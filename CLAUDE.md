@@ -103,6 +103,10 @@ Structure:
 - `company/profile.yaml` — structured company profile (populated by onboarding wizard)
 - `company/docs/` — uploaded documents (indexed into ChromaDB)
 
+## ERPNext Integration (in progress)
+
+Work that connects OpenExecutive to ERPNext (the `erpnext` MCP server, its caller-assertion hook in `orchestrator/mcp_gateway.py`, the ERPNext chat and webhook endpoints, `knowledge/erp`) follows the design in the sibling `oe_connector` repo: `../oe_connector/docs/erpnext-integration.md`. Read it before changing any of those, and keep that design and this repo's arch docs in step.
+
 ## Code Style
 
 - Python: `ruff` for linting, `mypy` for type checking, `pytest` for tests
