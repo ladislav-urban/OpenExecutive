@@ -50,7 +50,6 @@ import json
 import logging
 import os
 import re
-import resource
 import shutil
 import tempfile
 import threading
@@ -200,6 +199,10 @@ def _limit_memory(limit_mb: int) -> Any:
     and a lower CPU priority, so chat and the scheduler stay responsive."""
 
     def apply() -> None:
+        # POSIX-only, so imported here: at module level it stops the API
+        # importing on Windows, where the local sandbox never runs anyway.
+        import resource
+
         size = limit_mb * 2**20
         resource.setrlimit(resource.RLIMIT_DATA, (size, size))
         try:
