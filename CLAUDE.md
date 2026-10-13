@@ -105,7 +105,7 @@ Structure:
 
 ## ERPNext Integration (in progress)
 
-Work that connects OpenExecutive to ERPNext (the `erpnext` MCP server, its caller-assertion hook in `orchestrator/mcp_gateway.py`, the ERPNext chat and webhook endpoints, `knowledge/erp`) follows the design in the sibling `oe_connector` repo: `../oe_connector/docs/erpnext-integration.md`. Read it before changing any of those, and keep that design and this repo's arch docs in step.
+Work that connects OpenExecutive to ERPNext (the `erpnext` MCP server, its caller-assertion hook in `orchestrator/mcp_gateway.py`, the ERPNext chat and webhook endpoints, `knowledge/erp`) follows the design in the `oe_connector` repo (https://github.com/ladislav-urban/oe_connector), at `docs/erpnext-integration.md`. Read it before changing any of those, and keep that design and this repo's arch docs in step.
 
 ## Code Style
 
