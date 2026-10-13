@@ -356,6 +356,7 @@ def build_brief_fingerprint(
     reflection_flags: str = "",
     teammate_changes: str = "",
     owner_notes: list[Any] | None = None,
+    erp_numbers: str = "",
 ) -> str:
     """Stable hash of everything the brief would say. Deliberately free of
     dates and timestamps so an unchanged day yields the same fingerprint
@@ -381,7 +382,8 @@ def build_brief_fingerprint(
     a correction a teammate made since the last brief un-suppresses it, since
     the principal hears of it nowhere else. ``owner_notes`` (the FROM YOUR
     NOTES keys, ``history_brief.NotesBlock.keys``: note ids and states, no
-    dates) likewise, only when non-empty."""
+    dates) likewise, only when non-empty, and ``erp_numbers`` (the ERP
+    NUMBERS block): figures that moved are news."""
     new, carried = split_proposals(today_data.get("proposals", []), since)
     payload = {
         "new": sorted(int(p.get("alert_id") or 0) for p in new),
@@ -433,6 +435,10 @@ def build_brief_fingerprint(
         payload["teammate_changes"] = teammate_changes
     if owner_notes:
         payload["owner_notes"] = [list(k) if isinstance(k, tuple) else k for k in owner_notes]
+    if erp_numbers:
+        # Without its dates (it names yesterday and this month), so unchanged
+        # figures still suppress an unchanged day.
+        payload["erp_numbers"] = re.sub(r"\d{4}-\d{2}-\d{2}", "", erp_numbers)
     blob = json.dumps(payload, sort_keys=True, default=str)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 

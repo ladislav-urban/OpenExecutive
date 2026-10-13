@@ -109,6 +109,25 @@ def _private_ok() -> bool:
         return False
 
 
+def _erp_ok() -> bool:
+    """Belt and braces for the ERP NUMBERS block, on top of ``_private_ok``:
+    the scheduler's delivery to the principal, or a chat turn that is neither
+    a run nobody watches nor ERPNext's own panel. Its report runs are the one
+    unattended ERPNext path (``erpnext_caller.brief_run``), so no session
+    shaped like either may reach them, whatever ``_private_ok`` later
+    accepts."""
+    if PRINCIPAL_DELIVERY.get():
+        return True
+    from openexecutive.orchestrator.schedule_tools import current_session, erpnext_panel_turn
+
+    session = current_session.get()
+    return (
+        session is not None
+        and getattr(session, "unattended", False) is not True
+        and not erpnext_panel_turn(session)
+    )
+
+
 # Narrative synthesis (system prompt + context render + LLM call) is shared
 # with the on-page briefing header via openexecutive.briefing.narrative, so
 # both surfaces tell the same story in the same voice.
@@ -257,11 +276,20 @@ class MorningBriefWorkflow(Workflow):
                 owner_notes = await asyncio.to_thread(
                     history_brief.due_soon_block, owner.id, history_brief.local_today(now),
                 )
+        # ERP NUMBERS: a few totals from ERPNext's own reports, for the
+        # principal alone (ERPNEXT_BRIEF_COMPANY turns it on). Never raises.
+        erp_numbers = ""
+        if private_ok and _erp_ok():
+            from openexecutive.briefing.erp_numbers import gather_erp_numbers
+            from openexecutive.briefing.narrative_cache import local_today as local_date
+
+            erp_numbers = await gather_erp_numbers(datetime.fromisoformat(local_date(now)).date())
         # Did this brief actually draw on anything private to the principal?
         # Then its text stays out of the shared run history (the principal
         # gets it where it is delivered).
         private_used = private_ok and (
             bool(owner_notes.text)
+            or bool(erp_numbers)
             or teammate_changes != in_force_changes
             or live.calendar is not None
             or any(
@@ -289,6 +317,7 @@ class MorningBriefWorkflow(Workflow):
             pending_watch_suggestions=pending_suggestions, mode=mode,
             live_keys=live.keys, reflection_flags=reflection_flags,
             teammate_changes=teammate_changes, owner_notes=owner_notes.keys,
+            erp_numbers=erp_numbers,
         )
         previous = brief_state.last_delivered(BRIEF_KIND)
         suppressed = (
@@ -300,12 +329,13 @@ class MorningBriefWorkflow(Workflow):
         logger.info(
             "morning_brief: context since=%s proposals=%d activity=%d handled=%d "
             "inbound=%d stuck=%d drafts=%d conversations=%d calendar=%s "
-            "reflection_flags=%s notes=%d private=%s private_used=%s suppressed=%s",
+            "reflection_flags=%s notes=%d erp=%s private=%s private_used=%s suppressed=%s",
             since.isoformat()[:16], len(today_data["proposals"]), len(activity),
             len(handled), live.inbound_total, len(live.stuck), live.drafts,
             len(live.conversations),
             "none" if live.calendar is None else len(live.calendar),
-            bool(reflection_flags), len(owner_notes.keys), private_ok, private_used, suppressed,
+            bool(reflection_flags), len(owner_notes.keys), bool(erp_numbers), private_ok, private_used,
+            suppressed,
         )
 
         yield WorkflowEvent(
@@ -368,7 +398,7 @@ class MorningBriefWorkflow(Workflow):
                 pending_watch_suggestions=pending_suggestions, mode=mode,
                 live=live, live_window="since the last brief",
                 reflection_flags=reflection_flags, teammate_changes=teammate_changes,
-                owner_notes=owner_notes.text,
+                owner_notes=owner_notes.text, erp_numbers=erp_numbers,
             )
             # standalone=True → the enumerated DM brief (no cards beside it),
             # not the /today header synthesis.

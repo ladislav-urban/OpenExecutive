@@ -25,12 +25,14 @@ anything the model or the message says:
   (``Session.erpnext_panel_email``, set only by integrations/erpnext_panel.py
   from an assertion oe_connector signed): asked as that same ERPNext user,
   whose word ERPNext already is;
+- the morning brief's own ERP NUMBERS runs (``brief_run``, set only by
+  ``briefing.erp_numbers`` around the gateway calls it makes itself, never
+  by the model): ``service``, which oe_connector holds to the reports its
+  operator lists. Their audience is fixed, the principal;
 - anyone else is refused here, before ERPNext is asked. That includes every
-  run nobody is watching (``Session.unattended``): a scheduled follow-up's
-  text and recipient come from whoever scheduled it, so signing it as the
-  service user would hand them the service user's view. The ``service``
-  kind is kept for a later path whose audience is fixed (the principal's
-  morning brief); oe_connector holds it to the reports its operator lists.
+  other run nobody is watching (``Session.unattended``): a scheduled
+  follow-up's text and recipient come from whoever scheduled it, so signing
+  it as the service user would hand them the service user's view.
 
 **The assertion** is ``v1.<payload>.<signature>``, the format of
 ``api.caller_signing``: base64url JSON claims ``{args, aud, exp, iat, jti,
@@ -51,6 +53,9 @@ import json
 import logging
 import secrets
 import time
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -65,6 +70,24 @@ LIFETIME_S = 60
 ASSERTION_ARG = "_oe_caller"
 
 ErpnextCallerKind = Literal["user", "service"]
+
+# Set only by briefing.erp_numbers, around the report runs it makes itself.
+_brief_run: ContextVar[bool] = ContextVar("erpnext_brief_run", default=False)
+
+
+@contextmanager
+def brief_run() -> Iterator[None]:
+    """Mark the ERPNext calls made inside as the principal's morning brief's
+    own fixed report runs (``service``). Code only: no tool sets it."""
+    token = _brief_run.set(True)
+    try:
+        yield
+    finally:
+        _brief_run.reset(token)
+
+
+def in_brief_run() -> bool:
+    return _brief_run.get()
 
 
 @dataclass(frozen=True)
@@ -102,6 +125,8 @@ def caller_for(session: Any) -> ErpnextCaller:
     from openexecutive.orchestrator.content_trust import principal_speaking
     from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
 
+    if in_brief_run():
+        return ErpnextCaller("service")
     if session is None:
         raise CallerRefused("ERPNext is not available outside a conversation.", "no_session")
     panel_email = getattr(session, "erpnext_panel_email", "")

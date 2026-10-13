@@ -488,3 +488,35 @@ async def test_eod_digest_keeps_a_repair_that_grounds_it(monkeypatch: pytest.Mon
     [row] = rows
     assert row["details"]["repaired"] is True  # type: ignore[index]
     assert row["details"]["held_back"] == []  # type: ignore[index]
+
+
+@pytest.mark.asyncio
+async def test_erp_numbers_are_only_in_the_principals_brief(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.briefing import erp_numbers
+    from openexecutive.workflows import morning_brief
+
+    calls = _capture(monkeypatch)
+    _stub_aggregators(monkeypatch)
+    asked: list[object] = []
+
+    async def gather(today: object) -> str:
+        asked.append(today)
+        return "ERP NUMBERS (ERPNext's own reports, Acme, USD):\n- Payables today: 10.00 USD outstanding."
+
+    monkeypatch.setattr(erp_numbers, "gather_erp_numbers", gather)
+    # Anyone may run the brief from chat: ERPNext is not even asked.
+    shared = [e async for e in MorningBriefWorkflow().run(MorningBriefInput(), MagicMock())]
+    assert asked == []
+    assert "ERP NUMBERS" not in str(calls[-1]["rendered_context"])
+    assert next(e for e in shared if e.type == "result").data["private_to_principal"] is False
+    token = morning_brief.PRINCIPAL_DELIVERY.set(True)
+    try:
+        delivered = [e async for e in MorningBriefWorkflow().run(MorningBriefInput(force_full=True), MagicMock())]
+    finally:
+        morning_brief.PRINCIPAL_DELIVERY.reset(token)
+    assert len(asked) == 1
+    assert "Payables today: 10.00 USD outstanding." in str(calls[-1]["rendered_context"])
+    # Its text stays out of the shared run history.
+    assert next(e for e in delivered if e.type == "result").data["private_to_principal"] is True
