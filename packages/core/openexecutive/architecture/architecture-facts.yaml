@@ -8467,9 +8467,37 @@ integrations:
     is no knowledge/erp collection: retrieval feeds specialists by domain,
     who cannot call the tools, while the Executive reads the catalog live
     through erpnext__search_catalog. Later phases (design in
-    oe_connector's docs/erpnext-integration.md): the morning brief's ERP
-    block (the one path that would sign a `service` caller, whose audience
-    is fixed), and the budget-variance and weekly-margin alert rules.
+    oe_connector's docs/erpnext-integration.md): scheduled saved queries
+    (DSO every Monday), and the budget-variance and weekly-margin alert
+    rules.
+
+    ERP numbers in the morning brief (phase 3b): briefing/erp_numbers.py,
+    on with ERPNEXT_BRIEF_COMPANY. morning_brief gathers it only when
+    _private_ok() (PRINCIPAL_DELIVERY, or the principal's verified private
+    chat turn), so a run anyone else starts never asks ERPNext. Four fixed
+    erpnext__run_report calls through the gateway, made by this code, limit
+    1 (totals only, no names): Cash Flow (Date Range, Monthly, this month;
+    its summary), Accounts Receivable Summary and Accounts Payable Summary
+    (report_date today; total row by range0 not yet due / range1-5 days past
+    due, worded "past due" in full after a live run read "0-30 days" as
+    current), Sales Register (yesterday; net and grand total). They run
+    inside erpnext_caller.brief_run() (a ContextVar no tool sets): caller_for
+    answers ErpnextCaller("service") there, and in phase 1
+    _check_erpnext_caller lets it through as the principal's. oe_connector
+    holds the service caller to oe_connector_unattended_reports (the four).
+    A refused, failed or stalled report (JSON error, "Tool error:" text, a
+    result with rows but no total row, or past CALL_TIMEOUT_S = 30 s) is
+    left out with a log line. The only words ERPNext supplies, the currency
+    code and the ageing bucket labels, are an ERPNext administrator's to
+    edit, so a currency must match [A-Z]{3} and a label
+    [0-9A-Za-z<>+ -]{1,12} or it is dropped (security review 3b: a renamed
+    currency could otherwise carry a "Needs you" line into the brief); both
+    standalone prompts list ERP NUMBERS as quoted data. morning_brief also
+    requires _erp_ok(): PRINCIPAL_DELIVERY, or a session that is neither
+    unattended nor an ERPNext panel turn, on top of _private_ok. The block enters render_briefing_context
+    (erp_numbers=, after FROM YOUR NOTES; ERP_NUMBERS_RULE in both
+    standalone prompts), the fingerprint with its dates removed, and
+    private_used.
 
     ERPNext alerts (phase 3): oe_connector/alerts.py checks overdue_receivable
     (daily: submitted Sales Invoice, due more than overdue_days ago and never

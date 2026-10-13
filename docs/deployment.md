@@ -585,10 +585,9 @@ its own; never reuse the web app's. Then restart both. From then on:
   email is the service user's) gets nothing, not the service user's view.
 - Runs nobody is watching (the scheduler, scheduled follow-ups, workflows)
   are still refused: whoever scheduled one wrote its text and chose its
-  recipient. oe_connector already holds a `service` caller to the reports
-  you list (`set-config -p oe_connector_unattended_reports '["Accounts
-  Receivable"]'`), for the morning brief's fixed-audience ERP block in a
-  later phase.
+  recipient. The one exception is the morning brief's own ERP numbers
+  (below), whose audience is fixed: they are signed as a `service` caller
+  that oe_connector holds to the reports you list.
 
 To rotate, add the new public key to `oe_connector_caller_public_keys`
 (comma-separated), move the API to the new private key, then drop the old one.
@@ -629,6 +628,25 @@ bench --site <site> set-config oe_connector_openexecutive_url https://<api-host>
   are shown with no images or live links.
 - One question at a time per person, thirty an hour; conversations last an
   idle hour and end when the API restarts.
+
+**ERP numbers in the morning brief (phase 3b).** Name the company and the
+principal's morning brief ends with a few totals from ERPNext's own reports:
+cash this month, receivables and payables by days past due, and yesterday's
+sales. Only totals, never customer or supplier names, and only in a brief for
+the principal:
+
+```bash
+ERPNEXT_BRIEF_COMPANY="Acme Ltd"   # the API's environment
+```
+
+With per-person access on, these are the only ERPNext calls a scheduled run
+may make, signed as the service caller, so list the four reports in the bench:
+
+```bash
+bench --site <site> set-config -p oe_connector_unattended_reports '["Cash Flow", "Accounts Receivable Summary", "Accounts Payable Summary", "Sales Register"]'
+```
+
+A report ERPNext refuses is simply left out of the brief.
 
 **ERPNext alerts (phase 3).** oe_connector can raise alerts on the
 principal's board: a receivable overdue past a threshold, stock below its

@@ -752,7 +752,8 @@ def _check_erpnext_caller(tool_name: str) -> tuple[str | None, ErpnextCaller | N
 
     setting = erpnext_caller.signing_setting()
     if not setting:
-        if principal_speaking(current_session.get()):
+        # The morning brief's own report runs are for the principal alone.
+        if erpnext_caller.in_brief_run() or principal_speaking(current_session.get()):
             return None, None
         return _refuse_erpnext_call(
             tool_name, "not-principal",

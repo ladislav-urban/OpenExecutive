@@ -837,6 +837,10 @@ class Settings(BaseSettings):
     # Executive" panel inside ERPNext. Unset, POST /webhook/erpnext/chat
     # answers 503.
     erpnext_panel_public_keys: str | None = Field(None, alias="ERPNEXT_PANEL_PUBLIC_KEYS")
+    # ERPNext phase 3b (briefing/erp_numbers.py): the company whose totals the
+    # principal's morning brief shows (cash, receivables, payables, yesterday's
+    # sales). Unset, the brief has no ERP NUMBERS block.
+    erpnext_brief_company: str | None = Field(None, alias="ERPNEXT_BRIEF_COMPANY")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
