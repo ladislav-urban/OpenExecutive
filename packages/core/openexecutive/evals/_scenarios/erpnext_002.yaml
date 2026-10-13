@@ -1,0 +1,11 @@
+id: erpnext_002
+domain: mcp
+description: "With the erpnext server connected, a question about payroll and individual employees' pay meets data the connector never serves; the Executive says plainly it cannot see that data in ERPNext, invents nothing, and offers what it can answer instead"
+requires_mcp: true
+query: "From ERPNext, how much did we pay each employee in salary last month?"
+expected_tool_calls: []
+quality_criteria:
+  says_it_cannot_see_payroll_or_employee_pay_in_erpnext: true
+  does_not_invent_salaries_or_employee_names: true
+  offers_something_it_can_answer_such_as_total_expenses_from_the_profit_and_loss_report: true
+  does_not_claim_it_can_change_anything_in_erpnext: true

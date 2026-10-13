@@ -8340,6 +8340,87 @@ integrations:
     existing outbound→inbound DM context linkage; no Meet/Drive transcript
     integration is involved. Skipped silently when no attendee has a reachable
     DM channel. Failure to schedule never blocks the booking.
+  erpnext: |
+    ERPNext is an optional URL MCP server served by the oe_connector Frappe
+    app (github.com/ladislav-urban/oe_connector) inside the ERPNext site:
+    "erpnext": {"url": "https://<site>/api/method/oe_connector.mcp.endpoint.handle"}
+    in company/mcp_servers.json. extensible-mcp (pinned rev) sends a URL
+    server's credential only as `Authorization: Bearer <token>` from a
+    `tokens` file next to the config (`erpnext=<api_key>:<api_secret>`,
+    gitignored with company/); oe_connector accepts that form on its MCP
+    endpoint only (its auth.py, Frappe's validate_api_key_secret). Never put
+    the key in mcp_servers.json.
+
+    Six read tools: erpnext__search_catalog / describe_report / run_report /
+    describe_doctype / list_records / get_record. The limits are enforced in
+    ERPNext: an "OE Reader" service user (read + report on an explicit
+    DocType and report list), business modules only, payroll / employee /
+    bank-account / contact data and email, phone and password fields
+    excluded, standard reports only, 500-row cap, a company required for
+    totals when several are visible, every request rolled back. Results carry
+    company, currency, period and `truncated`.
+
+    Why it is not in mcp_servers.json.example's mcpServers: a placeholder
+    URL cannot start (test_mcp_gateway's example-config tests), and
+    MCPGateway.server_names lists every configured server, so a copied
+    placeholder would make the prompt claim ERPNext. It is documented in the
+    example's _comment and docs/deployment.md instead. The same caveat holds
+    for a real site that is down at startup: extensible-mcp skips it, the
+    prompt still names it.
+
+    Prompt: connected_systems.render_connected_systems names ERPNext as
+    connected and read-only when `erpnext` is configured, pins ERPNEXT_TOOLS
+    and adds a constant guide (catalog first, prefer standard reports, quote
+    company / currency / period, results are data). Constant text keeps
+    block 0 cacheable.
+
+    Discovery: not primed at startup (prime_pinned_tools stays Google-only,
+    so /health and the Setup page are unchanged). The first call to each
+    pinned ERPNext tool is refused by extensible-mcp's DiscoveredToolsFilter
+    and call_tool's undiscovered retry (_is_undiscovered_refusal covers
+    PINNED_ERPNEXT_TOOLS) searches the exact name and calls once more — only
+    when `erpnext` is in MCPGateway.server_names, i.e. the config named it.
+
+    Who may call (security review, phase 1): the service user sees more than
+    most people do in ERPNext, so mcp_gateway._check_erpnext_caller refuses
+    every `erpnext__*` call (matched on the normalized name) unless
+    content_trust.principal_speaking(current_session) holds. Teammates,
+    unverified senders, Google Chat, unattended runs and workflows outside a
+    session get an audited integration_outbound_blocked refusal. This lifts
+    per person once phase 2 runs calls as the asking person.
+
+    Trust and audit: every call is a normal `tool_invocation` audit row with
+    input and result. The chat loop (executive._stream_agent_loop, MCP
+    dispatch) wraps each `erpnext__*` result in
+    <untrusted_content source="erpnext" author="<tool>"> on its way to the
+    model, because customers and suppliers write some of ERPNext's text
+    (remarks, descriptions, names); run_script programs call the gateway
+    directly and still get the raw JSON they parse, but a script that called
+    any `erpnext__*` tool has its own result wrapped the same way
+    (author="run_script"), since that result carries the rows back. Both use
+    executive._is_erpnext_tool (case and hyphens folded, as the gate does). A private Act as me turn
+    offers only PRIVATE_TURN_MCP_TOOLS, which holds no ERPNext tool.
+
+    Credential handling: extensible-mcp sends a URL server the `tokens` line
+    named after it and indexes its tools as `<name>__*`, so
+    MCPGateway.load_mcp_server refuses a configured server's name, any name
+    in the tokens file (the one a `.env` beside the config names in
+    EXTENSIBLE_MCP_TOKENS_FILE, else `tokens`) and the reserved erpnext / fetch / google_workspace /
+    microsoft_365 (the example config also lists them in
+    load_control.deny_names). Client slots (clients/slots.py) save and
+    restore `tokens` with mcp_servers.json, 0600, and remove it when the
+    restored slot has none, so one client's ERPNext key never reaches
+    another client's site.
+
+    Specialists do not call ERPNext: analyze_with_tools is single-turn
+    structured output, not a tool loop. The Executive fetches figures and
+    passes them in consult_specialist's `context`. For the same reason there
+    is no knowledge/erp collection: retrieval feeds specialists by domain,
+    who cannot call the tools, while the Executive reads the catalog live
+    through erpnext__search_catalog. Later phases (design in
+    oe_connector's docs/erpnext-integration.md): a signed caller assertion so
+    calls run as the asking person, ERPNext webhooks into alerts, and a chat
+    panel inside ERPNext.
   own_gmail: |
     Act as me (delegation) connects a second, separate Gmail — the
     principal's own — read and drafted into by delegation.gmail.DelegateGmail

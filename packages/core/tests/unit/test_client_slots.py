@@ -9,7 +9,9 @@ round-trip contract under test.
 """
 from __future__ import annotations
 
+import os
 import sqlite3
+import stat
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -118,6 +120,28 @@ async def test_create_from_current_captures_state_and_activates(env: SimpleNames
     assert [s["slug"] for s in listed] == ["acme_corp"]
     assert listed[0]["has_state"] is True
     assert listed[0]["has_mcp_config"] is True
+
+
+async def test_the_gateway_tokens_file_moves_with_its_client(env: SimpleNamespace) -> None:
+    # Acme's ERPNext key must never reach Beta's same-named `erpnext` server.
+    _seed_live_company(env, "Acme Corp")
+    tokens = env.company / "tokens"
+    tokens.write_text("erpnext=acme-key:acme-secret\n")
+    await create_client_slot(env.settings, display_name="Acme Corp", source="current")
+    await create_client_slot(env.settings, display_name="Beta Inc", source="blank")
+
+    result = await activate_client_slot(env.settings, "beta_inc")
+    assert not tokens.exists()
+    assert result["mcp_config_changed"] is True
+
+    tokens.write_text("erpnext=beta-key:beta-secret\n")
+    await activate_client_slot(env.settings, "acme_corp")
+    assert tokens.read_text() == "erpnext=acme-key:acme-secret\n"
+    beta_saved = env.company / "_client_slots" / "beta_inc" / "tokens"
+    assert beta_saved.read_text() == "erpnext=beta-key:beta-secret\n"
+    if os.name == "posix":
+        assert stat.S_IMODE(tokens.stat().st_mode) == 0o600
+        assert stat.S_IMODE(beta_saved.stat().st_mode) == 0o600
 
 
 async def test_switch_round_trip_is_lossless(env: SimpleNamespace) -> None:

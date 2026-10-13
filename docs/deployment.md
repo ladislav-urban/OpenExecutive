@@ -117,6 +117,7 @@ One volume, mounted at `/data`:
 - `/data/episodic_memory.db` — SQLite: episodic memory, people, alerts, scheduled actions, audit log
 - `/data/company/profile.yaml` + `/data/company/docs/` — onboarding output + uploaded docs
 - `/data/company/mcp_servers.json` — MCP gateway config. Placing this file is what **enables** MCP when `MCP_ENABLED` is unset; set `MCP_ENABLED=false` to keep MCP off with the file in place. A config defining no servers under `mcpServers`, or a gateway that fails to start, is logged and skipped — the API boots without MCP tools (and without the email poller) rather than failing to boot.
+- `/data/company/tokens` — Bearer tokens for URL MCP servers, one `name=token` per line (the ERPNext service user's key and secret), if any is configured. It sits next to `mcp_servers.json` because the gateway reads it from there
 - `/data/google_credentials/` — Google Workspace OAuth token, if that integration is enabled
 - `/data/ms365_credentials/` — Microsoft 365 MSAL token cache (+ its `.cache-key`), if that integration is enabled
 
@@ -488,6 +489,86 @@ from `mcp_servers.json` is logged at startup and the poller skips its cycle;
 boot never fails. On Microsoft the approval-time conflict check reads only the
 Executive's own calendar (delegated permissions cannot read attendees'
 free/busy), so it is advisory in a narrower sense than Google's.
+
+---
+
+## ERPNext (oe_connector)
+
+ERPNext's data and reports come from the
+[oe_connector](https://github.com/ladislav-urban/oe_connector) Frappe app,
+installed in the ERPNext site. Unlike the two servers above it is not a child
+of the gateway: the app serves MCP over HTTP inside ERPNext, and the gateway
+reaches it by URL. It offers six read tools (`erpnext__search_catalog`,
+`erpnext__run_report`, `erpnext__list_records`, …), all read-only, under a
+service user that holds only the "OE Reader" role.
+
+1. In the ERPNext bench, install the app and create the service user:
+
+   ```bash
+   bench get-app https://github.com/ladislav-urban/oe_connector
+   bench --site <site> install-app oe_connector
+   bench --site <site> oe-connector-setup-reader [--company "Acme Ltd"]
+   ```
+
+   The last command prints the API key and secret once (`--rotate-keys`
+   issues new ones). `--company` limits the user to that company.
+
+2. Add the server to `/data/company/mcp_servers.json`:
+
+   ```json
+   "erpnext": {"url": "https://<site>/api/method/oe_connector.mcp.endpoint.handle"}
+   ```
+
+3. Put the credential in `/data/company/tokens`, next to it:
+
+   ```
+   erpnext=<api_key>:<api_secret>
+   ```
+
+   The gateway sends it as `Authorization: Bearer <api_key>:<api_secret>`, and
+   oe_connector accepts that form on its MCP endpoint only. The file holds a
+   live credential, so create it readable by the API's user alone before
+   writing the line, and never put the key in `mcp_servers.json`:
+
+   ```bash
+   install -m 600 -o <api-user> /dev/null /data/company/tokens
+   ```
+
+   Client slots save and restore this file with `mcp_servers.json`, so each
+   client's key stays with that client's config.
+
+4. Restart the API. The Executive's Connected Systems section then names
+   ERPNext and its tools, and the first call to each tool discovers it.
+
+Use HTTPS for any site not on the same machine: the token is the
+credential, and over plain `http://` on a network it travels in clear text.
+`http://localhost` is fine for local development (the `http://*` deny in
+`load_control` applies to `load_mcp_server` only, not to configured
+servers, so nothing stops a plain-HTTP site URL). Keep `erpnext` in
+`load_control.deny_names` as the example does; the gateway also refuses a
+runtime server under any configured or `tokens` name, which would otherwise
+be sent that name's credential.
+
+**Who sees ERPNext data.** In this first phase every call runs as the one
+service user, which can see more than most people can in ERPNext itself. So
+the gateway answers `erpnext__*` calls only on the principal's own verified
+turn (the web chat as the principal, their own Slack, Discord or
+secret-verified Telegram, or their own Gmail-authenticated email). A
+teammate, an unverified sender, Google Chat, the scheduler, workflows and
+other unattended runs are refused, and the refusal is audited. Calls running
+as the asking person come in a later phase. A site the gateway cannot reach at startup is skipped with a
+warning, but is still named as connected, so its calls fail until the next
+restart after the site is back.
+
+What the Executive can reach is decided in ERPNext, not here: business modules
+only, never payroll, employee, bank-account or personal contact data, standard
+reports only, rows capped at 500, and a company required for totals when the
+user sees several. Every `erpnext__*` call is in the audit log as a
+`tool_invocation` row, and its result reaches the model inside an
+`<untrusted_content source="erpnext">` block, since customers and suppliers
+write some of ERPNext's text. The design, including later phases (acting as the
+asking person, alerts, the chat panel inside ERPNext), is in the app's
+`docs/erpnext-integration.md`.
 
 ---
 

@@ -11,6 +11,9 @@ of one client company:
 - ``mcp_servers.json`` — per-client external MCP tools (e.g. one client's
   Crayon credentials). The MCP gateway reads this at process startup, so a
   changed config takes effect on the next restart.
+- ``tokens`` — the Bearer tokens for that config's URL servers (e.g. one
+  client's ERPNext key and secret), kept 0600 and swapped with it, so a
+  client's token never reaches another client's same-named server.
 - ``meta.json`` — display name + timestamps.
 
 Slots deliberately reuse the fixture switcher's primitives and its
@@ -33,6 +36,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import sqlite3
 from datetime import UTC, datetime
@@ -353,6 +357,8 @@ def _save_slot_state(settings: Any, slot: Path) -> dict[str, Any]:
         shutil.copy2(mcp_src, mcp_dst)
     else:
         mcp_dst.unlink(missing_ok=True)
+    # The gateway's credentials for this client's URL servers sit beside it.
+    _copy_tokens(mcp_src.parent / _TOKENS_FILE, slot / _TOKENS_FILE)
 
     # 4. state.db — VACUUM INTO produces a transactionally-consistent copy
     #    even while other connections hold the live DB open.
@@ -370,6 +376,23 @@ def _save_slot_state(settings: Any, slot: Path) -> dict[str, Any]:
 
     _write_meta(slot, saved_at=datetime.now(UTC).isoformat())
     return {"docs_saved": docs_copied, "db_saved": db_saved}
+
+
+_TOKENS_FILE = "tokens"
+
+
+def _copy_tokens(src: Path, dst: Path) -> None:
+    """Make ``dst`` a copy of the gateway ``tokens`` file ``src``, readable by
+    this user alone, or remove it when ``src`` does not exist."""
+    if not src.exists():
+        dst.unlink(missing_ok=True)
+        return
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.unlink(missing_ok=True)
+    # Created 0600, never copied and then narrowed: no moment under the umask.
+    fd = os.open(dst, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "wb") as out:
+        out.write(src.read_bytes())
 
 
 def _replace_dir_copy(src: Path, dst: Path) -> int:
@@ -436,6 +459,11 @@ async def _restore_slot_state(
         shutil.copy2(mcp_src, mcp_live)
     else:
         mcp_live.unlink(missing_ok=True)
+    # Always replaced, never left over: another client's token would be sent
+    # to this client's same-named server (an `erpnext` key to their site).
+    tokens_live = mcp_live.parent / _TOKENS_FILE
+    mcp_changed = mcp_changed or (slot / _TOKENS_FILE).exists() or tokens_live.exists()
+    _copy_tokens(slot / _TOKENS_FILE, tokens_live)
 
     # 3. Vector state — rebuild the company collections from the restored dirs.
     docs_indexed = await _rebuild_vector_state(settings, app_state)

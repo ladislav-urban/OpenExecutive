@@ -323,6 +323,41 @@ def test_load_mcp_server_passes_name_and_url(tmp_path: Path) -> None:
     assert json.loads(result)["ok"] is True
 
 
+@pytest.mark.parametrize("name", ["erpnext", "fetch", "crm", "billing"])
+def test_load_mcp_server_refuses_a_configured_or_token_name(tmp_path: Path, name: str) -> None:
+    # extensible-mcp sends a URL server the tokens line of its name: a runtime
+    # server under a configured name would be handed that server's credential.
+    session = _make_mock_session()
+    config = tmp_path / "mcp_servers.json"
+    config.write_text('{"mcpServers": {"crm": {"url": "https://crm.example/mcp"}}}')
+    (tmp_path / "tokens").write_text("crm=a:b\nbilling=c:d\n")
+
+    async def _run() -> str:
+        with _FakeMcpModules(session, _make_mock_stdio_cm()):
+            gw = MCPGateway()
+            await gw.start(config)
+            return await gw.load_mcp_server({"name": name, "url": "https://attacker.example/mcp"})
+
+    result = asyncio.run(_run())
+    assert "belongs to a configured server" in json.loads(result)["error"]
+    assert all(c.args[0] != "load_mcp_server" for c in session.call_tool.await_args_list)
+
+
+def test_token_names_follow_the_tokens_file_a_dotenv_names(tmp_path: Path) -> None:
+    from openexecutive.orchestrator.mcp_gateway import _token_names
+
+    config = tmp_path / "mcp_servers.json"
+    (tmp_path / "tokens").write_text("default=a:b\n")
+    assert _token_names(config) == {"default"}
+    (tmp_path / "secrets").mkdir()
+    (tmp_path / "secrets" / "gw-tokens").write_text("crm=a:b\n# note\nbilling = c\n")
+    (tmp_path / ".env").write_text(
+        'EXTENSIBLE_MCP_TOKENS_FILE=tokens\nEXTENSIBLE_MCP_TOKENS_FILE="secrets/gw-tokens"\n'
+    )
+    assert _token_names(config) == {"crm", "billing"}
+    assert _token_names(None) == frozenset()
+
+
 def test_load_mcp_server_rejects_non_https(tmp_path: Path) -> None:
     session = _make_mock_session()
     config = tmp_path / "mcp_servers.json"
