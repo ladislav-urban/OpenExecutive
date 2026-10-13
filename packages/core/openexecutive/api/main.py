@@ -59,6 +59,7 @@ from openexecutive.api.routes import (
 from openexecutive.api.routes import (
     auth as auth_route,
 )
+from openexecutive.integrations.erpnext_events import router as erpnext_events_router
 from openexecutive.integrations.erpnext_panel import router as erpnext_panel_router
 from openexecutive.integrations.google_chat import router as google_chat_router
 from openexecutive.integrations.slack_events import router as slack_events_router
@@ -158,7 +159,14 @@ _configure_logging()
 # the /webhook/* routes are called by external services (Google, Telegram,
 # ERPNext's oe_connector) and carry their own verification.
 _UNAUTHENTICATED_PATHS: frozenset[str] = frozenset(
-    {"/health", "/webhook/telegram", "/webhook/google-chat", "/webhook/slack", "/webhook/erpnext/chat"}
+    {
+        "/health",
+        "/webhook/telegram",
+        "/webhook/google-chat",
+        "/webhook/slack",
+        "/webhook/erpnext/chat",
+        "/webhook/erpnext/events",
+    }
 )
 
 
@@ -856,9 +864,10 @@ def _webhook_verifies_its_caller(path: str) -> bool:
     update."""
     if path in ("/webhook/google-chat", "/webhook/slack"):
         return True
-    if path == "/webhook/erpnext/chat":
+    if path in ("/webhook/erpnext/chat", "/webhook/erpnext/events"):
         # Every request needs oe_connector's Ed25519 signature over its body
-        # (integrations/erpnext_panel.py); without the keys it answers 503.
+        # (integrations/erpnext_panel.py, erpnext_events.py); without the
+        # keys they answer 503.
         return True
     if path == "/webhook/telegram":
         from openexecutive.config import get_settings
@@ -1002,6 +1011,7 @@ def create_app() -> FastAPI:
     app.include_router(telegram_router, tags=["telegram"])
     app.include_router(slack_events_router, tags=["slack"])
     app.include_router(erpnext_panel_router, tags=["erpnext"])
+    app.include_router(erpnext_events_router, tags=["erpnext"])
     app.include_router(architecture.router, tags=["architecture"])
     app.include_router(guide.router, tags=["guide"])
     app.include_router(health.router, tags=["health"])

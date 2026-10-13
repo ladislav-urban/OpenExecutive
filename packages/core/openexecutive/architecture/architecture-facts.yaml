@@ -8467,9 +8467,50 @@ integrations:
     is no knowledge/erp collection: retrieval feeds specialists by domain,
     who cannot call the tools, while the Executive reads the catalog live
     through erpnext__search_catalog. Later phases (design in
-    oe_connector's docs/erpnext-integration.md): ERPNext webhooks into
-    alerts, and the morning brief's ERP block (the one path that would sign
-    a `service` caller, whose audience is fixed).
+    oe_connector's docs/erpnext-integration.md): the morning brief's ERP
+    block (the one path that would sign a `service` caller, whose audience
+    is fixed), and the budget-variance and weekly-margin alert rules.
+
+    ERPNext alerts (phase 3): oe_connector/alerts.py checks overdue_receivable
+    (daily: submitted Sales Invoice, due more than overdue_days ago and never
+    before its due date, outstanding >= overdue_min_amount),
+    stock_below_reorder (daily: Bin.projected_qty below the Item Reorder
+    level, for the top_items best sellers by quantity over 90 days, in the
+    service user's visible companies) and large_purchase_invoice (on submit:
+    base_grand_total above large_invoice_factor x the median of the
+    supplier's last twelve, at least three; a background job queued after
+    the submit commits, so it never blocks or fails the submit). Every check
+    runs under frappe.set_user as the "OE Reader" service user through
+    permission-checked queries (top sellers limited to readable Items; no
+    alert without a visible Bin row). Site
+    config oe_connector_alerts, off by default. Each rule and document is
+    sent once a month at most, marked in Redis only after OpenExecutive
+    accepted it; 20 a minute (PAUSE_S between batches, MAX_PER_RUN 100), and
+    a 429 or failure stops the run. Errors are logged with an explicit
+    message: Frappe's log_error without one stores a traceback with every
+    frame's locals, which would hold oe_connector_panel_private_key (security
+    review 3a). POST /webhook/erpnext/events
+    (integrations/erpnext_events.py, exempt from BACKEND_SHARED_SECRET):
+    signed with the panel's site key for audience
+    "openexecutive-erpnext-events", sub "" (verify_panel_assertion's
+    audience parameter), so neither route accepts the other's assertion;
+    {"events": [{kind, key, title, text}]}, kinds a fixed list, key
+    [\w .,:/()&'+@-]{1,140} (item@warehouse for stock), title 200 and text
+    1500 characters, at most 20 a request, 20 a minute and 300 an hour, else
+    429 (the pipeline's shared budget is 60 a minute; ERPNext must not use it
+    up and lose the rest silently). Each becomes AlertEvent(source="erpnext",
+    private=True, dedup_hint="erpnext:<kind>:<key>",
+    external_id="erpnext:<kind>:<key>:<YYYY-MM>", so a document can raise
+    again after a dismissal) with its text wrapped as untrusted, through
+    pipeline.schedule_evaluation: triage sets severity and headline; private
+    keeps it on the principal's board only, since the checks see the
+    service user's view; dedup keeps one open alert per rule and document.
+    The text is ERPNext's data, partly outsiders' words (a customer can name
+    itself), wrapped as untrusted for triage; private=True still forces the
+    principal's board, so injected text cannot route or broadcast, only
+    sway triage's alert/no-alert call. pipeline.evaluate_and_dispatch leaves
+    private alerts out of the recent-alerts context when the event being
+    triaged is not private.
 
     Ask the Executive panel (phase 2b): oe_connector adds a desk side panel
     and a full page (/app/ask-the-executive); the browser posts to its
