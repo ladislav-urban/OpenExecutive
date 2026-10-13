@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -112,14 +112,16 @@ def hooks(monkeypatch: pytest.MonkeyPatch) -> dict[str, list[Any]]:
     return seen
 
 
-def _turn(tool_uses: list[Any]) -> Session:
+def _turn(tool_uses: list[Any], *, gateway: Any = None, act_as_me: bool = True) -> Session:
     from openexecutive.orchestrator.executive import Executive
 
     principal = people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
     people_registry.invalidate()
     person = people_store.get_person(principal)
     session = Session(
-        delegation_override=DelegationOverride(enabled=True, gmail=FakeMailbox(), person=person),
+        delegation_override=(
+            DelegationOverride(enabled=True, gmail=FakeMailbox(), person=person) if act_as_me else None
+        ),
         # The principal's own web chat: the surface extraction reads from.
         from_web_chat=True,
     )
@@ -132,7 +134,9 @@ def _turn(tool_uses: list[Any]) -> Session:
             patch("openexecutive.orchestrator.executive.get_provider", return_value=provider),
             patch("openexecutive.orchestrator.executive.audit_log", log_event),
         ):
-            async for _ in Executive().stream_chat("reply to Dana as me: yes", session, person_id=principal):
+            async for _ in Executive(mcp_gateway=gateway).stream_chat(
+                "reply to Dana as me: yes", session, person_id=principal
+            ):
                 pass
 
     asyncio.run(go())
@@ -186,3 +190,25 @@ def test_the_system_prompt_carries_the_addendum_only_when_on(hooks: dict[str, li
 
     assert DELEGATION_ADDENDUM in system_text(DelegationOverride(enabled=True, gmail=FakeMailbox()))
     assert DELEGATION_ADDENDUM not in system_text(DelegationOverride(enabled=False))
+
+
+def test_a_turn_that_read_erpnext_reaches_no_shared_memory(hooks: dict[str, list[Any]]) -> None:
+    # An ERPNext answer is the asker's own view (orchestrator.erpnext_caller):
+    # peer and department memory are read on other people's turns.
+    gateway = AsyncMock()
+
+    async def call_tool(tool_input: dict[str, Any]) -> str:
+        # What MCPGateway.call_tool does for an erpnext__* call it forwards.
+        current_session.get().turn_read_erpnext = True
+        return '{"rows": []}'
+
+    gateway.call_tool = AsyncMock(side_effect=call_tool)
+    read = ToolUseBlock("tu1", "call_tool", {"name": "erpnext__run_report", "arguments": {}})
+    session = _turn([read], gateway=gateway, act_as_me=False)
+    assert gateway.call_tool.await_count == 1
+    assert session.turn_read_erpnext is True
+    assert hooks["sync"] == []
+    # Nor any open loop, whose summary could repeat a figure from the reply.
+    assert hooks["open_loops"] == []
+    # The principal's own words still teach their memory.
+    assert hooks["extraction_private"] == [False]

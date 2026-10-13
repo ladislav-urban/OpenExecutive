@@ -168,6 +168,11 @@ class Session:
     # pinned to that turn's viewer, so what it drafts is theirs. An
     # ``artifact_records.Viewer``; None derives it from this session.
     documents_viewer: Any = None
+    # Whether the turn in progress read ERPNext (set by the gateway on a call
+    # it forwarded, reset at each turn's start). Its reply then stays out of
+    # peer and department memory, which are read on other people's turns: an
+    # ERPNext answer is the asker's own view (orchestrator.erpnext_caller).
+    turn_read_erpnext: bool = False
     # Evals and tests only (``delegation.settings.DelegationOverride``): run
     # as if the speaker had Act as me, against a fake mailbox.
     delegation_override: Any = None

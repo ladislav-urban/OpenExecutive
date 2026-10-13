@@ -826,6 +826,12 @@ class Settings(BaseSettings):
     # _resolve_mcp's inference. A private attr, not a field: it is derived on
     # every load, so an env var for it would only ever be discarded.
     _mcp_enabled_explicit: bool = PrivateAttr(default=False)
+    # ERPNext phase 2 (orchestrator/erpnext_caller.py): the Ed25519 key that
+    # signs who is asking into every `erpnext__*` call, as
+    # scripts/make-caller-keys.py prints a private key (`kid:key`). Set, calls
+    # run as the asker's own ERPNext user; unset, they run as the service user
+    # for the principal only (phase 1).
+    erpnext_caller_private_key: str | None = Field(None, alias="ERPNEXT_CALLER_PRIVATE_KEY")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
