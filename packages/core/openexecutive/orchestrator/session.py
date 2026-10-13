@@ -168,11 +168,18 @@ class Session:
     # pinned to that turn's viewer, so what it drafts is theirs. An
     # ``artifact_records.Viewer``; None derives it from this session.
     documents_viewer: Any = None
-    # Whether the turn in progress read ERPNext (set by the gateway on a call
-    # it forwarded, reset at each turn's start). Its reply then stays out of
-    # peer and department memory, which are read on other people's turns: an
-    # ERPNext answer is the asker's own view (orchestrator.erpnext_caller).
-    turn_read_erpnext: bool = False
+    # Whether this conversation has read ERPNext (set by the gateway on a call
+    # it forwarded, and from the start for ERPNext's panel). It never resets:
+    # a later turn's reply can restate the figures from history. While set,
+    # replies stay out of peer and department memory and the open-loop pass,
+    # which other people's turns read: an ERPNext answer is the asker's own
+    # view (orchestrator.erpnext_caller).
+    read_erpnext: bool = False
+    # Set only by the ERPNext panel route (integrations/erpnext_panel.py): the
+    # email oe_connector signed as its signed-in ERPNext user. Such a turn is
+    # read-only (schedule_tools.ERPNEXT_PANEL_TOOLS), never the principal's,
+    # and its ERPNext calls run as that same ERPNext user.
+    erpnext_panel_email: str = ""
     # Evals and tests only (``delegation.settings.DelegationOverride``): run
     # as if the speaker had Act as me, against a fake mailbox.
     delegation_override: Any = None

@@ -199,14 +199,14 @@ def test_a_turn_that_read_erpnext_reaches_no_shared_memory(hooks: dict[str, list
 
     async def call_tool(tool_input: dict[str, Any]) -> str:
         # What MCPGateway.call_tool does for an erpnext__* call it forwards.
-        current_session.get().turn_read_erpnext = True
+        current_session.get().read_erpnext = True
         return '{"rows": []}'
 
     gateway.call_tool = AsyncMock(side_effect=call_tool)
     read = ToolUseBlock("tu1", "call_tool", {"name": "erpnext__run_report", "arguments": {}})
     session = _turn([read], gateway=gateway, act_as_me=False)
     assert gateway.call_tool.await_count == 1
-    assert session.turn_read_erpnext is True
+    assert session.read_erpnext is True
     assert hooks["sync"] == []
     # Nor any open loop, whose summary could repeat a figure from the reply.
     assert hooks["open_loops"] == []

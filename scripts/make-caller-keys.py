@@ -21,6 +21,10 @@ With --erpnext it makes the separate pair for ERPNext phase 2
 (docs/deployment.md, "ERPNext (oe_connector)"): ERPNEXT_CALLER_PRIVATE_KEY on
 the API, which signs who is asking into each ERPNext call, and the public key
 for oe_connector's site config, which checks it. Never reuse the web app's pair.
+
+With --erpnext-panel it makes the pair for ERPNext's "Ask the Executive" panel,
+which signs the other way: the private key goes in oe_connector's site config
+and ERPNEXT_PANEL_PUBLIC_KEYS on the API. A pair of its own too.
 """
 from __future__ import annotations
 
@@ -44,11 +48,22 @@ def main() -> int:
         action="store_true",
         help="make the pair for ERPNext phase 2 (the API and oe_connector) instead",
     )
+    parser.add_argument(
+        "--erpnext-panel",
+        action="store_true",
+        help="make the pair for ERPNext's Ask the Executive panel instead",
+    )
     args = parser.parse_args()
     if args.kid is not None and not KID_RE.fullmatch(args.kid):
         print("--kid must be 1-32 letters, digits, _ or -", file=sys.stderr)
         return 2
     private, public = make_key_pair(args.kid)
+    if args.erpnext_panel:
+        print("# ERPNext, in the bench. Secret:")
+        print(f"bench --site <site> set-config oe_connector_panel_private_key '{private}'")
+        print("# The API only (packages/core):")
+        print(f"ERPNEXT_PANEL_PUBLIC_KEYS={public}")
+        return 0
     if args.erpnext:
         print("# The API only (packages/core). Secret:")
         print(f"ERPNEXT_CALLER_PRIVATE_KEY={private}")

@@ -1914,3 +1914,47 @@ def test_contacts_follow_the_role_on_the_principals_turn_only(roster: SimpleName
     assert _contacts_in_prompt(_private_turn(roster)) is False
     assert _contacts_in_prompt(_principal_web(roster)) is True
     assert _contacts_in_prompt(_teammate_web(roster)) is False
+
+
+# =========================================================================== #
+# ERPNext's "Ask the Executive" panel: a turn that only reads
+# =========================================================================== #
+
+
+def _panel_session() -> Session:
+    return Session(origin_channel="erpnext", erpnext_panel_email="ana@example.com")
+
+
+def test_a_panel_turn_is_offered_its_specialists_and_call_tool_only() -> None:
+    provider = _run_loop(_panel_session(), [], gateway=_gateway())
+    assert _offered(provider) == ["call_tool", "consult_specialist"]
+    # Not the server-side web search either: it could not be refused.
+    assert all("type" not in t or t.get("name") != "web_search" for t in provider.calls[0]["tools"])
+
+
+def test_a_panel_turn_refuses_anything_else_the_model_emits() -> None:
+    gateway = _gateway()
+    gateway.call_tool = AsyncMock(return_value=json.dumps({"rows": []}))
+    tool_uses = [
+        SimpleNamespace(type="tool_use", id="tu-0", name="call_tool",
+                        input={"name": "erpnext__run_report", "arguments": {}}),
+        SimpleNamespace(type="tool_use", id="tu-1", name="call_tool",
+                        input={"name": "google_workspace__send_gmail_message", "arguments": {}}),
+        SimpleNamespace(type="tool_use", id="tu-2", name="remember_fact", input={"fact": "x"}),
+        SimpleNamespace(type="tool_use", id="tu-3", name="load_mcp_server",
+                        input={"server_name": "x", "url": "https://x.test"}),
+    ]
+    provider = _run_loop(_panel_session(), tool_uses, gateway=gateway)
+    results = {
+        block["tool_use_id"]: str(block["content"])
+        for message in provider.calls[1]["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    }
+    # Only the ERPNext read reached the gateway.
+    assert [c.args[0]["name"] for c in gateway.call_tool.await_args_list] == ["erpnext__run_report"]
+    gateway.load_mcp_server.assert_not_awaited()
+    for refused in ("tu-1", "tu-2", "tu-3"):
+        assert "panel you can only read ERPNext" in results[refused]
+    assert "untrusted_content" in results["tu-0"]

@@ -3154,12 +3154,12 @@ class MCPGateway:
             arguments, attached_artifacts = expanded
         if erpnext_call:
             # The reply now quotes the asker's own ERPNext view: keep it out
-            # of peer and department memory (Session.turn_read_erpnext).
+            # of peer and department memory (Session.read_erpnext).
             from openexecutive.orchestrator.schedule_tools import current_session
 
             turn = current_session.get()
             if turn is not None:
-                turn.turn_read_erpnext = True
+                turn.read_erpnext = True
         result = await session.call_tool(
             "call_tool",
             {

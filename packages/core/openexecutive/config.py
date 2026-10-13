@@ -832,6 +832,11 @@ class Settings(BaseSettings):
     # run as the asker's own ERPNext user; unset, they run as the service user
     # for the principal only (phase 1).
     erpnext_caller_private_key: str | None = Field(None, alias="ERPNEXT_CALLER_PRIVATE_KEY")
+    # ERPNext phase 2b (integrations/erpnext_panel.py): oe_connector's public
+    # key(s), `kid:key[,kid:key]`, which sign who is asking from the "Ask the
+    # Executive" panel inside ERPNext. Unset, POST /webhook/erpnext/chat
+    # answers 503.
+    erpnext_panel_public_keys: str | None = Field(None, alias="ERPNEXT_PANEL_PUBLIC_KEYS")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools

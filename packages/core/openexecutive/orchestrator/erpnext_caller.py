@@ -21,6 +21,10 @@ anything the model or the message says:
   in a shared thread; in the web chat only under signed callers
   (``api.caller.signing_on``), since without them the signed-in email is
   whatever the holder of the shared secret sends;
+- the person in ERPNext's own "Ask the Executive" panel
+  (``Session.erpnext_panel_email``, set only by integrations/erpnext_panel.py
+  from an assertion oe_connector signed): asked as that same ERPNext user,
+  whose word ERPNext already is;
 - anyone else is refused here, before ERPNext is asked. That includes every
   run nobody is watching (``Session.unattended``): a scheduled follow-up's
   text and recipient come from whoever scheduled it, so signing it as the
@@ -100,6 +104,9 @@ def caller_for(session: Any) -> ErpnextCaller:
 
     if session is None:
         raise CallerRefused("ERPNext is not available outside a conversation.", "no_session")
+    panel_email = getattr(session, "erpnext_panel_email", "")
+    if isinstance(panel_email, str) and "@" in panel_email and getattr(session, "unattended", False) is not True:
+        return ErpnextCaller("user", panel_email.strip().lower())
     if getattr(session, "unattended", False) is True:
         raise CallerRefused(
             "ERPNext is not available in a run nobody is watching, such as a "

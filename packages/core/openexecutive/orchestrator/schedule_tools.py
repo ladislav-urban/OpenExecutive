@@ -1969,6 +1969,47 @@ def private_turn_withheld_error(tool_name: str) -> str:
     })
 
 
+# A turn from ERPNext's "Ask the Executive" panel (Session.erpnext_panel_email)
+# only asks: it is offered its specialists and `call_tool`, and `call_tool`
+# runs ERPNext's read tools only. An allow-list, not a withheld set, so a tool
+# added later is not offered there by default. The email is ERPNext's word,
+# which an ERPNext administrator can change, so nothing on this turn may
+# write, send, schedule, or reach any other system.
+ERPNEXT_PANEL_TOOLS: frozenset[str] = frozenset({"call_tool", "consult_specialist"})
+
+
+def erpnext_panel_turn(session: Any) -> bool:
+    """Whether ``session`` is a turn from ERPNext's panel."""
+    email = getattr(session, "erpnext_panel_email", "")
+    return isinstance(email, str) and bool(email)
+
+
+def erpnext_panel_withholds(tool_name: str, tool_input: Any) -> bool:
+    """Whether a panel turn may not run this tool use: anything outside
+    ``ERPNEXT_PANEL_TOOLS``, or a ``call_tool`` naming anything but an
+    ``erpnext__*`` tool."""
+    if tool_name not in ERPNEXT_PANEL_TOOLS:
+        return True
+    if tool_name != "call_tool":
+        return False
+    named = tool_input.get("name") if isinstance(tool_input, dict) else None
+    return not (
+        isinstance(named, str)
+        and named.strip().lower().replace("-", "_").startswith("erpnext__")
+    )
+
+
+def erpnext_panel_withheld_error(tool_name: str) -> str:
+    """The JSON error tool_result for a call a panel turn may not make."""
+    return json.dumps({
+        "error": (
+            f"{tool_name} is not available here: in ERPNext's panel you can only "
+            "read ERPNext and consult your specialists. Say what you cannot do "
+            "from here; the person can ask in the OpenExecutive app. Do not retry."
+        )
+    })
+
+
 def handlers_for_offered_tools(
     tools: list[dict[str, Any]], handlers: dict[str, Any]
 ) -> dict[str, Any]:
