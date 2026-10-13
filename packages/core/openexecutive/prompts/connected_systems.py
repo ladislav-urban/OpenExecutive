@@ -137,6 +137,24 @@ _ERPNEXT_GUIDE = (
 )
 
 
+# Who ERPNext answers. Phase 1 reads as one service user, so only the
+# principal; phase 2 (ERPNEXT_CALLER_PRIVATE_KEY set) runs each call as the
+# asker's own ERPNext user (orchestrator.erpnext_caller). Process-constant.
+_ERPNEXT_PRINCIPAL_ONLY = (
+    "ERPNext figures are for the principal only: on anyone else's turn "
+    "the calls are refused, so tell them you cannot share ERPNext data "
+    "with them. "
+)
+_ERPNEXT_AS_CALLER = (
+    "Each call runs as the person asking, with their own ERPNext "
+    "permissions, so two people can get different answers to one question; "
+    "never pass a teammate's ERPNext figures to anyone else. A teammate "
+    "without an ERPNext user, or asking where others can read the reply, is "
+    "refused: tell them you cannot look it up for them here. ERPNext is not "
+    "available in runs nobody is watching. "
+)
+
+
 def google_tool_manifest(settings: Settings) -> dict[str, tuple[str, ...]]:
     """``GOOGLE_TOOL_MANIFEST`` narrowed to what workspace-mcp actually loaded.
 
@@ -246,10 +264,8 @@ def render_connected_systems(
             "and project questions. You can read, never change anything there. "
             "Payroll, employee, bank-account and personal contact data are out "
             "of reach; when a call is refused, say what you could not see. "
-            "ERPNext figures are for the principal only: on anyone else's turn "
-            "the calls are refused, so tell them you cannot share ERPNext data "
-            "with them. "
-            "Call these tools directly with `call_tool`: "
+            + (_ERPNEXT_AS_CALLER if (settings.erpnext_caller_private_key or "").strip() else _ERPNEXT_PRINCIPAL_ONLY)
+            + "Call these tools directly with `call_tool`: "
             + ", ".join(f"`{n}`" for n in sorted(ERPNEXT_TOOLS))
             + "."
         )

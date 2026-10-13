@@ -1273,6 +1273,7 @@ class Executive:
         principal_role = pin_turn_principal_role(session, workspace_mode)
         # Act as me, pinned with the mode so the tool list, the handler and
         # the turn's audit privacy agree even if the setting flips mid-turn.
+        session.turn_read_erpnext = False
         delegation_pin = pin_turn_delegation(session, _speaker_text(memory_text, user_message))
         system_blocks = build_system_blocks(
             session.company_profile,
@@ -1459,7 +1460,10 @@ class Executive:
             # unrostered sender (None) records nothing.
             from openexecutive.attunement.open_loops import schedule_open_loop_pass
 
-            if not touched_mail:
+            # Nor for a turn that read ERPNext: the pass reads the reply, and
+            # a loop's summary is shown to other people (the nudges, the
+            # principal's board), so it could repeat the asker's own figures.
+            if not touched_mail and not session.turn_read_erpnext:
                 schedule_open_loop_pass(
                     speaker_text, full_response, person_id=person_id,
                     session_id=session.session_id,
@@ -1490,8 +1494,9 @@ class Executive:
             # Never for a turn private to the principal (mail from one of
             # their contacts, mail they forwarded): the reply summarises that
             # mail, and peer and department memory are read on other people's
-            # turns. Nor for a turn that touched the speaker's own mailbox.
-            if not _private_to_principal(session) and not touched_mail:
+            # turns. Nor for a turn that touched the speaker's own mailbox, or
+            # read ERPNext (the asker's own view: Session.turn_read_erpnext).
+            if not _private_to_principal(session) and not touched_mail and not session.turn_read_erpnext:
                 from openexecutive.memory.honcho_client import sync_turn as _honcho_sync
                 _honcho_sync(
                     speaker_text,
@@ -1592,6 +1597,7 @@ class Executive:
 
         workspace_mode = pin_turn_workspace_mode(session)
         principal_role = pin_turn_principal_role(session, workspace_mode)
+        session.turn_read_erpnext = False
         delegation_pin = pin_turn_delegation(session, _speaker_text(memory_text, user_message))
         system_blocks = build_system_blocks(
             session.company_profile,
@@ -1962,7 +1968,10 @@ class Executive:
             # Open loops — see stream_chat.
             from openexecutive.attunement.open_loops import schedule_open_loop_pass
 
-            if not touched_mail:
+            # Nor for a turn that read ERPNext: the pass reads the reply, and
+            # a loop's summary is shown to other people (the nudges, the
+            # principal's board), so it could repeat the asker's own figures.
+            if not touched_mail and not session.turn_read_erpnext:
                 schedule_open_loop_pass(
                     speaker_text, final_response, person_id=person_id,
                     session_id=session.session_id, workspace_mode=workspace_mode,
@@ -1982,7 +1991,7 @@ class Executive:
         # Mirror the completed exchange into Honcho (see stream_chat for
         # rationale, and for why a turn private to the principal — or one
         # that touched the speaker's own mailbox — is not).
-        if not _private_to_principal(session) and not touched_mail:
+        if not _private_to_principal(session) and not touched_mail and not session.turn_read_erpnext:
             from openexecutive.memory.honcho_client import sync_turn as _honcho_sync
             _honcho_sync(
                 speaker_text,

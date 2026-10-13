@@ -549,16 +549,54 @@ servers, so nothing stops a plain-HTTP site URL). Keep `erpnext` in
 runtime server under any configured or `tokens` name, which would otherwise
 be sent that name's credential.
 
-**Who sees ERPNext data.** In this first phase every call runs as the one
-service user, which can see more than most people can in ERPNext itself. So
-the gateway answers `erpnext__*` calls only on the principal's own verified
-turn (the web chat as the principal, their own Slack, Discord or
-secret-verified Telegram, or their own Gmail-authenticated email). A
-teammate, an unverified sender, Google Chat, the scheduler, workflows and
-other unattended runs are refused, and the refusal is audited. Calls running
-as the asking person come in a later phase. A site the gateway cannot reach at startup is skipped with a
-warning, but is still named as connected, so its calls fail until the next
-restart after the site is back.
+**Who sees ERPNext data.** Out of the box every call runs as the one service
+user, which can see more than most people can in ERPNext itself. So the
+gateway answers `erpnext__*` calls only on the principal's own verified turn
+(the web chat as the principal, their own Slack, Discord or secret-verified
+Telegram, or their own Gmail-authenticated email). A teammate, an unverified
+sender, Google Chat, the scheduler, workflows and other unattended runs are
+refused, and the refusal is audited. A site the gateway cannot reach at
+startup is skipped with a warning, but is still named as connected, so its
+calls fail until the next restart after the site is back.
+
+**Each person as themselves (phase 2).** With a signing key on both sides,
+every call runs as the asking person's own ERPNext user, found by the email on
+their People entry, with their roles and user permissions:
+
+```bash
+uv run --with cryptography python scripts/make-caller-keys.py --erpnext
+```
+
+It prints `ERPNEXT_CALLER_PRIVATE_KEY`, for the API's environment only, and a
+`bench set-config` line that gives oe_connector the public key. Make a pair of
+its own; never reuse the web app's. Then restart both. From then on:
+
+- The gateway signs who is asking into each call (Ed25519, one call, those
+  exact arguments, 60 seconds, once), and oe_connector refuses any call
+  without a valid assertion, or presented by any user but the service user.
+  A site without the public key refuses a signed call rather than ignore it.
+- The principal is asked as on any verified surface, as before. A verified
+  teammate is asked only where nobody else reads the reply (the web chat, a
+  Slack or Discord DM, a Telegram chat), so their view never lands in a
+  shared thread; in the web chat only with signed callers on
+  (`CALLER_ASSERTION_PUBLIC_KEYS`, `docs/auth.md`), since without them the
+  signed-in email is whatever the holder of the shared secret sends.
+- Someone with no enabled ERPNext System User under that email (or whose
+  email is the service user's) gets nothing, not the service user's view.
+- Runs nobody is watching (the scheduler, scheduled follow-ups, workflows)
+  are still refused: whoever scheduled one wrote its text and chose its
+  recipient. oe_connector already holds a `service` caller to the reports
+  you list (`set-config -p oe_connector_unattended_reports '["Accounts
+  Receivable"]'`), for the morning brief's fixed-audience ERP block in a
+  later phase.
+
+To rotate, add the new public key to `oe_connector_caller_public_keys`
+(comma-separated), move the API to the new private key, then drop the old one.
+A malformed key on either side refuses every call rather than falling back.
+
+A turn that read ERPNext never adds its reply to peer or department memory,
+which other people's turns read, nor opens a follow-up loop from it, so one
+person's figures do not resurface for someone else.
 
 What the Executive can reach is decided in ERPNext, not here: business modules
 only, never payroll, employee, bank-account or personal contact data, standard
@@ -566,9 +604,8 @@ reports only, rows capped at 500, and a company required for totals when the
 user sees several. Every `erpnext__*` call is in the audit log as a
 `tool_invocation` row, and its result reaches the model inside an
 `<untrusted_content source="erpnext">` block, since customers and suppliers
-write some of ERPNext's text. The design, including later phases (acting as the
-asking person, alerts, the chat panel inside ERPNext), is in the app's
-`docs/erpnext-integration.md`.
+write some of ERPNext's text. The design, including later phases (alerts,
+the chat panel inside ERPNext), is in the app's `docs/erpnext-integration.md`.
 
 ---
 

@@ -8382,12 +8382,58 @@ integrations:
     when `erpnext` is in MCPGateway.server_names, i.e. the config named it.
 
     Who may call (security review, phase 1): the service user sees more than
-    most people do in ERPNext, so mcp_gateway._check_erpnext_caller refuses
-    every `erpnext__*` call (matched on the normalized name) unless
+    most people do in ERPNext, so without ERPNEXT_CALLER_PRIVATE_KEY
+    mcp_gateway._check_erpnext_caller refuses every `erpnext__*` call
+    (matched on the normalized name) unless
     content_trust.principal_speaking(current_session) holds. Teammates,
     unverified senders, Google Chat, unattended runs and workflows outside a
-    session get an audited integration_outbound_blocked refusal. This lifts
-    per person once phase 2 runs calls as the asking person.
+    session get an audited integration_outbound_blocked refusal.
+
+    Acting as the caller (phase 2): with ERPNEXT_CALLER_PRIVATE_KEY set
+    (scripts/make-caller-keys.py --erpnext; the public half goes in
+    oe_connector's site config as oe_connector_caller_public_keys), the
+    gateway asks orchestrator.erpnext_caller.caller_for(session) who is
+    asking, from the session only: the principal on a verified surface (their
+    People email, any surface, as in phase 1); a verified teammate
+    (teammate_on_verified_surface) only in a conversation nobody else reads
+    (history_chat.private_chat: web chat, Slack/Discord DM, Telegram), and in
+    the web chat only under signed callers (api.caller.signing_on and
+    web_caller_signed_in; open mode takes x-caller-email on trust). Every
+    unattended run is refused (security review: a scheduled follow-up's text
+    and recipient come from whoever scheduled it, so a `service` signature
+    would hand a refused teammate the service user's view). Anyone else, no
+    email on the People entry, or a failed roster read is likewise an
+    audited refusal before ERPNext is asked. Just before each downstream
+    request (_erpnext_downstream, so the undiscovered retry gets its own) it
+    adds `_oe_caller` to a copy of the arguments: v1.<payload>.<sig>, Ed25519
+    over claims {args, aud: "oe_connector", exp, iat, jti, kid, kind, sub,
+    tool}, where args is the SHA-256 of the arguments' canonical JSON (sorted
+    keys, no spaces) and the lifetime is 60s. A value the model wrote there is
+    replaced; the model's own input (and its audit row) never holds one. It
+    rides in the arguments because extensible-mcp sends a URL server one
+    fixed Bearer token and passes arguments through untouched. oe_connector
+    (oe_connector/caller.py) removes it before logging, verifies signature,
+    audience, lifetime, tool and digest, spends the jti with Redis SET NX,
+    refuses a call authenticated as anyone but the "OE Reader" service user,
+    refuses a signed call when it has no public key (a half-configured pair
+    fails closed), and runs the tool under frappe.set_user as the one enabled
+    System User with that email (none, or an OE Reader user: nothing, never
+    the service user's view). It also accepts `service`, limited to
+    oe_connector_unattended_reports plus search_catalog and describe_doctype,
+    for the morning brief's fixed-audience block later; nothing signs one yet. Both repos' tests check one fixed
+    signing vector. A malformed key on either side refuses every call. The
+    Connected Systems line switches with the key (process-constant, so block
+    0 stays cached): each answer is the asker's own view, never passed on.
+
+    Shared memory (security review): the chat loop mirrors each reply into
+    Honcho peer memory and every consulted department's memory, both read on
+    other people's turns. The gateway sets Session.turn_read_erpnext (reset
+    at each turn's start in stream_chat and the committee path) on every
+    ERPNext call it forwards, in either phase, and that turn skips the sync
+    and the open-loop pass (it reads the reply, and loop summaries reach
+    nudges and the principal's board), as a turn that touched the speaker's
+    mailbox does. Episodic extraction
+    of the speaker's own words is unchanged.
 
     Trust and audit: every call is a normal `tool_invocation` audit row with
     input and result. The chat loop (executive._stream_agent_loop, MCP
@@ -8418,9 +8464,8 @@ integrations:
     is no knowledge/erp collection: retrieval feeds specialists by domain,
     who cannot call the tools, while the Executive reads the catalog live
     through erpnext__search_catalog. Later phases (design in
-    oe_connector's docs/erpnext-integration.md): a signed caller assertion so
-    calls run as the asking person, ERPNext webhooks into alerts, and a chat
-    panel inside ERPNext.
+    oe_connector's docs/erpnext-integration.md): ERPNext webhooks into
+    alerts, and a chat panel inside ERPNext.
   own_gmail: |
     Act as me (delegation) connects a second, separate Gmail — the
     principal's own — read and drafted into by delegation.gmail.DelegateGmail

@@ -17,8 +17,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote
 
+from openexecutive.api.caller_signing import load_private_key
 from openexecutive.config import Settings, get_settings, mcp_config_file_present
 from openexecutive.memory import drive_reads
+from openexecutive.orchestrator import erpnext_caller
+from openexecutive.orchestrator.erpnext_caller import ErpnextCaller
 from openexecutive.people.identity import RosterAllow
 from openexecutive.utils.html_tags import strip_tags
 
@@ -720,34 +723,71 @@ def _token_names(config_path: Path | None) -> frozenset[str]:
     )
 
 
-def _check_erpnext_caller(tool_name: str) -> str | None:
-    """Refuse an ERPNext call unless the principal is speaking on a surface
-    that proved it (``content_trust.principal_speaking``).
-
-    Phase 1 reads ERPNext as one service user, which sees more than most
-    people do in ERPNext itself; until calls run as the asking person, its
-    figures go to the principal only — never a teammate, an unverified
-    sender, an email from an unauthenticated address or an unattended run."""
+def _refuse_erpnext_call(tool_name: str, reason: str, message: str) -> str:
     from openexecutive.audit import log_event as audit_log
+
+    logger.warning("refused ERPNext call: tool=%s reason=%s", tool_name, reason)
+    audit_log(
+        "integration_outbound_blocked",
+        f"Refused an ERPNext call (tool={tool_name}, reason={reason})",
+        actor="mcp_gateway",
+        details={"tool": tool_name, "field": "caller", "address": f"<{reason}>"},
+    )
+    return json.dumps({"error": f"{tool_name} is not available here: {message}"})
+
+
+def _check_erpnext_caller(tool_name: str) -> tuple[str | None, ErpnextCaller | None]:
+    """Who an ERPNext call runs as: ``(refusal, None)`` when this turn may
+    not ask, else ``(None, caller)``, where ``caller`` is None in phase 1.
+
+    Phase 1 (no ``ERPNEXT_CALLER_PRIVATE_KEY``) reads ERPNext as one service
+    user, which sees more than most people do in ERPNext itself, so its
+    figures go to the principal only (``content_trust.principal_speaking``)
+    — never a teammate, an unverified sender, an email from an
+    unauthenticated address or an unattended run. Phase 2 signs the asker
+    into the call instead (``erpnext_caller``), and oe_connector runs it as
+    their own ERPNext user."""
     from openexecutive.orchestrator.content_trust import principal_speaking
     from openexecutive.orchestrator.schedule_tools import current_session
 
-    if principal_speaking(current_session.get()):
-        return None
-    logger.warning("refused ERPNext call outside the principal's turn: tool=%s", tool_name)
-    audit_log(
-        "integration_outbound_blocked",
-        f"Refused an ERPNext call outside the principal's own turn (tool={tool_name})",
-        actor="mcp_gateway",
-        details={"tool": tool_name, "field": "caller", "address": "<not-principal>"},
+    setting = erpnext_caller.signing_setting()
+    if not setting:
+        if principal_speaking(current_session.get()):
+            return None, None
+        return _refuse_erpnext_call(
+            tool_name, "not-principal",
+            "ERPNext data is shared only with the principal, on their own "
+            "verified turn. Say you cannot look it up for this person; do not "
+            "retry with another tool.",
+        ), None
+    try:
+        load_private_key(setting)
+    except ValueError:
+        logger.error("ERPNEXT_CALLER_PRIVATE_KEY is malformed; refusing every ERPNext call")
+        return _refuse_erpnext_call(
+            tool_name, "key-malformed",
+            "ERPNext's caller key is misconfigured on this install. Tell the "
+            "user an operator needs to fix ERPNEXT_CALLER_PRIVATE_KEY.",
+        ), None
+    try:
+        return None, erpnext_caller.caller_for(current_session.get())
+    except erpnext_caller.CallerRefused as refused:
+        return _refuse_erpnext_call(tool_name, refused.reason, refused.message), None
+
+
+def _erpnext_downstream(normalized: str, arguments: Any, caller: ErpnextCaller | None) -> Any:
+    """The arguments to send for an ERPNext call: in phase 2, a copy carrying
+    a fresh signed assertion of ``caller`` (one per request: a retry gets its
+    own); otherwise the model's own, minus any assertion it wrote."""
+    plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
+    if caller is None:
+        return plain
+    return erpnext_caller.with_assertion(
+        erpnext_caller.signing_setting(),
+        caller,
+        tool=normalized[len(_ERPNEXT_PREFIX):],
+        arguments=plain,
     )
-    return json.dumps({
-        "error": (
-            f"{tool_name} is not available here: ERPNext data is shared only "
-            "with the principal, on their own verified turn. Say you cannot "
-            "look it up for this person; do not retry with another tool."
-        )
-    })
 
 
 def _norm_key(key: str) -> str:
@@ -2982,8 +3022,15 @@ class MCPGateway:
         tool_name = tool_input.get("name", "")
         normalized = _normalize_tool_name(tool_name)
         attached_artifacts: list[str] = []
-        if normalized.startswith(_ERPNEXT_PREFIX):
-            blocked = _check_erpnext_caller(tool_name)
+        erpnext_call = normalized.startswith(_ERPNEXT_PREFIX)
+        erp_caller: ErpnextCaller | None = None
+        if erpnext_call:
+            if not isinstance(arguments, dict):
+                return _refuse(
+                    tool_name, "arguments", "<non-object>",
+                    reason="arguments must be a JSON object — refusing.",
+                )
+            blocked, erp_caller = _check_erpnext_caller(tool_name)
             if blocked is not None:
                 return blocked
         # Every Google Workspace call acts as the Executive's own account.
@@ -3105,9 +3152,22 @@ class MCPGateway:
             if isinstance(expanded, str):
                 return expanded
             arguments, attached_artifacts = expanded
+        if erpnext_call:
+            # The reply now quotes the asker's own ERPNext view: keep it out
+            # of peer and department memory (Session.turn_read_erpnext).
+            from openexecutive.orchestrator.schedule_tools import current_session
+
+            turn = current_session.get()
+            if turn is not None:
+                turn.turn_read_erpnext = True
         result = await session.call_tool(
             "call_tool",
-            {"tool_name": tool_input["name"], "arguments": arguments},
+            {
+                "tool_name": tool_input["name"],
+                "arguments": _erpnext_downstream(normalized, arguments, erp_caller)
+                if erpnext_call
+                else arguments,
+            },
         )
         result_text = result.content[0].text if result.content else json.dumps({"result": None})
         # A pinned tool called before startup priming reached it: the prompt
@@ -3119,7 +3179,12 @@ class MCPGateway:
         ):
             result = await session.call_tool(
                 "call_tool",
-                {"tool_name": tool_input["name"], "arguments": arguments},
+                {
+                    "tool_name": tool_input["name"],
+                    "arguments": _erpnext_downstream(normalized, arguments, erp_caller)
+                    if erpnext_call
+                    else arguments,
+                },
             )
             result_text = result.content[0].text if result.content else json.dumps({"result": None})
         # On the final result, retry or not: roster answer tokens are hidden
