@@ -13,6 +13,7 @@ from openexecutive.alerts.models import (
     AlertChannel,
     AlertEvent,
     TriageDecision,
+    is_private_alert,
 )
 
 if TYPE_CHECKING:
@@ -177,6 +178,9 @@ async def evaluate_and_dispatch(
         }
         # Never anyone's drafted documents: they are their owners' alone.
         for a in store.recent_alerts(limit=20, db_path=path, exclude_source="artifact")
+        # Nor, for an event others may see, the principal's private alerts:
+        # triage could echo their headlines into a broadcast.
+        if event.private or not is_private_alert(a)
     ]
     try:
         initiatives = get_active_initiatives()

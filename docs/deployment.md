@@ -630,6 +630,24 @@ bench --site <site> set-config oe_connector_openexecutive_url https://<api-host>
 - One question at a time per person, thirty an hour; conversations last an
   idle hour and end when the API restarts.
 
+**ERPNext alerts (phase 3).** oe_connector can raise alerts on the
+principal's board: a receivable overdue past a threshold, stock below its
+reorder level on a best-selling item (both checked daily, as the service
+user), and a purchase invoice far above the supplier's usual size (on
+submit). It signs them with the panel's site key (above) and posts them to
+`POST /webhook/erpnext/events`, so set those up first, then turn the rules on
+in the bench:
+
+```bash
+bench --site <site> set-config -p oe_connector_alerts '{"enabled": 1, "overdue_days": 60, "overdue_min_amount": 1000, "top_items": 20, "large_invoice_factor": 3}'
+```
+
+Every ERPNext alert is private to the principal, because the checks see the
+service user's view; each goes through the usual triage, and a rule keeps
+one open alert per document. OpenExecutive takes 20 ERPNext events a minute
+(the alert pipeline's budget is shared with mail and chat); oe_connector
+keeps to that pace and retries the rest on its next run.
+
 Once a conversation has read ERPNext, none of its replies, then or later,
 is added to peer or department memory, which other people's turns read, nor
 opens a follow-up loop, so one person's figures do not resurface for someone
@@ -641,9 +659,8 @@ reports only, rows capped at 500, and a company required for totals when the
 user sees several. Every `erpnext__*` call is in the audit log as a
 `tool_invocation` row, and its result reaches the model inside an
 `<untrusted_content source="erpnext">` block, since customers and suppliers
-write some of ERPNext's text. The design, including later phases (alerts
-and the morning brief's ERP block), is in the app's
-`docs/erpnext-integration.md`.
+write some of ERPNext's text. The design, including later phases (the
+morning brief's ERP block), is in the app's `docs/erpnext-integration.md`.
 
 ---
 

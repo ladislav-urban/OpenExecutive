@@ -123,10 +123,15 @@ def verify_panel_assertion(
     body: bytes,
     now: int,
     ledger: JtiLedger,
+    audience: str = AUDIENCE,
 ) -> str:
     """The ERPNext user's email ``token`` vouches for, for this one request
     ``body``; raises ``PanelRefused``. Its ``jti`` is spent only when every
-    other check passes."""
+    other check passes.
+
+    With another ``audience`` (``integrations.erpnext_events``) the site
+    itself is speaking: ``sub`` must be "" and "" is returned. The audience
+    keeps one route's assertion from being replayed at the other."""
     if not token or len(token) > _MAX_ASSERTION_LEN or not token.isascii():
         raise PanelRefused("malformed")
     parts = token.split(".")
@@ -148,7 +153,7 @@ def verify_panel_assertion(
     if not isinstance(claims, dict) or claims.get("kid") != signed_by:
         raise PanelRefused("key_id")
     iat, exp = _seconds(claims.get("iat")), _seconds(claims.get("exp"))
-    if claims.get("aud") != AUDIENCE:
+    if claims.get("aud") != audience:
         raise PanelRefused("audience")
     if not 0 < exp - iat <= MAX_LIFETIME_S:
         raise PanelRefused("lifetime")
@@ -166,7 +171,10 @@ def verify_panel_assertion(
     jti, sub = claims.get("jti"), claims.get("sub")
     if not isinstance(jti, str) or not _JTI_RE.fullmatch(jti):
         raise PanelRefused("malformed")
-    if (
+    if audience != AUDIENCE:
+        if sub != "":
+            raise PanelRefused("subject")
+    elif (
         not isinstance(sub, str)
         or len(sub) > _MAX_EMAIL_LEN
         or sub != sub.strip().lower()

@@ -472,3 +472,35 @@ def test_grounded_triage_text_is_stored_unchanged(monkeypatch, db: Path) -> None
     assert (stored.headline, stored.body, stored.suggested_action) == (
         "Dana Whitfield: renew 48 units", "Renewal of 48 units due Friday.", "Reply to Dana",
     )
+
+
+def test_private_alerts_stay_out_of_triage_for_events_others_may_see(monkeypatch, db: Path) -> None:
+    """A private alert's headline (an ERPNext receivable) is not shown to the
+    triage of a Slack or email event, whose alert can be broadcast."""
+    from openexecutive.agents import triage as triage_module
+    from openexecutive.alerts import pipeline
+
+    seen: list[list[str]] = []
+
+    async def fake_triage(self, event, **kwargs):  # noqa: ARG001
+        seen.append([a["headline"] for a in kwargs["recent_alerts"]])
+        return TriageDecision(
+            alert=True,
+            severity=AlertSeverity.HIGH,
+            channels=[AlertChannel.PERSISTED],
+            headline=f"Headline for {event.external_id}",
+            body="b",
+            topic_tags=["finance"],
+            dedup_key=event.external_id,
+        )
+
+    monkeypatch.setattr(triage_module.TriageAgent, "triage", fake_triage)
+
+    def run(event: AlertEvent) -> None:
+        asyncio.run(pipeline.evaluate_and_dispatch(event, db_path=db))
+
+    run(AlertEvent(source="erpnext", external_id="erp-1", subject="s", body="b", private=True))
+    run(AlertEvent(source="slack", external_id="slack-1", subject="s", body="b"))
+    run(AlertEvent(source="erpnext", external_id="erp-2", subject="s", body="b", private=True))
+    assert seen[1] == []
+    assert "Headline for erp-1" in seen[2]
