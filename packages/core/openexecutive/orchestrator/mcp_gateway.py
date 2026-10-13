@@ -674,6 +674,82 @@ def _refuse(tool: str, field: str, shown: str, *, reason: str) -> str:
     return json.dumps({"error": reason})
 
 
+_ERPNEXT_PREFIX = "erpnext__"
+
+# Server names `load_mcp_server` never registers. extensible-mcp hands a URL
+# server the line of the `tokens` file named after it, and indexes its tools as
+# `<name>__*`: a runtime server named `erpnext` would be sent the ERPNext key
+# and secret and would answer for the tool names block 0 pins.
+_RESERVED_SERVER_NAMES = frozenset({"erpnext", "fetch", "google_workspace", "microsoft_365"})
+
+
+def _tokens_path(config_path: Path) -> Path:
+    """The tokens file extensible-mcp reads for this config: the one a
+    `.env` beside the config names in EXTENSIBLE_MCP_TOKENS_FILE (relative
+    to the config's directory), else `tokens` beside it. The gateway's own
+    environment does not reach the child (`_FORWARDED_ENV_VARS`), so only
+    that `.env` can move it."""
+    directory = config_path.parent
+    chosen = ""
+    try:
+        for line in (directory / ".env").read_text(encoding="utf-8").splitlines():
+            key, sep, value = line.strip().partition("=")
+            if sep and key.strip() == "EXTENSIBLE_MCP_TOKENS_FILE":
+                # The last one wins, as in extensible-mcp's own .env reader.
+                chosen = value.strip().strip("'\"")
+    except (OSError, UnicodeDecodeError):
+        pass
+    if not chosen:
+        return directory / "tokens"
+    named = Path(chosen).expanduser()
+    return named if named.is_absolute() else directory / named
+
+
+def _token_names(config_path: Path | None) -> frozenset[str]:
+    """The server names the gateway's tokens file holds a line for (names
+    only; nothing past the `=` is kept). Empty when there is no such file or
+    it cannot be read."""
+    if config_path is None:
+        return frozenset()
+    try:
+        lines = _tokens_path(config_path).read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return frozenset()
+    return frozenset(
+        name.strip() for name, sep, _ in (line.partition("=") for line in lines) if sep and name.strip()
+    )
+
+
+def _check_erpnext_caller(tool_name: str) -> str | None:
+    """Refuse an ERPNext call unless the principal is speaking on a surface
+    that proved it (``content_trust.principal_speaking``).
+
+    Phase 1 reads ERPNext as one service user, which sees more than most
+    people do in ERPNext itself; until calls run as the asking person, its
+    figures go to the principal only — never a teammate, an unverified
+    sender, an email from an unauthenticated address or an unattended run."""
+    from openexecutive.audit import log_event as audit_log
+    from openexecutive.orchestrator.content_trust import principal_speaking
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    if principal_speaking(current_session.get()):
+        return None
+    logger.warning("refused ERPNext call outside the principal's turn: tool=%s", tool_name)
+    audit_log(
+        "integration_outbound_blocked",
+        f"Refused an ERPNext call outside the principal's own turn (tool={tool_name})",
+        actor="mcp_gateway",
+        details={"tool": tool_name, "field": "caller", "address": "<not-principal>"},
+    )
+    return json.dumps({
+        "error": (
+            f"{tool_name} is not available here: ERPNext data is shared only "
+            "with the principal, on their own verified turn. Say you cannot "
+            "look it up for this person; do not retry with another tool."
+        )
+    })
+
+
 def _norm_key(key: str) -> str:
     return re.sub(r"[^a-z0-9]", "", key.lower())
 
@@ -2618,15 +2694,28 @@ def _drop_blocked_tools(text: object) -> Any:
     return filter_search_results(text, lambda name: not _is_blocked_m365_auth_tool(name))
 
 
-def _is_undiscovered_refusal(tool_name: object, result_text: object) -> bool:
-    """Whether the gateway refused a pinned Google tool only because this
-    session had not discovered it yet. Pinned names only: any other tool
-    still needs the model's own search, as before."""
-    from openexecutive.prompts.connected_systems import PINNED_GOOGLE_TOOLS
+def _is_undiscovered_refusal(
+    tool_name: object, result_text: object, server_names: Iterable[str] = ()
+) -> bool:
+    """Whether the gateway refused a pinned tool (Google or ERPNext) only
+    because this session had not discovered it yet. Pinned names only: any
+    other tool still needs the model's own search, as before. ERPNext's are
+    never primed at startup, so this retry is how they are discovered — and
+    only when `erpnext` is a server the config named (``server_names``), so
+    the retry never searches up a same-named server from anywhere else."""
+    from openexecutive.prompts.connected_systems import (
+        ERPNEXT_SERVER,
+        PINNED_ERPNEXT_TOOLS,
+        PINNED_GOOGLE_TOOLS,
+    )
 
+    if not isinstance(tool_name, str):
+        return False
+    pinned = tool_name in PINNED_GOOGLE_TOOLS or (
+        tool_name in PINNED_ERPNEXT_TOOLS and ERPNEXT_SERVER in server_names
+    )
     return (
-        isinstance(tool_name, str)
-        and tool_name in PINNED_GOOGLE_TOOLS
+        pinned
         and isinstance(result_text, str)
         and result_text.startswith(f"Error: Tool '{tool_name}' ")
         and _UNDISCOVERED_MARKER in result_text
@@ -2731,6 +2820,9 @@ class MCPGateway:
         # Connected Systems prompt section reads it, so a gateway that never
         # started never reads as connected.
         self.server_names: tuple[str, ...] = ()
+        # The config the gateway started with; its directory holds the
+        # `tokens` file whose names load_mcp_server must not take.
+        self._config_path: Path | None = None
         # What startup priming found, for /health and the Setup status page.
         # None until priming finishes, so a probe that crashed can never read
         # as "every pinned tool is present" — only PinnedToolsProbe(missing=())
@@ -2753,6 +2845,7 @@ class MCPGateway:
         await self._session.__aenter__()
         await self._session.initialize()
         self.server_names = tuple(configured_server_names(config_path))
+        self._config_path = config_path
         logger.info("MCPGateway started — config=%s", config_path)
 
     async def close(self) -> None:
@@ -2807,6 +2900,10 @@ class MCPGateway:
             return False
         if found:
             return True
+        if not tool_name.startswith(_GW_PREFIX):
+            # The hint below is about workspace-mcp's settings only.
+            logger.warning("MCPGateway: pinned tool %s not found by search", tool_name)
+            return False
         if settings is None:
             settings = get_settings()
         # Both causes, because the old text named only the rename and sent the
@@ -2885,6 +2982,10 @@ class MCPGateway:
         tool_name = tool_input.get("name", "")
         normalized = _normalize_tool_name(tool_name)
         attached_artifacts: list[str] = []
+        if normalized.startswith(_ERPNEXT_PREFIX):
+            blocked = _check_erpnext_caller(tool_name)
+            if blocked is not None:
+                return blocked
         # Every Google Workspace call acts as the Executive's own account.
         if _is_apps_script_tool(tool_name):
             return _refuse(
@@ -3013,7 +3114,9 @@ class MCPGateway:
         # told the model to call it directly, so discover it and retry once.
         # The refused call ran nothing, and every gate above has already
         # passed these same arguments.
-        if _is_undiscovered_refusal(tool_name, result_text) and await self._discover(tool_name):
+        if _is_undiscovered_refusal(tool_name, result_text, self.server_names) and await self._discover(
+            tool_name
+        ):
             result = await session.call_tool(
                 "call_tool",
                 {"tool_name": tool_input["name"], "arguments": arguments},
@@ -3066,6 +3169,20 @@ class MCPGateway:
         url: str = tool_input["url"]
         if not url.startswith("https://"):
             return json.dumps({"error": "load_mcp_server requires an HTTPS URL"})
+        name = str(tool_input.get("name") or "").strip()
+        if (
+            name in _RESERVED_SERVER_NAMES
+            or name in self.server_names
+            or name in _token_names(self._config_path)
+        ):
+            # A configured server's name would be handed its credential from
+            # the tokens file and answer for its tool names.
+            return json.dumps({
+                "error": (
+                    f"load_mcp_server cannot use the name '{name[:64]}': it belongs "
+                    "to a configured server. Choose another name."
+                )
+            })
         result = await session.call_tool(
             "load_mcp_server",
             {"name": tool_input["name"], "url": url},

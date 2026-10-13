@@ -65,6 +65,7 @@ from openexecutive.orchestrator.calendar_tools import (
 from openexecutive.orchestrator.content_trust import (
     principal_only_withheld,
     principal_only_withheld_error,
+    wrap_untrusted,
 )
 from openexecutive.orchestrator.debug_events import DebugCollector
 from openexecutive.orchestrator.decision_tools import (
@@ -201,6 +202,14 @@ def _contacts_in_prompt(session: Any) -> bool:
 
 # A tool name as the process log may show it (see _loggable_tool).
 _LOGGABLE_TOOL_RE = re.compile(r"[a-z0-9_]{1,64}")
+
+
+def _is_erpnext_tool(name: object) -> bool:
+    """Whether ``name`` is an ERPNext tool, in any case or hyphenation the
+    gateway would route there (the gateway's gate matches the same way).
+    Customers and suppliers write some of ERPNext's text, so what these
+    return reaches the model as untrusted content."""
+    return isinstance(name, str) and name.strip().lower().replace("-", "_").startswith("erpnext__")
 
 
 def _loggable_tool(label: str) -> str:
@@ -2778,6 +2787,12 @@ class Executive:
                         results_by_id[tu["id"]] = _tool_error_result(tool_label, raw)
                         continue
                     result = raw
+                    if tu["name"] == "call_tool" and _is_erpnext_tool(tool_label):
+                        # ERPNext free text (remarks, descriptions, names) is
+                        # written by customers and suppliers too. Labelled here,
+                        # on the way to the model only: a run_script program
+                        # still gets the JSON it parses.
+                        result = wrap_untrusted(result, source="erpnext", author=tool_label)
                     if private_turn and tu["name"] == "search_tools":
                         # Offer a private turn PRIVATE_TURN_MCP_TOOLS only.
                         result = filter_search_results(result, private_turn_allows_mcp_tool)
@@ -2918,6 +2933,9 @@ class Executive:
                     script_result = json.dumps({"error": "the script did not finish"})
                     script_failed = True
                     script_stats: dict[str, Any] = {}
+                    # Whether the script read ERPNext: its result then carries
+                    # that text back, and is labelled like a direct call's.
+                    script_read_erpnext = False
                     # aclosing: a stopped turn closes the script, and with it
                     # the Monty worker, instead of leaving it to the GC.
                     async with contextlib.aclosing(
@@ -2940,6 +2958,8 @@ class Executive:
                         async for kind, payload in script_steps:
                             for call_input, text, raised in made:
                                 label = str(call_input["name"])[:200]
+                                if not call_input.get("own") and _is_erpnext_tool(label):
+                                    script_read_erpnext = True
                                 if call_input.get("own"):
                                     # One of the Executive's own tools: the
                                     # same chip and row as a direct call.
@@ -3039,7 +3059,11 @@ class Executive:
                             elif kind == "done":
                                 script_result, script_failed = payload
                     logger.info("← run_script  result=%s", _trunc(script_result))
-                    results_by_id[tu["id"]] = script_result
+                    results_by_id[tu["id"]] = (
+                        wrap_untrusted(script_result, source="erpnext", author="run_script")
+                        if script_read_erpnext
+                        else script_result
+                    )
                     # Agent Activity: the built tool as one card, with the
                     # calls it made (the result lists them, capped). Sent by
                     # the round's event replay below, like specialist events.

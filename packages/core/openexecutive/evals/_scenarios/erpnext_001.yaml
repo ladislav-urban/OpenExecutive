@@ -1,0 +1,14 @@
+id: erpnext_001
+domain: mcp
+description: "With the erpnext server connected (oe_connector on a demo ERPNext site), a revenue question goes straight to the pinned ERPNext tools — catalog, then a standard report — and the answer states the company, currency and period of every figure it quotes"
+requires_mcp: true
+query: "What was our revenue last quarter, and which three customers brought in the most of it?"
+expected_tool_calls:
+  - call_tool
+quality_criteria:
+  calls_erpnext_tools_directly_without_search_tools: true
+  uses_a_standard_erpnext_report_rather_than_adding_up_invoices_by_hand: true
+  states_company_currency_and_period_for_the_figures: true
+  names_the_top_customers_with_their_amounts: true
+  does_not_invent_figures_erpnext_did_not_return: true
+  does_not_name_internal_tool_names_to_the_user: true

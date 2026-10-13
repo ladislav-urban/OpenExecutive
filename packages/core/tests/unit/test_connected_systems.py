@@ -1,9 +1,10 @@
 """The Connected Systems section of cached block 0 (prompts/connected_systems.py)
-and the gateway's handling of the pinned Google tools it names
+and the gateway's handling of the pinned Google and ERPNext tools it names
 (orchestrator/mcp_gateway.py `prime_pinned_tools`, the undiscovered retry)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import re
 from collections.abc import Iterator
 from typing import Any
@@ -15,8 +16,10 @@ from openexecutive.config import get_settings
 from openexecutive.orchestrator.mcp_gateway import MCPGateway, gateway_server_names
 from openexecutive.prompts.cache_manager import build_system_blocks
 from openexecutive.prompts.connected_systems import (
+    ERPNEXT_TOOLS,
     GOOGLE_TOOL_MANIFEST,
     GOOGLE_TOOLS_ABOVE_CORE,
+    PINNED_ERPNEXT_TOOLS,
     PINNED_GOOGLE_TOOLS,
     google_tool_manifest,
     pinned_google_tools,
@@ -223,6 +226,27 @@ def test_persona_override_still_gets_the_section(channel_env: Any) -> None:
     assert "## Connected Systems" in text and GMAIL_SEARCH in text
 
 
+def test_erpnext_connected_pins_its_read_tools(channel_env: Any) -> None:
+    text = _render(("erpnext", "fetch"))
+    assert "ERPNext: connected, read-only" in text
+    for name in PINNED_ERPNEXT_TOOLS:
+        assert f"`{name}`" in text
+    assert "company, currency and period" in text
+    # Named on its own line, not again among the servers to search.
+    assert "**Other tool servers:** `fetch`." in text
+
+
+def test_erpnext_tools_cannot_change_anything() -> None:
+    assert frozenset(ERPNEXT_TOOLS) == PINNED_ERPNEXT_TOOLS
+    for name in ERPNEXT_TOOLS:
+        assert name.startswith("erpnext__")
+        assert not any(verb in name for verb in ("create", "update", "delete", "submit", "draft"))
+
+
+def test_without_erpnext_nothing_claims_it(channel_env: Any) -> None:
+    assert "ERPNext" not in _render(("fetch", "google_workspace"))
+
+
 def test_gateway_server_names() -> None:
     gw = MCPGateway()
     assert gateway_server_names(gw) == ()
@@ -285,6 +309,61 @@ def test_an_unpinned_tool_is_never_searched_for_the_model() -> None:
     out = asyncio.run(gateway.call_tool({"name": name, "arguments": {}}))
     assert out == _undiscovered(name)
     assert forwarded.await_count == 1
+
+
+@pytest.fixture
+def principal_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator import content_trust
+
+    monkeypatch.setattr(content_trust, "principal_speaking", lambda _session: True)
+
+
+def _erpnext_gateway(replies: list[str]) -> tuple[MCPGateway, AsyncMock]:
+    gateway, forwarded = _gateway(replies)
+    gateway.server_names = ("erpnext",)
+    return gateway, forwarded
+
+
+def test_an_erpnext_tool_refused_as_undiscovered_is_discovered_and_retried_once(
+    principal_turn: None,
+) -> None:
+    name = "erpnext__run_report"
+    gateway, forwarded = _erpnext_gateway([_undiscovered(name), _search_hit(name), '{"rows": []}'])
+    out = asyncio.run(
+        gateway.call_tool({"name": name, "arguments": {"report_name": "General Ledger"}})
+    )
+    assert out == '{"rows": []}'
+    calls = [c.args for c in forwarded.await_args_list]
+    assert [c[0] for c in calls] == ["call_tool", "search_tools", "call_tool"]
+    assert calls[1][1] == {"query": "erpnext run report", "top_k": 10}
+    assert calls[0] == calls[2]
+
+
+def test_no_erpnext_retry_unless_the_config_named_erpnext(principal_turn: None) -> None:
+    # A same-named server loaded from anywhere else is never searched up.
+    name = "erpnext__run_report"
+    gateway, forwarded = _gateway([_undiscovered(name)])
+    assert asyncio.run(gateway.call_tool({"name": name, "arguments": {}})) == _undiscovered(name)
+    assert forwarded.await_count == 1
+
+
+@pytest.mark.parametrize("name", ["erpnext__get_record", "ERPNext__run-report"])
+def test_erpnext_is_refused_unless_the_principal_is_speaking(
+    name: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.orchestrator import content_trust, mcp_gateway
+
+    audited: list[str] = []
+    monkeypatch.setattr(content_trust, "principal_speaking", lambda _session: False)
+    monkeypatch.setattr(
+        "openexecutive.audit.log_event", lambda event, *_a, **_k: audited.append(event)
+    )
+    gateway, forwarded = _erpnext_gateway(['{"doc": {}}'])
+    out = asyncio.run(gateway.call_tool({"name": name, "arguments": {"doctype": "Customer"}}))
+    assert "only with the principal" in json.loads(out)["error"]
+    assert forwarded.await_count == 0
+    assert audited == ["integration_outbound_blocked"]
+    assert mcp_gateway._ERPNEXT_PREFIX == "erpnext__"
 
 
 def test_other_errors_are_not_retried() -> None:
