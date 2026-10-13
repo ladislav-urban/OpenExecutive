@@ -360,7 +360,12 @@ async def _prefetch_department_for_call(
     """
     from openexecutive.departments.registry import slug_for_specialist
     from openexecutive.memory.honcho_client import prefetch_department
+    from openexecutive.orchestrator.schedule_tools import current_session, erpnext_panel_turn
 
+    # ERPNext's panel: ERPNext's word names the asker, so its specialists
+    # read no department's memory (integrations.erpnext_panel).
+    if erpnext_panel_turn(current_session.get()):
+        return ""
     slug = slug_for_specialist(call["specialist"])
     if slug is None:
         return ""

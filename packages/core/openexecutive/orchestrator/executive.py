@@ -129,11 +129,15 @@ from openexecutive.orchestrator.router import (
     route_parallel,
 )
 from openexecutive.orchestrator.schedule_tools import (
+    ERPNEXT_PANEL_TOOLS,
     PRIVATE_TURN_WITHHELD_TOOLS,
     SCHEDULE_TOOL_HANDLERS,
     SCHEDULE_TOOLS,
     UNATTENDED_WITHHELD_TOOLS,
     current_session,
+    erpnext_panel_turn,
+    erpnext_panel_withheld_error,
+    erpnext_panel_withholds,
     filter_tools_for_workspace_mode,
     private_turn_allows_mcp_tool,
     private_turn_withheld_error,
@@ -815,6 +819,34 @@ def _artifact_row_owner(tool_name: str) -> int | None:
     return current_viewer().person_id
 
 
+def _conversation_read_erpnext(session: Any) -> bool:
+    """Whether this conversation has read ERPNext in any turn: the session's
+    flag, else the audit log's ``mcp:erpnext__`` rows for its id (a channel
+    adapter builds a new Session per message, and a restart rebuilds them
+    all). Its replies can restate the asker's own ERPNext figures, so they
+    stay out of everything other people's turns read. Fails closed: an
+    unreadable audit log answers yes."""
+    if getattr(session, "read_erpnext", False) is True:
+        return True
+    session_id = getattr(session, "session_id", None)
+    if not session_id:
+        return False
+    try:
+        from openexecutive.audit.logger import get_audit_logger
+
+        found = bool(
+            get_audit_logger().query(
+                event_type="tool_invocation", session_id=session_id, q="mcp:erpnext__", limit=1
+            )
+        )
+    except Exception:
+        logger.warning("couldn't check whether the conversation read ERPNext — keeping it private", exc_info=True)
+        return True
+    if found:
+        session.read_erpnext = True
+    return found
+
+
 def _speaker_text(memory_text: str | None, user_message: str) -> str:
     """The speaker's own words for this turn, which every post-turn pass reads
     instead of the prompt — episodic extraction, open loops and peer memory:
@@ -1273,7 +1305,6 @@ class Executive:
         principal_role = pin_turn_principal_role(session, workspace_mode)
         # Act as me, pinned with the mode so the tool list, the handler and
         # the turn's audit privacy agree even if the setting flips mid-turn.
-        session.turn_read_erpnext = False
         delegation_pin = pin_turn_delegation(session, _speaker_text(memory_text, user_message))
         system_blocks = build_system_blocks(
             session.company_profile,
@@ -1463,7 +1494,7 @@ class Executive:
             # Nor for a turn that read ERPNext: the pass reads the reply, and
             # a loop's summary is shown to other people (the nudges, the
             # principal's board), so it could repeat the asker's own figures.
-            if not touched_mail and not session.turn_read_erpnext:
+            if not touched_mail and not _conversation_read_erpnext(session):
                 schedule_open_loop_pass(
                     speaker_text, full_response, person_id=person_id,
                     session_id=session.session_id,
@@ -1495,8 +1526,8 @@ class Executive:
             # their contacts, mail they forwarded): the reply summarises that
             # mail, and peer and department memory are read on other people's
             # turns. Nor for a turn that touched the speaker's own mailbox, or
-            # read ERPNext (the asker's own view: Session.turn_read_erpnext).
-            if not _private_to_principal(session) and not touched_mail and not session.turn_read_erpnext:
+            # read ERPNext (the asker's own view: Session.read_erpnext).
+            if not _private_to_principal(session) and not touched_mail and not _conversation_read_erpnext(session):
                 from openexecutive.memory.honcho_client import sync_turn as _honcho_sync
                 _honcho_sync(
                     speaker_text,
@@ -1597,7 +1628,6 @@ class Executive:
 
         workspace_mode = pin_turn_workspace_mode(session)
         principal_role = pin_turn_principal_role(session, workspace_mode)
-        session.turn_read_erpnext = False
         delegation_pin = pin_turn_delegation(session, _speaker_text(memory_text, user_message))
         system_blocks = build_system_blocks(
             session.company_profile,
@@ -1971,7 +2001,7 @@ class Executive:
             # Nor for a turn that read ERPNext: the pass reads the reply, and
             # a loop's summary is shown to other people (the nudges, the
             # principal's board), so it could repeat the asker's own figures.
-            if not touched_mail and not session.turn_read_erpnext:
+            if not touched_mail and not _conversation_read_erpnext(session):
                 schedule_open_loop_pass(
                     speaker_text, final_response, person_id=person_id,
                     session_id=session.session_id, workspace_mode=workspace_mode,
@@ -1991,7 +2021,7 @@ class Executive:
         # Mirror the completed exchange into Honcho (see stream_chat for
         # rationale, and for why a turn private to the principal — or one
         # that touched the speaker's own mailbox — is not).
-        if not _private_to_principal(session) and not touched_mail and not session.turn_read_erpnext:
+        if not _private_to_principal(session) and not touched_mail and not _conversation_read_erpnext(session):
             from openexecutive.memory.honcho_client import sync_turn as _honcho_sync
             _honcho_sync(
                 speaker_text,
@@ -2083,6 +2113,10 @@ class Executive:
         # an inbound email, a teammate's turn or Google Chat
         # (`content_trust.principal_only_withheld`).
         principal_withheld = principal_only_withheld(current_session.get())
+        # A turn from ERPNext's panel only asks: its specialists and ERPNext's
+        # read tools, nothing else (schedule_tools.ERPNEXT_PANEL_TOOLS) — a
+        # stable tool list of its own, and the same guard at dispatch.
+        panel_turn = erpnext_panel_turn(current_session.get())
         # Python jobs need the sandbox the API image installs: without it the
         # tool is not offered (fixed per process, so the prefix stays stable).
         sandbox_missing = frozenset() if python_job.available() else frozenset({python_job.TOOL_NAME})
@@ -2186,13 +2220,16 @@ class Executive:
                     workspace_mode,
                 )
                 if t["name"] not in not_offered
+                and (not panel_turn or t["name"] in ERPNEXT_PANEL_TOOLS)
             )
             client_tools = sorted(direct_tools, key=lambda t: t["name"])
             tools_with_cache: list[dict[str, Any]] = [
                 *client_tools[:-1],
                 {**client_tools[-1], "cache_control": {"type": "ephemeral", "ttl": "1h"}},
             ]
-            web_search_tool = build_web_search_tool()
+            # A server-side tool cannot be refused at dispatch, so a panel
+            # turn is simply not given it.
+            web_search_tool = None if panel_turn else build_web_search_tool()
             if web_search_tool is not None:
                 tools_with_cache.append(web_search_tool)
             stream_model = model or self._settings.default_model
@@ -2308,6 +2345,32 @@ class Executive:
                     replayed = reading_budget.replay(tu)
                     if replayed is not None:
                         group_results[tu["id"]] = replayed
+            # ERPNext's panel: anything but its specialists and ERPNext's read
+            # tools gets an error result before any guard or handler sees it.
+            if panel_turn:
+                for tu in tool_uses:
+                    if tu["id"] in group_results or not erpnext_panel_withholds(tu["name"], tu["input"]):
+                        continue
+                    label = tu["name"]
+                    if label == "call_tool" and isinstance(tu["input"], dict):
+                        named = tu["input"].get("name")
+                        label = named[:200] if isinstance(named, str) and named else label
+                    logger.warning("%s refused — ERPNext's panel only reads", _loggable_tool(label))
+                    audit_log(
+                        "tool_invocation",
+                        f"{label} refused: ERPNext's panel only reads",
+                        session_id=getattr(current_session.get(), "session_id", None),
+                        turn_id=turn_id,
+                        actor="executive",
+                        details={
+                            "tool": label,
+                            "kind": "mcp" if tu["name"] in MCP_TOOL_NAMES else "skill",
+                            "iteration": iteration,
+                            "ok": False,
+                            "refused": "erpnext_panel",
+                        },
+                    )
+                    group_results[tu["id"]] = erpnext_panel_withheld_error(label)
             dispatch_uses = [tu for tu in tool_uses if tu["id"] not in group_results]
 
             specialist_tool_uses = [tu for tu in dispatch_uses if tu["name"] == "consult_specialist"]

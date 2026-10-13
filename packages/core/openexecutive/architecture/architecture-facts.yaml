@@ -8427,13 +8427,16 @@ integrations:
 
     Shared memory (security review): the chat loop mirrors each reply into
     Honcho peer memory and every consulted department's memory, both read on
-    other people's turns. The gateway sets Session.turn_read_erpnext (reset
-    at each turn's start in stream_chat and the committee path) on every
-    ERPNext call it forwards, in either phase, and that turn skips the sync
-    and the open-loop pass (it reads the reply, and loop summaries reach
-    nudges and the principal's board), as a turn that touched the speaker's
-    mailbox does. Episodic extraction
-    of the speaker's own words is unchanged.
+    other people's turns. The gateway sets Session.read_erpnext on every
+    ERPNext call it forwards, in either phase, and it never resets (security
+    review 2b: a later turn can restate the figures from history);
+    executive._conversation_read_erpnext also finds the conversation's
+    mcp:erpnext__ audit rows, since channel adapters rebuild the Session per
+    message and a restart rebuilds them all (an unreadable log answers yes).
+    Every such turn skips the sync and the open-loop pass (it reads the
+    reply, and loop summaries reach nudges and the principal's board), as a
+    turn that touched the speaker's mailbox does. Episodic extraction of the
+    speaker's own words is unchanged.
 
     Trust and audit: every call is a normal `tool_invocation` audit row with
     input and result. The chat loop (executive._stream_agent_loop, MCP
@@ -8465,7 +8468,48 @@ integrations:
     who cannot call the tools, while the Executive reads the catalog live
     through erpnext__search_catalog. Later phases (design in
     oe_connector's docs/erpnext-integration.md): ERPNext webhooks into
-    alerts, and a chat panel inside ERPNext.
+    alerts, and the morning brief's ERP block (the one path that would sign
+    a `service` caller, whose audience is fixed).
+
+    Ask the Executive panel (phase 2b): oe_connector adds a desk side panel
+    and a full page (/app/ask-the-executive); the browser posts to its
+    whitelisted panel.ask, which forwards to POST /webhook/erpnext/chat
+    (integrations/erpnext_panel.py, exempt from BACKEND_SHARED_SECRET in
+    api/main.py's _UNAUTHENTICATED_PATHS and _webhook_verifies_its_caller).
+    Header x-oe-panel-assertion: v1.<payload>.<sig>, Ed25519 over claims
+    {aud: "openexecutive-erpnext-panel", body (SHA-256 of the exact request
+    body), exp, iat, jti, kid, sub (the ERPNext user's email)}, lifetime at
+    most 120s (oe_connector signs 60s), jti once (api.caller.JtiLedger, one
+    process). Keys: oe_connector_panel_private_key in site config,
+    ERPNEXT_PANEL_PUBLIC_KEYS on the API (make-caller-keys.py
+    --erpnext-panel). The email must name a rostered team member
+    (find_person_by_email; not a contact, not archived) or 403 not_on_roster,
+    which the panel shows as disabled; {"check": true} answers {enabled,
+    name}. Trust: ERPNext's word names the person, and an ERPNext
+    administrator can change a user's email, so the panel's origin_channel
+    "erpnext" is not a verified speaker surface: never principal_speaking,
+    never teammate_on_verified_surface. Its Session.erpnext_panel_email
+    makes the turn read-only: schedule_tools.ERPNEXT_PANEL_TOOLS
+    (consult_specialist, call_tool) is an allow-list applied to the offered
+    list and again at dispatch (executive._stream_agent_loop, before every
+    other guard), call_tool only for erpnext__*, and no server-side web
+    search. erpnext_caller.caller_for signs its ERPNext calls as that same
+    email. No person_id, episodic, briefing, standing-fact (standing_facts="")
+    or Honcho context is passed; router._prefetch_department_for_call returns
+    nothing on a panel turn; the session starts with read_erpnext set, so
+    nothing is mirrored; retrieval is the company knowledge base, as on any
+    channel. The open page's name is wrapped as untrusted content.
+    Conversations are pinned to the email that started them, and one
+    question per person is in flight at a time. In-process
+    conversations (500, idle hour, keyed erpnext:<person id>:<conversation>),
+    30 questions per person per hour, 150s per answer. 503 without the keys,
+    without ERPNEXT_CALLER_PRIVATE_KEY, or without the erpnext server.
+    oe_connector renders replies escaped, Markdown images and links reduced
+    to their words, then Markdown, then sanitize_html with img and a
+    disallowed (an image is fetched on display: a zero-click exfiltration
+    sink); posts only over HTTPS (HTTP to loopback) with redirects off; and
+    lets only an enabled System User ask (not the service user,
+    Administrator or a portal user).
   own_gmail: |
     Act as me (delegation) connects a second, separate Gmail — the
     principal's own — read and drafted into by delegation.gmail.DelegateGmail

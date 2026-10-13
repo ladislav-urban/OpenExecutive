@@ -207,13 +207,13 @@ def test_each_erpnext_call_carries_the_askers_assertion(phase2: Any) -> None:
     # The model's own arguments are left as it wrote them.
     assert args[ASSERTION_ARG] == "v1.forged.by-the-model"
     # The turn's reply now quotes ERPNext: it stays out of shared memory.
-    assert current_session.get().turn_read_erpnext is True
+    assert current_session.get().read_erpnext is True
 
 
 def test_a_refused_call_does_not_mark_the_turn(phase2: Any) -> None:
     gateway, _forwarded = _gateway([])
     asyncio.run(gateway.call_tool({"name": "erpnext__run_report", "arguments": {}}))
-    assert getattr(current_session.get(), "turn_read_erpnext", False) is False
+    assert getattr(current_session.get(), "read_erpnext", False) is False
 
 
 def test_a_retried_call_gets_a_fresh_assertion(phase2: Any) -> None:
@@ -284,3 +284,30 @@ def test_the_prompt_says_whose_view_each_answer_is(monkeypatch: pytest.MonkeyPat
     assert "runs as the person asking" in phase2 and "for the principal only" not in phase2
     assert "not available in runs nobody is watching" in phase2
     assert VECTOR_PRIVATE_KEY.split(":")[1] not in phase2
+
+
+def test_a_conversation_that_read_erpnext_stays_out_of_shared_memory(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A later turn can restate the figures from history, and a channel
+    # adapter builds a new Session per message: the audit log remembers.
+    from openexecutive.orchestrator.executive import _conversation_read_erpnext
+
+    rows: dict[str, list[Any]] = {"telegram:42": [object()]}
+    asked: list[dict[str, Any]] = []
+
+    class _Audit:
+        def query(self, **kw: Any) -> list[Any]:
+            asked.append(kw)
+            return rows.get(kw["session_id"], [])
+
+    monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", lambda: _Audit())
+    fresh = SimpleNamespace(session_id="telegram:42", read_erpnext=False)
+    assert _conversation_read_erpnext(fresh) is True
+    assert fresh.read_erpnext is True
+    assert asked[0]["q"] == "mcp:erpnext__" and asked[0]["event_type"] == "tool_invocation"
+    assert _conversation_read_erpnext(SimpleNamespace(session_id="web-1", read_erpnext=False)) is False
+
+    def broken() -> Any:
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", broken)
+    assert _conversation_read_erpnext(SimpleNamespace(session_id="web-1", read_erpnext=False)) is True

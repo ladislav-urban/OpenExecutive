@@ -20,8 +20,10 @@ when the surface proved it:
 
 Nothing else counts: a teammate, an unrostered sender, the principal's address
 on mail Gmail did not authenticate, Google Chat (which names no verified
-sender), the MCP server (its caller names themselves), and every run nobody is
-watching (the scheduler, alert review, workflows).
+sender), the MCP server (its caller names themselves), ERPNext's "Ask the
+Executive" panel (its email is ERPNext's word, which an ERPNext administrator
+can change; ``integrations.erpnext_panel``), and every run nobody is watching
+(the scheduler, alert review, workflows).
 
 **What may become memory.** The principal's own words, on such a turn only.
 Episodic extraction (decisions, initiatives, advice) is gated on

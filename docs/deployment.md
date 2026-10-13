@@ -594,9 +594,46 @@ To rotate, add the new public key to `oe_connector_caller_public_keys`
 (comma-separated), move the API to the new private key, then drop the old one.
 A malformed key on either side refuses every call rather than falling back.
 
-A turn that read ERPNext never adds its reply to peer or department memory,
-which other people's turns read, nor opens a follow-up loop from it, so one
-person's figures do not resurface for someone else.
+**Ask the Executive inside ERPNext (phase 2b).** oe_connector adds an "Ask
+the Executive" button to every desk page, opening a side panel, and a full
+page at `/app/ask-the-executive`. It needs per-person access (above), and a
+second pair of its own that signs the other way:
+
+```bash
+uv run --with cryptography python scripts/make-caller-keys.py --erpnext-panel
+```
+
+It prints a `bench set-config` line for the private key, which stays in
+ERPNext, and `ERPNEXT_PANEL_PUBLIC_KEYS` for the API. Then tell the site where
+the API is, and restart both:
+
+```bash
+bench --site <site> set-config oe_connector_openexecutive_url https://<api-host>
+```
+
+- The panel posts to the site, never to OpenExecutive: oe_connector forwards
+  each question to `POST /webhook/erpnext/chat`, signed (Ed25519, that exact
+  body, 60 seconds, once) as the signed-in ERPNext user's email. The route
+  is exempt from `BACKEND_SHARED_SECRET` because it checks that signature,
+  and answers 503 without the keys or per-person access.
+- Only someone on the People page as a team member gets answers; anyone else
+  sees the panel disabled. ERPNext's word is all that names them, and an
+  ERPNext administrator can change a user's email, so a panel turn is never
+  treated as the principal or a verified teammate: it can only read ERPNext
+  (as that same ERPNext user) and consult the specialists. It cannot send,
+  schedule, save, or reach any other system. It reads no one's memory,
+  standing facts or department memory, and nothing it says is mirrored
+  anywhere; it does read the company knowledge base, as a teammate on any
+  channel does.
+- The site URL must be HTTPS (plain HTTP only to the same machine); replies
+  are shown with no images or live links.
+- One question at a time per person, thirty an hour; conversations last an
+  idle hour and end when the API restarts.
+
+Once a conversation has read ERPNext, none of its replies, then or later,
+is added to peer or department memory, which other people's turns read, nor
+opens a follow-up loop, so one person's figures do not resurface for someone
+else.
 
 What the Executive can reach is decided in ERPNext, not here: business modules
 only, never payroll, employee, bank-account or personal contact data, standard
@@ -604,8 +641,9 @@ reports only, rows capped at 500, and a company required for totals when the
 user sees several. Every `erpnext__*` call is in the audit log as a
 `tool_invocation` row, and its result reaches the model inside an
 `<untrusted_content source="erpnext">` block, since customers and suppliers
-write some of ERPNext's text. The design, including later phases (alerts,
-the chat panel inside ERPNext), is in the app's `docs/erpnext-integration.md`.
+write some of ERPNext's text. The design, including later phases (alerts
+and the morning brief's ERP block), is in the app's
+`docs/erpnext-integration.md`.
 
 ---
 
