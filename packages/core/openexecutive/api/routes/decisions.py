@@ -670,9 +670,49 @@ _DELEGATED_ACTIONS = DecisionClassSpec(
     after_reject=_actions_dismissed,
 )
 
+async def _create_erpnext_draft(
+    instance: DecisionInstance, body: ApproveBody, request: Request, resolver: int | None
+) -> DecisionInstance:
+    """Make an ERPNext draft card's draft, exactly as stored, on its
+    person's tap (``integrations.erpnext_drafts``, which checks the caller
+    and claims the card first). Nothing on the card is edited here."""
+    from openexecutive.integrations.erpnext_drafts import ApproveRefused, approve
+
+    if body.edits:
+        raise HTTPException(
+            status_code=422,
+            detail={"code": "no_edits", "message": "A draft card is approved as it is; change it in ERPNext."},
+        )
+    try:
+        await approve(instance, caller=api_caller.caller(request), resolver=resolver)
+    except ApproveRefused as refused:
+        raise HTTPException(
+            status_code=refused.status, detail={"code": refused.code, "message": refused.message},
+        ) from None
+    return _refresh(instance.id)
+
+
+async def _erpnext_draft_dismissed(instance: DecisionInstance) -> None:
+    from openexecutive.integrations.erpnext_drafts import dismissed
+
+    await dismissed(instance)
+
+
+# An ERPNext draft the Executive prepared for someone (ERPNext phase 4a,
+# integrations.erpnext_drafts): theirs alone, and never an alert. Nothing is
+# in ERPNext until they approve it; then it is an unsubmitted draft.
+_ERPNEXT_DRAFT = DecisionClassSpec(
+    name="erpnext_draft",
+    principal_only=False,
+    approver_only=True,
+    alert_source=None,
+    approve=_create_erpnext_draft,
+    after_reject=_erpnext_draft_dismissed,
+)
+
 DECISION_CLASSES: dict[str, DecisionClassSpec] = {
     spec.name: spec
-    for spec in (_MEETING_BOOKING, _DELEGATED_REPLY, _TAKE_THE_LEAD, _DELEGATED_ACTIONS)
+    for spec in (_MEETING_BOOKING, _DELEGATED_REPLY, _TAKE_THE_LEAD, _DELEGATED_ACTIONS, _ERPNEXT_DRAFT)
 }
 
 

@@ -776,7 +776,57 @@ def _check_erpnext_caller(tool_name: str) -> tuple[str | None, ErpnextCaller | N
         return _refuse_erpnext_call(tool_name, refused.reason, refused.message), None
 
 
-def _erpnext_downstream(normalized: str, arguments: Any, caller: ErpnextCaller | None) -> Any:
+_DRAFT_OUTSIDE_CARD = (
+    "ERPNext drafts are created only from an approval card the person "
+    "approves in OpenExecutive. Leave them one with propose_erpnext_draft "
+    "if it is offered on this turn; do not retry this tool."
+)
+
+
+def _check_erpnext_draft(
+    tool_name: str, normalized: str, arguments: dict[str, Any]
+) -> tuple[str | None, ErpnextCaller | None]:
+    """Who an ``erpnext__draft*`` call runs as, as ``_check_erpnext_caller``.
+
+    Every such tool is refused from any turn, script or workflow, by prefix
+    (oe_connector may add more): it passes only inside a marker code set for
+    exactly this call (``erpnext_caller.draft_call_for``). The card
+    executor's names the approver; the proposal path's (``draft_check``
+    only) asks as the turn's own caller. Both need per-person access, since
+    oe_connector inserts a draft as the asking person's ERPNext user."""
+    plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
+    marker = erpnext_caller.draft_call_for(normalized, plain)
+    if marker is None:
+        return _refuse_erpnext_call(tool_name, "draft-outside-card", _DRAFT_OUTSIDE_CARD), None
+    setting = erpnext_caller.signing_setting()
+    if not setting:
+        return _refuse_erpnext_call(
+            tool_name, "draft-needs-keys",
+            "ERPNext drafts need per-person access (ERPNEXT_CALLER_PRIVATE_KEY). "
+            "Tell the user an operator must turn it on.",
+        ), None
+    if marker.caller is not None:
+        try:
+            load_private_key(setting)
+        except ValueError:
+            logger.error("ERPNEXT_CALLER_PRIVATE_KEY is malformed; refusing every ERPNext call")
+            return _refuse_erpnext_call(
+                tool_name, "key-malformed",
+                "ERPNext's caller key is misconfigured on this install. Tell the "
+                "user an operator needs to fix ERPNEXT_CALLER_PRIVATE_KEY.",
+            ), None
+        return None, marker.caller
+    blocked, caller = _check_erpnext_caller(tool_name)
+    if blocked is not None:
+        return blocked, None
+    if caller is None or caller.kind != "user":
+        return _refuse_erpnext_call(tool_name, "draft-not-a-person", _DRAFT_OUTSIDE_CARD), None
+    return None, caller
+
+
+def _erpnext_downstream(
+    normalized: str, arguments: Any, caller: ErpnextCaller | None, *, purpose: str | None = None
+) -> Any:
     """The arguments to send for an ERPNext call: in phase 2, a copy carrying
     a fresh signed assertion of ``caller`` (one per request: a retry gets its
     own); otherwise the model's own, minus any assertion it wrote."""
@@ -788,6 +838,7 @@ def _erpnext_downstream(normalized: str, arguments: Any, caller: ErpnextCaller |
         caller,
         tool=normalized[len(_ERPNEXT_PREFIX):],
         arguments=plain,
+        purpose=purpose,
     )
 
 
@@ -2745,6 +2796,7 @@ def _is_undiscovered_refusal(
     only when `erpnext` is a server the config named (``server_names``), so
     the retry never searches up a same-named server from anywhere else."""
     from openexecutive.prompts.connected_systems import (
+        ERPNEXT_DRAFT_TOOLS,
         ERPNEXT_SERVER,
         PINNED_ERPNEXT_TOOLS,
         PINNED_GOOGLE_TOOLS,
@@ -2752,8 +2804,11 @@ def _is_undiscovered_refusal(
 
     if not isinstance(tool_name, str):
         return False
+    # The draft tools are never shown to the model, so they are discovered the
+    # same way (only the gated draft path calls them, by these exact names).
     pinned = tool_name in PINNED_GOOGLE_TOOLS or (
-        tool_name in PINNED_ERPNEXT_TOOLS and ERPNEXT_SERVER in server_names
+        (tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS)
+        and ERPNEXT_SERVER in server_names
     )
     return (
         pinned
@@ -3025,13 +3080,18 @@ class MCPGateway:
         attached_artifacts: list[str] = []
         erpnext_call = normalized.startswith(_ERPNEXT_PREFIX)
         erp_caller: ErpnextCaller | None = None
+        erp_purpose: str | None = None
         if erpnext_call:
             if not isinstance(arguments, dict):
                 return _refuse(
                     tool_name, "arguments", "<non-object>",
                     reason="arguments must be a JSON object — refusing.",
                 )
-            blocked, erp_caller = _check_erpnext_caller(tool_name)
+            if normalized.startswith(erpnext_caller.DRAFT_TOOL_PREFIX):
+                blocked, erp_caller = _check_erpnext_draft(tool_name, normalized, arguments)
+                erp_purpose = erpnext_caller.PURPOSE_DRAFT
+            else:
+                blocked, erp_caller = _check_erpnext_caller(tool_name)
             if blocked is not None:
                 return blocked
         # Every Google Workspace call acts as the Executive's own account.
@@ -3165,7 +3225,7 @@ class MCPGateway:
             "call_tool",
             {
                 "tool_name": tool_input["name"],
-                "arguments": _erpnext_downstream(normalized, arguments, erp_caller)
+                "arguments": _erpnext_downstream(normalized, arguments, erp_caller, purpose=erp_purpose)
                 if erpnext_call
                 else arguments,
             },
@@ -3182,7 +3242,7 @@ class MCPGateway:
                 "call_tool",
                 {
                     "tool_name": tool_input["name"],
-                    "arguments": _erpnext_downstream(normalized, arguments, erp_caller)
+                    "arguments": _erpnext_downstream(normalized, arguments, erp_caller, purpose=erp_purpose)
                     if erpnext_call
                     else arguments,
                 },

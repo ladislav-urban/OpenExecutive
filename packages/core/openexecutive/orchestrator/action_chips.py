@@ -77,6 +77,8 @@ SIDE_EFFECTING_TOOLS: frozenset[str] = frozenset({
     "remind_me",
     # Act as me: a card of actions left for the speaker to approve
     "propose_actions",
+    # ERPNext: a draft card left for the principal to approve
+    "propose_erpnext_draft",
 })
 
 
@@ -262,6 +264,19 @@ def summarize_action(
         count = len(actions) if isinstance(actions, list) else 0
         noun = "action" if count == 1 else "actions"
         payload["summary"] = f"Waiting for your approval: {count} {noun}" if count else "Waiting for your approval"
+        payload["target"] = None
+        payload["link"] = "/today"
+        # The chat shows the card itself under its message, by this id.
+        decision_id = (parsed or {}).get("decision_id")
+        if isinstance(decision_id, int) and not isinstance(decision_id, bool):
+            payload["decision_id"] = decision_id
+    elif tool_name == "propose_erpnext_draft":
+        # Only a stored card earns a chip; it says nothing is in ERPNext yet.
+        if (parsed or {}).get("status") != "waiting_for_approval":
+            return None
+        doctype = (parsed or {}).get("doctype")
+        noun = doctype if doctype in ("ToDo", "Material Request") else "ERPNext"
+        payload["summary"] = f"Waiting for your approval: {noun} draft"
         payload["target"] = None
         payload["link"] = "/today"
         # The chat shows the card itself under its message, by this id.

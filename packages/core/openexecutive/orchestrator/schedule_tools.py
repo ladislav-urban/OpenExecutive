@@ -1765,6 +1765,9 @@ UNATTENDED_WITHHELD_TOOLS: frozenset[str] = frozenset({
     "remember_fact",
     "resolve_roster_request",
     "update_company_profile",
+    # An ERPNext draft card is the principal's own ask, never a run's
+    # (integrations/erpnext_drafts.py; its handler refuses one too).
+    "propose_erpnext_draft",
 })
 
 
@@ -1811,6 +1814,8 @@ def unattended_withheld_error(tool_name: str) -> str:
 #   its retirement) and the company profile are read on everyone's turns and
 #   in every brief. They also refuse any surface but the principal's verified
 #   ones, which email is not.
+# - propose_erpnext_draft: an ERPNext draft is the principal's own ask in a
+#   chat, never what a contact's mail asks for (its handler refuses too).
 # Still offered: the email, DM and invite paths reach the principal and
 # refuse anyone else (`people_tools.PRIVATE_TURN_REFUSAL`, the gateway's
 # allow-list), and an alert the turn raises is private to the principal. The
@@ -1831,6 +1836,7 @@ PRIVATE_TURN_WITHHELD_TOOLS: frozenset[str] = frozenset({
     "draft_artifact",
     "forget_fact",
     "load_mcp_server",
+    "propose_erpnext_draft",
     "read_document",
     "remember_fact",
     "run_executive_research",
@@ -1969,7 +1975,7 @@ def private_turn_withheld_error(tool_name: str) -> str:
     })
 
 
-# A turn from ERPNext's "Ask the Executive" panel (Session.erpnext_panel_email)
+# A turn from ERPNext's "Ask the Dynocortex" panel (Session.erpnext_panel_email)
 # only asks: it is offered its specialists and `call_tool`, and `call_tool`
 # runs ERPNext's read tools only. An allow-list, not a withheld set, so a tool
 # added later is not offered there by default. The email is ERPNext's word,

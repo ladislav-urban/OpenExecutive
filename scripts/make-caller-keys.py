@@ -22,7 +22,7 @@ With --erpnext it makes the separate pair for ERPNext phase 2
 the API, which signs who is asking into each ERPNext call, and the public key
 for oe_connector's site config, which checks it. Never reuse the web app's pair.
 
-With --erpnext-panel it makes the pair for ERPNext's "Ask the Executive" panel,
+With --erpnext-panel it makes the pair for ERPNext's "Ask the Dynocortex" panel,
 which signs the other way: the private key goes in oe_connector's site config
 and ERPNEXT_PANEL_PUBLIC_KEYS on the API. A pair of its own too.
 """
@@ -51,7 +51,7 @@ def main() -> int:
     parser.add_argument(
         "--erpnext-panel",
         action="store_true",
-        help="make the pair for ERPNext's Ask the Executive panel instead",
+        help="make the pair for ERPNext's Ask the Dynocortex panel instead",
     )
     args = parser.parse_args()
     if args.kid is not None and not KID_RE.fullmatch(args.kid):

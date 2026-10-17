@@ -14,6 +14,7 @@ import { isMailboxLink } from "@/lib/replyCards";
 import { hostOf } from "@/lib/url";
 import FeatureName from "@/components/FeatureName";
 import { ChatActionCards } from "@/components/ActionCards";
+import { ChatErpnextDraftCards } from "@/components/ErpnextDraftCards";
 
 interface MessageProps {
   role: "user" | "assistant";
@@ -235,10 +236,20 @@ export default function Message({
   onFeedback,
   status,
 }: MessageProps) {
-  // Approval cards this reply left, shown under it (ActionCards).
+  // Approval cards this reply left, shown under it (ActionCards), and the
+  // ERPNext draft cards (ErpnextDraftCards), by the chip that left each.
   const cardIds = useMemo(
     () =>
       (actions ?? [])
+        .filter((a) => a.tool !== "propose_erpnext_draft")
+        .map((a) => a.decision_id)
+        .filter((id): id is number => typeof id === "number"),
+    [actions],
+  );
+  const draftIds = useMemo(
+    () =>
+      (actions ?? [])
+        .filter((a) => a.tool === "propose_erpnext_draft")
         .map((a) => a.decision_id)
         .filter((id): id is number => typeof id === "number"),
     [actions],
@@ -301,6 +312,8 @@ export default function Message({
         {actions && actions.length > 0 && <ActionChips actions={actions} />}
 
         {cardIds.length > 0 && <ChatActionCards ids={cardIds} />}
+
+        {draftIds.length > 0 && <ChatErpnextDraftCards ids={draftIds} />}
 
         {sources && !isStreaming && <AnswerSourcesFooter sources={sources} />}
 

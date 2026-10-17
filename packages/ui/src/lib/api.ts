@@ -20,8 +20,8 @@ export interface ActionTaken {
   target?: string | null;
   link?: string | null;
   iteration?: number;
-  // An approval card's id (propose_actions): the chat shows the card itself
-  // under the message.
+  // An approval card's id (propose_actions, propose_erpnext_draft): the chat
+  // shows the card itself under the message.
   decision_id?: number;
 }
 
@@ -2007,6 +2007,80 @@ export async function dismissActionCard(id: number): Promise<void> {
   });
   if (res.status === 404 || res.status === 409) return; // already gone or handled
   if (!res.ok) throw await delegationError(res, "Couldn't dismiss that card.");
+}
+
+// An ERPNext draft the Executive prepared for you (a ToDo or a Material
+// Request), yours alone. Nothing is in ERPNext until you approve it here:
+// Approve (POST /decisions/{id}/approve) makes it, unsubmitted, as your own
+// ERPNext user; Dismiss (POST /decisions/{id}/reject) drops it. Every value
+// on it is ERPNext's own reading of the draft, shown as plain text.
+export interface ErpnextDraftField {
+  label: string;
+  value: string;
+}
+
+export interface ErpnextDraftLine {
+  item_code: string;
+  qty: string;
+  warehouse: string;
+}
+
+export interface ErpnextDraftCard {
+  decision_id: number;
+  created_at: string;
+  expires_at: string;
+  why: string;
+  // "ToDo" or "Material Request".
+  doctype: string;
+  fields: ErpnextDraftField[];
+  lines: ErpnextDraftLine[];
+  notes: string[];
+  // Why the last approval didn't make it; approving again is safe.
+  last_error: string;
+}
+
+// What an approval made in ERPNext.
+export interface ErpnextDraftCreated {
+  doctype: string;
+  name: string;
+  // ERPNext's desk link for it, or "" when it gave none.
+  url: string;
+  already_created: boolean;
+}
+
+// [] for a viewer with none, or a backend without them (404).
+export async function getErpnextDraftCards(signal?: AbortSignal): Promise<ErpnextDraftCard[]> {
+  const res = await fetch(`${API_BASE}/erpnext/drafts`, { signal });
+  if (res.status === 403 || res.status === 404) return [];
+  if (!res.ok) throw await delegationError(res, "Couldn't load the drafts waiting for you.");
+  const body = (await res.json()) as { cards: ErpnextDraftCard[] };
+  return body.cards;
+}
+
+export async function approveErpnextDraft(id: number): Promise<ErpnextDraftCreated | null> {
+  const res = await fetch(`${API_BASE}/decisions/${id}/approve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ edits: null }),
+  });
+  if (!res.ok) throw await delegationError(res, "Couldn't make the draft.");
+  const body = (await res.json()) as { final_payload_json?: string | null };
+  try {
+    const payload = JSON.parse(body.final_payload_json ?? "{}") as { created?: ErpnextDraftCreated };
+    return payload.created ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export async function dismissErpnextDraft(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/decisions/${id}/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason: "" }),
+  });
+  if (res.status === 404 || res.status === 409) return; // already gone or handled
+  if (!res.ok) throw await delegationError(res, "Couldn't dismiss that draft.");
 }
 
 // Dismiss a reply card. Its draft is deleted from your Gmail unless you

@@ -8468,8 +8468,8 @@ integrations:
     who cannot call the tools, while the Executive reads the catalog live
     through erpnext__search_catalog. Later phases (design in
     oe_connector's docs/erpnext-integration.md): scheduled saved queries
-    (DSO every Monday), and the budget-variance and weekly-margin alert
-    rules.
+    (DSO every Monday), and phase 4b drafts (Quotation, Purchase Order,
+    teammates, alert-suggested cards, the panel decision).
 
     ERP numbers in the morning brief (phase 3b): briefing/erp_numbers.py,
     on with ERPNEXT_BRIEF_COMPANY. morning_brief gathers it only when
@@ -8538,10 +8538,106 @@ integrations:
     principal's board, so injected text cannot route or broadcast, only
     sway triage's alert/no-alert call. pipeline.evaluate_and_dispatch leaves
     private alerts out of the recent-alerts context when the event being
-    triaged is not private.
+    triaged is not private. Phase 3c adds budget_exceeded (daily, Budget
+    Variance Report: a budget line by cost center or project whose actual
+    this fiscal year is above its budget; key company:dimension:account:FY)
+    and weekly_margin_drop (weekly per company, Gross Profit: last week's
+    margin more than margin_drop_points below the trailing weeks'; key
+    company:<week label>). erpnext_events.KINDS lists all five; oe_connector
+    holds a kind back until it is listed there, because a kind OpenExecutive
+    does not know is skipped yet the request is still accepted, so the event
+    would be marked sent and lost for the month.
 
-    Ask the Executive panel (phase 2b): oe_connector adds a desk side panel
-    and a full page (/app/ask-the-executive); the browser posts to its
+    Drafts a person approves (phase 4a, integrations/erpnext_drafts.py;
+    design oe_connector docs/erpnext-phase4-plan.md). Off unless
+    ERPNEXT_DRAFTS_ENABLED and ERPNEXT_CALLER_PRIVATE_KEY are both set and
+    the gateway has the erpnext server (prompts.connected_systems.
+    erpnext_drafts_on, plus drafts_on's server check). Two DocTypes:
+    ToDo (erpnext__draft_todo) and Material Request
+    (erpnext__draft_material_request), erpnext_drafts.DRAFT_TOOLS; Quotation
+    and Purchase Order, which oe_connector already serves, wait for 4b.
+    Invariants:
+    - The model never gets a draft tool. mcp_gateway._check_erpnext_draft
+      refuses every call whose normalized name starts with erpnext__draft
+      (a prefix, not a list, so oe_connector's draft_quotation /
+      draft_purchase_order / anything later are covered) unless
+      erpnext_caller.draft_call_for finds a marker for exactly that tool and
+      the SHA-256 of exactly those arguments: draft_check_run (the proposal
+      path, erpnext__draft_check only, asked as the turn's own caller via
+      caller_for) or draft_executor_run (the card executor, any draft tool
+      but draft_check, signed as the approver it names; an API request with
+      no session). Markers are ContextVars set only by code around its own
+      gateway call, so a concurrent tool use, a script (run_script) or a
+      workflow never inherits one. Refused calls are audited as
+      integration_outbound_blocked <draft-outside-card>.
+    - Every draft call is signed with an extra purpose: "draft" claim
+      (erpnext_caller.mint purpose=, a user caller only), which
+      oe_connector's caller.py requires on every draft tool; reads carry no
+      purpose, so phase 2's shared vector is unchanged. Drafts need phase 2
+      (no key: refused, reason draft-needs-keys).
+    - Who may propose (erpnext_drafts.offer_refusal; 4a pilot): the
+      principal speaking on a surface that proved it (principal_speaking),
+      never an unattended run, a turn private to the principal or an email
+      turn (origin_channel "email": mail text), never ERPNext's panel (not
+      in ERPNEXT_PANEL_TOOLS either), and never after the turn read the
+      owner's mail (lockdown.MAIL_TOUCHED_WITHHELD_TOOLS). Also in
+      UNATTENDED_WITHHELD_TOOLS and PRIVATE_TURN_WITHHELD_TOOLS. The tool
+      joins the offered list per turn, its own registry like recall_history,
+      so on any other turn a call to it is an unknown tool; the handler
+      re-checks all of it.
+    Proposing: propose_erpnext_draft {why, doctype, fields}. check_fields
+    allows only oe_connector's own fields (ToDo: description, allocated_to,
+    priority, date, reference_type + reference_name; Material Request:
+    company, material_request_type, schedule_date, items of exactly
+    item_code / qty / warehouse, at most 20), types and lengths; then
+    erpnext__draft_check validates as the principal without saving (it runs
+    ERPNext's validate with Notifications counted as sent). A refusal goes
+    back to the model wrapped as untrusted and leaves no card. The card is
+    an erpnext_draft decision (approver_only, alert_source None) with
+    payload {private, person_id, why, digest, doctype, tool, fields,
+    asked_by, card_key, view, attempts, last_error?}; idempotency_key =
+    card_key = "oe:erpnext_draft:<uuid hex>". view is card_view of
+    draft_check's summary (normalised fields, lines, estimated_value and
+    currency, unpriced_items), every value plain() one-line text capped at
+    300 chars, except a ToDo's "What": the stored description in full (up
+    to TEXT_MAX 1000, line breaks kept), since that is what approval sends
+    and a cut would hide text the assignee gets under the approver's name
+    (security review). Limits:
+    CARDS_PER_TURN 3 (TurnDelegation.erpnext_drafts), OPEN_CARDS_MAX 10,
+    CARD_TTL 3 days; the same draft still waiting is the same card.
+    Approving (POST /decisions/{id}/approve, decisions._ERPNEXT_DRAFT, no
+    edits): erpnext_drafts.approve checks the card's person still matches
+    approver_person_id, verified.caller_refusal (signed sign-ins or local
+    login), principal only, drafts still on, TTL, and that the stored
+    payload still passes check_fields unchanged with the tool its doctype
+    names; then claim_for_execution (once), then the stored call with
+    {**fields, idempotency_key: card_key, asked_by} inside
+    draft_executor_run, 60s timeout. Success needs ok, docstatus 0 and a
+    plain name: finish_execution approved_unchanged with
+    final_payload.created {doctype, name, url (only an http(s) desk link:
+    /desk/ from Frappe 16 on, /app/ before),
+    already_created}, external_event_id = the draft's name. Failure:
+    release_claim and update_open_payload with last_error and attempts, so
+    approving again re-sends the same key (oe_connector's "OE Draft" log
+    returns the draft it already made); ATTEMPTS_MAX 5, then failed.
+    Dismiss is reject (audit only). Audit rows, private to the person:
+    erpnext_draft_proposed / created / failed / dismissed. GET
+    /erpnext/drafts lists the caller's own waiting cards (api/routes/
+    erpnext_drafts.py, chat._resolve_caller_person_id; no People entry:
+    []). UI: components/ErpnextDraftCards.tsx on Today's Needs you and
+    under the chat reply whose propose_erpnext_draft chip carries the id.
+    Take the lead never makes one: unattended runs are not offered the
+    tool and the gateway refuses the rest. Nothing in OpenExecutive
+    submits, cancels, amends or deletes; oe_connector inserts as the
+    approver's ERPNext user with docstatus 0, tags it OpenExecutive and
+    logs it in "OE Draft". Prompt: connected_systems adds the constant
+    _ERPNEXT_DRAFTS paragraph to block 0 only while erpnext_drafts_on.
+
+    Ask the Dynocortex panel (phase 2b; "Ask the Executive" before
+    oe_connector #8): oe_connector docks a chat panel, always open, on the
+    right of every desk page (along the bottom below Frappe's 840px md
+    breakpoint), and a full page (/desk/ask-the-executive, the route name
+    unchanged); the browser posts to its
     whitelisted panel.ask, which forwards to POST /webhook/erpnext/chat
     (integrations/erpnext_panel.py, exempt from BACKEND_SHARED_SECRET in
     api/main.py's _UNAUTHENTICATED_PATHS and _webhook_verifies_its_caller).

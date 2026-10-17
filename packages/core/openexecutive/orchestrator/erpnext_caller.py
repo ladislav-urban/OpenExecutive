@@ -21,7 +21,7 @@ anything the model or the message says:
   in a shared thread; in the web chat only under signed callers
   (``api.caller.signing_on``), since without them the signed-in email is
   whatever the holder of the shared secret sends;
-- the person in ERPNext's own "Ask the Executive" panel
+- the person in ERPNext's own "Ask the Dynocortex" panel
   (``Session.erpnext_panel_email``, set only by integrations/erpnext_panel.py
   from an assertion oe_connector signed): asked as that same ERPNext user,
   whose word ERPNext already is;
@@ -44,6 +44,20 @@ server one fixed Bearer token and no per-call header; oe_connector removes it
 before anything else reads the arguments. The model never sees it: it is
 added to the copy sent downstream, and any value the model wrote there is
 replaced.
+
+**Drafts** (phase 4, ``integrations.erpnext_drafts``). oe_connector's
+``draft_*`` tools (``draft_check`` and the ones that insert a draft) need a
+``user`` assertion that also carries ``purpose: "draft"``. The gateway signs
+one only inside a marker set by code, never by the model, bound to one tool
+and the digest of its exact arguments:
+
+- ``draft_check_run``: the proposal path validating a draft for its card,
+  asked as the turn's own caller (``caller_for``), ``draft_check`` only;
+- ``draft_executor_run``: the card executor carrying out an approved card,
+  asked as the approver it names (an API request, with no session).
+
+Any other ``erpnext__draft*`` call is refused in the gateway
+(``mcp_gateway._check_erpnext_draft``).
 """
 from __future__ import annotations
 
@@ -68,6 +82,13 @@ VERSION = "v1"
 AUDIENCE = "oe_connector"
 LIFETIME_S = 60
 ASSERTION_ARG = "_oe_caller"
+# The claim oe_connector requires on every draft tool (its caller.py).
+PURPOSE_DRAFT = "draft"
+# Every oe_connector tool that can write starts with this (normalized gateway
+# names). Matched as a prefix, so a draft tool oe_connector adds later is
+# gated here with no list to keep in step.
+DRAFT_TOOL_PREFIX = "erpnext__draft"
+DRAFT_CHECK_TOOL = "erpnext__draft_check"
 
 ErpnextCallerKind = Literal["user", "service"]
 
@@ -95,6 +116,52 @@ class ErpnextCaller:
     kind: ErpnextCallerKind
     # The asker's email, lowercased; "" for ``service``.
     email: str = ""
+
+
+@dataclass(frozen=True)
+class DraftCall:
+    """One draft call code is about to make: the gateway tool, the digest of
+    its exact arguments, and who it runs as (None: the turn's own caller)."""
+
+    tool: str
+    digest: str
+    caller: ErpnextCaller | None = None
+
+
+_draft_call: ContextVar[DraftCall | None] = ContextVar("erpnext_draft_call", default=None)
+
+
+@contextmanager
+def _marked(call: DraftCall) -> Iterator[None]:
+    token = _draft_call.set(call)
+    try:
+        yield
+    finally:
+        _draft_call.reset(token)
+
+
+def draft_check_run(arguments: dict[str, Any]) -> Any:
+    """Mark the one ``erpnext__draft_check`` call with exactly ``arguments``
+    that the proposal path makes to fill in its card. Code only."""
+    return _marked(DraftCall(DRAFT_CHECK_TOOL, arguments_digest(arguments)))
+
+
+def draft_executor_run(tool: str, arguments: dict[str, Any], approver_email: str) -> Any:
+    """Mark the one draft call (``tool`` with exactly ``arguments``) the card
+    executor makes for an approved card, run as ``approver_email``. Code only."""
+    email = approver_email.strip().lower()
+    if "@" not in email or not tool.startswith(DRAFT_TOOL_PREFIX + "_") or tool == DRAFT_CHECK_TOOL:
+        raise ValueError("a draft is created by a draft tool, as the person who approved it")
+    return _marked(DraftCall(tool, arguments_digest(arguments), ErpnextCaller("user", email)))
+
+
+def draft_call_for(tool: str, arguments: dict[str, Any]) -> DraftCall | None:
+    """The marker covering exactly this call (normalized ``tool``, the
+    arguments without any assertion), or None."""
+    call = _draft_call.get()
+    if call is None or call.tool != tool or call.digest != arguments_digest(arguments):
+        return None
+    return call
 
 
 class CallerRefused(Exception):
@@ -219,17 +286,21 @@ def mint(
     arguments: dict[str, Any],
     now: int | None = None,
     jti: str | None = None,
+    purpose: str | None = None,
 ) -> str:
     """One assertion for one call of ``tool`` (oe_connector's own name, e.g.
-    ``run_report``) with exactly ``arguments``. Raises ``ValueError`` on a
+    ``run_report``) with exactly ``arguments``; ``purpose`` adds that claim
+    (``PURPOSE_DRAFT``, a person's only). Raises ``ValueError`` on a
     malformed key; the message never includes it."""
     if caller.kind == "user" and "@" not in caller.email:
         raise ValueError("a user is named by their email")
     if caller.kind == "service" and caller.email:
         raise ValueError("the service caller names no one")
+    if purpose is not None and (purpose != PURPOSE_DRAFT or caller.kind != "user"):
+        raise ValueError("only a person's draft carries a purpose")
     kid, key = load_private_key(setting)
     iat = int(time.time()) if now is None else now
-    claims = {
+    claims: dict[str, Any] = {
         "args": arguments_digest(arguments),
         "aud": AUDIENCE,
         "exp": iat + LIFETIME_S,
@@ -240,14 +311,21 @@ def mint(
         "sub": caller.email,
         "tool": tool,
     }
+    if purpose is not None:
+        claims["purpose"] = purpose
     signing_input = f"{VERSION}.{_b64url(canonical_json(claims).encode('utf-8'))}"
     return f"{signing_input}.{_b64url(key.sign(signing_input.encode('ascii')))}"
 
 
 def with_assertion(
-    setting: str, caller: ErpnextCaller, *, tool: str, arguments: dict[str, Any]
+    setting: str,
+    caller: ErpnextCaller,
+    *,
+    tool: str,
+    arguments: dict[str, Any],
+    purpose: str | None = None,
 ) -> dict[str, Any]:
     """A copy of ``arguments`` carrying a fresh assertion in ``ASSERTION_ARG``,
     replacing whatever the model put there."""
     plain = {k: v for k, v in arguments.items() if k != ASSERTION_ARG}
-    return {**plain, ASSERTION_ARG: mint(setting, caller, tool=tool, arguments=plain)}
+    return {**plain, ASSERTION_ARG: mint(setting, caller, tool=tool, arguments=plain, purpose=purpose)}
