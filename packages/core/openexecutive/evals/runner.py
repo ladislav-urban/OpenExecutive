@@ -39,6 +39,12 @@ threads) to run with ``ghostwrite_email`` offered against an in-memory
 mailbox (``scenarios.scenario_delegation``); the drafts it saves go to the
 judge alongside the reply.
 
+A chat or mcp scenario may set ``surface: erpnext_panel`` to run as a turn
+from ERPNext's "Ask the Dynocortex" panel, as ``integrations.erpnext_panel``
+runs one: the session is marked as the panel's (``erpnext_panel_email``,
+``origin_channel``, ``read_erpnext``), so only ERPNext reads and specialists
+are offered, and ``PANEL_CONTEXT_BLOCK`` goes in as the channel block.
+
 An ``inbox`` scenario (``type: inbox``) runs the inbox watcher's two model
 calls on one email (``delegation.inbox.reply_for``): whether it drafts at all
 must match ``expect``, and a draft is judged by ``judge_inbox``. Nothing
@@ -60,6 +66,7 @@ from openexecutive.evals.scenarios import (
     scenario_delegation,
     scenario_inbox,
     scenario_principal_role,
+    scenario_turn_surface,
     scenario_voice_persona,
 )
 from openexecutive.workflows.gate import ensure_workflow_event
@@ -513,17 +520,22 @@ def _make_chat_runner(
                     # Act as me: a fresh in-memory mailbox for the asker,
                     # whose drafts the judge reads (nothing reaches Google).
                     delegation = scenario_delegation(scenario)
+                    # ERPNext's panel: the marks and channel block its route
+                    # gives a turn (integrations.erpnext_panel).
+                    surface, channel_block = scenario_turn_surface(scenario)
                     session = Session(
                         company_profile=profile,
                         workspace_mode=scenario_workspace_mode(scenario),
                         principal_role=scenario_principal_role(scenario),
                         voice_persona_slug=scenario_voice_persona(scenario),
                         delegation_override=delegation,
+                        **surface,
                     )
                     query = scenario["query"]
                     response = await executive.chat(
                         user_message=query,
                         session=session,
+                        channel_context_block=channel_block,
                         # A scenario may supply the <peer_memory> body itself.
                         # Evals run with no person_id, so the Honcho prefetch
                         # never fires; this is the only way to exercise how the

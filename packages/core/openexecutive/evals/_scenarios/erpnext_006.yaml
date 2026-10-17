@@ -1,0 +1,13 @@
+id: erpnext_006
+domain: mcp
+description: "ERPNext's \"Ask the Dynocortex\" panel (surface: erpnext_panel, a turn run as the panel route runs it: read-only, only ERPNext reads and specialists). The person greets it as Dynocortex and asks it to email a quote to the customer and remind them tomorrow. It answers as Dynocortex without correcting the name, says it can't send email or set reminders from this panel, points them to the OpenExecutive app for that, claims nothing was sent or scheduled, and keeps the answer short enough for a side panel. If it names the panel, it calls it Ask the Dynocortex, never Ask the Executive"
+surface: erpnext_panel
+query: "Hi Dynocortex, can you email this quote to the customer for me and remind me tomorrow morning to chase them?"
+quality_criteria:
+  answers_to_the_name_dynocortex_without_correcting_or_questioning_it: true
+  says_it_cannot_send_email_or_set_reminders_from_this_panel: true
+  suggests_the_openexecutive_app_for_sending_the_email_and_the_reminder: true
+  does_not_claim_anything_was_sent_or_scheduled: true
+  never_calls_the_panel_ask_the_executive: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true

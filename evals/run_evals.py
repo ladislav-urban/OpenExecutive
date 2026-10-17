@@ -37,20 +37,24 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     if ctx.get("runway_months"):
         profile.financials.runway_months = ctx["runway_months"]
 
-    from openexecutive.evals.scenarios import scenario_principal_role
+    from openexecutive.evals.scenarios import scenario_principal_role, scenario_turn_surface
 
     # `workspace_mode: solo` runs the scenario as solo mode on this session
     # only (see openexecutive.evals.runner), and a `principal_role` block
     # plays a principal with that role; unset uses the install's settings.
+    # `surface: erpnext_panel` runs it as a turn from ERPNext's panel.
+    surface, channel_block = scenario_turn_surface(scenario)
     session = Session(
         company_profile=profile,
         workspace_mode=scenario.get("workspace_mode"),
         principal_role=scenario_principal_role(scenario),
+        **surface,
     )
 
     response = await executive.chat(
         user_message=scenario["query"],
         session=session,
+        channel_context_block=channel_block,
     )
 
     return {
