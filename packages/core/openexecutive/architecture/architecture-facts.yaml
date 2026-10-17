@@ -8679,7 +8679,15 @@ integrations:
     or Honcho context is passed; router._prefetch_department_for_call returns
     nothing on a panel turn; the session starts with read_erpnext set, so
     nothing is mirrored; retrieval is the company knowledge base, as on any
-    channel. The open page's name is wrapped as untrusted content.
+    channel. The open page's name is wrapped as untrusted content. The
+    turn's channel block is erpnext_panel.PANEL_CONTEXT_BLOCK (user turn,
+    not cached): it names the panel "Ask the Dynocortex", says people there
+    call the Executive Dynocortex, and states the read-only limits (suggest
+    the OpenExecutive app for anything else). Eval erpnext_006 runs a turn
+    this way: a chat scenario's `surface: erpnext_panel`
+    (evals.scenarios.scenario_surface) makes evals.runner give the session
+    the panel's marks (erpnext_panel_email = EVAL_PANEL_EMAIL,
+    origin_channel "erpnext", read_erpnext) and pass PANEL_CONTEXT_BLOCK.
     Conversations are pinned to the email that started them, and one
     question per person is in flight at a time. In-process
     conversations (500, idle hour, keyed erpnext:<person id>:<conversation>),

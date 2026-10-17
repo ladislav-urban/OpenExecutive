@@ -137,6 +137,45 @@ def scenario_principal_role(scenario: dict[str, Any]) -> PrincipalRole | None:
     return role
 
 
+# Where a chat scenario's turn comes from, besides the web app (no `surface`).
+SURFACE_ERPNEXT_PANEL = "erpnext_panel"
+# The ERPNext user a panel scenario's turn is from. Only marks the turn as the
+# panel's (schedule_tools.erpnext_panel_turn); nothing is signed or sent.
+EVAL_PANEL_EMAIL = "principal@eval.example"
+
+
+def scenario_surface(scenario: dict[str, Any]) -> str | None:
+    """The scenario's ``surface``: None for the web app (the default), or
+    ``erpnext_panel`` for a turn from ERPNext's "Ask the Dynocortex" panel,
+    which the runner runs as ``integrations.erpnext_panel`` does (its session
+    marks and ``PANEL_CONTEXT_BLOCK``). Anything else raises ValueError, so a
+    typo fails the scenario instead of silently running in the web app."""
+    surface = scenario.get("surface")
+    if surface is None:
+        return None
+    if surface != SURFACE_ERPNEXT_PANEL:
+        raise ValueError(f"surface must be {SURFACE_ERPNEXT_PANEL!r}, got {surface!r}")
+    return SURFACE_ERPNEXT_PANEL
+
+
+def scenario_turn_surface(scenario: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """What the scenario's ``surface`` adds to its turn, for both eval runners
+    (``evals.runner`` and ``evals/run_evals.py``): extra ``Session`` fields and
+    the ``channel_context_block`` for ``Executive.chat``. The web app adds
+    nothing; ERPNext's panel adds what ``integrations.erpnext_panel`` gives a
+    turn."""
+    if scenario_surface(scenario) != SURFACE_ERPNEXT_PANEL:
+        return {}, ""
+    from openexecutive.integrations.erpnext_panel import PANEL_CONTEXT_BLOCK
+
+    session_fields = {
+        "origin_channel": "erpnext",
+        "erpnext_panel_email": EVAL_PANEL_EMAIL,
+        "read_erpnext": True,
+    }
+    return session_fields, PANEL_CONTEXT_BLOCK
+
+
 def scenario_voice_persona(scenario: dict[str, Any]) -> str | None:
     """The scenario's ``voice_persona`` slug, or None to use the install's
     voice. An unknown slug raises ValueError, so a typo fails the scenario
@@ -338,6 +377,11 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             raise ValueError(f"`principal_role`: {e}") from e
     if s.get("voice_persona") is not None:
         scenario_voice_persona(s)
+    if s.get("surface") is not None:
+        try:
+            scenario_surface(s)
+        except ValueError as e:
+            raise ValueError(f"`surface`: {e}") from e
     if s.get("delegation") is not None:
         try:
             scenario_delegation(s)
