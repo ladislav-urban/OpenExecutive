@@ -113,6 +113,8 @@ class TurnDelegation:
     reminders: int = 0
     # Approval cards left this turn (orchestrator.action_card_tools).
     action_cards: int = 0
+    # ERPNext draft cards left this turn (integrations.erpnext_drafts).
+    erpnext_drafts: int = 0
     # The speaker's own words this turn (``executive._speaker_text``): a new
     # contact may take an address they typed, and a draft's address they
     # didn't type is named back to them. Pinned here because the turn's

@@ -841,6 +841,11 @@ class Settings(BaseSettings):
     # principal's morning brief shows (cash, receivables, payables, yesterday's
     # sales). Unset, the brief has no ERP NUMBERS block.
     erpnext_brief_company: str | None = Field(None, alias="ERPNEXT_BRIEF_COMPANY")
+    # ERPNext phase 4a (integrations/erpnext_drafts.py): the principal may have
+    # the Executive prepare ERPNext drafts (a ToDo, a Material Request) on an
+    # approval card they tap; created only then, unsubmitted, as their own
+    # ERPNext user. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
+    erpnext_drafts_enabled: bool = Field(False, alias="ERPNEXT_DRAFTS_ENABLED")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools

@@ -31,6 +31,7 @@ from openexecutive.delegation.settings import (
     pin_turn_delegation,
     turn_delegation,
 )
+from openexecutive.integrations import erpnext_drafts
 from openexecutive.memory.facts import render_facts_for_prompt
 from openexecutive.memory.honcho_client import ReasoningLevel as HonchoReasoningLevel
 from openexecutive.memory.workspace_settings import (
@@ -788,6 +789,7 @@ def builtin_tool_names() -> frozenset[str]:
         *DELEGATION_TOOL_HANDLERS,
         *MAILBOX_TOOL_NAMES,
         *HISTORY_TOOL_HANDLERS,
+        *erpnext_drafts.ERPNEXT_DRAFT_TOOL_HANDLERS,
         *MCP_TOOL_NAMES,
         step_script.RUN_SCRIPT_TOOL,
         step_script.LIST_SAVED_TOOLS_TOOL,
@@ -806,6 +808,8 @@ def _private_tool_row(tool_name: str) -> bool:
         tool_name in DELEGATION_TOOL_NAMES
         or tool_name in FACT_TOOL_HANDLERS
         or tool_name in HISTORY_TOOL_NAMES
+        # The asker's own ERPNext view, as every ERPNext read is.
+        or tool_name == erpnext_drafts.PROPOSE
     )
 
 
@@ -2141,6 +2145,12 @@ class Executive:
         if history_offered:
             delegation_tools = [*delegation_tools, *HISTORY_TOOLS]
             turn_handlers = {**turn_handlers, **HISTORY_TOOL_HANDLERS}
+        # ERPNext drafts (phase 4a): the principal's own turns only, while
+        # drafts are on (erpnext_drafts.offer_refusal). Its own registry, as
+        # above, so on any other turn a call to it is an unknown tool.
+        if erpnext_drafts.offered(current_session.get()):
+            delegation_tools = [*delegation_tools, *erpnext_drafts.ERPNEXT_DRAFT_TOOLS]
+            turn_handlers = {**turn_handlers, **erpnext_drafts.ERPNEXT_DRAFT_TOOL_HANDLERS}
         # Tools an installed extension adds (orchestrator/extensions.py): only
         # on a turn someone is in, never an unattended run or a turn private
         # to the principal, and only where each tool says it is offered.

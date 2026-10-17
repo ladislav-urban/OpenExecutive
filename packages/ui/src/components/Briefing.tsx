@@ -27,6 +27,7 @@ import {
 import { reviewRanLabel } from "@/lib/rhythmCards";
 import InfoTip from "./InfoTip";
 import { ACTION_CARDS_TIP, ActionCardItem, useActionCards } from "./ActionCards";
+import { ERPNEXT_DRAFTS_TIP, ErpnextDraftCardItem, useErpnextDraftCards } from "./ErpnextDraftCards";
 import { REPLIES_WAITING_TIP, ReplyCardItem, useReplyCards } from "./RepliesWaiting";
 import Icon from "./Icon";
 import {
@@ -340,6 +341,8 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   const replies = useReplyCards();
   // Actions it suggested from the caller's email, to approve (Act as me).
   const actionCards = useActionCards();
+  // ERPNext drafts it prepared at the caller's request, to approve.
+  const draftCards = useErpnextDraftCards();
   // Solo's own sections load on their own, so their tiles can count them.
   const principalId = solo ? principalIdOf(today?.people ?? []) : null;
   const projects = useActiveProjects(solo);
@@ -381,6 +384,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
     today.proposals.length === 0 &&
     replies.cards.length === 0 &&
     actionCards.cards.length === 0 &&
+    draftCards.cards.length === 0 &&
     activeDepts.every((d) => d.at_risk_count === 0 && d.off_track_count === 0 && d.awaiting_count === 0) &&
     today.people.every((p) => p.awaiting_count === 0);
 
@@ -430,7 +434,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   // The top three words a commitment as the owner's ("you").
   const principalName =
     (principalId != null && today?.people.find((p) => p.id === principalId)?.full_name) || "";
-  const needsYouCount = mineProposals.length + replies.cards.length + actionCards.cards.length;
+  const needsYouCount = mineProposals.length + replies.cards.length + actionCards.cards.length + draftCards.cards.length;
   const summary: SummaryPart[] = today
     ? briefingSummary({
         needsYou: needsYouCount,
@@ -558,6 +562,12 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
       key: `actions-${card.decision_id}`,
       render: (emphasized: boolean) => (
         <ActionCardItem card={card} onGone={actionCards.gone} emphasized={emphasized} />
+      ),
+    })),
+    ...draftCards.cards.map((card) => ({
+      key: `erpnext-draft-${card.decision_id}`,
+      render: (emphasized: boolean) => (
+        <ErpnextDraftCardItem card={card} onGone={draftCards.gone} emphasized={emphasized} />
       ),
     })),
     ...mineProposals.map((p) => ({
@@ -713,6 +723,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                   </h2>
                   {replies.cards.length > 0 && <InfoTip align="left">{REPLIES_WAITING_TIP}</InfoTip>}
                   {actionCards.cards.length > 0 && <InfoTip align="left">{ACTION_CARDS_TIP}</InfoTip>}
+                  {draftCards.cards.length > 0 && <InfoTip align="left">{ERPNEXT_DRAFTS_TIP}</InfoTip>}
                   <div className="ml-auto flex items-center gap-1">
                     {hasBrief && (
                       <button

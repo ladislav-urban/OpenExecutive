@@ -31,6 +31,7 @@ from openexecutive.api.routes import (
     departments,
     documents,
     episodic,
+    erpnext_drafts,
     evals,
     executive,
     fixtures,
@@ -1012,6 +1013,7 @@ def create_app() -> FastAPI:
     app.include_router(slack_events_router, tags=["slack"])
     app.include_router(erpnext_panel_router, tags=["erpnext"])
     app.include_router(erpnext_events_router, tags=["erpnext"])
+    app.include_router(erpnext_drafts.router, tags=["erpnext"])
     app.include_router(architecture.router, tags=["architecture"])
     app.include_router(guide.router, tags=["guide"])
     app.include_router(health.router, tags=["health"])

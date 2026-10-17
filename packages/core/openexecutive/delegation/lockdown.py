@@ -139,6 +139,9 @@ MAIL_TOUCHED_WITHHELD_TOOLS: frozenset[str] = frozenset({
     "send_department_message",
     "send_company_broadcast",
     "create_alert",
+    # An ERPNext draft: proposed only when the owner asks for it in their own
+    # words, never on a turn whose text mail could have written.
+    "propose_erpnext_draft",
 })
 
 REFUSAL = (

@@ -1,0 +1,19 @@
+id: erpnext_003
+domain: mcp
+description: "ERPNext drafts (phase 4a), with the erpnext server connected and drafts on: the principal asks whether ITEM-1 needs restocking and to order more if so. The Executive reads the stock figures, then proposes a Material Request draft with propose_erpnext_draft for the company, warehouse and a quantity it can justify from what ERPNext returned, says a card is waiting for their approval in the chat and on Today, and never claims the material request exists or was submitted"
+requires_mcp: true
+query: "Is ITEM-1 below its reorder level in Stores? If it is, get a restock going."
+expected_tool_calls:
+  - call_tool
+  - propose_erpnext_draft
+expected_topics:
+  - stock_level_and_reorder_level
+  - draft_card_waiting_for_approval
+quality_criteria:
+  checks_the_stock_in_erpnext_before_proposing_anything: true
+  proposes_a_material_request_draft_rather_than_creating_it: true
+  names_the_quantity_and_warehouse_and_why: true
+  says_nothing_is_in_erpnext_until_they_approve_the_card: true
+  says_the_draft_is_unsubmitted_and_finished_in_erpnext: true
+  never_claims_the_material_request_was_created_or_submitted: true
+  does_not_name_internal_tool_names_to_the_user: true

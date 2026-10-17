@@ -593,9 +593,10 @@ To rotate, add the new public key to `oe_connector_caller_public_keys`
 (comma-separated), move the API to the new private key, then drop the old one.
 A malformed key on either side refuses every call rather than falling back.
 
-**Ask the Executive inside ERPNext (phase 2b).** oe_connector adds an "Ask
-the Executive" button to every desk page, opening a side panel, and a full
-page at `/app/ask-the-executive`. It needs per-person access (above), and a
+**Ask the Dynocortex inside ERPNext (phase 2b).** oe_connector docks an "Ask
+the Dynocortex" chat panel on the right of every desk page, always open (along
+the bottom on narrow screens), and adds a full page at
+`/desk/ask-the-executive`. It needs per-person access (above), and a
 second pair of its own that signs the other way:
 
 ```bash
@@ -665,6 +666,41 @@ service user's view; each goes through the usual triage, and a rule keeps
 one open alert per document. OpenExecutive takes 20 ERPNext events a minute
 (the alert pipeline's budget is shared with mail and chat); oe_connector
 keeps to that pace and retries the rest on its next run.
+
+Two more rules use ERPNext's own report logic: a budget line whose actual
+this fiscal year is above its budget (daily, by the Budget Variance Report),
+and last week's gross margin well below the weeks before it (weekly, by Gross
+Profit). Each stays off until its own key is set in `oe_connector_alerts`
+(`budget_variance`, `weekly_margin`; the options are in oe_connector's
+`alerts.py`). OpenExecutive accepts both kinds from this release on.
+
+**ERPNext drafts (phase 4a).** The owner can ask the Executive to prepare a
+ToDo (a follow-up assigned to someone) or a Material Request (a restock) in
+ERPNext. The Executive checks the draft with ERPNext and leaves a card on
+Today and in the chat showing exactly what will be written; only when the
+owner taps Approve is it created, unsubmitted, as their own ERPNext user, to
+review and submit in ERPNext. Nothing is ever submitted, cancelled or deleted
+from OpenExecutive, and nothing is drafted in a run nobody is watching. It
+needs per-person access (above) and signed sign-ins
+(`CALLER_ASSERTION_PUBLIC_KEYS`, or local login), and both sides turn it on:
+
+```bash
+ERPNEXT_DRAFTS_ENABLED=true   # the API's environment
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_draft_doctypes '["ToDo", "Material Request"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Material Request": 5000}'
+bench --site <site> set-config -p oe_connector_draft_daily_limit 20
+```
+
+The value cap is in company currency (quantity times the item's valuation
+rate, else its last purchase rate); with a cap set, an item with neither is
+refused. List only ToDo and Material Request for now: oe_connector also has
+Quotation and Purchase Order drafts, but OpenExecutive does not offer them
+yet. Each draft is tagged "OpenExecutive", commented with who asked and
+approved, and logged in ERPNext's "OE Draft" list; OpenExecutive's audit log
+has a row for each card proposed, created, failed or dismissed.
 
 Once a conversation has read ERPNext, none of its replies, then or later,
 is added to peer or department memory, which other people's turns read, nor

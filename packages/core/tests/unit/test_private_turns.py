@@ -1380,6 +1380,10 @@ def _offered(provider: _ScriptedStreams) -> list[str]:
 
 
 def test_every_withheld_name_is_a_real_tool() -> None:
+    from openexecutive.integrations.erpnext_drafts import (
+        ERPNEXT_DRAFT_TOOL_HANDLERS,
+        ERPNEXT_DRAFT_TOOLS,
+    )
     from openexecutive.orchestrator.executive import _ALL_SKILL_HANDLERS, _ALL_SKILL_TOOLS
     from openexecutive.orchestrator.mcp_gateway import MCP_TOOL_NAMES
     from openexecutive.orchestrator.schedule_tools import PRIVATE_TURN_WITHHELD_TOOLS
@@ -1388,9 +1392,11 @@ def test_every_withheld_name_is_a_real_tool() -> None:
     # run_script and list_saved_tools are dispatched beside the gateway's
     # meta-tools (step_script).
     gateway_side = MCP_TOOL_NAMES | {RUN_SCRIPT_TOOL, LIST_SAVED_TOOLS_TOOL}
-    names = {t["name"] for t in _ALL_SKILL_TOOLS} | gateway_side
+    # propose_erpnext_draft has its own registry, offered per turn
+    # (integrations.erpnext_drafts), never in _ALL_SKILL_TOOLS.
+    names = {t["name"] for t in _ALL_SKILL_TOOLS} | {t["name"] for t in ERPNEXT_DRAFT_TOOLS} | gateway_side
     assert names >= PRIVATE_TURN_WITHHELD_TOOLS
-    assert set(_ALL_SKILL_HANDLERS) | gateway_side >= PRIVATE_TURN_WITHHELD_TOOLS
+    assert set(_ALL_SKILL_HANDLERS) | set(ERPNEXT_DRAFT_TOOL_HANDLERS) | gateway_side >= PRIVATE_TURN_WITHHELD_TOOLS
 
 
 @pytest.mark.parametrize("mode", ["team", "solo"])
@@ -1836,8 +1842,12 @@ def test_a_normal_turn_offers_and_runs_them_unchanged(roster: SimpleNamespace) -
         provider = _run_loop(_teammate_web(roster), [tool_use], gateway=_gateway())
     handler.assert_awaited_once()
     offered = _offered(provider)
-    # A teammate's turn: everything but the principal-only tools.
-    assert set(offered) >= PRIVATE_TURN_WITHHELD_TOOLS - PRINCIPAL_ONLY_TOOLS
+    # A teammate's turn: everything but the principal-only tools, and
+    # propose_erpnext_draft, which only the principal's own turns are offered
+    # (erpnext_drafts.offer_refusal).
+    from openexecutive.integrations.erpnext_drafts import PROPOSE
+
+    assert set(offered) >= PRIVATE_TURN_WITHHELD_TOOLS - PRINCIPAL_ONLY_TOOLS - {PROPOSE}
     from openexecutive.workflows.step_script import (
         CHAT_TOOL_DEFINITION,
         LIST_SAVED_TOOLS_DEFINITION,

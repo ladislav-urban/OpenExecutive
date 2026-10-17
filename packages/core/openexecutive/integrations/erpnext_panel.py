@@ -1,4 +1,4 @@
-"""``POST /webhook/erpnext/chat`` — ERPNext's "Ask the Executive" panel.
+"""``POST /webhook/erpnext/chat`` — ERPNext's "Ask the Dynocortex" panel.
 
 ERPNext phase 2b (design: oe_connector's ``docs/erpnext-integration.md``,
 "Chat inside ERPNext"). The panel in ERPNext's desk posts to a whitelisted

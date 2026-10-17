@@ -124,6 +124,8 @@ _LABELS: dict[str, str] = {
     "read_my_email_attachment": "Reading an attachment…",
     "remind_me": "Setting a reminder…",
     "propose_actions": "Leaving you a card to approve…",
+    # ERPNext: a draft checked with ERPNext and left on a card to approve
+    "propose_erpnext_draft": "Checking the draft with ERPNext…",
     "my_email_awaiting_reply": "Checking what's waiting on a reply…",
     "my_email_read_before": "Finding the email you mean…",
 

@@ -104,6 +104,11 @@ EVENT_TYPES: tuple[str, ...] = (
     "fact_approval_changed",        # the principal turned "needs my approval" on or off for a teammate's standing facts
     "fact_confirmation",            # an emailed standing-fact change held, confirmed, cancelled or refused (integrations/fact_confirmation.py)
     "grounding",  # unattended prose held back / refused / rewritten for naming people or figures not in its inputs
+    # ERPNext drafts (integrations/erpnext_drafts.py) — written private to the card's person.
+    "erpnext_draft_proposed",   # propose_erpnext_draft left a card; details name the DocType and card, never its fields
+    "erpnext_draft_created",    # the person approved a card and ERPNext made the unsubmitted draft (details.name)
+    "erpnext_draft_failed",     # an approved card's draft wasn't made; the card waits again, retried with the same key
+    "erpnext_draft_dismissed",  # the person dismissed a draft card
 )
 
 
