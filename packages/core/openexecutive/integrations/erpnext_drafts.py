@@ -306,11 +306,44 @@ def _live(card: Any, now: datetime) -> bool:
     return created is not None and now - created <= CARD_TTL
 
 
+# Cards an approval in this process is carrying out right now. The API runs
+# as one process (docker/Dockerfile, make dev), so a draft card left
+# `executing` and not in here was abandoned mid-approval: a cancelled
+# request or a restart. As inbox.SENDING is for reply cards.
+_APPROVING: set[int] = set()
+
+
+def _tidy(person_id: int, now: datetime) -> None:
+    """Put back ``person_id``'s draft cards an approval abandoned, and close
+    the ones past ``CARD_TTL``, so neither lingers in the ledger. Putting one
+    back is safe even if ERPNext made the draft: approving again sends the
+    same card key, and oe_connector returns the draft it already made."""
+    from openexecutive.memory.decision_ledger import (
+        STATUS_EXECUTING,
+        STATUS_PROPOSED,
+        close_externally,
+        list_instances,
+        release_claim,
+    )
+
+    for card in list_instances(DECISION_CLASS, status=STATUS_EXECUTING, approver_person_id=person_id, limit=1000):
+        if card.id not in _APPROVING and release_claim(card.id):
+            logger.warning("erpnext_drafts: card %d was left mid-approval; it waits again", card.id)
+    for card in list_instances(DECISION_CLASS, status=STATUS_PROPOSED, approver_person_id=person_id, limit=1000):
+        if not _live(card, now):
+            close_externally(card.id, reason="expired")
+
+
 def open_cards(person_id: int, *, now: datetime | None = None) -> list[Any]:
-    """``person_id``'s draft cards still waiting, newest first."""
+    """``person_id``'s draft cards still waiting, newest first (``_tidy``
+    first, so an abandoned card is back and an expired one is gone)."""
     from openexecutive.memory.decision_ledger import STATUS_PROPOSED, list_instances
 
     at = now or datetime.now(UTC)
+    try:
+        _tidy(person_id, at)
+    except Exception:
+        logger.warning("erpnext_drafts: couldn't tidy the draft cards", exc_info=True)
     found = list_instances(DECISION_CLASS, status=STATUS_PROPOSED, approver_person_id=person_id, limit=1000)
     return sorted((c for c in found if _live(c, at)), key=lambda c: c.created_at, reverse=True)
 
@@ -318,15 +351,20 @@ def open_cards(person_id: int, *, now: datetime | None = None) -> list[Any]:
 def _shown(value: Any) -> str:
     if isinstance(value, bool):
         return "yes" if value else "no"
-    if isinstance(value, int | float):
-        return f"{value:,.2f}".rstrip("0").rstrip(".") if isinstance(value, float) else str(value)
+    if isinstance(value, float):
+        # The number as sent, not rounded: 0.004 must not read as 0.
+        return format(value, ".15g")
+    if isinstance(value, int):
+        return str(value)
     return _one_line(value)
 
 
 def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, Any]:
-    """What the card shows: ERPNext's own reading of the draft
-    (``draft_check``'s summary), as plain text, falling back to the stored
-    fields for anything it left out."""
+    """What the card shows: what approval will send (the stored ``fields``,
+    and a Material Request's stored lines), as plain text. ERPNext's own
+    reading (``draft_check``'s summary) fills only what the fields leave to
+    it (a default it will apply) and the extras: a ToDo's reference, the
+    estimated value, the items it couldn't price."""
     got: dict[str, Any] = summary if isinstance(summary, dict) else {}
     shown: list[dict[str, str]] = []
     lines: list[dict[str, str]] = []
@@ -334,7 +372,9 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
 
     def add(label: str, *keys: str) -> None:
         for key in keys:
-            value = got.get(key, fields.get(key))
+            value = fields.get(key)
+            if value in (None, "", []):
+                value = got.get(key)
             if value not in (None, "", []):
                 shown.append({"label": label, "value": _shown(value)})
                 return
@@ -357,8 +397,9 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
         add("Company", "company")
         add("Type", "material_request_type")
         add("Needed by", "schedule_date")
-        listed = got.get("items") if isinstance(got.get("items"), list) else fields.get("items")
-        for row in (listed or [])[:MAX_LINES]:
+        # The stored lines, every one approval inserts; never ERPNext's list,
+        # which could merge or leave one out.
+        for row in (fields.get("items") or [])[:MAX_LINES]:
             if isinstance(row, dict):
                 lines.append({
                     "item_code": _one_line(row.get("item_code"), NAME_MAX),
@@ -385,16 +426,17 @@ def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
 
 def propose(
     person: Any, doctype: str, fields: dict[str, Any], view: dict[str, Any], why: str,
-    *, asked_by: str, session_id: str | None,
-) -> int:
+    *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None,
+) -> tuple[int, bool]:
     """Store a card for ``person`` (``fields`` already checked); returns its
-    decision id. The same draft still waiting is that card."""
+    decision id and whether it is new. The same draft still waiting is that
+    card, not a new one. ``waiting``: ``open_cards(person.id)``, if read."""
     from openexecutive.memory.decision_ledger import create_decision_instance
 
     digest = _digest(person.id, doctype, fields)
-    for card in open_cards(person.id):
+    for card in open_cards(person.id) if waiting is None else waiting:
         if _payload(card).get("digest") == digest:
-            return int(card.id)
+            return int(card.id), False
     card_key = f"oe:{DECISION_CLASS}:{uuid.uuid4().hex}"
     payload = {
         # A card is its person's alone (approver_only hides the class); this
@@ -420,7 +462,7 @@ def propose(
         gate_mode="propose",
         approver_person_id=person.id,
         confidence=None,
-    )
+    ), True
 
 
 def cards(person: Any) -> list[DraftCard]:
@@ -493,8 +535,10 @@ PROPOSE_TOOL: dict[str, Any] = {
     "description": (
         "Prepare an ERPNext draft for the person you are speaking with to approve: a "
         "`ToDo` (a follow-up assigned to someone, optionally on a document) or a "
-        "`Material Request` (a restock). ERPNext checks it as them, and they get a card, "
-        "in this chat and on Today, showing exactly what will be written; nothing is "
+        "`Material Request` (a restock). ERPNext checks it as them, and they get a card "
+        "on Today in the OpenExecutive web app (and under this reply when they are in "
+        "its chat, but not in Slack, Telegram or Discord), showing exactly what will be "
+        "written; nothing is "
         "created until they tap Approve, and then only an unsubmitted draft they finish "
         "in ERPNext. Use it only when they ask for the draft in their own words. ToDo "
         "fields: description, allocated_to (the assignee's ERPNext user email), optional "
@@ -555,7 +599,8 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
             "People entry, and it has none. Say adding it fixes this."
         )
     try:
-        if len(open_cards(person.id)) >= OPEN_CARDS_MAX:
+        waiting = open_cards(person.id)
+        if len(waiting) >= OPEN_CARDS_MAX:
             return _error(f"They already have {OPEN_CARDS_MAX} draft cards waiting. Ask them to clear some first.")
     except Exception:
         logger.warning("erpnext_drafts: couldn't count the open cards", exc_info=True)
@@ -576,25 +621,31 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
         )
     view = card_view(doctype, checked.get("summary"), fields)
     try:
-        pinned.erpnext_drafts += 1
-        decision_id = propose(
+        decision_id, new = propose(
             person, doctype, fields, view, str(tool_input.get("why") or ""),
-            asked_by=email, session_id=getattr(session, "session_id", None),
+            asked_by=email, session_id=getattr(session, "session_id", None), waiting=waiting,
         )
     except Exception:
         logger.warning("erpnext_drafts: couldn't store the card", exc_info=True)
         return _error("Couldn't leave the card just now. Try again in a moment.")
-    audit("erpnext_draft_proposed", f"Left person {person.id} an ERPNext {doctype} draft card", {
-        "person_id": person.id, "decision_id": decision_id, "doctype": doctype,
-    })
+    # Only a card actually left counts towards the turn's cards and the audit:
+    # the same draft again is the card already waiting.
+    if new:
+        pinned.erpnext_drafts += 1
+        audit("erpnext_draft_proposed", f"Left person {person.id} an ERPNext {doctype} draft card", {
+            "person_id": person.id, "decision_id": decision_id, "doctype": doctype,
+        })
     return json.dumps({
         "status": "waiting_for_approval",
         "decision_id": decision_id,
         "doctype": doctype,
         "card": wrap_untrusted(json.dumps(view, ensure_ascii=False), source="erpnext", author="draft_check"),
         "note": (
-            "Nothing is in ERPNext yet. The card is in this chat and on Today for them to "
-            "approve; it then becomes an unsubmitted draft they review and submit in ERPNext."
+            ("" if new else "This is the card already waiting for the same draft. ")
+            + "Nothing is in ERPNext yet. The card is on Today in the OpenExecutive web app, "
+            "and under this reply in its chat, for them to approve; it then becomes an "
+            "unsubmitted draft they review and submit in ERPNext. Outside the web app, say "
+            "where to find it."
         ),
     })
 
@@ -626,15 +677,7 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     stored. Returns what was made. Raises ``ApproveRefused``."""
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.delegation.verified import NOT_YOURS, caller_refusal
-    from openexecutive.memory.decision_ledger import (
-        STATUS_APPROVED_UNCHANGED,
-        STATUS_FAILED,
-        claim_for_execution,
-        finish_execution,
-        release_claim,
-        update_open_payload,
-    )
-    from openexecutive.orchestrator import erpnext_caller
+    from openexecutive.memory.decision_ledger import claim_for_execution
     from openexecutive.people.store import get_person
 
     payload = _payload(instance)
@@ -663,14 +706,38 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     if (
         tool is None or payload.get("tool") != tool or isinstance(rechecked, str) or rechecked != fields
         or not isinstance(key, str) or not _KEY_RE.fullmatch(key) or key != instance.idempotency_key
+        or not isinstance(doctype, str)
     ):
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it and ask again.")
     if "@" not in email:
         raise ApproveRefused(409, "no_email", "Your People entry has no email, so ERPNext can't tell who you are.")
     if not claim_for_execution(instance.id, resolver_person_id=resolver):
         raise ApproveRefused(409, "already_handled", "This card was already handled.")
+    _APPROVING.add(instance.id)
+    try:
+        return await _carry_out(instance, payload, person, email, tool, rechecked, key)
+    finally:
+        _APPROVING.discard(instance.id)
+
+
+async def _carry_out(
+    instance: Any, payload: dict[str, Any], person: Any, email: str,
+    tool: str, fields: dict[str, Any], key: str,
+) -> dict[str, Any]:
+    """``approve`` once it holds the claim: the one ERPNext call, then the
+    card finished, or back to waiting with why. Raises ``ApproveRefused``."""
+    from openexecutive.memory.decision_ledger import (
+        STATUS_APPROVED_UNCHANGED,
+        STATUS_FAILED,
+        finish_execution,
+        release_claim,
+        update_open_payload,
+    )
+    from openexecutive.orchestrator import erpnext_caller
+
+    doctype = payload["doctype"]
     asked_by = payload.get("asked_by") if isinstance(payload.get("asked_by"), str) else email
-    arguments = {**rechecked, "idempotency_key": key, "asked_by": asked_by}
+    arguments = {**fields, "idempotency_key": key, "asked_by": asked_by}
     raw: Any = None
     try:
         with erpnext_caller.draft_executor_run(tool, arguments, email):
@@ -678,6 +745,12 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     except Exception as exc:
         logger.warning("erpnext_drafts: the draft call for card %d failed (%s)", instance.id, type(exc).__name__)
         raw = _error("ERPNext didn't answer in time; it may or may not have made the draft.")
+    except BaseException:
+        # Cancelled mid-call (the request went away, the API is stopping):
+        # the card waits again rather than staying claimed. Approving again
+        # sends the same key, so ERPNext returns the draft if it was made.
+        release_claim(instance.id)
+        raise
     result = _result(raw)
     name = result.get("name")
     if result.get("ok") is True and result.get("docstatus") == 0 and isinstance(name, str) and _DOC_NAME_RE.fullmatch(name):
@@ -685,10 +758,13 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
             "doctype": doctype, "name": name, "url": _desk_link(result.get("url")),
             "already_created": result.get("already_created") is True,
         }
-        finish_execution(
+        if not finish_execution(
             instance.id, STATUS_APPROVED_UNCHANGED,
             final_payload={**payload, "created": created}, external_event_id=name,
-        )
+        ):
+            # The claim was lost meanwhile; the card waits again, and approving
+            # it once more returns this same draft (already_created).
+            logger.warning("erpnext_drafts: card %d's draft was made but the card wasn't closed", instance.id)
         audit("erpnext_draft_created", f"Person {person.id} approved an ERPNext {doctype} draft", {
             "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "name": name,
             "already_created": created["already_created"],
@@ -703,12 +779,15 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "attempts": attempts, "last_error": reason})
         raise ApproveRefused(502, "draft_failed", f"ERPNext didn't make the draft: {reason} This card has been tried {attempts} times, so it is closed.")
     # Back to waiting, with the reason: approving again sends the same card
-    # key, so ERPNext returns the draft if it was made after all.
-    if release_claim(instance.id):
-        update_open_payload(
-            instance.id, {**payload, "attempts": attempts, "last_error": reason},
-            expected_json=instance.proposed_payload_json,
-        )
+    # key, so ERPNext returns the draft if it was made after all. The reason
+    # and count are written while the claim is still held, then released, so
+    # a second tap can't claim it in between and the count is never lost.
+    if not update_open_payload(
+        instance.id, {**payload, "attempts": attempts, "last_error": reason},
+        expected_json=instance.proposed_payload_json, while_executing=True,
+    ):
+        logger.warning("erpnext_drafts: couldn't note card %d's failed attempt", instance.id)
+    release_claim(instance.id)
     raise ApproveRefused(
         502, "draft_failed",
         f"ERPNext didn't make the draft: {reason} You can approve it again; it won't make a second one.",

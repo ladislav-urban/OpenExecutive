@@ -8596,15 +8596,24 @@ integrations:
     an erpnext_draft decision (approver_only, alert_source None) with
     payload {private, person_id, why, digest, doctype, tool, fields,
     asked_by, card_key, view, attempts, last_error?}; idempotency_key =
-    card_key = "oe:erpnext_draft:<uuid hex>". view is card_view of
-    draft_check's summary (normalised fields, lines, estimated_value and
-    currency, unpriced_items), every value plain() one-line text capped at
-    300 chars, except a ToDo's "What": the stored description in full (up
-    to TEXT_MAX 1000, line breaks kept), since that is what approval sends
-    and a cut would hide text the assignee gets under the approver's name
-    (security review). Limits:
+    card_key = "oe:erpnext_draft:<uuid hex>". view is card_view: what
+    approval sends, i.e. the stored fields and a Material Request's stored
+    lines (never draft_check's item list, which could merge or omit one),
+    with draft_check's summary filling only what the fields leave to
+    ERPNext (a default it applies) and the extras (a ToDo's reference,
+    estimated_value and currency, unpriced_items). Values are plain()
+    one-line text capped at 300 chars, numbers exact (no rounding), except
+    a ToDo's "What": the stored description in full (up to TEXT_MAX 1000,
+    line breaks kept), since a cut would hide text the assignee gets under
+    the approver's name (security review). Limits:
     CARDS_PER_TURN 3 (TurnDelegation.erpnext_drafts), OPEN_CARDS_MAX 10,
-    CARD_TTL 3 days; the same draft still waiting is the same card.
+    CARD_TTL 3 days; the same draft still waiting is the same card, and
+    counts towards neither the turn's three nor the audit. Reading the
+    cards (open_cards) first tidies: a card past CARD_TTL is closed
+    (close_externally, reason "expired"), and a card left executing that
+    no approval in this process is carrying out (_APPROVING; the API runs
+    as one process) is released to wait again, safe because a re-approval
+    sends the same card key.
     Approving (POST /decisions/{id}/approve, decisions._ERPNEXT_DRAFT, no
     edits): erpnext_drafts.approve checks the card's person still matches
     approver_person_id, verified.caller_refusal (signed sign-ins or local
@@ -8612,12 +8621,15 @@ integrations:
     payload still passes check_fields unchanged with the tool its doctype
     names; then claim_for_execution (once), then the stored call with
     {**fields, idempotency_key: card_key, asked_by} inside
-    draft_executor_run, 60s timeout. Success needs ok, docstatus 0 and a
+    draft_executor_run, 60s timeout; a cancelled request releases the
+    claim before re-raising. Success needs ok, docstatus 0 and a
     plain name: finish_execution approved_unchanged with
     final_payload.created {doctype, name, url (only an http(s) desk link:
     /desk/ from Frappe 16 on, /app/ before),
     already_created}, external_event_id = the draft's name. Failure:
-    release_claim and update_open_payload with last_error and attempts, so
+    update_open_payload(while_executing=True) with last_error and attempts
+    while the claim is still held, then release_claim, so a second tap
+    can't claim it in between and lose the count; so
     approving again re-sends the same key (oe_connector's "OE Draft" log
     returns the draft it already made); ATTEMPTS_MAX 5, then failed.
     Dismiss is reject (audit only). Audit rows, private to the person:
@@ -8625,7 +8637,11 @@ integrations:
     /erpnext/drafts lists the caller's own waiting cards (api/routes/
     erpnext_drafts.py, chat._resolve_caller_person_id; no People entry:
     []). UI: components/ErpnextDraftCards.tsx on Today's Needs you and
-    under the chat reply whose propose_erpnext_draft chip carries the id.
+    under the chat reply whose propose_erpnext_draft chip carries the id,
+    all views sharing one store (one GET however many are on screen; a
+    card approved, dismissed or closed in one is so in all). The card is
+    not shown in Slack, Telegram or Discord; the tool and the prompt tell
+    the model to point there to Today.
     Take the lead never makes one: unattended runs are not offered the
     tool and the gateway refuses the rest. Nothing in OpenExecutive
     submits, cancels, amends or deletes; oe_connector inserts as the
@@ -10538,6 +10554,11 @@ trust_ledger: |
       acting, so of two taps only one acts; a failure that leaves it unclear
       whether the effect happened stays executing for a reconciler, never
       retried. get_live_by_idem counts executing as open.
+      update_open_payload changes a payload by compare-and-set on proposed
+      (and, when given, the payload as read); with while_executing=True on
+      executing instead, so the claim holder can note why its attempt failed
+      before release_claim and no other tap claims the row in between
+      (ERPNext draft cards, integrations/erpnext_drafts.py).
 
     decision_class_state — one row per class; holds the promoted/propose mode.
       Columns: decision_class (PK), mode (propose|auto_execute), updated_at,

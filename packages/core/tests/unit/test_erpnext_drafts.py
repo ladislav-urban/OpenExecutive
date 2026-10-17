@@ -334,8 +334,24 @@ def test_the_same_draft_is_one_card_and_a_turn_leaves_three(erp: FakeErpnext, ro
         fields = {**RESTOCK, "items": [{**RESTOCK["items"][0], "qty": qty}]}
         ids.append(_propose(session, {"why": "x", "doctype": "Material Request", "fields": fields})["decision_id"])
     assert ids[0] == ids[1] != ids[2]
-    out = _propose(session, {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
+    # The repeat was the card already waiting: it used none of the turn's three.
+    erp.replies.append(json.dumps({"ok": True, "summary": {}}))
+    assert "decision_id" in _propose(session, {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
+    out = _propose(session, {"why": "x", "doctype": "ToDo", "fields": {**FOLLOW_UP, "priority": "Low"}})
     assert "3 draft cards this turn" in out["error"]
+
+
+def test_the_same_draft_again_is_audited_once(
+    erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(drafts, "audit", lambda event, *_a: events.append(event))
+    session = _owner_turn(roster)
+    for _ in range(2):
+        erp.replies.append(json.dumps(CHECKED_RESTOCK))
+        out = _propose(session, {"why": "x", "doctype": "Material Request", "fields": RESTOCK})
+    assert events == ["erpnext_draft_proposed"]
+    assert "already waiting" in out["note"]
 
 
 def test_a_teammate_or_a_mail_reading_turn_cannot_propose(
@@ -466,6 +482,108 @@ def test_the_card_shows_the_whole_description_it_will_send() -> None:
     shown = {f["label"]: f["value"] for f in view["fields"]}
     assert shown["What"] == fields["description"] == description
     assert len(shown["What"]) > drafts.SHOWN_MAX
+
+
+def test_the_card_shows_what_approval_sends_not_erpnexts_reading() -> None:
+    # Two lines and exact quantities stored; ERPNext's summary merged the
+    # lines, rounded and named another assignee. The card shows what is sent.
+    fields = drafts.check_fields("Material Request", {
+        **RESTOCK,
+        "items": [
+            {"item_code": "ITEM-1", "qty": 0.004, "warehouse": "Stores - AC"},
+            {"item_code": "ITEM-2", "qty": 2.125, "warehouse": "Stores - AC"},
+        ],
+    })
+    assert isinstance(fields, dict)
+    summary = {**CHECKED_RESTOCK["summary"], "company": "Other Co",
+               "items": [{"item_code": "ITEM-1", "qty": 0, "warehouse": "Stores - AC"}]}
+    view = drafts.card_view("Material Request", summary, fields)
+    assert [(ln["item_code"], ln["qty"]) for ln in view["lines"]] == [("ITEM-1", "0.004"), ("ITEM-2", "2.125")]
+    shown = {f["label"]: f["value"] for f in view["fields"]}
+    assert shown["Company"] == "Acme"
+    # What the fields leave to ERPNext still comes from its reading.
+    assert shown["Type"] == "Purchase" and shown["Estimated value"].startswith("1,234.50")
+
+
+def test_a_card_left_mid_approval_waits_again(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    from openexecutive.memory.decision_ledger import STATUS_EXECUTING, claim_for_execution
+
+    card = _restock_card(erp, roster)
+    person = people_store.get_person(roster.principal)
+    # An approval this process is carrying out is left alone…
+    assert claim_for_execution(card.id)
+    drafts._APPROVING.add(card.id)
+    try:
+        assert drafts.cards(person) == []
+        held = get_decision_instance(card.id)
+        assert held is not None and held.status == STATUS_EXECUTING
+    finally:
+        drafts._APPROVING.discard(card.id)
+    # …one nothing is carrying out (a restart) waits again.
+    assert [c.decision_id for c in drafts.cards(person)] == [card.id]
+
+
+def test_a_cancelled_approval_puts_the_card_back(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    card = _restock_card(erp, roster)
+
+    async def cancelled(*_a: Any) -> str:
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(drafts, "_call", cancelled)
+    with pytest.raises(asyncio.CancelledError):
+        _approve(card)
+    back = get_decision_instance(card.id)
+    assert back is not None and back.status == STATUS_PROPOSED
+    assert not drafts._APPROVING
+
+
+def test_a_failed_attempt_is_noted_before_the_card_is_released(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.memory import decision_ledger
+
+    card = _restock_card(erp, roster)
+    order: list[str] = []
+    real_update, real_release = decision_ledger.update_open_payload, decision_ledger.release_claim
+
+    def update(*a: Any, **k: Any) -> bool:
+        order.append("note" if k.get("while_executing") else "other")
+        return real_update(*a, **k)
+
+    def release(*a: Any, **k: Any) -> bool:
+        order.append("release")
+        return real_release(*a, **k)
+
+    monkeypatch.setattr(decision_ledger, "update_open_payload", update)
+    monkeypatch.setattr(decision_ledger, "release_claim", release)
+    erp.replies.append(json.dumps({"error": "ERPNext is down"}))
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(card)
+    assert order == ["note", "release"]
+    waiting = get_decision_instance(card.id)
+    assert waiting is not None and json.loads(waiting.proposed_payload_json)["attempts"] == 1
+
+
+def test_an_expired_card_is_closed(erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.memory.decision_ledger import STATUS_CLOSED_EXTERNALLY
+
+    card = _restock_card(erp, roster)
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(seconds=-1))
+    assert drafts.open_cards(roster.principal) == []
+    gone = get_decision_instance(card.id)
+    assert gone is not None and gone.status == STATUS_CLOSED_EXTERNALLY
+
+
+def test_the_tool_says_where_the_card_is_outside_the_web_app() -> None:
+    from openexecutive.prompts.connected_systems import _ERPNEXT_DRAFTS
+
+    for text in (drafts.PROPOSE_TOOL["description"], _ERPNEXT_DRAFTS):
+        assert "in this chat and on Today" not in text
+        assert "Today in the OpenExecutive web app" in text and "Telegram" in text
 
 
 # --------------------------------------------------------------------------- #
