@@ -87,6 +87,10 @@ function load(): Promise<void> {
   return loading;
 }
 
+// Load the cards again, as after a card was left from outside this store
+// (an alert's "Prepare" button).
+export const reloadErpnextDraftCards = load;
+
 function gone(id: number) {
   update((s) => ({
     cards: s.cards.filter((c) => c.decision_id !== id),

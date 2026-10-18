@@ -53,6 +53,9 @@ and the digest of its exact arguments:
 
 - ``draft_check_run``: the proposal path validating a draft for its card,
   asked as the turn's own caller (``caller_for``), ``draft_check`` only;
+- ``draft_check_as``: a person's own verified tap preparing the card an
+  ERPNext alert suggests, ``draft_check`` only, asked as that person (an API
+  request, with no session);
 - ``draft_executor_run``: the card executor carrying out an approved card,
   asked as the approver it names (an API request, with no session).
 
@@ -144,6 +147,18 @@ def draft_check_run(arguments: dict[str, Any]) -> Any:
     """Mark the one ``erpnext__draft_check`` call with exactly ``arguments``
     that the proposal path makes to fill in its card. Code only."""
     return _marked(DraftCall(DRAFT_CHECK_TOOL, arguments_digest(arguments)))
+
+
+def draft_check_as(arguments: dict[str, Any], email: str) -> Any:
+    """Mark the one ``erpnext__draft_check`` call with exactly ``arguments``
+    that a person's own verified tap makes, asked as ``email`` with no turn:
+    preparing the card an ERPNext alert suggests
+    (``integrations.erpnext_alert_drafts``, after ``verified.caller_refusal``
+    proved the tapper is that person). Code only."""
+    asker = email.strip().lower()
+    if "@" not in asker:
+        raise ValueError("a draft is checked as a person's own ERPNext user")
+    return _marked(DraftCall(DRAFT_CHECK_TOOL, arguments_digest(arguments), ErpnextCaller("user", asker)))
 
 
 def draft_executor_run(tool: str, arguments: dict[str, Any], approver_email: str) -> Any:

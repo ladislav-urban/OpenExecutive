@@ -23,6 +23,11 @@ without per-person access. Each event names its rule and its document, and
 The event text is ERPNext's data, partly written by outsiders (a customer's
 name), and reaches triage as the body of an inbound event, as an email's
 does. Fields are length-capped and the kinds are a fixed list.
+
+**A suggested draft** (phase 4b): a stock or overdue-receivable event may
+carry ``suggest``, the draft ERPNext's own fields make for it. It never
+reaches triage: ``erpnext_alert_drafts.remember`` keeps a well-formed one by
+the alert's ref, for the principal's "Prepare" button.
 """
 from __future__ import annotations
 
@@ -97,7 +102,7 @@ def _text(value: Any, cap: int) -> str:
     return " ".join(value.split())[:cap]
 
 
-def parse_events(data: Any) -> list[dict[str, str]]:
+def parse_events(data: Any) -> list[dict[str, Any]]:
     """The well-formed events in ``data``; raises ``ValueError`` when it is
     not ``{"events": [...]}`` or holds too many. A single malformed event is
     skipped, not the batch."""
@@ -105,7 +110,7 @@ def parse_events(data: Any) -> list[dict[str, str]]:
         raise ValueError("expected {\"events\": [...]}")
     if len(data["events"]) > MAX_EVENTS:
         raise ValueError(f"at most {MAX_EVENTS} events per request")
-    events: list[dict[str, str]] = []
+    events: list[dict[str, Any]] = []
     for raw in data["events"]:
         if not isinstance(raw, dict):
             continue
@@ -113,11 +118,13 @@ def parse_events(data: Any) -> list[dict[str, str]]:
         title, text = _text(raw.get("title"), _MAX_TITLE), _text(raw.get("text"), _MAX_TEXT)
         if kind not in KINDS or not isinstance(key, str) or not _KEY_RE.fullmatch(key) or not title:
             continue
-        events.append({"kind": kind, "key": key, "title": title, "text": text})
+        # The draft it suggests, if any: kept as sent, checked by
+        # erpnext_alert_drafts.remember before it is stored.
+        events.append({"kind": kind, "key": key, "title": title, "text": text, "suggest": raw.get("suggest")})
     return events
 
 
-def _schedule(event: dict[str, str]) -> None:
+def _schedule(event: dict[str, Any]) -> None:
     from openexecutive.alerts.models import AlertEvent
     from openexecutive.alerts.pipeline import schedule_evaluation
     from openexecutive.orchestrator.content_trust import wrap_untrusted
@@ -201,5 +208,9 @@ async def erpnext_events(request: Request) -> JSONResponse:
             details={"channel": "erpnext", "kind": event["kind"], "key": event["key"]},
             private=True,
         )
+        if event["suggest"] is not None:
+            from openexecutive.integrations.erpnext_alert_drafts import remember
+
+            remember(event["kind"], event["key"], event["suggest"])
         _schedule(event)
     return JSONResponse({"accepted": len(events)})

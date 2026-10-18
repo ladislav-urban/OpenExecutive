@@ -67,6 +67,18 @@ def _routable_person(person_id: int) -> bool:
     return person is None or person.kind == "team"
 
 
+# Sources an integration raises alerts under, with what only it can attach
+# (an ERPNext alert's suggested draft, integrations.erpnext_alert_drafts).
+# The model may say an alert came from one, but it is stored as
+# ``executive_<source>``, so it never passes for the integration's own.
+RESERVED_SOURCES: frozenset[str] = frozenset({"erpnext"})
+
+
+def _source(tool_input: dict[str, Any]) -> str:
+    source = str(tool_input.get("source", "unknown"))
+    return f"executive_{source}" if source.strip().lower() in RESERVED_SOURCES else source
+
+
 async def handle_create_alert(tool_input: dict[str, Any]) -> str:
     from openexecutive.alerts.models import AlertEvent
     from openexecutive.alerts.pipeline import schedule_evaluation
@@ -80,7 +92,7 @@ async def handle_create_alert(tool_input: dict[str, Any]) -> str:
     private = getattr(current_session.get(), "private_to_principal", False) is True
     try:
         event = AlertEvent(
-            source=tool_input.get("source", "unknown"),
+            source=_source(tool_input),
             external_id=tool_input.get("external_id", ""),
             subject=tool_input["subject"],
             body=tool_input["body"],

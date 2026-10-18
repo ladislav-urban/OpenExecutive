@@ -745,6 +745,16 @@ draft is made as their ERPNext user, so their own ERPNext roles decide what
 they can create. oe_connector's daily limit counts per person. Turned off
 again, teammates' waiting cards can no longer be approved.
 
+ERPNext alerts can suggest a draft (phase 4b; oe_connector from #11). A
+low-stock alert carries the restock ERPNext's own reorder would raise, and an
+overdue-invoice alert the invoice to follow up. On Today such an alert shows
+**Prepare restock** or **Prepare follow-up** to the owner. Nothing is
+checked or written when the alert arrives. The tap, signed in, has ERPNext
+check the draft as the owner and leaves the usual card to approve. The
+follow-up ToDo is worded from the invoice's figures and assigned to the
+owner. The DocType must be listed in `ERPNEXT_DRAFT_DOCTYPES` (both are by
+default); nothing else needs setting.
+
 Once a conversation has read ERPNext, none of its replies, then or later,
 is added to peer or department memory, which other people's turns read, nor
 opens a follow-up loop, so one person's figures do not resurface for someone

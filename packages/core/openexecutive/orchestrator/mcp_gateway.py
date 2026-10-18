@@ -791,8 +791,10 @@ def _check_erpnext_draft(
     Every such tool is refused from any turn, script or workflow, by prefix
     (oe_connector may add more): it passes only inside a marker code set for
     exactly this call (``erpnext_caller.draft_call_for``). The card
-    executor's names the approver; the proposal path's (``draft_check``
-    only) asks as the turn's own caller. Both need per-person access, since
+    executor's names the approver; an alert's "Prepare" tap
+    (``draft_check_as``, ``draft_check`` only) names the principal who
+    tapped; the proposal path's (``draft_check`` only) asks as the turn's
+    own caller. All need per-person access, since
     oe_connector inserts a draft as the asking person's ERPNext user."""
     plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
     marker = erpnext_caller.draft_call_for(normalized, plain)
