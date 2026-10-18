@@ -1,0 +1,20 @@
+id: erpnext_009
+domain: mcp
+surface: erpnext_panel
+description: "ERPNext drafts from ERPNext's \"Ask the Dynocortex\" panel (phase 4b), with the erpnext server connected and drafts on: the principal, in the panel, asks whether ITEM-1 is below its reorder level in Stores and to raise a restock if so. The Executive reads the stock figures, proposes a Material Request draft with propose_erpnext_draft, and tells them the card is waiting on Today in the OpenExecutive web app, where they approve it signed in, because the panel cannot show it; it never claims the material request exists, and keeps the answer short enough for a side panel"
+requires_mcp: true
+query: "Is ITEM-1 below its reorder level in Stores? If so, raise a restock."
+expected_tool_calls:
+  - call_tool
+  - propose_erpnext_draft
+expected_topics:
+  - stock_level_and_reorder_level
+  - card_waiting_in_the_openexecutive_app
+quality_criteria:
+  checks_the_stock_in_erpnext_before_proposing_anything: true
+  proposes_a_material_request_draft_rather_than_creating_it: true
+  says_the_card_is_on_today_in_the_openexecutive_web_app_not_in_the_panel: true
+  says_nothing_is_in_erpnext_until_they_approve_it_signed_in: true
+  never_claims_the_material_request_was_created_or_submitted: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true

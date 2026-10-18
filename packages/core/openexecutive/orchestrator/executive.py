@@ -2145,12 +2145,16 @@ class Executive:
         if history_offered:
             delegation_tools = [*delegation_tools, *HISTORY_TOOLS]
             turn_handlers = {**turn_handlers, **HISTORY_TOOL_HANDLERS}
-        # ERPNext drafts (phase 4a): the principal's own turns only, while
-        # drafts are on (erpnext_drafts.offer_refusal). Its own registry, as
+        # ERPNext drafts (phase 4): turns whose speaker may have one prepared
+        # for themselves (erpnext_drafts.offer_refusal). Its own registry, as
         # above, so on any other turn a call to it is an unknown tool.
-        if erpnext_drafts.offered(current_session.get()):
+        drafts_offered = erpnext_drafts.offered(current_session.get())
+        if drafts_offered:
             delegation_tools = [*delegation_tools, *erpnext_drafts.draft_tools()]
             turn_handlers = {**turn_handlers, **erpnext_drafts.ERPNEXT_DRAFT_TOOL_HANDLERS}
+        # In ERPNext's panel, propose_erpnext_draft as well when this turn is
+        # offered it (phase 4b: its card is approved in the app, signed in).
+        panel_tools = ERPNEXT_PANEL_TOOLS | ({erpnext_drafts.PROPOSE} if drafts_offered else frozenset())
         # Tools an installed extension adds (orchestrator/extensions.py): only
         # on a turn someone is in, never an unattended run or a turn private
         # to the principal, and only where each tool says it is offered.
@@ -2230,7 +2234,7 @@ class Executive:
                     workspace_mode,
                 )
                 if t["name"] not in not_offered
-                and (not panel_turn or t["name"] in ERPNEXT_PANEL_TOOLS)
+                and (not panel_turn or t["name"] in panel_tools)
             )
             client_tools = sorted(direct_tools, key=lambda t: t["name"])
             tools_with_cache: list[dict[str, Any]] = [
@@ -2360,6 +2364,9 @@ class Executive:
             if panel_turn:
                 for tu in tool_uses:
                     if tu["id"] in group_results or not erpnext_panel_withholds(tu["name"], tu["input"]):
+                        continue
+                    # Only the draft tool, by name: call_tool's own check stands.
+                    if drafts_offered and tu["name"] == erpnext_drafts.PROPOSE:
                         continue
                     label = tu["name"]
                     if label == "call_tool" and isinstance(tu["input"], dict):
