@@ -1,0 +1,13 @@
+id: erpnext_011
+domain: mcp
+description: "Scheduled ERP metrics, with the erpnext server connected and ERPNEXT_BRIEF_COMPANY set: the principal asks for inventory turnover every Friday. That is not one of the fixed metrics (days sales outstanding, cash this month, receivables, payables, sales last week), so the Executive says it can't schedule that one, names what it can send on a schedule, offers to look inventory turnover up now instead, and schedules nothing it was not asked for"
+requires_mcp: true
+query: "Can you send me inventory turnover every Friday afternoon?"
+forbidden_tool_calls:
+  - schedule_erp_metric
+quality_criteria:
+  says_inventory_turnover_cannot_be_scheduled: true
+  names_the_figures_it_can_send_on_a_schedule: true
+  offers_to_look_it_up_now_instead: true
+  schedules_nothing_it_was_not_asked_for: true
+  does_not_name_internal_tool_names_to_the_user: true

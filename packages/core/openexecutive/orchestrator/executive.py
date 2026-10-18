@@ -21,6 +21,7 @@ from openexecutive.audit.redaction import (
     audit_tool_result_full,
 )
 from openexecutive.audit.usage import log_model_usage
+from openexecutive.briefing import erp_metrics
 from openexecutive.config import get_settings
 from openexecutive.delegation.lockdown import (
     mail_touched_withheld_error,
@@ -2152,6 +2153,12 @@ class Executive:
         if drafts_offered:
             delegation_tools = [*delegation_tools, *erpnext_drafts.draft_tools()]
             turn_handlers = {**turn_handlers, **erpnext_drafts.ERPNEXT_DRAFT_TOOL_HANDLERS}
+        # Scheduled ERP metrics: the principal's own chat turns, while
+        # ERPNEXT_BRIEF_COMPANY is set and ERPNext is connected
+        # (erp_metrics.offered). Their own registry, like the drafts.
+        if erp_metrics.offered(current_session.get()):
+            delegation_tools = [*delegation_tools, *erp_metrics.METRIC_TOOLS]
+            turn_handlers = {**turn_handlers, **erp_metrics.METRIC_TOOL_HANDLERS}
         # In ERPNext's panel, propose_erpnext_draft as well when this turn is
         # offered it (phase 4b: its card is approved in the app, signed in).
         panel_tools = ERPNEXT_PANEL_TOOLS | ({erpnext_drafts.PROPOSE} if drafts_offered else frozenset())

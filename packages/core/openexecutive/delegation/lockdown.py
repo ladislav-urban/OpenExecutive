@@ -109,6 +109,10 @@ MAIL_TOUCHED_ALLOWED_TOOLS: frozenset[str] = frozenset({
 })
 
 MAIL_TOUCHED_WITHHELD_TOOLS: frozenset[str] = frozenset({
+    # Scheduled ERP metrics (briefing.erp_metrics): a standing send, never
+    # set up on the say-so of mail just read.
+    "schedule_erp_metric",
+    "cancel_erp_metric",
     # Fetches of an outside address: a URL can carry the mail anywhere.
     "read_document",
     "load_mcp_server",
