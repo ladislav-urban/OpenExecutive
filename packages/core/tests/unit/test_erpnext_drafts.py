@@ -579,11 +579,204 @@ def test_an_expired_card_is_closed(erp: FakeErpnext, roster: SimpleNamespace, mo
 
 
 def test_the_tool_says_where_the_card_is_outside_the_web_app() -> None:
-    from openexecutive.prompts.connected_systems import _ERPNEXT_DRAFTS
+    from openexecutive.prompts.connected_systems import _erpnext_drafts
 
-    for text in (drafts.PROPOSE_TOOL["description"], _ERPNEXT_DRAFTS):
-        assert "in this chat and on Today" not in text
-        assert "Today in the OpenExecutive web app" in text and "Telegram" in text
+    for doctypes in (("Material Request", "ToDo"), tuple(sorted(drafts.DRAFT_TOOLS))):
+        for text in (drafts.propose_tool(doctypes)["description"], _erpnext_drafts(doctypes)):
+            assert "in this chat and on Today" not in text
+            assert "Today in the OpenExecutive web app" in text and "Telegram" in text
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4b: Quotation and Purchase Order
+# --------------------------------------------------------------------------- #
+
+QUOTE = {"company": "Acme", "customer": "Globex", "valid_till": "2099-02-01",
+         "items": [{"item_code": "ITEM-1", "qty": 10}, {"item_code": "ITEM-2", "qty": 2, "rate": 99.5}]}
+CHECKED_QUOTE = {
+    "ok": True, "doctype": "Quotation", "docstatus": 0,
+    "summary": {
+        "company": "Acme", "customer": "Globex", "valid_till": "2099-02-01",
+        "currency": "USD", "company_currency": "EUR",
+        "items": [{"item_code": "ITEM-1", "qty": 10, "rate": 12.0, "amount": 120.0},
+                  {"item_code": "ITEM-2", "qty": 2, "rate": 99.5, "amount": 199.0}],
+        "net_total": 319.0, "grand_total": 319.0, "base_grand_total": 290.12,
+    },
+}
+ORDER_FROM_REQUEST = {"company": "Acme", "supplier": "Initech", "material_request": "MAT-MR-2026-00012"}
+CHECKED_ORDER = {
+    "ok": True, "doctype": "Purchase Order", "docstatus": 0,
+    "summary": {
+        "company": "Acme", "supplier": "Initech", "schedule_date": "2099-01-15", "currency": "EUR",
+        "company_currency": "EUR", "from": {"doctype": "Material Request", "name": "MAT-MR-2026-00012"},
+        "items": [{"item_code": "ITEM-1", "qty": 40, "rate": 8.0, "amount": 320.0, "warehouse": "Stores - AC"}],
+        "net_total": 320.0, "grand_total": 320.0, "base_grand_total": 320.0,
+    },
+}
+
+
+@pytest.fixture
+def all_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ERPNEXT_DRAFT_DOCTYPES", "ToDo, Material Request, Quotation, Purchase Order")
+
+
+def test_quotations_and_orders_are_offered_only_once_listed(
+    erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.config import get_settings
+
+    # By default an install drafts 4a's two only, whatever oe_connector has.
+    assert drafts.enabled_doctypes() == ("Material Request", "ToDo")
+    assert "doctype" in str(drafts.check_fields("Quotation", QUOTE))
+    assert drafts.draft_tools()[0]["input_schema"]["properties"]["doctype"]["enum"] == ["Material Request", "ToDo"]
+    before = render_connected_systems(mcp_servers=("erpnext",), settings=get_settings())
+    assert "Quotation" not in before and "price list" not in before
+    monkeypatch.setenv("ERPNEXT_DRAFT_DOCTYPES", "Quotation,Purchase Order,Journal Entry")
+    assert drafts.enabled_doctypes() == ("Purchase Order", "Quotation")
+    after = render_connected_systems(mcp_servers=("erpnext",), settings=get_settings())
+    assert "a Quotation (a quote for a customer)" in after and "price list" in after
+    assert "ToDo" not in after and "Journal Entry" not in after
+    assert "price list" in drafts.draft_tools()[0]["description"]
+    # Listing nothing oe_connector drafts turns drafts off; left blank, it is
+    # the default.
+    monkeypatch.setenv("ERPNEXT_DRAFT_DOCTYPES", "Journal Entry")
+    assert "not turned on" in str(drafts.offer_refusal(_owner_turn(roster)))
+    monkeypatch.setenv("ERPNEXT_DRAFT_DOCTYPES", "")
+    assert drafts.enabled_doctypes() == ("Material Request", "ToDo")
+
+
+@pytest.mark.parametrize(("doctype", "fields", "error"), [
+    ("Quotation", {**QUOTE, "customer": None}, "customer"),
+    ("Quotation", {**QUOTE, "discount_amount": 5}, "takes only"),
+    ("Quotation", {**QUOTE, "items": [{"item_code": "X", "qty": 1, "rate": -1}]}, "rate"),
+    ("Quotation", {**QUOTE, "items": [{"item_code": "X", "qty": 1, "rate": True}]}, "rate"),
+    ("Quotation", {**QUOTE, "items": [{"item_code": "X", "qty": 1, "uom": "Box"}]}, "only"),
+    ("Purchase Order", {"company": "Acme", "supplier": "Initech", "items": [{"item_code": "X", "qty": 1}]},
+     "schedule_date"),
+    ("Purchase Order", {"company": "Acme", "supplier": "Initech", "schedule_date": "2099-01-15",
+                        "items": [{"item_code": "X", "qty": 1}]}, "warehouse"),
+    ("Purchase Order", {**ORDER_FROM_REQUEST, "supplier_quotation": "PUR-SQTN-1"}, "not both"),
+    ("Purchase Order", {**ORDER_FROM_REQUEST, "items": [{"item_code": "X", "qty": 1, "warehouse": "W"}]},
+     "leave out `items`"),
+    ("Purchase Order", {"company": "Acme", "material_request": "MAT-MR-2026-00012"}, "supplier"),
+    ("Purchase Order", {**ORDER_FROM_REQUEST, "taxes_and_charges": "VAT"}, "takes only"),
+])
+def test_only_what_oe_connector_takes_on_a_quote_or_order(
+    all_kinds: None, doctype: str, fields: dict[str, Any], error: str,
+) -> None:
+    out = drafts.check_fields(doctype, fields)
+    assert isinstance(out, str) and error in out
+
+
+def test_the_shapes_a_quote_or_order_may_take(all_kinds: None) -> None:
+    assert drafts.check_fields("Quotation", QUOTE) == QUOTE
+    # A Supplier Quotation brings its own supplier; the date is then optional.
+    from_quote = {"company": "Acme", "supplier_quotation": "PUR-SQTN-2026-00003"}
+    assert drafts.check_fields("Purchase Order", from_quote) == from_quote
+    assert drafts.check_fields("Purchase Order", {**ORDER_FROM_REQUEST, "items": []}) == ORDER_FROM_REQUEST
+
+
+def test_a_quote_card_shows_each_line_priced_and_the_total() -> None:
+    view = drafts.card_view("Quotation", CHECKED_QUOTE["summary"], QUOTE)
+    shown = {f["label"]: f["value"] for f in view["fields"]}
+    assert (shown["Customer"], shown["Valid till"]) == ("Globex", "2099-02-01")
+    assert shown["Grand total"] == "319.00 USD" and shown["In EUR"] == "290.12 EUR"
+    assert view["lines"] == [
+        {"item_code": "ITEM-1", "qty": "10", "warehouse": "", "rate": "12.00", "amount": "120.00"},
+        {"item_code": "ITEM-2", "qty": "2", "warehouse": "", "rate": "99.50", "amount": "199.00"},
+    ]
+    # ITEM-1 had no rate: ERPNext's price list set it, and the card says so.
+    assert any("price list" in n and "ITEM-1" in n and "ITEM-2" not in n for n in view["notes"])
+
+
+def test_a_quote_card_shows_the_stored_lines_not_erpnexts() -> None:
+    # ERPNext's reading dropped a line and a pricing rule moved a stated rate:
+    # the card shows every stored line, the stated rate, and says what moved.
+    summary = {**CHECKED_QUOTE["summary"], "customer": "Someone Else",
+               "items": [{"item_code": "ITEM-1", "qty": 10, "rate": 12.0, "amount": 120.0},
+                         {"item_code": "ITEM-2", "qty": 2, "rate": 80.0, "amount": 160.0}][1:]}
+    view = drafts.card_view("Quotation", summary, QUOTE)
+    assert {f["label"]: f["value"] for f in view["fields"]}["Customer"] == "Globex"
+    assert [(ln["item_code"], ln["rate"], ln["amount"]) for ln in view["lines"]] == [
+        ("ITEM-1", "", ""), ("ITEM-2", "99.50", ""),
+    ]
+    summary["items"] = [{"item_code": "ITEM-1", "qty": 10, "rate": 12.0, "amount": 120.0},
+                        {"item_code": "ITEM-2", "qty": 2, "rate": 80.0, "amount": 160.0}]
+    view = drafts.card_view("Quotation", summary, QUOTE)
+    assert view["lines"][1]["rate"] == "99.50"
+    assert any("pricing rules" in n and "80.00" in n for n in view["notes"])
+
+
+def test_a_quote_line_erpnext_gave_no_figures_for_says_so() -> None:
+    # ERPNext's code in its own case is the same line; a line it gave no
+    # figures for (or none at all) says its rate is ERPNext's to set.
+    summary = {**CHECKED_QUOTE["summary"],
+               "items": [{"item_code": "item-1", "qty": 10, "rate": 12.0, "amount": 120.0},
+                         {"item_code": "ITEM-2", "qty": 2}]}
+    view = drafts.card_view("Quotation", summary, QUOTE)
+    assert view["lines"][0]["amount"] == "120.00" and view["lines"][1]["rate"] == "99.50"
+    assert not any("pricing rules" in n for n in view["notes"])
+    summary["items"] = summary["items"][:1]
+    view = drafts.card_view("Quotation", summary, QUOTE)
+    assert any("didn't give figures for ITEM-2" in n for n in view["notes"])
+
+
+def test_an_order_from_a_request_shows_erpnexts_lines_and_says_whose() -> None:
+    view = drafts.card_view("Purchase Order", CHECKED_ORDER["summary"], ORDER_FROM_REQUEST)
+    shown = {f["label"]: f["value"] for f in view["fields"]}
+    assert shown["From"] == "Material Request MAT-MR-2026-00012" and shown["Needed by"] == "2099-01-15"
+    assert shown["Grand total"] == "320.00 EUR" and "In EUR" not in shown
+    assert view["lines"] == [
+        {"item_code": "ITEM-1", "qty": "40", "warehouse": "Stores - AC", "rate": "8.00", "amount": "320.00"},
+    ]
+    assert any("not ordered yet" in n and "more or less" in n and "prices them again" in n for n in view["notes"])
+
+
+def test_the_same_draft_again_answers_with_the_card_it_left(
+    all_kinds: None, erp: FakeErpnext, roster: SimpleNamespace,
+) -> None:
+    # The price list moved between the two asks: the model is told what the
+    # waiting card shows, not the new figures.
+    session = _owner_turn(roster, "quote Globex")
+    erp.replies.append(json.dumps(CHECKED_QUOTE))
+    first = _propose(session, {"why": "x", "doctype": "Quotation", "fields": QUOTE})
+    moved = {**CHECKED_QUOTE, "summary": {**CHECKED_QUOTE["summary"], "grand_total": 999.0}}
+    erp.replies.append(json.dumps(moved))
+    again = _propose(session, {"why": "x", "doctype": "Quotation", "fields": QUOTE})
+    assert again["decision_id"] == first["decision_id"]
+    assert "319.00 USD" in again["card"] and "999.00" not in again["card"]
+
+
+def test_approving_an_order_from_a_request_sends_the_source_as_stored(
+    all_kinds: None, erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    erp.replies.append(json.dumps(CHECKED_ORDER))
+    proposed = _propose(_owner_turn(roster, "order MAT-MR-2026-00012 from Initech"),
+                        {"why": "Order the restock", "doctype": "Purchase Order", "fields": ORDER_FROM_REQUEST})
+    card = get_decision_instance(proposed["decision_id"])
+    assert card is not None
+    erp.replies.append(json.dumps({**CREATED, "doctype": "Purchase Order", "name": "PUR-ORD-2026-00007"}))
+    assert _approve(card)["name"] == "PUR-ORD-2026-00007"
+    tool, sent = erp.calls[-1]
+    assert tool == "erpnext__draft_purchase_order"
+    assert (erp.claims()["purpose"], erp.claims()["tool"]) == ("draft", "draft_purchase_order")
+    sent.pop(ASSERTION_ARG)
+    # The source, as stored: the lines are ERPNext's mapper's, never the card's.
+    assert sent == {**ORDER_FROM_REQUEST, "idempotency_key": card.idempotency_key, "asked_by": OWNER}
+
+
+def test_a_card_whose_kind_was_unlisted_is_not_carried_out(
+    all_kinds: None, erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    erp.replies.append(json.dumps(CHECKED_QUOTE))
+    proposed = _propose(_owner_turn(roster, "quote Globex"), {"why": "x", "doctype": "Quotation", "fields": QUOTE})
+    card = get_decision_instance(proposed["decision_id"])
+    monkeypatch.setenv("ERPNEXT_DRAFT_DOCTYPES", "ToDo,Material Request")
+    with pytest.raises(drafts.ApproveRefused) as off:
+        _approve(card)
+    assert off.value.code == "drafts_off" and "Quotation" in off.value.message
+    assert len(erp.calls) == 1
 
 
 # --------------------------------------------------------------------------- #

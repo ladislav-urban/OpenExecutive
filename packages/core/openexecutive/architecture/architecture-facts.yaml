@@ -8548,14 +8548,24 @@ integrations:
     does not know is skipped yet the request is still accepted, so the event
     would be marked sent and lost for the month.
 
-    Drafts a person approves (phase 4a, integrations/erpnext_drafts.py;
-    design oe_connector docs/erpnext-phase4-plan.md). Off unless
-    ERPNEXT_DRAFTS_ENABLED and ERPNEXT_CALLER_PRIVATE_KEY are both set and
-    the gateway has the erpnext server (prompts.connected_systems.
-    erpnext_drafts_on, plus drafts_on's server check). Two DocTypes:
-    ToDo (erpnext__draft_todo) and Material Request
-    (erpnext__draft_material_request), erpnext_drafts.DRAFT_TOOLS; Quotation
-    and Purchase Order, which oe_connector already serves, wait for 4b.
+    Drafts a person approves (phase 4a, and 4b's Quotation and Purchase
+    Order; integrations/erpnext_drafts.py; design oe_connector
+    docs/erpnext-phase4-plan.md). Off unless ERPNEXT_DRAFTS_ENABLED and
+    ERPNEXT_CALLER_PRIVATE_KEY are both set, ERPNEXT_DRAFT_DOCTYPES names a
+    DocType, and the gateway has the erpnext server (prompts.
+    connected_systems.erpnext_drafts_on, plus drafts_on's server check).
+    erpnext_drafts.DRAFT_TOOLS maps four DocTypes to oe_connector's tools:
+    ToDo (erpnext__draft_todo), Material Request
+    (erpnext__draft_material_request), Quotation (erpnext__draft_quotation)
+    and Purchase Order (erpnext__draft_purchase_order). An install offers
+    only those ERPNEXT_DRAFT_DOCTYPES lists (connected_systems.
+    erpnext_draft_doctypes; default ToDo,Material Request, so a 4a install
+    does not start offering customer-facing or money-committing drafts on
+    upgrade; blank is the default). The list shapes the tool's doctype enum
+    and description (erpnext_drafts.propose_tool via draft_tools) and the
+    prompt paragraph, both process-constant; check_fields refuses an
+    unlisted DocType, and approve refuses a waiting card whose DocType was
+    unlisted since (drafts_off) before anything reaches ERPNext.
     Invariants:
     - The model never gets a draft tool. mcp_gateway._check_erpnext_draft
       refuses every call whose normalized name starts with erpnext__draft
@@ -8589,7 +8599,12 @@ integrations:
     allows only oe_connector's own fields (ToDo: description, allocated_to,
     priority, date, reference_type + reference_name; Material Request:
     company, material_request_type, schedule_date, items of exactly
-    item_code / qty / warehouse, at most 20), types and lengths; then
+    item_code / qty / warehouse, at most 20; Quotation: company, customer,
+    valid_till?, items of item_code / qty / rate? / warehouse?; Purchase
+    Order: company and either supplier + schedule_date + items of
+    item_code / qty / rate? / warehouse, or material_request + supplier, or
+    supplier_quotation (+ supplier?), with no items and schedule_date
+    optional), types and lengths (rate 0..1e9, as oe_connector); then
     erpnext__draft_check validates as the principal without saving (it runs
     ERPNext's validate with Notifications counted as sent). A refusal goes
     back to the model wrapped as untrusted and leaves no card. The card is
@@ -8601,7 +8616,18 @@ integrations:
     lines (never draft_check's item list, which could merge or omit one),
     with draft_check's summary filling only what the fields leave to
     ERPNext (a default it applies) and the extras (a ToDo's reference,
-    estimated_value and currency, unpriced_items). Values are plain()
+    estimated_value and currency, unpriced_items). A Quotation's or
+    Purchase Order's card (erpnext_drafts._priced_view) shows the stored
+    lines with ERPNext's rate and amount beside each only where its reading
+    at the same index is the same item and qty; a stated rate stays as
+    stated (a note says when ERPNext's pricing rules moved it), an unstated
+    one is ERPNext's price-list rate at the check (a note says it is
+    re-applied at insert); and Grand total in the document's currency,
+    plus base_grand_total when the company's differs. A Purchase Order from
+    a material_request or supplier_quotation stores no lines: approval
+    sends the source and ERPNext's mapper makes them, so the card shows the
+    mapper's lines from the check (at most 20, then a count) and notes that
+    approval brings over only what is not ordered yet then. Values are plain()
     one-line text capped at 300 chars, numbers exact (no rounding), except
     a ToDo's "What": the stored description in full (up to TEXT_MAX 1000,
     line breaks kept), since a cut would hide text the assignee gets under
@@ -8646,8 +8672,18 @@ integrations:
     tool and the gateway refuses the rest. Nothing in OpenExecutive
     submits, cancels, amends or deletes; oe_connector inserts as the
     approver's ERPNext user with docstatus 0, tags it OpenExecutive and
-    logs it in "OE Draft". Prompt: connected_systems adds the constant
-    _ERPNEXT_DRAFTS paragraph to block 0 only while erpnext_drafts_on.
+    logs it in "OE Draft". OpenExecutive sends nothing to a customer or
+    supplier; only the site's own Notifications and hooks on a new
+    document run at insert (the prompt and docs say so, never "nothing is
+    sent"). Asking for the same draft again answers with the waiting card's
+    stored view, not the new check's, so the model never quotes figures
+    the card doesn't show (security review 4b). Prompt: connected_systems adds the
+    _erpnext_drafts(doctypes) paragraph to block 0 only while
+    erpnext_drafts_on, naming the listed DocTypes; with Quotation or
+    Purchase Order listed it adds that the model gives a rate only when
+    the person states one, never discounts, taxes or terms. OpenExecutive's
+    other 4b parts (teammates proposing, alert-suggested cards, the panel
+    decision) are not built.
 
     Ask the Dynocortex panel (phase 2b; "Ask the Executive" before
     oe_connector #8): oe_connector docks a chat panel, always open, on the

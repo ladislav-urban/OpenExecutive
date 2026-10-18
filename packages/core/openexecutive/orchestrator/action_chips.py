@@ -274,8 +274,10 @@ def summarize_action(
         # Only a stored card earns a chip; it says nothing is in ERPNext yet.
         if (parsed or {}).get("status") != "waiting_for_approval":
             return None
+        from openexecutive.integrations.erpnext_drafts import DRAFT_TOOLS
+
         doctype = (parsed or {}).get("doctype")
-        noun = doctype if doctype in ("ToDo", "Material Request") else "ERPNext"
+        noun = doctype if doctype in DRAFT_TOOLS else "ERPNext"
         payload["summary"] = f"Waiting for your approval: {noun} draft"
         payload["target"] = None
         payload["link"] = "/today"

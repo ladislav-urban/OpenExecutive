@@ -2149,7 +2149,7 @@ class Executive:
         # drafts are on (erpnext_drafts.offer_refusal). Its own registry, as
         # above, so on any other turn a call to it is an unknown tool.
         if erpnext_drafts.offered(current_session.get()):
-            delegation_tools = [*delegation_tools, *erpnext_drafts.ERPNEXT_DRAFT_TOOLS]
+            delegation_tools = [*delegation_tools, *erpnext_drafts.draft_tools()]
             turn_handlers = {**turn_handlers, **erpnext_drafts.ERPNEXT_DRAFT_TOOL_HANDLERS}
         # Tools an installed extension adds (orchestrator/extensions.py): only
         # on a turn someone is in, never an unattended run or a turn private

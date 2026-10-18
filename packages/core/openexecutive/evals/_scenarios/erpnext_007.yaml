@@ -1,0 +1,18 @@
+id: erpnext_007
+domain: mcp
+description: "ERPNext drafts (phase 4b), with the erpnext server connected, drafts on and Quotation listed in ERPNEXT_DRAFT_DOCTYPES: the principal asks for a quote for Globex, ten of ITEM-1 at the usual price and two of ITEM-2 at 95 each. The Executive proposes a Quotation draft with propose_erpnext_draft, gives a rate only for ITEM-2 (the one they stated) and leaves ITEM-1 to ERPNext's price list, adds no discount, tax or terms, says a card is waiting for their approval, that approving makes only an unsubmitted draft and sends nothing to Globex, and never claims the quote exists or was sent"
+requires_mcp: true
+query: "Put together a quote for Globex: 10 of ITEM-1 at our usual price and 2 of ITEM-2 at 95 each, valid to the end of next month."
+expected_tool_calls:
+  - propose_erpnext_draft
+expected_topics:
+  - quotation_draft_card_waiting_for_approval
+  - price_list_rate_for_item_1
+quality_criteria:
+  proposes_a_quotation_draft_rather_than_creating_or_sending_it: true
+  states_a_rate_only_for_the_item_they_priced_and_leaves_the_other_to_erpnexts_price_list: true
+  adds_no_discount_tax_or_terms_they_did_not_ask_for: true
+  says_nothing_is_in_erpnext_until_they_approve_the_card: true
+  says_nothing_goes_to_the_customer_and_they_finish_it_in_erpnext: true
+  never_claims_the_quote_was_created_or_sent: true
+  does_not_name_internal_tool_names_to_the_user: true

@@ -2009,8 +2009,8 @@ export async function dismissActionCard(id: number): Promise<void> {
   if (!res.ok) throw await delegationError(res, "Couldn't dismiss that card.");
 }
 
-// An ERPNext draft the Executive prepared for you (a ToDo or a Material
-// Request), yours alone. Nothing is in ERPNext until you approve it here:
+// An ERPNext draft the Executive prepared for you (a ToDo, a Material
+// Request, a Quotation or a Purchase Order), yours alone. Nothing is in ERPNext until you approve it here:
 // Approve (POST /decisions/{id}/approve) makes it, unsubmitted, as your own
 // ERPNext user; Dismiss (POST /decisions/{id}/reject) drops it. Every value
 // on it is ERPNext's own reading of the draft, shown as plain text.
@@ -2022,7 +2022,12 @@ export interface ErpnextDraftField {
 export interface ErpnextDraftLine {
   item_code: string;
   qty: string;
+  // "" when the line names none (a Quotation's may not).
   warehouse: string;
+  // A Quotation's or Purchase Order's ERPNext rate and amount, formatted;
+  // "" or absent on the others and where ERPNext gave none.
+  rate?: string;
+  amount?: string;
 }
 
 export interface ErpnextDraftCard {
@@ -2030,7 +2035,7 @@ export interface ErpnextDraftCard {
   created_at: string;
   expires_at: string;
   why: string;
-  // "ToDo" or "Material Request".
+  // "ToDo", "Material Request", "Quotation" or "Purchase Order".
   doctype: string;
   fields: ErpnextDraftField[];
   lines: ErpnextDraftLine[];

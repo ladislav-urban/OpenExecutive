@@ -31,6 +31,10 @@ class DraftLineOut(BaseModel):
     item_code: str
     qty: str
     warehouse: str
+    # A Quotation's or Purchase Order's line (ERPNext's figures, formatted);
+    # "" on the others and where ERPNext gave none.
+    rate: str = ""
+    amount: str = ""
 
 
 class DraftCardOut(BaseModel):

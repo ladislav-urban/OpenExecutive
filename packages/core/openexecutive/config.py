@@ -841,11 +841,18 @@ class Settings(BaseSettings):
     # principal's morning brief shows (cash, receivables, payables, yesterday's
     # sales). Unset, the brief has no ERP NUMBERS block.
     erpnext_brief_company: str | None = Field(None, alias="ERPNEXT_BRIEF_COMPANY")
-    # ERPNext phase 4a (integrations/erpnext_drafts.py): the principal may have
-    # the Executive prepare ERPNext drafts (a ToDo, a Material Request) on an
+    # ERPNext phase 4 (integrations/erpnext_drafts.py): the principal may have
+    # the Executive prepare ERPNext drafts (ERPNEXT_DRAFT_DOCTYPES) on an
     # approval card they tap; created only then, unsubmitted, as their own
     # ERPNext user. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
     erpnext_drafts_enabled: bool = Field(False, alias="ERPNEXT_DRAFTS_ENABLED")
+    # Which DocTypes those drafts may be (comma-separated), as oe_connector's
+    # oe_connector_draft_doctypes lists them on its side. Phase 4b's
+    # Quotation and Purchase Order face customers or commit money once
+    # submitted, so an install offers them only once listed here.
+    erpnext_draft_doctypes: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["ToDo", "Material Request"], alias="ERPNEXT_DRAFT_DOCTYPES"
+    )
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
@@ -928,7 +935,7 @@ class Settings(BaseSettings):
 
     @field_validator(
         "web_search_allowed_domains", "web_search_blocked_domains",
-        "research_specialists", "workflow_file_dirs", mode="before",
+        "research_specialists", "workflow_file_dirs", "erpnext_draft_doctypes", mode="before",
     )
     @classmethod
     def _parse_domain_list(cls, v: Any) -> list[str]:

@@ -1,12 +1,15 @@
 """ERPNext drafts a person approves: ``propose_erpnext_draft`` and its cards.
 
-ERPNext phase 4a (design: oe_connector's ``docs/erpnext-integration.md``,
+ERPNext phase 4 (design: oe_connector's ``docs/erpnext-integration.md``,
 "Writes come last", and ``docs/erpnext-phase4-plan.md``). The Executive can
-prepare two kinds of ERPNext document, a ToDo (a follow-up assigned to
-someone) and a Material Request (a restock), as unsubmitted drafts. Nothing
-is written until a person taps Approve on a card that shows exactly what will
-be written, and then once, with no model call. A person finishes every
-document in ERPNext: nothing here submits, cancels, amends or deletes.
+prepare ERPNext documents as unsubmitted drafts: in 4a a ToDo (a follow-up
+assigned to someone) and a Material Request (a restock); in 4b a Quotation
+(to a customer) and a Purchase Order (to a supplier), which ERPNext prices
+(``PRICED``). An install offers only the DocTypes ``ERPNEXT_DRAFT_DOCTYPES``
+lists (``enabled_doctypes``), by default 4a's two. Nothing is written until a
+person taps Approve on a card that shows exactly what will be written, and
+then once, with no model call. A person finishes every document in ERPNext:
+nothing here submits, cancels, amends, deletes or sends.
 
 **Propose** (``handle_propose``). The model gives the DocType and its fields.
 They are checked for shape here (``check_fields``: only the fields
@@ -46,6 +49,7 @@ import json
 import logging
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -55,12 +59,18 @@ logger = logging.getLogger(__name__)
 DECISION_CLASS = "erpnext_draft"
 PROPOSE = "propose_erpnext_draft"
 
-# What 4a may draft, and the oe_connector tool that inserts each. Quotation
-# and Purchase Order (oe_connector has them) wait for 4b.
+# What may be drafted, and the oe_connector tool that inserts each. An
+# install offers only those ERPNEXT_DRAFT_DOCTYPES lists (enabled_doctypes).
 DRAFT_TOOLS: dict[str, str] = {
     "ToDo": "erpnext__draft_todo",
     "Material Request": "erpnext__draft_material_request",
+    # Phase 4b: they face a customer or commit money once submitted.
+    "Quotation": "erpnext__draft_quotation",
+    "Purchase Order": "erpnext__draft_purchase_order",
 }
+# The drafts ERPNext prices: its draft_check returns each line's rate and
+# amount and the totals (a missing rate comes from its price list).
+PRICED: frozenset[str] = frozenset({"Quotation", "Purchase Order"})
 
 CARDS_PER_TURN = 3
 OPEN_CARDS_MAX = 10
@@ -72,6 +82,8 @@ TEXT_MAX = 1000
 NAME_MAX = 140
 WHY_MAX = 300
 QTY_MAX = 1_000_000
+# oe_connector's own bound on a line's rate (drafts._priced_lines).
+RATE_MAX = 1_000_000_000
 # What the card shows of any one ERPNext value, and of a failure.
 SHOWN_MAX = 300
 
@@ -85,6 +97,17 @@ _CURRENCY_RE = re.compile(r"[A-Z]{3}")
 _TODO_FIELDS = frozenset({"description", "allocated_to", "priority", "date", "reference_type", "reference_name"})
 _MR_FIELDS = frozenset({"company", "material_request_type", "schedule_date", "items"})
 _MR_LINE_FIELDS = frozenset({"item_code", "qty", "warehouse"})
+_QUOTATION_FIELDS = frozenset({"company", "customer", "valid_till", "items"})
+_PO_FIELDS = frozenset({"company", "supplier", "schedule_date", "items", "material_request", "supplier_quotation"})
+_PRICED_LINE_FIELDS = frozenset({"item_code", "qty", "rate", "warehouse"})
+
+
+def enabled_doctypes() -> tuple[str, ...]:
+    """The DocTypes this install drafts (``connected_systems.erpnext_draft_doctypes``)."""
+    from openexecutive.config import get_settings
+    from openexecutive.prompts.connected_systems import erpnext_draft_doctypes
+
+    return erpnext_draft_doctypes(get_settings())
 
 
 class ApproveRefused(Exception):
@@ -188,12 +211,46 @@ def _todo(fields: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _material_request(fields: dict[str, Any]) -> dict[str, Any]:
-    extra = set(fields) - _MR_FIELDS
+def _only(fields: dict[str, Any], allowed: frozenset[str], doctype: str) -> None:
+    extra = set(fields) - allowed
     if extra:
-        raise ValueError(
-            f"A Material Request takes only {', '.join(sorted(_MR_FIELDS))}; not {', '.join(sorted(extra))}."
-        )
+        raise ValueError(f"A {doctype} takes only {', '.join(sorted(allowed))}; not {', '.join(sorted(extra))}.")
+
+
+def _lines(items: Any, *, priced: bool, warehouse_required: bool) -> list[dict[str, Any]]:
+    """A draft's item lines: item_code, qty and a warehouse, and on a priced
+    draft an optional rate (left out, ERPNext's price list sets it)."""
+    allowed = _PRICED_LINE_FIELDS if priced else _MR_LINE_FIELDS
+    listed = "item_code, qty, rate and warehouse" if priced else "item_code, qty and warehouse"
+    if not isinstance(items, list) or not items:
+        raise ValueError(f"`items` must be a list of {{{', '.join(sorted(allowed))}}}.")
+    if len(items) > MAX_LINES:
+        raise ValueError(f"At most {MAX_LINES} items on one draft.")
+    lines: list[dict[str, Any]] = []
+    for number, raw in enumerate(items, start=1):
+        if not isinstance(raw, dict) or set(raw) - allowed:
+            raise ValueError(f"Item {number}: give only {listed}.")
+        qty = raw.get("qty")
+        if isinstance(qty, bool) or not isinstance(qty, int | float) or not 0 < qty <= QTY_MAX:
+            raise ValueError(f"Item {number}: `qty` must be a positive number.")
+        line: dict[str, Any] = {
+            "item_code": _name(raw.get("item_code"), f"item {number} item_code", required=True),
+            "qty": qty,
+        }
+        rate = raw.get("rate")
+        if rate is not None:
+            if isinstance(rate, bool) or not isinstance(rate, int | float) or not 0 <= rate <= RATE_MAX:
+                raise ValueError(f"Item {number}: `rate` must be a number of at least 0, or left out for the price list.")
+            line["rate"] = rate
+        warehouse = _name(raw.get("warehouse"), f"item {number} warehouse", required=warehouse_required)
+        if warehouse is not None:
+            line["warehouse"] = warehouse
+        lines.append(line)
+    return lines
+
+
+def _material_request(fields: dict[str, Any]) -> dict[str, Any]:
+    _only(fields, _MR_FIELDS, "Material Request")
     out: dict[str, Any] = {
         "company": _name(fields.get("company"), "company", required=True),
         "schedule_date": _date(fields.get("schedule_date"), "schedule_date", required=True),
@@ -203,36 +260,69 @@ def _material_request(fields: dict[str, Any]) -> dict[str, Any]:
         if kind not in ("Purchase", "Material Transfer"):
             raise ValueError("`material_request_type` must be Purchase or Material Transfer.")
         out["material_request_type"] = kind
-    items = fields.get("items")
-    if not isinstance(items, list) or not items:
-        raise ValueError("`items` must be a list of {item_code, qty, warehouse}.")
-    if len(items) > MAX_LINES:
-        raise ValueError(f"At most {MAX_LINES} items on one draft.")
-    lines: list[dict[str, Any]] = []
-    for number, raw in enumerate(items, start=1):
-        if not isinstance(raw, dict) or set(raw) - _MR_LINE_FIELDS:
-            raise ValueError(f"Item {number}: give only item_code, qty and warehouse.")
-        qty = raw.get("qty")
-        if isinstance(qty, bool) or not isinstance(qty, int | float) or not 0 < qty <= QTY_MAX:
-            raise ValueError(f"Item {number}: `qty` must be a positive number.")
-        lines.append({
-            "item_code": _name(raw.get("item_code"), f"item {number} item_code", required=True),
-            "qty": qty,
-            "warehouse": _name(raw.get("warehouse"), f"item {number} warehouse", required=True),
-        })
-    out["items"] = lines
+    out["items"] = _lines(fields.get("items"), priced=False, warehouse_required=True)
     return out
+
+
+def _quotation(fields: dict[str, Any]) -> dict[str, Any]:
+    _only(fields, _QUOTATION_FIELDS, "Quotation")
+    out: dict[str, Any] = {
+        "company": _name(fields.get("company"), "company", required=True),
+        "customer": _name(fields.get("customer"), "customer", required=True),
+    }
+    if (valid_till := _date(fields.get("valid_till"), "valid_till", required=False)) is not None:
+        out["valid_till"] = valid_till
+    out["items"] = _lines(fields.get("items"), priced=True, warehouse_required=False)
+    return out
+
+
+def _purchase_order(fields: dict[str, Any]) -> dict[str, Any]:
+    """From lines (supplier, schedule_date, items with a warehouse), or from
+    a submitted Material Request (with the supplier to order from) or
+    Supplier Quotation (its own supplier), whose lines ERPNext's own mapper
+    brings over: then no items are given."""
+    _only(fields, _PO_FIELDS, "Purchase Order")
+    out: dict[str, Any] = {"company": _name(fields.get("company"), "company", required=True)}
+    material_request = _name(fields.get("material_request"), "material_request", required=False)
+    supplier_quotation = _name(fields.get("supplier_quotation"), "supplier_quotation", required=False)
+    if material_request and supplier_quotation:
+        raise ValueError("Give a `material_request` or a `supplier_quotation`, not both.")
+    source = material_request or supplier_quotation
+    if source and fields.get("items") not in (None, []):
+        raise ValueError("With a `material_request` or `supplier_quotation`, ERPNext takes the lines from it: leave out `items`.")
+    supplier = _name(fields.get("supplier"), "supplier", required=not supplier_quotation)
+    if supplier is not None:
+        out["supplier"] = supplier
+    schedule_date = _date(fields.get("schedule_date"), "schedule_date", required=not source)
+    if schedule_date is not None:
+        out["schedule_date"] = schedule_date
+    if material_request:
+        out["material_request"] = material_request
+    elif supplier_quotation:
+        out["supplier_quotation"] = supplier_quotation
+    else:
+        out["items"] = _lines(fields.get("items"), priced=True, warehouse_required=True)
+    return out
+
+
+_SHAPES = {
+    "ToDo": _todo,
+    "Material Request": _material_request,
+    "Quotation": _quotation,
+    "Purchase Order": _purchase_order,
+}
 
 
 def check_fields(doctype: Any, fields: Any) -> dict[str, Any] | str:
     """``fields`` as they will be stored and sent, or why they can't be.
     Shape only: oe_connector checks what they name (``draft_check``)."""
-    if doctype not in DRAFT_TOOLS:
-        return f"`doctype` must be one of {', '.join(sorted(DRAFT_TOOLS))}; nothing else can be drafted."
+    enabled = enabled_doctypes()
+    if doctype not in enabled:
+        return f"`doctype` must be one of {', '.join(enabled)}; nothing else can be drafted here."
     if not isinstance(fields, dict):
         return "`fields` must be an object."
     try:
-        return _todo(fields) if doctype == "ToDo" else _material_request(fields)
+        return _SHAPES[doctype](fields)
     except ValueError as exc:
         return str(exc)
 
@@ -242,8 +332,8 @@ def check_fields(doctype: Any, fields: Any) -> dict[str, Any] | str:
 # ---------------------------------------------------------------------------
 
 def drafts_on() -> bool:
-    """``ERPNEXT_DRAFTS_ENABLED`` with per-person access on, and ERPNext
-    connected to the running gateway."""
+    """``ERPNEXT_DRAFTS_ENABLED`` with per-person access on and a DocType
+    listed, and ERPNext connected to the running gateway."""
     from openexecutive.config import get_settings
     from openexecutive.orchestrator.mcp_gateway import gateway_server_names, get_active_gateway
     from openexecutive.prompts.connected_systems import ERPNEXT_SERVER, erpnext_drafts_on
@@ -393,6 +483,8 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
             reference = f"{fields['reference_type']} {fields['reference_name']}"
         if reference not in (None, ""):
             shown.append({"label": "On", "value": _one_line(reference)})
+    elif doctype in PRICED:
+        _priced_view(doctype, got, fields, add, shown, lines, notes)
     else:
         add("Company", "company")
         add("Type", "material_request_type")
@@ -418,6 +510,106 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
     return {"fields": shown, "lines": lines, "notes": notes}
 
 
+def _number(value: Any) -> float | None:
+    return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
+def _money(value: Any) -> str:
+    amount = _number(value)
+    return "" if amount is None else f"{amount:,.2f}"
+
+
+def _currency(value: Any) -> str:
+    return value if isinstance(value, str) and _CURRENCY_RE.fullmatch(value) else ""
+
+
+def _priced_view(
+    doctype: str, got: dict[str, Any], fields: dict[str, Any], add: Callable[..., None],
+    shown: list[dict[str, str]], lines: list[dict[str, str]], notes: list[str],
+) -> None:
+    """``card_view`` for a Quotation or Purchase Order. Stored lines are shown
+    as stored, with ERPNext's rate and amount beside each where its reading
+    is that same line. A Purchase Order from a source document has no stored
+    lines: approval sends the source, and ERPNext's mapper makes the lines,
+    so the card shows the ones it made at the check and says so."""
+    add("Company", "company")
+    if doctype == "Quotation":
+        add("Customer", "customer")
+        add("Valid till", "valid_till")
+    else:
+        add("Supplier", "supplier")
+        add("Needed by", "schedule_date")
+    source_doctype, source = (
+        ("Material Request", fields.get("material_request")) if fields.get("material_request")
+        else ("Supplier Quotation", fields.get("supplier_quotation")) if fields.get("supplier_quotation")
+        else ("", None)
+    )
+    if source:
+        shown.append({"label": "From", "value": f"{source_doctype} {_one_line(source, NAME_MAX)}"})
+    items = got.get("items")
+    checked = [r for r in items if isinstance(r, dict)] if isinstance(items, list) else []
+
+    def line(row: dict[str, Any], rate: Any, amount: Any) -> dict[str, str]:
+        return {
+            "item_code": _one_line(row.get("item_code"), NAME_MAX),
+            "qty": _shown(row.get("qty")),
+            "warehouse": _one_line(row.get("warehouse"), NAME_MAX),
+            "rate": _money(rate),
+            "amount": _money(amount),
+        }
+
+    if source:
+        for row in checked[:MAX_LINES]:
+            lines.append(line(row, row.get("rate"), row.get("amount")))
+        notes.append(
+            f"ERPNext takes these lines from {source_doctype} {_one_line(source, NAME_MAX)}: on approval it "
+            "brings over what is not ordered yet at that moment, which may be more or less than shown, "
+            "and prices them again."
+        )
+        if len(checked) > MAX_LINES:
+            notes.append(f"And {len(checked) - MAX_LINES} more lines, as ERPNext lists them.")
+    else:
+        priced_by_erpnext: list[str] = []
+        unmatched: list[str] = []
+        for index, row in enumerate(fields.get("items") or []):
+            if not isinstance(row, dict):
+                continue
+            match = checked[index] if index < len(checked) else {}
+            # ERPNext may give an item's code in its own case.
+            same = (
+                str(match.get("item_code") or "").casefold() == str(row.get("item_code") or "").casefold()
+                and _number(match.get("qty")) == _number(row.get("qty"))
+            )
+            rate = row.get("rate") if "rate" in row else (match.get("rate") if same else None)
+            lines.append(line(row, rate, match.get("amount") if same else None))
+            name = _one_line(row.get("item_code"), NAME_MAX)
+            if not same:
+                unmatched.append(name)
+            elif "rate" not in row and _number(match.get("rate")) is not None:
+                priced_by_erpnext.append(name)
+            elif "rate" in row and _number(match.get("rate")) not in (None, _number(row["rate"])):
+                notes.append(f"ERPNext's pricing rules made {name}'s rate {_money(match.get('rate'))}.")
+        if priced_by_erpnext:
+            notes.append(
+                f"Rates from ERPNext's price list at the check, for {', '.join(priced_by_erpnext)}; "
+                "ERPNext applies its price list again when it makes the draft."
+            )
+        if unmatched:
+            notes.append(
+                f"ERPNext's check didn't give figures for {', '.join(unmatched)}; its rate is "
+                "ERPNext's to set (a pricing rule can change a stated one), so check it in ERPNext."
+            )
+    currency = _currency(got.get("currency"))
+    company_currency = _currency(got.get("company_currency"))
+    if _number(got.get("grand_total")) is not None:
+        shown.append({"label": "Grand total", "value": f"{_money(got['grand_total'])} {currency}".strip()})
+        if company_currency and company_currency != currency and _number(got.get("base_grand_total")) is not None:
+            shown.append({
+                "label": f"In {company_currency}",
+                "value": f"{_money(got['base_grand_total'])} {company_currency}",
+            })
+
+
 def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
     return hashlib.sha256(
         json.dumps([person_id, doctype, fields], sort_keys=True).encode()
@@ -427,16 +619,19 @@ def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
 def propose(
     person: Any, doctype: str, fields: dict[str, Any], view: dict[str, Any], why: str,
     *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None,
-) -> tuple[int, bool]:
+) -> tuple[int, bool, dict[str, Any]]:
     """Store a card for ``person`` (``fields`` already checked); returns its
-    decision id and whether it is new. The same draft still waiting is that
-    card, not a new one. ``waiting``: ``open_cards(person.id)``, if read."""
+    decision id, whether it is new and the view it shows. The same draft
+    still waiting is that card, not a new one, with the view it was left
+    with. ``waiting``: ``open_cards(person.id)``, if read."""
     from openexecutive.memory.decision_ledger import create_decision_instance
 
     digest = _digest(person.id, doctype, fields)
     for card in open_cards(person.id) if waiting is None else waiting:
-        if _payload(card).get("digest") == digest:
-            return int(card.id), False
+        stored = _payload(card)
+        if stored.get("digest") == digest:
+            shown = stored.get("view")
+            return int(card.id), False, shown if isinstance(shown, dict) else view
     card_key = f"oe:{DECISION_CLASS}:{uuid.uuid4().hex}"
     payload = {
         # A card is its person's alone (approver_only hides the class); this
@@ -462,7 +657,7 @@ def propose(
         gate_mode="propose",
         approver_person_id=person.id,
         confidence=None,
-    ), True
+    ), True, view
 
 
 def cards(person: Any) -> list[DraftCard]:
@@ -530,37 +725,69 @@ async def _call(tool: str, arguments: dict[str, Any]) -> str:
 # The tool
 # ---------------------------------------------------------------------------
 
-PROPOSE_TOOL: dict[str, Any] = {
-    "name": PROPOSE,
-    "description": (
-        "Prepare an ERPNext draft for the person you are speaking with to approve: a "
-        "`ToDo` (a follow-up assigned to someone, optionally on a document) or a "
-        "`Material Request` (a restock). ERPNext checks it as them, and they get a card "
-        "on Today in the OpenExecutive web app (and under this reply when they are in "
-        "its chat, but not in Slack, Telegram or Discord), showing exactly what will be "
-        "written; nothing is "
-        "created until they tap Approve, and then only an unsubmitted draft they finish "
-        "in ERPNext. Use it only when they ask for the draft in their own words. ToDo "
-        "fields: description, allocated_to (the assignee's ERPNext user email), optional "
-        "priority (Low/Medium/High), date (YYYY-MM-DD), reference_type and "
-        "reference_name (e.g. Sales Invoice, ACC-SINV-2026-00042). Material Request "
-        "fields: company, schedule_date (YYYY-MM-DD), items (item_code, qty, warehouse; "
-        "at most 20), optional material_request_type (Purchase or Material Transfer). "
-        "Tell them the card is waiting; never say the draft exists."
+# How each DocType's fields read in the tool's description.
+_FIELD_HELP: dict[str, str] = {
+    "ToDo": (
+        "ToDo fields: description, allocated_to (the assignee's ERPNext user email), "
+        "optional priority (Low/Medium/High), date (YYYY-MM-DD), reference_type and "
+        "reference_name (e.g. Sales Invoice, ACC-SINV-2026-00042)."
     ),
-    "input_schema": {
-        "type": "object",
-        "properties": {
-            "why": {
-                "type": "string",
-                "description": "One line on what this is for, e.g. 'Restock ITEM-1, below its reorder level'.",
-            },
-            "doctype": {"type": "string", "enum": sorted(DRAFT_TOOLS)},
-            "fields": {"type": "object", "description": "The draft's fields, as listed above for its doctype."},
-        },
-        "required": ["why", "doctype", "fields"],
-    },
+    "Material Request": (
+        "Material Request fields: company, schedule_date (YYYY-MM-DD), items "
+        "(item_code, qty, warehouse; at most 20), optional material_request_type "
+        "(Purchase or Material Transfer)."
+    ),
+    "Quotation": (
+        "Quotation fields: company, customer, optional valid_till (YYYY-MM-DD), items "
+        "(item_code, qty, optional rate and warehouse; at most 20)."
+    ),
+    "Purchase Order": (
+        "Purchase Order fields: company and either supplier, schedule_date "
+        "(YYYY-MM-DD) and items (item_code, qty, warehouse, optional rate; at most "
+        "20), or a submitted material_request (a purchase request) with the "
+        "supplier to order from, or a submitted supplier_quotation, with no items: "
+        "ERPNext takes the lines from it (schedule_date optional)."
+    ),
 }
+
+
+def propose_tool(doctypes: tuple[str, ...]) -> dict[str, Any]:
+    """``propose_erpnext_draft`` for the DocTypes this install drafts.
+    Process-constant, so the turn's tool list stays cacheable."""
+    priced = (
+        "Give a Quotation's or Purchase Order's rate only when they state one; "
+        "ERPNext's price list sets the rest. OpenExecutive sends nothing to the "
+        "customer or supplier (only ERPNext's own notifications for a new document "
+        "might, if the site has any). " if PRICED & set(doctypes) else ""
+    )
+    return {
+        "name": PROPOSE,
+        "description": (
+            f"Prepare an ERPNext draft for the person you are speaking with to approve: "
+            f"{', '.join(f'`{d}`' for d in doctypes)}. ERPNext checks it as them, and "
+            "they get a card on Today in the OpenExecutive web app (and under this reply "
+            "when they are in its chat, but not in Slack, Telegram or Discord), showing "
+            "exactly what will be written; nothing is created until they tap Approve, and "
+            "then only an unsubmitted draft they finish in ERPNext. Use it only when they "
+            "ask for the draft in their own words. "
+            + " ".join(_FIELD_HELP[d] for d in doctypes)
+            + " "
+            + priced
+            + "Tell them the card is waiting; never say the draft exists."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "why": {
+                    "type": "string",
+                    "description": "One line on what this is for, e.g. 'Restock ITEM-1, below its reorder level'.",
+                },
+                "doctype": {"type": "string", "enum": list(doctypes)},
+                "fields": {"type": "object", "description": "The draft's fields, as listed above for its doctype."},
+            },
+            "required": ["why", "doctype", "fields"],
+        },
+    }
 
 
 async def handle_propose(tool_input: dict[str, Any]) -> str:
@@ -621,7 +848,7 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
         )
     view = card_view(doctype, checked.get("summary"), fields)
     try:
-        decision_id, new = propose(
+        decision_id, new, view = propose(
             person, doctype, fields, view, str(tool_input.get("why") or ""),
             asked_by=email, session_id=getattr(session, "session_id", None), waiting=waiting,
         )
@@ -641,7 +868,7 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
         "doctype": doctype,
         "card": wrap_untrusted(json.dumps(view, ensure_ascii=False), source="erpnext", author="draft_check"),
         "note": (
-            ("" if new else "This is the card already waiting for the same draft. ")
+            ("" if new else "This is the card already waiting for the same draft, as ERPNext read it then. ")
             + "Nothing is in ERPNext yet. The card is on Today in the OpenExecutive web app, "
             "and under this reply in its chat, for them to approve; it then becomes an "
             "unsubmitted draft they review and submit in ERPNext. Outside the web app, say "
@@ -650,7 +877,11 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
     })
 
 
-ERPNEXT_DRAFT_TOOLS: list[dict[str, Any]] = [PROPOSE_TOOL]
+def draft_tools() -> list[dict[str, Any]]:
+    """The turn tools a turn ``offered`` drafts gets."""
+    return [propose_tool(enabled_doctypes())]
+
+
 ERPNEXT_DRAFT_TOOL_HANDLERS: dict[str, Any] = {PROPOSE: handle_propose}
 
 
@@ -698,6 +929,8 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         raise ApproveRefused(409, "principal_only", "For now only the account owner can approve ERPNext drafts.")
     if not drafts_on():
         raise ApproveRefused(409, "drafts_off", "ERPNext drafts are turned off here, or ERPNext isn't connected.")
+    if payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
+        raise ApproveRefused(409, "drafts_off", f"ERPNext {payload['doctype']} drafts are turned off here.")
     if not _live(instance, datetime.now(UTC)):
         raise ApproveRefused(409, "expired", "This card is more than three days old. Ask again if it's still needed.")
     doctype, fields, key = payload.get("doctype"), payload.get("fields"), payload.get("card_key")
