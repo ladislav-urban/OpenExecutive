@@ -8585,9 +8585,17 @@ integrations:
       oe_connector's caller.py requires on every draft tool; reads carry no
       purpose, so phase 2's shared vector is unchanged. Drafts need phase 2
       (no key: refused, reason draft-needs-keys).
-    - Who may propose (erpnext_drafts.offer_refusal; 4a pilot): the
-      principal speaking on a surface that proved it (principal_speaking),
-      never an unattended run, a turn private to the principal or an email
+    - Who may propose (erpnext_drafts.offer_refusal, _proposer): the
+      person speaking, for themselves: the principal on a surface that
+      proved it (principal_speaking), and with ERPNEXT_DRAFTS_TEAMMATES
+      (4b, default off) a verified teammate, by the very rule that answers
+      their ERPNext reads as their own user (erpnext_caller.caller_for:
+      teammate_on_verified_surface, a conversation nobody else reads, the
+      web chat only under signed sign-ins). _proposer checks the switch
+      before caller_for, so with it off a teammate hears "only the account
+      owner", and requires the person's People email to equal the caller's
+      email. The card's approver is that person, approver_only, so nobody
+      else (the principal included) sees or approves it; never an unattended run, a turn private to the principal or an email
       turn (origin_channel "email": mail text), never ERPNext's panel (not
       in ERPNEXT_PANEL_TOOLS either), and never after the turn read the
       owner's mail (lockdown.MAIL_TOUCHED_WITHHELD_TOOLS). Also in
@@ -8643,7 +8651,10 @@ integrations:
     Approving (POST /decisions/{id}/approve, decisions._ERPNEXT_DRAFT, no
     edits): erpnext_drafts.approve checks the card's person still matches
     approver_person_id, verified.caller_refusal (signed sign-ins or local
-    login), principal only, drafts still on, TTL, and that the stored
+    login), the principal or (ERPNEXT_DRAFTS_TEAMMATES still on) a team
+    member, else principal_only; the stored asked_by still equal to the
+    person's current email, else changed (a People email edited since may
+    name another human; security review 4b teammates); drafts still on, TTL, and that the stored
     payload still passes check_fields unchanged with the tool its doctype
     names; then claim_for_execution (once), then the stored call with
     {**fields, idempotency_key: card_key, asked_by} inside
@@ -8662,7 +8673,8 @@ integrations:
     erpnext_draft_proposed / created / failed / dismissed. GET
     /erpnext/drafts lists the caller's own waiting cards (api/routes/
     erpnext_drafts.py, chat._resolve_caller_person_id; no People entry:
-    []). UI: components/ErpnextDraftCards.tsx on Today's Needs you and
+    []; a teammate also [] unless api.caller.signing_on, since their cards
+    hold ERPNext figures read as them). UI: components/ErpnextDraftCards.tsx on Today's Needs you and
     under the chat reply whose propose_erpnext_draft chip carries the id,
     all views sharing one store (one GET however many are on screen; a
     card approved, dismissed or closed in one is so in all). The card is
@@ -8681,8 +8693,10 @@ integrations:
     _erpnext_drafts(doctypes) paragraph to block 0 only while
     erpnext_drafts_on, naming the listed DocTypes; with Quotation or
     Purchase Order listed it adds that the model gives a rate only when
-    the person states one, never discounts, taxes or terms. OpenExecutive's
-    other 4b parts (teammates proposing, alert-suggested cards, the panel
+    the person states one, never discounts, taxes or terms; with
+    ERPNEXT_DRAFTS_TEAMMATES it names teammates and says a draft is only
+    for the person speaking, never for someone else to approve.
+    OpenExecutive's other 4b parts (alert-suggested cards, the panel
     decision) are not built.
 
     Ask the Dynocortex panel (phase 2b; "Ask the Executive" before

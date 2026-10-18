@@ -63,6 +63,15 @@ def get_erpnext_drafts(request: Request) -> DraftCardsOut:
     person = get_person(person_id) if person_id is not None else None
     if person is None or person.id is None or person.archived:
         return DraftCardsOut(cards=[])
+    # A teammate's cards hold ERPNext figures read as them, which ERPNext
+    # gives a teammate in the web app only under signed sign-ins
+    # (erpnext_caller.caller_for); without them, whoever holds the shared
+    # secret could name any teammate.
+    if not person.is_principal:
+        from openexecutive.api.caller import signing_on
+
+        if not signing_on():
+            return DraftCardsOut(cards=[])
     try:
         found = cards(person)
     except Exception as exc:

@@ -780,6 +780,97 @@ def test_a_card_whose_kind_was_unlisted_is_not_carried_out(
 
 
 # --------------------------------------------------------------------------- #
+# Phase 4b: teammates
+# --------------------------------------------------------------------------- #
+
+
+def _teammate_turn(roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, text: str = "chase ACC-SINV-2026-00042") -> Session:
+    # Signed in to the web chat, with signed sign-ins on: where ERPNext
+    # answers a teammate as themselves (erpnext_caller.caller_for).
+    monkeypatch.setattr("openexecutive.api.caller.signing_on", lambda: True)
+    session = Session(from_web_chat=True, caller_person_id=roster.teammate, web_caller_signed_in=True)
+    pin_turn_delegation(session, text)
+    return session
+
+
+def test_a_teammate_drafts_for_themselves_once_let_in(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    session = _teammate_turn(roster, monkeypatch)
+    assert "account owner" in str(drafts.offer_refusal(session))
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    assert drafts.offer_refusal(session) is None
+    erp.replies.append(json.dumps({"ok": True, "summary": {}}))
+    proposed = _propose(session, {"why": "Chase the invoice", "doctype": "ToDo", "fields": FOLLOW_UP})
+    card = get_decision_instance(proposed["decision_id"])
+    # Checked as the teammate's own ERPNext user, and theirs alone.
+    assert erp.claims()["sub"] == TEAM
+    assert card is not None and card.approver_person_id == roster.teammate
+    assert json.loads(card.proposed_payload_json)["asked_by"] == TEAM
+    assert drafts.open_cards(roster.principal) == []
+    assert [c.decision_id for c in drafts.cards(people_store.get_person(roster.teammate))] == [card.id]
+    erp.replies.append(json.dumps({**CREATED, "doctype": "ToDo", "name": "abc123def"}))
+    assert _approve(card)["name"] == "abc123def"
+    assert (erp.claims()["sub"], erp.claims()["purpose"]) == (TEAM, "draft")
+
+
+def test_a_teammates_card_waits_while_teammates_are_turned_off(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    erp.replies.append(json.dumps({"ok": True, "summary": {}}))
+    proposed = _propose(_teammate_turn(roster, monkeypatch), {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
+    card = get_decision_instance(proposed["decision_id"])
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "false")
+    with pytest.raises(drafts.ApproveRefused) as off:
+        _approve(card)
+    assert off.value.code == "principal_only"
+    assert len(erp.calls) == 1
+    still = get_decision_instance(card.id)
+    assert still is not None and still.status == STATUS_PROPOSED
+
+
+def test_a_card_whose_asker_no_longer_matches_is_not_carried_out(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    from openexecutive.memory.decision_ledger import update_open_payload
+
+    # Checked as one email; the person's People email now names another.
+    card = _restock_card(erp, roster)
+    update_open_payload(card.id, {**json.loads(card.proposed_payload_json), "asked_by": "someone@else.example"})
+    with pytest.raises(drafts.ApproveRefused) as changed:
+        _approve(get_decision_instance(card.id))
+    assert changed.value.code == "changed"
+    assert len(erp.calls) == 1
+
+
+def test_a_teammate_where_others_read_cannot_propose(
+    erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    # Web chat without signed sign-ins: the signed-in email is not proven.
+    monkeypatch.setattr("openexecutive.api.caller.signing_on", lambda: False)
+    session = Session(from_web_chat=True, caller_person_id=roster.teammate, web_caller_signed_in=True)
+    pin_turn_delegation(session, "make a todo")
+    out = _propose(session, {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
+    assert "signed" in out["error"]
+    assert erp.calls == []
+
+
+def test_the_prompt_names_teammates_only_once_let_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.config import get_settings
+
+    monkeypatch.setenv("ERPNEXT_CALLER_PRIVATE_KEY", VECTOR_PRIVATE_KEY)
+    monkeypatch.setenv("ERPNEXT_DRAFTS_ENABLED", "true")
+    off = render_connected_systems(mcp_servers=("erpnext",), settings=get_settings())
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    on = render_connected_systems(mcp_servers=("erpnext",), settings=get_settings())
+    assert "Drafts (the principal only)" in off and "teammate" not in off.split("Drafts (")[1]
+    assert "verified teammate in a conversation nobody else reads" in on
+    assert "never prepare one for someone else to approve" in on
+
+
+# --------------------------------------------------------------------------- #
 # Routes
 # --------------------------------------------------------------------------- #
 
@@ -810,6 +901,21 @@ def test_the_routes_show_and_resolve_a_card_for_its_person_alone(
     assert resp.status_code == 200 and resp.json()["status"] == STATUS_APPROVED_UNCHANGED
     assert json.loads(resp.json()["final_payload_json"])["created"]["name"] == "MAT-MR-2026-00012"
     assert client.get("/erpnext/drafts", headers=olivia).json()["cards"] == []
+
+
+def test_a_teammate_sees_their_cards_only_under_signed_sign_ins(
+    erp: FakeErpnext, roster: SimpleNamespace, client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    erp.replies.append(json.dumps({"ok": True, "summary": {}}))
+    proposed = _propose(_teammate_turn(roster, monkeypatch), {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
+    ben = {"x-caller-email": TEAM}
+    listed = client.get("/erpnext/drafts", headers=ben).json()["cards"]
+    assert [c["decision_id"] for c in listed] == [proposed["decision_id"]]
+    # The principal never sees a teammate's card.
+    assert client.get("/erpnext/drafts", headers={"x-caller-email": OWNER}).json()["cards"] == []
+    monkeypatch.setattr("openexecutive.api.caller.signing_on", lambda: False)
+    assert client.get("/erpnext/drafts", headers=ben).json()["cards"] == []
 
 
 def test_dismissing_a_card_writes_nothing(

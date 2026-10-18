@@ -853,6 +853,11 @@ class Settings(BaseSettings):
     erpnext_draft_doctypes: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["ToDo", "Material Request"], alias="ERPNEXT_DRAFT_DOCTYPES"
     )
+    # Phase 4b: a verified teammate may have drafts prepared too, for
+    # themselves, in a conversation nobody else reads, as their own ERPNext
+    # user (who may read ERPNext as themselves; erpnext_caller.caller_for).
+    # Off by default, so an install's drafts stay the principal's until set.
+    erpnext_drafts_teammates: bool = Field(False, alias="ERPNEXT_DRAFTS_TEAMMATES")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
