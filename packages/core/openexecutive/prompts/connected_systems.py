@@ -218,6 +218,19 @@ def _erpnext_drafts(doctypes: Sequence[str], *, teammates: bool = False) -> str:
     )
 
 
+# Scheduled ERP metrics (briefing.erp_metrics): the principal's, while
+# ERPNEXT_BRIEF_COMPANY is set. Process-constant, like the lines above.
+_ERPNEXT_METRICS = (
+    "  Scheduled figures (the principal only): when they ask to get an "
+    "ERPNext figure regularly (\"DSO every Monday\"), use "
+    "`schedule_erp_metric`; `cancel_erp_metric` stops one. Only its listed "
+    "metrics exist (days sales outstanding, cash this month, receivables, "
+    "payables, sales last week): say so if they ask for another. Each is "
+    "computed from ERPNext's own reports and sent to their own channel, "
+    "like the morning brief."
+)
+
+
 def google_tool_manifest(settings: Settings) -> dict[str, tuple[str, ...]]:
     """``GOOGLE_TOOL_MANIFEST`` narrowed to what workspace-mcp actually loaded.
 
@@ -357,6 +370,8 @@ def render_connected_systems(
             + "."
         )
         lines.append(_ERPNEXT_GUIDE)
+        if (settings.erpnext_brief_company or "").strip():
+            lines.append(_ERPNEXT_METRICS)
         if drafts:
             lines.append(_erpnext_drafts(
                 erpnext_draft_doctypes(settings), teammates=bool(settings.erpnext_drafts_teammates),

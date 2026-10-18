@@ -1039,6 +1039,15 @@ async def _execute_action(
         await _run_principal_brief(action, now)
         return
 
+    # A scheduled ERP metric (briefing.erp_metrics): one figure from ERPNext,
+    # computed by code and sent to the principal as the brief is; it chains
+    # its own next run. channel="__internal__" too, so it comes first.
+    if action.kind == "erpnext_metric":
+        from openexecutive.briefing import erp_metrics
+
+        await erp_metrics.run(action, now, _deliver_to_principal)
+        return
+
     # ------------------------------------------------------------------
     # Executive reflection (Shift 5) — OE's daily solo standup. Runs
     # ~30 minutes before the morning brief; walks the org state and

@@ -15,6 +15,7 @@ import pytest
 
 from openexecutive.audit import logger as audit_logger
 from openexecutive.audit.logger import AuditLogger, log_event
+from openexecutive.briefing import erp_metrics
 from openexecutive.delegation import ghostwriter as gw
 from openexecutive.delegation import lockdown
 from openexecutive.delegation.settings import DelegationOverride, TurnDelegation
@@ -144,7 +145,7 @@ def test_every_tool_is_classified_once() -> None:
         t["name"]
         for t in [
             *ex._ALL_SKILL_TOOLS, *SPECIALIST_TOOLS, *MCP_TOOLS, *DELEGATION_TOOLS, *HISTORY_TOOLS,
-            *draft_tools(),
+            *draft_tools(), *erp_metrics.METRIC_TOOLS,
             step_script.CHAT_TOOL_DEFINITION, step_script.LIST_SAVED_TOOLS_DEFINITION,
         ]
     }
@@ -174,6 +175,7 @@ def test_only_links_scripts_workflows_posts_and_lasting_text_are_withheld() -> N
         "archive_person", "set_department_head", "resolve_roster_request",
         "schedule_followup", "create_goal", "update_department_goal",
         "record_decision_outcome", "propose_erpnext_draft",
+        "schedule_erp_metric", "cancel_erp_metric",
     } == lockdown.MAIL_TOUCHED_WITHHELD_TOOLS
     for tool in ("message_person", "send_slack_dm", "create_calendar_event",
                  "remember_fact", "remind_me", "update_company_profile"):

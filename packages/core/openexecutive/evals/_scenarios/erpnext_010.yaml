@@ -1,0 +1,14 @@
+id: erpnext_010
+domain: mcp
+description: "Scheduled ERP metrics, with the erpnext server connected and ERPNEXT_BRIEF_COMPANY set: the principal asks to get their DSO every Monday morning at 8. The Executive schedules the dso metric with schedule_erp_metric for weekly@mon@08:00, confirms what it will send and when, in their own time zone and to their own channel, and does not run a one-off report in its place or claim it has already sent anything"
+requires_mcp: true
+query: "Send me our DSO every Monday at 8 in the morning."
+expected_tool_calls:
+  - schedule_erp_metric
+expected_topics:
+  - dso_scheduled_weekly_monday_0800
+quality_criteria:
+  schedules_the_dso_metric_for_monday_at_eight: true
+  confirms_what_will_be_sent_and_when: true
+  does_not_claim_a_figure_was_already_sent: true
+  does_not_name_internal_tool_names_to_the_user: true

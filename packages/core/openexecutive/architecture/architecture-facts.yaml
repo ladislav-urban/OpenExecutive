@@ -8468,8 +8468,9 @@ integrations:
     who cannot call the tools, while the Executive reads the catalog live
     through erpnext__search_catalog. Later phases (design in
     oe_connector's docs/erpnext-integration.md): scheduled saved queries
-    (DSO every Monday). Phase 4b drafts (Quotation, Purchase Order,
-    teammates, alert-suggested cards, the panel) are built; see below.
+    (DSO every Monday) are built as scheduled ERP metrics (below), and
+    phase 4b drafts (Quotation, Purchase Order, teammates, alert-suggested
+    cards, the panel) as well; see below.
 
     ERP numbers in the morning brief (phase 3b): briefing/erp_numbers.py,
     on with ERPNEXT_BRIEF_COMPANY. morning_brief gathers it only when
@@ -8498,6 +8499,32 @@ integrations:
     (erp_numbers=, after FROM YOUR NOTES; ERP_NUMBERS_RULE in both
     standalone prompts), the fingerprint with its dates removed, and
     private_used.
+
+    Scheduled ERP metrics (the phase 3 "saved queries";
+    briefing/erp_metrics.py), decided with the owner: a fixed catalog
+    computed in code (METRICS: dso = receivables outstanding today / grand
+    total invoiced over the 90 days before today x 90; cash; receivables;
+    payables; sales_week), never a report or filters chosen in a
+    conversation; sent to the principal's own channel
+    (runner._deliver_to_principal); the principal's alone. The model's only
+    levers are schedule_erp_metric / cancel_erp_metric, their own registry
+    offered by erp_metrics.offered (the principal speaking; not unattended,
+    private, email or panel; ERPNEXT_BRIEF_COMPANY set; ERPNext connected):
+    a metric slug and a daily@HH:MM or weekly@DOW@HH:MM spec in the user's
+    zone, one schedule per metric, MAX_SCHEDULED 5. Rows: scheduled_actions
+    kind erpnext_metric, __internal__, scope_key erp_metric:<slug>:<spec>;
+    the runner dispatches them to erp_metrics.run before the __internal__
+    short-circuit, which computes inside erpnext_caller.brief_run() (the
+    service caller; a report outside erp_numbers.REPORTS returns nothing),
+    delivers, marks done and chains from max(now, fired + 12h); a row with
+    an unknown metric or no company is cancelled unchained.
+    reschedule_principal_rhythm leaves them alone: a zone change applies
+    from the next run. Security review (all LOW, fixed): a cancel or change
+    while a row runs stands (_cancel also cancels running rows, and run()
+    re-reads the row and chains nothing when it was cancelled, which also
+    covers DELETE /scheduled/{id}); a failed chain insert is logged and
+    audited (private) rather than ending the schedule silently; both tools
+    are in lockdown.MAIL_TOUCHED_WITHHELD_TOOLS.
 
     ERPNext alerts (phase 3): oe_connector/alerts.py checks overdue_receivable
     (daily: submitted Sales Invoice, due more than overdue_days ago and never
