@@ -5,6 +5,7 @@ import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import ErpnextAlertDraftButton from "@/components/ErpnextAlertDraftButton";
 import RosterRequestCard from "@/components/RosterRequestCard";
 import Button, { buttonClass } from "@/components/ui/Button";
 import OverflowMenu, { type OverflowItem } from "@/components/ui/OverflowMenu";
@@ -470,6 +471,10 @@ export default function ProposalCard({
       ) : (
         <div>{header}</div>
       )}
+
+      {/* An ERPNext alert's suggested draft (a restock, a follow-up); renders
+          nothing unless GET /erpnext/alert-drafts listed this alert. */}
+      <ErpnextAlertDraftButton alertId={proposal.alert_id} />
 
       {expanded && (
         <div className="mt-3 space-y-2.5">

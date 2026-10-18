@@ -2053,6 +2053,32 @@ export interface ErpnextDraftCreated {
   already_created: boolean;
 }
 
+// An open ERPNext alert that suggests a draft (a restock, a follow-up), for
+// its "Prepare" button. The principal's alone; [] for anyone else.
+export interface ErpnextAlertDraft {
+  alert_id: number;
+  label: string;
+}
+
+// [] for a viewer with none, or a backend without them (404).
+export async function getErpnextAlertDrafts(signal?: AbortSignal): Promise<ErpnextAlertDraft[]> {
+  const res = await fetch(`${API_BASE}/erpnext/alert-drafts`, { signal });
+  if (res.status === 403 || res.status === 404) return [];
+  if (!res.ok) throw await delegationError(res, "Couldn't load the drafts your alerts suggest.");
+  const body = (await res.json()) as { suggestions: ErpnextAlertDraft[] };
+  return body.suggestions;
+}
+
+// The tap: ERPNext checks the suggested draft as you and leaves its card in
+// Needs you. Nothing is in ERPNext until you approve that card.
+export async function prepareErpnextAlertDraft(
+  alertId: number,
+): Promise<{ decision_id: number; already_waiting: boolean }> {
+  const res = await fetch(`${API_BASE}/erpnext/alert-drafts/${alertId}`, { method: "POST" });
+  if (!res.ok) throw await delegationError(res, "Couldn't prepare that draft.");
+  return (await res.json()) as { decision_id: number; already_waiting: boolean };
+}
+
 // [] for a viewer with none, or a backend without them (404).
 export async function getErpnextDraftCards(signal?: AbortSignal): Promise<ErpnextDraftCard[]> {
   const res = await fetch(`${API_BASE}/erpnext/drafts`, { signal });

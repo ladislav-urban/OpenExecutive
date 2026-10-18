@@ -1,10 +1,16 @@
-"""ERPNext draft cards waiting for the caller (ERPNext phase 4a).
+"""ERPNext draft cards waiting for the caller (ERPNext phase 4).
 
 Routes:
   GET /erpnext/drafts — the caller's own draft cards still waiting
                         (``integrations.erpnext_drafts``), from the database;
                         no ERPNext call. Approve and Dismiss are
                         ``POST /decisions/{id}/approve`` and ``/reject``.
+  GET /erpnext/alert-drafts — the principal's open ERPNext alerts that
+                        suggest a draft, for their "Prepare" button
+                        (``integrations.erpnext_alert_drafts``); [] for anyone
+                        else, as ERPNext alerts are the principal's alone.
+  POST /erpnext/alert-drafts/{alert_id} — the principal's tap: ERPNext checks
+                        the suggested draft as them and the usual card is left.
 
 A card is its person's alone: the caller is resolved the way the decisions
 routes resolve an approver (``chat._resolve_caller_person_id``), and anyone
@@ -81,3 +87,57 @@ def get_erpnext_drafts(request: Request) -> DraftCardsOut:
             detail={"code": "unavailable", "message": "Couldn't read the drafts waiting for you."},
         ) from exc
     return DraftCardsOut(cards=[DraftCardOut(**asdict(card)) for card in found])
+
+
+class AlertDraftOut(BaseModel):
+    alert_id: int
+    label: str
+
+
+class AlertDraftsOut(BaseModel):
+    suggestions: list[AlertDraftOut]
+
+
+class PreparedOut(BaseModel):
+    decision_id: int
+    # The same draft was already waiting on this card.
+    already_waiting: bool
+
+
+@router.get("/erpnext/alert-drafts", response_model=AlertDraftsOut)
+def get_erpnext_alert_drafts(request: Request) -> AlertDraftsOut:
+    from openexecutive.api.routes.people import caller_is_principal
+    from openexecutive.integrations.erpnext_alert_drafts import open_suggestions
+    from openexecutive.integrations.erpnext_drafts import drafts_on
+
+    if not caller_is_principal(request) or not drafts_on():
+        return AlertDraftsOut(suggestions=[])
+    try:
+        found = open_suggestions()
+    except Exception:
+        logger.exception("erpnext_alert_drafts: reading the suggestions failed")
+        return AlertDraftsOut(suggestions=[])
+    return AlertDraftsOut(suggestions=[AlertDraftOut(alert_id=i, label=label) for i, label in found])
+
+
+@router.post("/erpnext/alert-drafts/{alert_id}", response_model=PreparedOut)
+async def prepare_erpnext_alert_draft(alert_id: int, request: Request) -> PreparedOut:
+    from openexecutive.alerts import store
+    from openexecutive.api import caller as api_caller
+    from openexecutive.api.routes.people import caller_is_principal
+    from openexecutive.integrations.erpnext_alert_drafts import prepare
+    from openexecutive.integrations.erpnext_drafts import ApproveRefused
+
+    alert = store.get_alert(alert_id)
+    # The principal's alone: anyone else is told it isn't there.
+    if alert is None or alert.source != "erpnext" or not caller_is_principal(request):
+        raise HTTPException(status_code=404, detail={"code": "gone", "message": "That alert isn't there."})
+    if alert.status not in ("unread", "read"):
+        raise HTTPException(status_code=409, detail={"code": "closed", "message": "That alert is already closed."})
+    try:
+        decision_id, new = await prepare(alert, caller=api_caller.caller(request))
+    except ApproveRefused as refused:
+        raise HTTPException(
+            status_code=refused.status, detail={"code": refused.code, "message": refused.message},
+        ) from None
+    return PreparedOut(decision_id=decision_id, already_waiting=not new)

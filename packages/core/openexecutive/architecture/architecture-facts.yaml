@@ -8574,9 +8574,11 @@ integrations:
       erpnext_caller.draft_call_for finds a marker for exactly that tool and
       the SHA-256 of exactly those arguments: draft_check_run (the proposal
       path, erpnext__draft_check only, asked as the turn's own caller via
-      caller_for) or draft_executor_run (the card executor, any draft tool
-      but draft_check, signed as the approver it names; an API request with
-      no session). Markers are ContextVars set only by code around its own
+      caller_for), draft_check_as (an alert's "Prepare" tap,
+      erpnext__draft_check only, signed as the principal the API verified
+      as the tapper; an API request with no session) or draft_executor_run
+      (the card executor, any draft tool but draft_check, signed as the
+      approver it names; an API request with no session). Markers are ContextVars set only by code around its own
       gateway call, so a concurrent tool use, a script (run_script) or a
       workflow never inherits one. Refused calls are audited as
       integration_outbound_blocked <draft-outside-card>.
@@ -8696,8 +8698,39 @@ integrations:
     the person states one, never discounts, taxes or terms; with
     ERPNEXT_DRAFTS_TEAMMATES it names teammates and says a draft is only
     for the person speaking, never for someone else to approve.
-    OpenExecutive's other 4b parts (alert-suggested cards, the panel
-    decision) are not built.
+    Alert-suggested cards (4b; integrations/erpnext_alert_drafts.py):
+    oe_connector's stock_below_reorder and overdue_receivable events carry
+    `suggest` (oe_connector #11). erpnext_events passes it to remember()
+    after the signature check, never to triage; parse_suggestion keeps only
+    a Material Request of one line whose item@warehouse is the event key
+    (erpnext_drafts._material_request shape) or a ToDo reference to the
+    Sales Invoice that is the key, with amount, [A-Z]{3} currency and date;
+    stored in erpnext_alert_suggestions by ref (erpnext:<kind>:<key>),
+    newest wins, rows past KEEP_FOR 62 days pruned on write, re-checked on
+    read. suggestion_for binds it to that event's own alert only: source
+    erpnext, private (PRIVATE_ALERT_TAG), dedup_key exactly private:<ref>
+    (pipeline._make_private), external_id <ref>:<YYYY-MM>; and the model's
+    create_alert stores a reserved source (alert_tools.RESERVED_SOURCES:
+    erpnext) as executive_<source>, so neither it nor a workflow can raise
+    an alert that carries a suggestion (security review 4b alerts: an
+    unbound ref let a model-created alert frame the button). prepare
+    re-reads the waiting cards after draft_check with no await before
+    propose, so two taps at once leave one card. Nothing calls ERPNext on arrival. GET /erpnext/alert-drafts: the
+    principal's open (unread/read) erpnext alerts with one, {alert_id,
+    label}; [] for anyone else or drafts off. POST
+    /erpnext/alert-drafts/{alert_id}: principal (caller_is_principal, else
+    404), open alert (else 409 closed), then prepare(): drafts_on,
+    verified.caller_refusal against the principal's email (signed sign-ins
+    or local login), draft_for builds the fields from the stored suggestion
+    only (the follow-up ToDo's description from invoice, amount, currency
+    and due date; allocated_to the principal; priority High; reference the
+    invoice), check_fields (the DocType must be listed), OPEN_CARDS_MAX,
+    draft_check inside erpnext_caller.draft_check_as, card_view, and
+    erpnext_drafts.propose with session_id None; audit
+    erpnext_draft_proposed with alert_id. The same draft still waiting is
+    that card (already_waiting). UI: components/ErpnextAlertDraftButton.tsx
+    on each ProposalCard, one GET for all, reloads the draft cards after a
+    tap. OpenExecutive's last 4b part (the panel decision) is not built.
 
     Ask the Dynocortex panel (phase 2b; "Ask the Executive" before
     oe_connector #8): oe_connector docks a chat panel, always open, on the
