@@ -1382,7 +1382,7 @@ def _offered(provider: _ScriptedStreams) -> list[str]:
 def test_every_withheld_name_is_a_real_tool() -> None:
     from openexecutive.integrations.erpnext_drafts import (
         ERPNEXT_DRAFT_TOOL_HANDLERS,
-        ERPNEXT_DRAFT_TOOLS,
+        draft_tools,
     )
     from openexecutive.orchestrator.executive import _ALL_SKILL_HANDLERS, _ALL_SKILL_TOOLS
     from openexecutive.orchestrator.mcp_gateway import MCP_TOOL_NAMES
@@ -1394,7 +1394,7 @@ def test_every_withheld_name_is_a_real_tool() -> None:
     gateway_side = MCP_TOOL_NAMES | {RUN_SCRIPT_TOOL, LIST_SAVED_TOOLS_TOOL}
     # propose_erpnext_draft has its own registry, offered per turn
     # (integrations.erpnext_drafts), never in _ALL_SKILL_TOOLS.
-    names = {t["name"] for t in _ALL_SKILL_TOOLS} | {t["name"] for t in ERPNEXT_DRAFT_TOOLS} | gateway_side
+    names = {t["name"] for t in _ALL_SKILL_TOOLS} | {t["name"] for t in draft_tools()} | gateway_side
     assert names >= PRIVATE_TURN_WITHHELD_TOOLS
     assert set(_ALL_SKILL_HANDLERS) | set(ERPNEXT_DRAFT_TOOL_HANDLERS) | gateway_side >= PRIVATE_TURN_WITHHELD_TOOLS
 

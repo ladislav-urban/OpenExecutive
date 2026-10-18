@@ -13,8 +13,8 @@ import {
 import { formatRelativeTime } from "@/lib/relativeTime";
 
 // Home and chat: ERPNext drafts the Executive prepared at your request (a
-// ToDo, a Material Request), shown as cards in "Needs you". Each card shows
-// exactly what approval will write; ERPNext's text on it is shown as plain
+// ToDo, a Material Request, a Quotation, a Purchase Order), shown as cards
+// in "Needs you". Each card shows exactly what approval will write; ERPNext's text on it is shown as plain
 // text and never as markup. Approve makes it once, unsubmitted, as your own
 // ERPNext user; you review and submit it in ERPNext. GET /erpnext/drafts
 // answers only the card's own person, so nothing shows for anyone else or on
@@ -158,6 +158,10 @@ export function ErpnextDraftCardItem({
   const when = formatRelativeTime(card.created_at);
 
   const link = created?.url && /^https?:\/\//.test(created.url) ? created.url : null;
+  // A Quotation's or Purchase Order's lines carry ERPNext's rates; a
+  // Quotation's may name no warehouse.
+  const priced = card.lines.some((line) => Boolean(line.rate || line.amount));
+  const anyWarehouse = card.lines.some((line) => Boolean(line.warehouse));
   return (
     <article
       className={`rounded-2xl border bg-surface-elevated p-4 sm:p-5 ${
@@ -194,7 +198,9 @@ export function ErpnextDraftCardItem({
               <tr className="text-left text-xs text-fg-muted">
                 <th className="font-medium">Item</th>
                 <th className="font-medium text-right">Qty</th>
-                <th className="font-medium pl-3">Warehouse</th>
+                {priced && <th className="font-medium text-right pl-3">Rate</th>}
+                {priced && <th className="font-medium text-right pl-3">Amount</th>}
+                {anyWarehouse && <th className="font-medium pl-3">Warehouse</th>}
               </tr>
             </thead>
             <tbody>
@@ -202,7 +208,9 @@ export function ErpnextDraftCardItem({
                 <tr key={i} className="align-top">
                   <td className="break-words text-fg">{line.item_code}</td>
                   <td className="text-right tabular-nums text-fg">{line.qty}</td>
-                  <td className="pl-3 break-words text-fg">{line.warehouse}</td>
+                  {priced && <td className="pl-3 text-right tabular-nums text-fg">{line.rate || "—"}</td>}
+                  {priced && <td className="pl-3 text-right tabular-nums text-fg">{line.amount || "—"}</td>}
+                  {anyWarehouse && <td className="pl-3 break-words text-fg">{line.warehouse}</td>}
                 </tr>
               ))}
             </tbody>

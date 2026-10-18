@@ -674,9 +674,10 @@ Profit). Each stays off until its own key is set in `oe_connector_alerts`
 (`budget_variance`, `weekly_margin`; the options are in oe_connector's
 `alerts.py`). OpenExecutive accepts both kinds from this release on.
 
-**ERPNext drafts (phase 4a).** The owner can ask the Executive to prepare a
+**ERPNext drafts (phase 4).** The owner can ask the Executive to prepare a
 ToDo (a follow-up assigned to someone) or a Material Request (a restock) in
-ERPNext. The Executive checks the draft with ERPNext and leaves a card on
+ERPNext, and, once listed (below), a Quotation for a customer or a Purchase
+Order to a supplier. The Executive checks the draft with ERPNext and leaves a card on
 Today and in the chat showing exactly what will be written; only when the
 owner taps Approve is it created, unsubmitted, as their own ERPNext user, to
 review and submit in ERPNext. Nothing is ever submitted, cancelled or deleted
@@ -686,6 +687,8 @@ needs per-person access (above) and signed sign-ins
 
 ```bash
 ERPNEXT_DRAFTS_ENABLED=true   # the API's environment
+# Which DocTypes (default: ToDo,Material Request); list the same on the site.
+ERPNEXT_DRAFT_DOCTYPES=ToDo,Material Request
 ```
 
 ```bash
@@ -696,9 +699,33 @@ bench --site <site> set-config -p oe_connector_draft_daily_limit 20
 
 The value cap is in company currency (quantity times the item's valuation
 rate, else its last purchase rate); with a cap set, an item with neither is
-refused. List only ToDo and Material Request for now: oe_connector also has
-Quotation and Purchase Order drafts, but OpenExecutive does not offer them
-yet. Each draft is tagged "OpenExecutive", commented with who asked and
+refused.
+
+Quotation and Purchase Order (phase 4b) face a customer or commit money once
+submitted, so turn them on after running ToDo and Material Request for a
+while, by listing them on both sides:
+
+```bash
+ERPNEXT_DRAFT_DOCTYPES=ToDo,Material Request,Quotation,Purchase Order
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_draft_doctypes '["ToDo", "Material Request", "Quotation", "Purchase Order"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Material Request": 5000, "Quotation": 20000, "Purchase Order": 10000}'
+```
+
+Their cap is on ERPNext's own grand total, in company currency. ERPNext
+prices them: the Executive gives a line's rate only when the owner states
+one, and ERPNext's price list sets the rest; discounts, taxes and terms are
+never taken from it. A Purchase Order can also come from a submitted
+Material Request or Supplier Quotation, whose lines ERPNext's own "Create >
+Purchase Order" brings over. The card shows each line's rate and amount and
+the grand total as ERPNext worked them out. Approving makes only the draft,
+and OpenExecutive sends nothing to the customer or supplier. ERPNext's own
+Notifications and hooks on a new Quotation or Purchase Order still run when
+the draft is inserted, so check that none of yours emails the customer or
+supplier on "New" before listing these DocTypes. Leaving a DocType off `ERPNEXT_DRAFT_DOCTYPES` later also stops
+its cards already waiting from being approved. Each draft is tagged "OpenExecutive", commented with who asked and
 approved, and logged in ERPNext's "OE Draft" list; OpenExecutive's audit log
 has a row for each card proposed, created, failed or dismissed.
 

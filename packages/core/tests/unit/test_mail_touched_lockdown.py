@@ -18,7 +18,7 @@ from openexecutive.audit.logger import AuditLogger, log_event
 from openexecutive.delegation import ghostwriter as gw
 from openexecutive.delegation import lockdown
 from openexecutive.delegation.settings import DelegationOverride, TurnDelegation
-from openexecutive.integrations.erpnext_drafts import ERPNEXT_DRAFT_TOOLS
+from openexecutive.integrations.erpnext_drafts import draft_tools
 from openexecutive.memory import episodic
 from openexecutive.orchestrator import executive as ex
 from openexecutive.orchestrator.delegation_tools import DELEGATION_TOOLS
@@ -144,7 +144,7 @@ def test_every_tool_is_classified_once() -> None:
         t["name"]
         for t in [
             *ex._ALL_SKILL_TOOLS, *SPECIALIST_TOOLS, *MCP_TOOLS, *DELEGATION_TOOLS, *HISTORY_TOOLS,
-            *ERPNEXT_DRAFT_TOOLS,
+            *draft_tools(),
             step_script.CHAT_TOOL_DEFINITION, step_script.LIST_SAVED_TOOLS_DEFINITION,
         ]
     }
