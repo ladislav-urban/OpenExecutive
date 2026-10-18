@@ -86,6 +86,11 @@ WHY_MAX = 300
 QTY_MAX = 1_000_000
 # oe_connector's own bound on a line's rate (drafts._priced_lines).
 RATE_MAX = 1_000_000_000
+# On a card asked for in ERPNext's panel, whose word named the person.
+PANEL_NOTE = (
+    "Asked for in ERPNext's panel. Approve it only if you asked for it there; "
+    "otherwise dismiss it."
+)
 # What the card shows of any one ERPNext value, and of a failure.
 SHOWN_MAX = 300
 
@@ -136,6 +141,9 @@ class DraftCard:
     notes: list[str] = field(default_factory=list)
     # Why the last approval didn't make it, when it was tried.
     last_error: str = ""
+    # Where it was asked for when that was not OpenExecutive itself:
+    # "erpnext_panel" (ERPNext's word named the person), else "".
+    asked_in: str = ""
 
 
 def _one_line(value: Any, limit: int = SHOWN_MAX) -> str:
@@ -356,13 +364,25 @@ def _proposer(session: Any) -> tuple[Any, str] | str:
     (``erpnext_caller.caller_for``), when that is the principal or, with
     ``teammates_on``, a verified teammate (which ``caller_for`` already holds
     to a conversation nobody else reads, and in the web chat to signed
-    sign-ins). Otherwise why not. Raises if a lookup fails."""
+    sign-ins). In ERPNext's panel (4b) it is the team member whose People
+    email is the ERPNext user oe_connector signed: ERPNext's word, never
+    proof of who is speaking, which is why a card asked for there is only
+    approved in the OpenExecutive app, signed in (``approve``). Otherwise why
+    not. Raises if a lookup fails."""
     from openexecutive.orchestrator import erpnext_caller
     from openexecutive.orchestrator.content_trust import principal_speaking
     from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
-    from openexecutive.people.store import find_principal_person
+    from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
+    from openexecutive.people.store import find_person_by_email, find_principal_person
 
-    principal = principal_speaking(session)
+    panel_person: Any = None
+    if erpnext_panel_turn(session):
+        panel_person = find_person_by_email(str(session.erpnext_panel_email).strip().lower())
+        if panel_person is None or panel_person.archived or panel_person.kind != "team":
+            return "This ERPNext user is not on the team in OpenExecutive, so no draft can be proposed for them."
+        principal = bool(panel_person.is_principal)
+    else:
+        principal = principal_speaking(session)
     if not principal and not teammates_on():
         return "For now only the account owner can have ERPNext drafts prepared."
     try:
@@ -371,7 +391,10 @@ def _proposer(session: Any) -> tuple[Any, str] | str:
         return refused.message
     if caller.kind != "user" or "@" not in caller.email:
         return "ERPNext drafts are made only as a person's own ERPNext user."
-    person = find_principal_person() if principal else teammate_on_verified_surface(session)
+    if panel_person is not None:
+        person = panel_person
+    else:
+        person = find_principal_person() if principal else teammate_on_verified_surface(session)
     email = (getattr(person, "email", None) or "").strip().lower()
     if person is None or getattr(person, "id", None) is None or email != caller.email:
         return "Who is asking could not be matched to their ERPNext user, so no draft can be proposed."
@@ -381,18 +404,15 @@ def _proposer(session: Any) -> tuple[Any, str] | str:
 def offer_refusal(session: Any) -> str | None:
     """Why this turn may not propose a draft, or None: the person speaking,
     for themselves (``_proposer``: the principal, or with ``teammates_on`` a
-    verified teammate in a private conversation), on their own turn (not an
-    email, which quotes mail; not ERPNext's panel; not a run nobody is
-    watching; not a turn private to the principal). Fails closed."""
-    from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
-
+    verified teammate in a private conversation, or the team member ERPNext's
+    panel names), on their own turn (not an email, which quotes mail; not a
+    run nobody is watching; not a turn private to the principal). Fails
+    closed."""
     try:
         if not drafts_on():
             return "ERPNext drafts are not turned on here."
         if session is None or getattr(session, "unattended", False) is True:
             return "ERPNext drafts are proposed only in a conversation with the person, never in a run nobody is watching."
-        if erpnext_panel_turn(session):
-            return "ERPNext drafts can't be proposed from ERPNext's panel yet; the person can ask in the OpenExecutive app."
         if getattr(session, "private_to_principal", False) is True or str(getattr(session, "origin_channel", "") or "") == "email":
             return "ERPNext drafts are proposed only when the person asks in a chat, never from an email."
         who = _proposer(session)
@@ -656,7 +676,7 @@ def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
 
 def propose(
     person: Any, doctype: str, fields: dict[str, Any], view: dict[str, Any], why: str,
-    *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None,
+    *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None, asked_in: str = "",
 ) -> tuple[int, bool, dict[str, Any]]:
     """Store a card for ``person`` (``fields`` already checked); returns its
     decision id, whether it is new and the view it shows. The same draft
@@ -682,6 +702,7 @@ def propose(
         "tool": DRAFT_TOOLS[doctype],
         "fields": fields,
         "asked_by": asked_by,
+        **({"asked_in": asked_in} if asked_in else {}),
         "card_key": card_key,
         "view": view,
         "attempts": 0,
@@ -716,6 +737,7 @@ def cards(person: Any) -> list[DraftCard]:
             lines=[ln for ln in view.get("lines") or [] if isinstance(ln, dict)],
             notes=[str(n) for n in view.get("notes") or []],
             last_error=str(payload.get("last_error") or ""),
+            asked_in="erpnext_panel" if payload.get("asked_in") == "erpnext_panel" else "",
         ))
     return out
 
@@ -831,8 +853,6 @@ def propose_tool(doctypes: tuple[str, ...]) -> dict[str, Any]:
 async def handle_propose(tool_input: dict[str, Any]) -> str:
     from openexecutive.delegation.lockdown import outside_reach_refusal
     from openexecutive.delegation.settings import turn_delegation
-    from openexecutive.orchestrator import erpnext_caller
-    from openexecutive.orchestrator.content_trust import wrap_untrusted
     from openexecutive.orchestrator.schedule_tools import current_session
 
     refused = outside_reach_refusal(PROPOSE)
@@ -861,42 +881,84 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
     if isinstance(who, str):
         return _error(f"{PROPOSE} is not available here: {who} Say so; do not retry.")
     person, email = who
+    full = _cards_full(person.id, doctype, fields)
+    if full is not None:
+        return _error(full)
+    # The turn's slot is taken before the check, which waits on ERPNext, so
+    # calls made together in one round can't each pass CARDS_PER_TURN; it is
+    # given back below unless a new card is left.
+    pinned.erpnext_drafts += 1
+    new = False
     try:
-        waiting = open_cards(person.id)
-        if len(waiting) >= OPEN_CARDS_MAX:
-            return _error(f"They already have {OPEN_CARDS_MAX} draft cards waiting. Ask them to clear some first.")
+        result, new = await _check_and_leave(session, person, email, doctype, fields, str(tool_input.get("why") or ""))
+        return result
+    finally:
+        if not new:
+            pinned.erpnext_drafts -= 1
+
+
+def _cards_full(person_id: int, doctype: str, fields: dict[str, Any]) -> str | None:
+    """Why no card can be left for ``person_id`` now, or None: OPEN_CARDS_MAX
+    waiting and none of them this same draft."""
+    try:
+        waiting = open_cards(person_id)
     except Exception:
         logger.warning("erpnext_drafts: couldn't count the open cards", exc_info=True)
-        return _error("Couldn't leave the card just now. Try again in a moment.")
+        return "Couldn't leave the card just now. Try again in a moment."
+    digest = _digest(person_id, doctype, fields)
+    if len(waiting) >= OPEN_CARDS_MAX and not any(_payload(c).get("digest") == digest for c in waiting):
+        return f"They already have {OPEN_CARDS_MAX} draft cards waiting. Ask them to clear some first."
+    return None
+
+
+async def _check_and_leave(
+    session: Any, person: Any, email: str, doctype: str, fields: dict[str, Any], why: str,
+) -> tuple[str, bool]:
+    """``handle_propose`` once the turn's slot is taken: ERPNext's check as
+    the turn's caller, then the card. The tool result, and whether a new
+    card was left."""
+    from openexecutive.orchestrator import erpnext_caller
+    from openexecutive.orchestrator.content_trust import wrap_untrusted
+    from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
+
     check_args = {"doctype": doctype, "fields": fields}
     try:
         with erpnext_caller.draft_check_run(check_args):
             raw = await _call(erpnext_caller.DRAFT_CHECK_TOOL, check_args)
     except Exception:
         logger.warning("erpnext_drafts: draft_check failed", exc_info=True)
-        return _error("ERPNext didn't answer the check, so no card was left. Try again in a moment.")
+        return _error("ERPNext didn't answer the check, so no card was left. Try again in a moment."), False
     checked = _result(raw)
     if checked.get("ok") is not True:
         said = wrap_untrusted(_refusal_text(raw), source="erpnext", author="draft_check")
         return _error(
             "ERPNext did not accept this draft, so no card was left. Tell them why, in "
             f"your own words, and fix it only with what they tell you. ERPNext said:\n{said}"
-        )
+        ), False
     view = card_view(doctype, checked.get("summary"), fields)
+    from_panel = erpnext_panel_turn(session)
+    if from_panel:
+        view["notes"] = [*view["notes"], PANEL_NOTE]
+    # Read again after the check, with no await before the card is stored,
+    # so calls made together never pass OPEN_CARDS_MAX.
+    full = _cards_full(person.id, doctype, fields)
+    if full is not None:
+        return _error(full), False
     try:
         decision_id, new, view = propose(
-            person, doctype, fields, view, str(tool_input.get("why") or ""),
-            asked_by=email, session_id=getattr(session, "session_id", None), waiting=waiting,
+            person, doctype, fields, view, why,
+            asked_by=email, session_id=getattr(session, "session_id", None),
+            asked_in="erpnext_panel" if from_panel else "",
         )
     except Exception:
         logger.warning("erpnext_drafts: couldn't store the card", exc_info=True)
-        return _error("Couldn't leave the card just now. Try again in a moment.")
+        return _error("Couldn't leave the card just now. Try again in a moment."), False
     # Only a card actually left counts towards the turn's cards and the audit:
     # the same draft again is the card already waiting.
     if new:
-        pinned.erpnext_drafts += 1
         audit("erpnext_draft_proposed", f"Left person {person.id} an ERPNext {doctype} draft card", {
             "person_id": person.id, "decision_id": decision_id, "doctype": doctype,
+            **({"asked_in": "erpnext_panel"} if from_panel else {}),
         })
     return json.dumps({
         "status": "waiting_for_approval",
@@ -910,7 +972,7 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
             "unsubmitted draft they review and submit in ERPNext. Outside the web app, say "
             "where to find it."
         ),
-    })
+    }), new
 
 
 def draft_tools() -> list[dict[str, Any]]:

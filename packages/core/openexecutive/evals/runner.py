@@ -43,7 +43,8 @@ A chat or mcp scenario may set ``surface: erpnext_panel`` to run as a turn
 from ERPNext's "Ask the Dynocortex" panel, as ``integrations.erpnext_panel``
 runs one: the session is marked as the panel's (``erpnext_panel_email``,
 ``origin_channel``, ``read_erpnext``), so only ERPNext reads and specialists
-are offered, and ``PANEL_CONTEXT_BLOCK`` goes in as the channel block.
+are offered (and ERPNext drafts, when the install offers them), and the
+panel's channel block (``erpnext_panel.context_block``) goes in.
 
 An ``inbox`` scenario (``type: inbox``) runs the inbox watcher's two model
 calls on one email (``delegation.inbox.reply_for``): whether it drafts at all

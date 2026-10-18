@@ -238,7 +238,6 @@ def test_it_is_offered_to_the_principal_alone_and_never_unattended(erp: FakeErpn
     teammate = Session(from_web_chat=True, caller_person_id=roster.teammate)
     assert "account owner" in str(drafts.offer_refusal(teammate))
     assert "nobody is watching" in str(drafts.offer_refusal(Session(unattended=True)))
-    assert "panel" in str(drafts.offer_refusal(Session(erpnext_panel_email=OWNER)))
     assert "email" in str(drafts.offer_refusal(Session(origin_channel="email", caller_person_id=roster.principal)))
     assert "email" in str(drafts.offer_refusal(Session(private_to_principal=True)))
     assert drafts.offer_refusal(None) is not None
@@ -868,6 +867,97 @@ def test_the_prompt_names_teammates_only_once_let_in(monkeypatch: pytest.MonkeyP
     assert "Drafts (the principal only)" in off and "teammate" not in off.split("Drafts (")[1]
     assert "verified teammate in a conversation nobody else reads" in on
     assert "never prepare one for someone else to approve" in on
+
+
+# --------------------------------------------------------------------------- #
+# Phase 4b: ERPNext's panel
+# --------------------------------------------------------------------------- #
+
+
+def _panel_turn(email: str = OWNER) -> Session:
+    # As integrations.erpnext_panel marks a panel turn: ERPNext's word.
+    session = Session(erpnext_panel_email=email, origin_channel="erpnext", read_erpnext=True)
+    pin_turn_delegation(session, "order 40 more ITEM-1 for Stores")
+    return session
+
+
+def test_the_panel_offers_drafts_to_the_team_member_erpnext_names(
+    erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from .test_delegation_tools import _loop, _offered
+
+    assert drafts.offer_refusal(_panel_turn()) is None
+    # Its read tools and specialists (call_tool needs a gateway), and drafts.
+    panel_tools = {"call_tool", "consult_specialist", drafts.PROPOSE}
+    offered = set(_offered(_loop(_panel_turn(), [])))
+    assert drafts.PROPOSE in offered and offered <= panel_tools
+    # A teammate as in chat: only once teammates are let in.
+    assert "account owner" in str(drafts.offer_refusal(_panel_turn(TEAM)))
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    assert drafts.offer_refusal(_panel_turn(TEAM)) is None
+    # Nobody on the team, nothing.
+    assert "not on the team" in str(drafts.offer_refusal(_panel_turn("stranger@else.example")))
+    monkeypatch.setenv("ERPNEXT_DRAFTS_ENABLED", "false")
+    assert set(_offered(_loop(_panel_turn(), []))) <= panel_tools - {drafts.PROPOSE}
+
+
+def test_a_panel_card_says_where_it_was_asked_and_is_approved_in_the_app(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    erp.replies.append(json.dumps(CHECKED_RESTOCK))
+    proposed = _propose(_panel_turn(), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
+    assert erp.claims()["sub"] == OWNER
+    card = get_decision_instance(proposed["decision_id"])
+    assert card is not None and card.approver_person_id == roster.principal
+    (listed,) = drafts.cards(people_store.get_person(roster.principal))
+    assert drafts.PANEL_NOTE in listed.notes and listed.asked_in == "erpnext_panel"
+    # Approving is the usual signed tap in the app; ERPNext's word alone made nothing.
+    signed["refusal"] = "caller_signing_required"
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(card)
+    assert len(erp.calls) == 1
+
+
+def test_the_panel_offers_nothing_to_anyone_not_on_the_team(
+    erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    people_store.upsert_person(full_name="Carl Contact", email="carl@co.example", kind="contact")
+    people_store.archive_person(people_store.upsert_person(full_name="Gina Gone", email="gina@co.example"))
+    people_registry.invalidate()
+    for email in ("carl@co.example", "gina@co.example"):
+        assert "not on the team" in str(drafts.offer_refusal(_panel_turn(email)))
+
+
+def test_drafts_called_together_leave_no_more_than_a_turn_allows(
+    erp: FakeErpnext, roster: SimpleNamespace,
+) -> None:
+    from .test_delegation_tools import ToolUseBlock, _loop
+
+    # Five different restocks in one round: their checks all wait on ERPNext
+    # together, yet only CARDS_PER_TURN cards are left.
+    calls = []
+    for qty in range(1, 6):
+        erp.replies.append(json.dumps(CHECKED_RESTOCK))
+        fields = {**RESTOCK, "items": [{**RESTOCK["items"][0], "qty": qty}]}
+        calls.append(ToolUseBlock(f"tu{qty}", drafts.PROPOSE, {"why": "x", "doctype": "Material Request", "fields": fields}))
+    provider = _loop(_owner_turn(roster), calls)
+    results = [r["content"] for r in provider.calls[1]["messages"][-1]["content"]]
+    assert sum("waiting_for_approval" in r for r in results) == drafts.CARDS_PER_TURN
+    assert len(drafts.open_cards(roster.principal)) == drafts.CARDS_PER_TURN
+
+
+def test_the_panel_still_reaches_nothing_but_erpnext(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    from .test_delegation_tools import ToolUseBlock, _loop
+
+    erp.replies.append(json.dumps(CHECKED_RESTOCK))
+    provider = _loop(_panel_turn(), [
+        ToolUseBlock("tu1", drafts.PROPOSE, {"why": "x", "doctype": "Material Request", "fields": RESTOCK}),
+        ToolUseBlock("tu2", "call_tool", {"name": "google_workspace__send_gmail_message", "arguments": {}}),
+    ])
+    results = {r["tool_use_id"]: r["content"] for r in provider.calls[1]["messages"][-1]["content"]}
+    assert "waiting_for_approval" in results["tu1"]
+    assert "only read ERPNext" in results["tu2"]
 
 
 # --------------------------------------------------------------------------- #

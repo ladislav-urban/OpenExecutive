@@ -8468,8 +8468,8 @@ integrations:
     who cannot call the tools, while the Executive reads the catalog live
     through erpnext__search_catalog. Later phases (design in
     oe_connector's docs/erpnext-integration.md): scheduled saved queries
-    (DSO every Monday), and phase 4b drafts (Quotation, Purchase Order,
-    teammates, alert-suggested cards, the panel decision).
+    (DSO every Monday). Phase 4b drafts (Quotation, Purchase Order,
+    teammates, alert-suggested cards, the panel) are built; see below.
 
     ERP numbers in the morning brief (phase 3b): briefing/erp_numbers.py,
     on with ERPNEXT_BRIEF_COMPANY. morning_brief gathers it only when
@@ -8598,8 +8598,7 @@ integrations:
       owner", and requires the person's People email to equal the caller's
       email. The card's approver is that person, approver_only, so nobody
       else (the principal included) sees or approves it; never an unattended run, a turn private to the principal or an email
-      turn (origin_channel "email": mail text), never ERPNext's panel (not
-      in ERPNEXT_PANEL_TOOLS either), and never after the turn read the
+      turn (origin_channel "email": mail text), and never after the turn read the
       owner's mail (lockdown.MAIL_TOUCHED_WITHHELD_TOOLS). Also in
       UNATTENDED_WITHHELD_TOOLS and PRIVATE_TURN_WITHHELD_TOOLS. The tool
       joins the offered list per turn, its own registry like recall_history,
@@ -8730,7 +8729,7 @@ integrations:
     erpnext_draft_proposed with alert_id. The same draft still waiting is
     that card (already_waiting). UI: components/ErpnextAlertDraftButton.tsx
     on each ProposalCard, one GET for all, reloads the draft cards after a
-    tap. OpenExecutive's last 4b part (the panel decision) is not built.
+    tap. With the panel (below), every 4b part is built.
 
     Ask the Dynocortex panel (phase 2b; "Ask the Executive" before
     oe_connector #8): oe_connector docks a chat panel, always open, on the
@@ -8757,7 +8756,26 @@ integrations:
     (consult_specialist, call_tool) is an allow-list applied to the offered
     list and again at dispatch (executive._stream_agent_loop, before every
     other guard), call_tool only for erpnext__*, and no server-side web
-    search. erpnext_caller.caller_for signs its ERPNext calls as that same
+    search. Phase 4b, decided with the owner: the panel may propose drafts,
+    approved only in the app. On a turn erpnext_drafts.offered (drafts on,
+    and _proposer finds the team member whose People email is the signed
+    ERPNext user: the principal, or a teammate only with
+    ERPNEXT_DRAFTS_TEAMMATES; no other kind, archived or unknown email),
+    executive adds propose_erpnext_draft to the panel's allow-list for the
+    offered list and lets that one name past the dispatch guard (call_tool's
+    own erpnext__* check stands). The card notes PANEL_NOTE, carries
+    asked_in "erpnext_panel" (payload, DraftCard, GET /erpnext/drafts),
+    which the UI shows as a badge above the asker-written headline, and its
+    audit row asked_in erpnext_panel. handle_propose takes the turn's slot
+    before draft_check's await (given back unless a new card is left) and
+    re-reads the open cards after it with no await before propose, so draft
+    calls made together in one round never pass CARDS_PER_TURN or
+    OPEN_CARDS_MAX (security review 4b panel); approve() is unchanged: the card's person, signed
+    in (verified.caller_refusal), so ERPNext's word alone creates nothing.
+    The channel block is PANEL_DRAFTS_CONTEXT_BLOCK on such a turn
+    (erpnext_panel.context_block, which the eval runner's panel surface uses
+    too): the panel cannot show the card, so the reply points to Today in
+    the web app. erpnext_caller.caller_for signs its ERPNext calls as that same
     email. No person_id, episodic, briefing, standing-fact (standing_facts="")
     or Honcho context is passed; router._prefetch_department_for_call returns
     nothing on a panel turn; the session starts with read_erpnext set, so

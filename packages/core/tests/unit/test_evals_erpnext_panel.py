@@ -19,7 +19,7 @@ from openexecutive.evals.scenarios import (
     scenario_surface,
     validate_scenario_yaml,
 )
-from openexecutive.integrations.erpnext_panel import PANEL_CONTEXT_BLOCK
+from openexecutive.integrations.erpnext_panel import PANEL_CONTEXT_BLOCK, PANEL_DRAFTS_CONTEXT_BLOCK
 from openexecutive.orchestrator.executive import Executive
 from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
 
@@ -90,8 +90,9 @@ def test_an_unknown_surface_fails_the_scenario() -> None:
 
 
 def test_the_panel_prompt_names_it_ask_the_dynocortex() -> None:
-    assert '"Ask the Dynocortex" panel' in PANEL_CONTEXT_BLOCK
-    assert "Ask the Executive" not in PANEL_CONTEXT_BLOCK
+    for block in (PANEL_CONTEXT_BLOCK, PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert '"Ask the Dynocortex" panel' in block
+        assert "Ask the Executive" not in block
 
 
 def test_the_panel_scenario_ships_and_loads_as_chat() -> None:

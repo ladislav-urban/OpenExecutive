@@ -148,7 +148,7 @@ def scenario_surface(scenario: dict[str, Any]) -> str | None:
     """The scenario's ``surface``: None for the web app (the default), or
     ``erpnext_panel`` for a turn from ERPNext's "Ask the Dynocortex" panel,
     which the runner runs as ``integrations.erpnext_panel`` does (its session
-    marks and ``PANEL_CONTEXT_BLOCK``). Anything else raises ValueError, so a
+    marks and ``erpnext_panel.context_block``). Anything else raises ValueError, so a
     typo fails the scenario instead of silently running in the web app."""
     surface = scenario.get("surface")
     if surface is None:
@@ -166,14 +166,18 @@ def scenario_turn_surface(scenario: dict[str, Any]) -> tuple[dict[str, Any], str
     turn."""
     if scenario_surface(scenario) != SURFACE_ERPNEXT_PANEL:
         return {}, ""
-    from openexecutive.integrations.erpnext_panel import PANEL_CONTEXT_BLOCK
+    from openexecutive.integrations.erpnext_panel import context_block
+    from openexecutive.orchestrator.session import Session
 
     session_fields = {
         "origin_channel": "erpnext",
         "erpnext_panel_email": EVAL_PANEL_EMAIL,
         "read_erpnext": True,
     }
-    return session_fields, PANEL_CONTEXT_BLOCK
+    # The block the panel gives that person: with drafts when they are
+    # offered them (phase 4b), as integrations.erpnext_panel chooses it.
+    probe = Session(origin_channel="erpnext", erpnext_panel_email=EVAL_PANEL_EMAIL, read_erpnext=True)
+    return session_fields, context_block(probe)
 
 
 def scenario_voice_persona(scenario: dict[str, Any]) -> str | None:

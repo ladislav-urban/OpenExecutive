@@ -19,7 +19,11 @@ administrator can change a user's email, so the panel is never a surface that
 proves who is speaking: not the principal's (``content_trust``), not a
 verified teammate's (``people_tools``). Its turn only asks: it is offered its
 specialists and ERPNext's read tools, nothing else
-(``schedule_tools.ERPNEXT_PANEL_TOOLS``), and those ERPNext calls run as that
+(``schedule_tools.ERPNEXT_PANEL_TOOLS``), but for leaving that person an
+ERPNext draft card when drafts are offered them (phase 4b,
+``erpnext_drafts.offer_refusal``): a card nothing writes until they approve
+it in the OpenExecutive app, signed in, so ERPNext's word alone never
+creates anything, and those ERPNext calls run as that
 same ERPNext user (``erpnext_caller``, ``Session.erpnext_panel_email``). It
 reads no one's memory: no person, episodic, briefing or standing-fact context,
 and its specialists read no department's memory. Nothing it says is mirrored
@@ -308,6 +312,23 @@ PANEL_CONTEXT_BLOCK = (
     "a side panel. If they ask for something you cannot do here, say so and "
     "suggest the OpenExecutive app."
 )
+# The same, for a person this turn may prepare ERPNext drafts for (phase 4b,
+# integrations.erpnext_drafts.offered): proposing is the one thing it may
+# leave, and only as a card approved in the OpenExecutive app.
+PANEL_DRAFTS_CONTEXT_BLOCK = (
+    "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
+    "a chat docked on every ERPNext page; people there call you Dynocortex, "
+    "and that is you. "
+    "Here you can read ERPNext (its tools run as this person's own ERPNext "
+    "user), consult your specialists, and, when they ask in their own words, "
+    "leave them an ERPNext draft card with propose_erpnext_draft. The panel "
+    "cannot show the card: tell them it is waiting on Today in the "
+    "OpenExecutive web app, where they approve it signed in, and that nothing "
+    "is in ERPNext until then. You cannot send, schedule or save anything, or "
+    "reach any other system. Keep answers short enough for a side panel. If "
+    "they ask for something you cannot do here, say so and suggest the "
+    "OpenExecutive app."
+)
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:
@@ -321,6 +342,13 @@ async def _read_capped(request: Request) -> bytes | None:
         if len(body) > MAX_BODY_BYTES:
             return None
     return bytes(body)
+
+
+def context_block(session: Any) -> str:
+    """The panel's channel block: with drafts for this person, or without."""
+    from openexecutive.integrations.erpnext_drafts import offered
+
+    return PANEL_DRAFTS_CONTEXT_BLOCK if offered(session) else PANEL_CONTEXT_BLOCK
 
 
 def _person_for(email: str) -> Any:
@@ -376,7 +404,7 @@ async def _answer(person: Any, email: str, conversation_id: str, message: str, p
                 user_message=f"{where}\n\n{message}" if where else message,
                 session=session,
                 retrieved_context=retrieved_context,
-                channel_context_block=PANEL_CONTEXT_BLOCK,
+                channel_context_block=context_block(session),
                 memory_text=message,
                 # No standing facts: they include teammates' own, "(per
                 # <name>)", and ERPNext's word is all that names this person.

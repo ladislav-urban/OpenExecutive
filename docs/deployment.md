@@ -620,8 +620,13 @@ bench --site <site> set-config oe_connector_openexecutive_url https://<api-host>
   sees the panel disabled. ERPNext's word is all that names them, and an
   ERPNext administrator can change a user's email, so a panel turn is never
   treated as the principal or a verified teammate: it can only read ERPNext
-  (as that same ERPNext user) and consult the specialists. It cannot send,
-  schedule, save, or reach any other system. It reads no one's memory,
+  (as that same ERPNext user) and consult the specialists. With ERPNext
+  drafts on (below), it can also leave that person a draft card, under the
+  same rules as in chat (the owner, and teammates only with
+  `ERPNEXT_DRAFTS_TEAMMATES`). The card says it was asked for in the panel,
+  and it is approved only in the OpenExecutive web app, signed in, so
+  ERPNext's word alone never creates anything. It cannot send, schedule,
+  save, or reach any other system. It reads no one's memory,
   standing facts or department memory, and nothing it says is mirrored
   anywhere; it does read the company knowledge base, as a teammate on any
   channel does.
