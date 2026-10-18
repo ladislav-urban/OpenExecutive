@@ -724,10 +724,26 @@ the grand total as ERPNext worked them out. Approving makes only the draft,
 and OpenExecutive sends nothing to the customer or supplier. ERPNext's own
 Notifications and hooks on a new Quotation or Purchase Order still run when
 the draft is inserted, so check that none of yours emails the customer or
-supplier on "New" before listing these DocTypes. Leaving a DocType off `ERPNEXT_DRAFT_DOCTYPES` later also stops
-its cards already waiting from being approved. Each draft is tagged "OpenExecutive", commented with who asked and
+supplier on "New" before listing these DocTypes. Leaving a DocType off
+`ERPNEXT_DRAFT_DOCTYPES` later also stops its cards already waiting from being
+approved. Each draft is tagged "OpenExecutive", commented with who asked and
 approved, and logged in ERPNext's "OE Draft" list; OpenExecutive's audit log
 has a row for each card proposed, created, failed or dismissed.
+
+Teammates (phase 4b) can have drafts prepared too, each for themselves, once
+the API's environment says so:
+
+```bash
+ERPNEXT_DRAFTS_TEAMMATES=true
+```
+
+A teammate is offered drafts where ERPNext already answers them as their own
+user: verified, in a conversation nobody else reads (the web chat with
+signed sign-ins, or their own Slack, Discord or Telegram DM). The card is
+theirs alone, on their Today; only they can approve it, signed in, and the
+draft is made as their ERPNext user, so their own ERPNext roles decide what
+they can create. oe_connector's daily limit counts per person. Turned off
+again, teammates' waiting cards can no longer be approved.
 
 Once a conversation has read ERPNext, none of its replies, then or later,
 is added to peer or department memory, which other people's turns read, nor

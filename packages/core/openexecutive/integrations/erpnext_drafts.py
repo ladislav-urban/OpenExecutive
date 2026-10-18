@@ -17,10 +17,12 @@ oe_connector takes, the right types and lengths), then by oe_connector itself,
 as the asking person, without saving (``erpnext__draft_check``, inside
 ``erpnext_caller.draft_check_run``, the only way the gateway lets it through
 from a turn). What it returns fills in the card (``card_view``), as plain
-text labelled as ERPNext's. Offered only where ERPNext reads are and in 4a to
-the principal alone (``offer_refusal``): never on an unattended run, a turn
-private to the principal, an email turn, ERPNext's own panel or a turn that
-read their mail (``delegation.lockdown``).
+text labelled as ERPNext's. Offered only where ERPNext reads are, to the
+person speaking for themselves (``offer_refusal``, ``_proposer``): the
+principal, and with ``ERPNEXT_DRAFTS_TEAMMATES`` (4b) a verified teammate in
+a conversation nobody else reads; never on an unattended run, a turn private
+to the principal, an email turn, ERPNext's own panel or a turn that read
+their mail (``delegation.lockdown``).
 
 **The card** is an ``erpnext_draft`` decision for that person, theirs alone
 (``approver_only``) and never an alert: ``CARDS_PER_TURN`` a turn,
@@ -341,12 +343,47 @@ def drafts_on() -> bool:
     return erpnext_drafts_on(get_settings()) and ERPNEXT_SERVER in gateway_server_names(get_active_gateway())
 
 
-def offer_refusal(session: Any) -> str | None:
-    """Why this turn may not propose a draft, or None. In 4a: the principal,
-    on a surface that proved it, on their own turn (not an email, which
-    quotes mail; not ERPNext's panel; not a run nobody is watching; not a
-    turn private to them). Fails closed."""
+def teammates_on() -> bool:
+    """``ERPNEXT_DRAFTS_TEAMMATES``: verified teammates may have drafts too."""
+    from openexecutive.config import get_settings
+
+    return bool(get_settings().erpnext_drafts_teammates)
+
+
+def _proposer(session: Any) -> tuple[Any, str] | str:
+    """Who this turn's draft is for, and their ERPNext email: the person
+    ERPNext would answer on this turn as their own user
+    (``erpnext_caller.caller_for``), when that is the principal or, with
+    ``teammates_on``, a verified teammate (which ``caller_for`` already holds
+    to a conversation nobody else reads, and in the web chat to signed
+    sign-ins). Otherwise why not. Raises if a lookup fails."""
+    from openexecutive.orchestrator import erpnext_caller
     from openexecutive.orchestrator.content_trust import principal_speaking
+    from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
+    from openexecutive.people.store import find_principal_person
+
+    principal = principal_speaking(session)
+    if not principal and not teammates_on():
+        return "For now only the account owner can have ERPNext drafts prepared."
+    try:
+        caller = erpnext_caller.caller_for(session)
+    except erpnext_caller.CallerRefused as refused:
+        return refused.message
+    if caller.kind != "user" or "@" not in caller.email:
+        return "ERPNext drafts are made only as a person's own ERPNext user."
+    person = find_principal_person() if principal else teammate_on_verified_surface(session)
+    email = (getattr(person, "email", None) or "").strip().lower()
+    if person is None or getattr(person, "id", None) is None or email != caller.email:
+        return "Who is asking could not be matched to their ERPNext user, so no draft can be proposed."
+    return person, email
+
+
+def offer_refusal(session: Any) -> str | None:
+    """Why this turn may not propose a draft, or None: the person speaking,
+    for themselves (``_proposer``: the principal, or with ``teammates_on`` a
+    verified teammate in a private conversation), on their own turn (not an
+    email, which quotes mail; not ERPNext's panel; not a run nobody is
+    watching; not a turn private to the principal). Fails closed."""
     from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
 
     try:
@@ -357,9 +394,10 @@ def offer_refusal(session: Any) -> str | None:
         if erpnext_panel_turn(session):
             return "ERPNext drafts can't be proposed from ERPNext's panel yet; the person can ask in the OpenExecutive app."
         if getattr(session, "private_to_principal", False) is True or str(getattr(session, "origin_channel", "") or "") == "email":
-            return "ERPNext drafts are proposed only when the owner asks in a chat, never from an email."
-        if not principal_speaking(session):
-            return "For now only the account owner can have ERPNext drafts prepared."
+            return "ERPNext drafts are proposed only when the person asks in a chat, never from an email."
+        who = _proposer(session)
+        if isinstance(who, str):
+            return who
     except Exception:
         logger.warning("erpnext_drafts: couldn't tell who is asking — refusing", exc_info=True)
         return "Who is asking could not be checked, so no draft can be proposed right now."
@@ -796,7 +834,6 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
     from openexecutive.orchestrator import erpnext_caller
     from openexecutive.orchestrator.content_trust import wrap_untrusted
     from openexecutive.orchestrator.schedule_tools import current_session
-    from openexecutive.people.store import find_principal_person
 
     refused = outside_reach_refusal(PROPOSE)
     if refused is not None:
@@ -814,17 +851,16 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
     if isinstance(fields, str):
         return _error(fields)
     doctype = str(tool_input["doctype"])
+    # The card is the person speaking's own: the principal's, or a verified
+    # teammate's, approved by them alone and made as their ERPNext user.
     try:
-        person = find_principal_person()
+        who = _proposer(session)
     except Exception:
-        logger.warning("erpnext_drafts: couldn't read the principal", exc_info=True)
-        person = None
-    email = (getattr(person, "email", None) or "").strip().lower()
-    if person is None or person.id is None or "@" not in email:
-        return _error(
-            "A draft is made as the owner's own ERPNext user, found by the email on their "
-            "People entry, and it has none. Say adding it fixes this."
-        )
+        logger.warning("erpnext_drafts: couldn't tell who is asking", exc_info=True)
+        who = "Who is asking could not be checked, so no draft can be proposed right now."
+    if isinstance(who, str):
+        return _error(f"{PROPOSE} is not available here: {who} Say so; do not retry.")
+    person, email = who
     try:
         waiting = open_cards(person.id)
         if len(waiting) >= OPEN_CARDS_MAX:
@@ -925,7 +961,9 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
             409, "caller_signing_required",
             "Approving needs signed sign-ins on this server, so that nobody else can approve it for you.",
         )
-    if not person.is_principal:
+    # A teammate's card waits on teammates still being let in: turned off,
+    # their cards stay but can't be carried out.
+    if not person.is_principal and not (teammates_on() and person.kind == "team"):
         raise ApproveRefused(409, "principal_only", "For now only the account owner can approve ERPNext drafts.")
     if not drafts_on():
         raise ApproveRefused(409, "drafts_off", "ERPNext drafts are turned off here, or ERPNext isn't connected.")
@@ -944,6 +982,11 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it and ask again.")
     if "@" not in email:
         raise ApproveRefused(409, "no_email", "Your People entry has no email, so ERPNext can't tell who you are.")
+    # The card was checked as the person who asked: if their People email
+    # changed since, it may now name someone else, so it isn't theirs to make.
+    asked_by = payload.get("asked_by")
+    if not isinstance(asked_by, str) or normalize_email(asked_by) != email:
+        raise ApproveRefused(409, "changed", "Your email changed since this card was left. Dismiss it and ask again.")
     if not claim_for_execution(instance.id, resolver_person_id=resolver):
         raise ApproveRefused(409, "already_handled", "This card was already handled.")
     _APPROVING.add(instance.id)
