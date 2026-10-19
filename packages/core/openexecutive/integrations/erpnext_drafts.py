@@ -677,6 +677,7 @@ def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
 def propose(
     person: Any, doctype: str, fields: dict[str, Any], view: dict[str, Any], why: str,
     *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None, asked_in: str = "",
+    from_alert: int | None = None,
 ) -> tuple[int, bool, dict[str, Any]]:
     """Store a card for ``person`` (``fields`` already checked); returns its
     decision id, whether it is new and the view it shows. The same draft
@@ -703,6 +704,9 @@ def propose(
         "fields": fields,
         "asked_by": asked_by,
         **({"asked_in": asked_in} if asked_in else {}),
+        # The ERPNext alert whose suggestion this is (erpnext_alert_drafts),
+        # so that alert offers no second card.
+        **({"from_alert": from_alert} if from_alert is not None else {}),
         "card_key": card_key,
         "view": view,
         "attempts": 0,

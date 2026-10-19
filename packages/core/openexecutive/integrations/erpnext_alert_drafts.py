@@ -31,8 +31,13 @@ a restock as ERPNext sent it, a follow-up ToDo worded here from the invoice's
 figures and assigned to the principal (the customer's name, theirs to write,
 stays out). ERPNext checks it as the principal (``draft_check``, inside
 ``erpnext_caller.draft_check_as``), and the usual draft card is left
-(``erpnext_drafts.propose``), to approve like any other. The same draft still
-waiting is that card.
+(``erpnext_drafts.propose``), to approve like any other.
+
+**Once per alert** (``_taken``): the card carries the alert's id
+(``from_alert``). While it waits, or once its draft is made, the alert offers
+no button, and a tap answers with the waiting card or says the draft is
+already in ERPNext. Dismissed, expired or failed, the alert offers it again.
+oe_connector's next month's alert for the same document is a new alert.
 """
 from __future__ import annotations
 
@@ -241,6 +246,10 @@ async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
     suggestion = suggestion_for(alert)
     if suggestion is None:
         raise refused(404, "no_suggestion", "This alert has no draft to prepare.")
+    try:
+        _already(person.id, alert)
+    except _Waiting as waiting_card:
+        return waiting_card.decision_id, False
     doctype, raw_fields, why = draft_for(suggestion, email)
     fields = drafts.check_fields(doctype, raw_fields)
     if isinstance(fields, str):
@@ -258,16 +267,110 @@ async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
         raise refused(502, "not_accepted", f"ERPNext did not accept this draft: {drafts._refusal_text(raw)}")
     view = drafts.card_view(doctype, checked.get("summary"), fields)
     # Read again after the check, with no await before the card is stored,
-    # so two taps at once leave one card and never pass OPEN_CARDS_MAX.
+    # so two taps at once leave one card, never pass OPEN_CARDS_MAX, and the
+    # alert never gets a second.
+    try:
+        _already(person.id, alert)
+    except _Waiting as waiting_card:
+        return waiting_card.decision_id, False
     waiting = _room_for(person.id, doctype, fields)
     decision_id, new, _ = drafts.propose(
         person, doctype, fields, view, why, asked_by=email, session_id=None, waiting=waiting,
+        from_alert=getattr(alert, "id", None),
     )
+    if not new:
+        _tag(decision_id, getattr(alert, "id", None))
     if new:
         drafts.audit("erpnext_draft_proposed", f"Left person {person.id} an ERPNext {doctype} draft card from an alert", {
             "person_id": person.id, "decision_id": decision_id, "doctype": doctype, "alert_id": getattr(alert, "id", None),
         })
     return decision_id, new
+
+
+# A card that still counts for its alert: waiting, being made, or made.
+_TAKEN = ("proposed", "executing", "approved_unchanged", "approved_with_edit", "executed")
+
+
+class _Waiting(Exception):
+    """The alert's card is waiting: answer with it."""
+
+    def __init__(self, decision_id: int) -> None:
+        super().__init__(decision_id)
+        self.decision_id = decision_id
+
+
+def _taken(person_id: int) -> dict[int, Any]:
+    """``person_id``'s cards that still count, by the alert they came from:
+    a card tagged ``from_alert``, or one from before cards were tagged that
+    its ``erpnext_draft_proposed`` audit row ties to an alert. One query (and
+    one for the audit rows), after ``open_cards`` has closed any waiting card
+    past its time."""
+    from types import SimpleNamespace
+
+    from openexecutive.memory.decision_ledger import _db_path as ledger_path
+    from openexecutive.memory.episodic import _get_conn
+
+    drafts.open_cards(person_id)
+    legacy: dict[int, int] = {}
+    statuses = ",".join("?" * len(_TAKEN))
+    with _get_conn(ledger_path()) as conn:
+        try:
+            for decision_id, alert_id in conn.execute(
+                "SELECT json_extract(details_json, '$.decision_id'), json_extract(details_json, '$.alert_id') "
+                "FROM audit_log WHERE event_type = 'erpnext_draft_proposed' "
+                "AND json_extract(details_json, '$.alert_id') IS NOT NULL"
+            ):
+                if isinstance(decision_id, int) and isinstance(alert_id, int):
+                    legacy[decision_id] = alert_id
+        except sqlite3.Error:
+            logger.warning("erpnext_alert_drafts: couldn't read the proposal audit rows", exc_info=True)
+        rows = conn.execute(
+            "SELECT id, status, final_payload_json, json_extract(proposed_payload_json, '$.from_alert') "
+            f"FROM decision_instances WHERE decision_class = ? AND approver_person_id = ? AND status IN ({statuses}) "
+            "ORDER BY id",
+            (drafts.DECISION_CLASS, person_id, *_TAKEN),
+        ).fetchall()
+    out: dict[int, Any] = {}
+    for card_id, status, final_json, tagged in rows:
+        alert_id = tagged if isinstance(tagged, int) else legacy.get(card_id)
+        if isinstance(alert_id, int):
+            out.setdefault(alert_id, SimpleNamespace(id=card_id, status=status, final_payload_json=final_json))
+    return out
+
+
+def _already(person_id: int, alert: Any) -> None:
+    """Raise ``_Waiting`` when ``alert``'s card waits, ``ApproveRefused``
+    when its draft was made; nothing when it may have one."""
+    alert_id = getattr(alert, "id", None)
+    card = _taken(person_id).get(alert_id) if isinstance(alert_id, int) else None
+    if card is None:
+        return
+    if card.status in ("proposed", "executing"):
+        raise _Waiting(int(card.id))
+    try:
+        made = json.loads(card.final_payload_json or "{}").get("created") or {}
+    except ValueError:
+        made = {}
+    name = made.get("name") if isinstance(made, dict) else None
+    raise drafts.ApproveRefused(
+        409, "already_prepared",
+        f"This alert's draft is already in ERPNext{f' ({name})' if isinstance(name, str) else ''}. "
+        "Review it there.",
+    )
+
+
+def _tag(decision_id: int, alert_id: Any) -> None:
+    """The same draft already waited on a card no alert was tied to (the
+    model proposed those exact fields, or an earlier alert for the same
+    document): tie it to this alert too, so the alert offers no second."""
+    from openexecutive.memory.decision_ledger import get_decision_instance, update_open_payload
+
+    card = get_decision_instance(decision_id)
+    payload = drafts._payload(card) if card is not None else {}
+    if card is None or not isinstance(alert_id, int) or "from_alert" in payload:
+        return
+    if not update_open_payload(decision_id, {**payload, "from_alert": alert_id}, expected_json=card.proposed_payload_json):
+        logger.info("erpnext_alert_drafts: card %d moved on before it was tied to alert %d", decision_id, alert_id)
 
 
 def _room_for(person_id: int, doctype: str, fields: dict[str, Any]) -> list[Any]:
@@ -283,12 +386,16 @@ def _room_for(person_id: int, doctype: str, fields: dict[str, Any]) -> list[Any]
 
 
 def open_suggestions(*, limit: int = 200) -> list[tuple[int, str]]:
-    """``(alert_id, label)`` for each open ERPNext alert with a suggestion."""
+    """``(alert_id, label)`` for each open ERPNext alert with a suggestion
+    and no card that still counts (``_taken``)."""
     from openexecutive.alerts import store
+    from openexecutive.people.store import find_principal_person
 
+    principal = find_principal_person()
+    taken = _taken(principal.id) if principal is not None and principal.id is not None else {}
     out: list[tuple[int, str]] = []
     for alert in store.list_alerts(limit=limit):
-        if alert.id is None or alert.source != "erpnext" or alert.status not in ("unread", "read"):
+        if alert.id is None or alert.source != "erpnext" or alert.status not in ("unread", "read") or alert.id in taken:
             continue
         suggestion = suggestion_for(alert)
         if suggestion is not None:

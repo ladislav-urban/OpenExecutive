@@ -8741,7 +8741,18 @@ integrations:
     an alert that carries a suggestion (security review 4b alerts: an
     unbound ref let a model-created alert frame the button). prepare
     re-reads the waiting cards after draft_check with no await before
-    propose, so two taps at once leave one card. Nothing calls ERPNext on arrival. GET /erpnext/alert-drafts: the
+    propose, so two taps at once leave one card. Once per alert (live check of
+    Oct 19, 2026: a second tap after approval left a second card): the
+    card's payload carries from_alert (the alert id); _taken maps the
+    principal's cards that still count (proposed and live, executing,
+    approved_unchanged/approved_with_edit, executed) by alert in one
+    json_extract query (a card from before tagging counts through its
+    erpnext_draft_proposed audit row's alert_id; a same-digest card the
+    tap lands on is tied to the alert by _tag), so
+    open_suggestions leaves such an alert out and prepare answers with the
+    waiting card (already_waiting) or refuses already_prepared, checked
+    before draft_check and again just before propose. A dismissed, expired
+    or failed card frees the alert; next month's alert is a new alert. Nothing calls ERPNext on arrival. GET /erpnext/alert-drafts: the
     principal's open (unread/read) erpnext alerts with one, {alert_id,
     label}; [] for anyone else or drafts off. POST
     /erpnext/alert-drafts/{alert_id}: principal (caller_is_principal, else
