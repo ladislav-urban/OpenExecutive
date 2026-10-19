@@ -34,7 +34,7 @@ def _run(monkeypatch: pytest.MonkeyPatch, scenario: dict[str, Any]) -> dict[str,
     async def fake_judge(_scenario: dict[str, Any], _response: str) -> dict[str, Any]:
         return {"overall": 5}
 
-    monkeypatch.setattr(Executive, "__init__", lambda self: None)
+    monkeypatch.setattr(Executive, "__init__", lambda self, mcp_gateway=None: None)
     monkeypatch.setattr(Executive, "chat", fake_chat)
     monkeypatch.setattr(runner_module, "judge_chat", fake_judge)
     queue: asyncio.Queue[Any] = asyncio.Queue()
@@ -100,3 +100,26 @@ def test_the_panel_scenario_ships_and_loads_as_chat() -> None:
     assert len(found) == 1
     assert scenario_surface(found[0]) == "erpnext_panel"
     assert found[0]["quality_criteria"]["never_calls_the_panel_ask_the_executive"] is True
+
+
+def test_an_mcp_run_gets_the_running_gateway_and_a_chat_run_none(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without a gateway the Executive offers no MCP tools, so an mcp
+    # scenario would be judged on a turn that can't reach ERPNext.
+    import asyncio as _asyncio
+
+    from openexecutive.evals import runner
+    from openexecutive.orchestrator import executive as executive_module
+
+    given: list[object] = []
+
+    class Recording:
+        def __init__(self, mcp_gateway: object = None) -> None:
+            given.append(mcp_gateway)
+
+    gateway = object()
+    monkeypatch.setattr(executive_module, "Executive", Recording)
+    monkeypatch.setattr("openexecutive.orchestrator.mcp_gateway.get_active_gateway", lambda: gateway)
+    queue: _asyncio.Queue[dict[str, object] | None] = _asyncio.Queue()
+    for with_mcp in (True, False):
+        runner._make_chat_runner(_asyncio.Semaphore(1), queue, [0], 1, None, with_mcp=with_mcp)
+    assert given == [gateway, None]
