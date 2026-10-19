@@ -1,5 +1,6 @@
 id: erpnext_010
 domain: mcp
+speaker: principal
 description: "Scheduled ERP metrics, with the erpnext server connected and ERPNEXT_BRIEF_COMPANY set: the principal asks to get their DSO every Monday morning at 8. The Executive schedules the dso metric with schedule_erp_metric for weekly@mon@08:00, confirms what it will send and when, in their own time zone and to their own channel, and does not run a one-off report in its place or claim it has already sent anything"
 requires_mcp: true
 query: "Send me our DSO every Monday at 8 in the morning."

@@ -55,6 +55,9 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
         user_message=scenario["query"],
         session=session,
         channel_context_block=channel_block,
+        # chat() sets the turn's speaker from this, as the chat route passes
+        # the signed-in person: a `speaker` scenario's caller, else None.
+        person_id=surface.get("caller_person_id"),
     )
 
     return {

@@ -1,8 +1,9 @@
 id: erpnext_008
 domain: mcp
-description: "ERPNext drafts (phase 4b), with the erpnext server connected, drafts on and Purchase Order listed in ERPNEXT_DRAFT_DOCTYPES: the principal asks to turn material request MAT-MR-2026-00012 into a purchase order with Initech. The Executive proposes a Purchase Order draft from that material request with Initech as the supplier, without retyping the lines itself (ERPNext brings over what is not ordered yet), says a card is waiting for their approval, that nothing is ordered until they submit the draft in ERPNext, and never claims the order was placed"
+speaker: principal
+description: "ERPNext drafts (phase 4b), with the erpnext server connected, drafts on and Purchase Order listed in ERPNEXT_DRAFT_DOCTYPES: the principal asks to turn the open purchase material request for ITEM-2 into a purchase order with Initech (oe_connector's demo dataset has one). The Executive finds that material request in ERPNext, proposes a Purchase Order draft from it with Initech as the supplier, without retyping the lines itself (ERPNext brings over what is not ordered yet), says a card is waiting for their approval, that nothing is ordered until they submit the draft in ERPNext, and never claims the order was placed"
 requires_mcp: true
-query: "Turn material request MAT-MR-2026-00012 into a purchase order with Initech."
+query: "Turn our open purchase material request for ITEM-2 into a purchase order with Initech."
 expected_tool_calls:
   - propose_erpnext_draft
 expected_topics:

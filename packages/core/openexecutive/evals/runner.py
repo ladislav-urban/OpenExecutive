@@ -544,6 +544,10 @@ def _make_chat_runner(
                         user_message=query,
                         session=session,
                         channel_context_block=channel_block,
+                        # chat() sets the turn's speaker from this, as the chat
+                        # route passes the signed-in person: a `speaker`
+                        # scenario's caller, else None.
+                        person_id=surface.get("caller_person_id"),
                         # A scenario may supply the <peer_memory> body itself.
                         # Evals run with no person_id, so the Honcho prefetch
                         # never fires; this is the only way to exercise how the

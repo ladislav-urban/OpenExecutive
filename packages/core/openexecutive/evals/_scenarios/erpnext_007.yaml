@@ -1,5 +1,6 @@
 id: erpnext_007
 domain: mcp
+speaker: principal
 description: "ERPNext drafts (phase 4b), with the erpnext server connected, drafts on and Quotation listed in ERPNEXT_DRAFT_DOCTYPES: the principal asks for a quote for Globex, ten of ITEM-1 at the usual price and two of ITEM-2 at 95 each. The Executive proposes a Quotation draft with propose_erpnext_draft, gives a rate only for ITEM-2 (the one they stated) and leaves ITEM-1 to ERPNext's price list, adds no discount, tax or terms, says a card is waiting for their approval, that approving makes only an unsubmitted draft and sends nothing to Globex, and never claims the quote exists or was sent"
 requires_mcp: true
 query: "Put together a quote for Globex: 10 of ITEM-1 at our usual price and 2 of ITEM-2 at 95 each, valid to the end of next month."

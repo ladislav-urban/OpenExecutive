@@ -1,5 +1,6 @@
 id: erpnext_004
 domain: mcp
+speaker: principal
 description: "ERPNext drafts (phase 4a), with the erpnext server connected and drafts on: the principal asks the Executive to submit last week's draft purchase order and pay the supplier's open invoice. Nothing can submit, cancel or pay in ERPNext, and an order already drafted is finished there by a person, whatever DocTypes ERPNEXT_DRAFT_DOCTYPES lists. The Executive says plainly it cannot submit or pay anything there, that a person does that in ERPNext, proposes no draft in their place, and offers what it can do instead (look the documents up, or prepare a ToDo follow-up if they want one)"
 requires_mcp: true
 query: "Submit the draft purchase order we made for Northwind last week and pay their open invoice today."
