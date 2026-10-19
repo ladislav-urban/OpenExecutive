@@ -20,6 +20,7 @@ from openexecutive.integrations import erpnext_alert_drafts as alert_drafts
 from openexecutive.integrations import erpnext_drafts as drafts
 from openexecutive.memory.decision_ledger import get_decision_instance
 from openexecutive.orchestrator.erpnext_caller import ASSERTION_ARG
+from openexecutive.people import store as people_store
 
 from . import test_delegation_tools, test_erpnext_drafts, test_erpnext_events
 from .test_delegation_tools import OWNER, TEAM
@@ -47,6 +48,8 @@ FOLLOW_UP_SUGGESTION = {
     "outstanding_amount": 4100, "currency": "EUR", "due_date": "2026-07-30",
 }
 CHECKED = {"ok": True, "doctype": "ToDo", "docstatus": 0, "summary": {}}
+CREATED_TODO = {"ok": True, "doctype": "ToDo", "name": "abc123def", "docstatus": 0,
+                "url": "https://erp.example/app/todo/abc123def", "already_created": False}
 
 
 @pytest.fixture
@@ -276,3 +279,74 @@ def test_the_button_and_the_tap_are_the_principals_alone(
     reply = client.post(f"/erpnext/alert-drafts/{alert.id}", headers=olivia)
     assert reply.status_code == 200 and reply.json()["already_waiting"] is False
     assert [c.id for c in drafts.open_cards(roster.principal)] == [reply.json()["decision_id"]]
+
+
+def test_an_alert_offers_its_draft_once(
+    alerts_db: Path, erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    from openexecutive.memory.decision_ledger import STATUS_REJECTED, mark_resolved
+
+    alert_drafts.remember("overdue_receivable", OVERDUE["key"], FOLLOW_UP_SUGGESTION)
+    alert = _alert("overdue_receivable", OVERDUE["key"])
+    erp.replies.append(json.dumps(CHECKED))
+    decision_id, new = _prepare(alert)
+    assert new
+    # While its card waits: no button, and a tap is that card, unchecked.
+    assert alert_drafts.open_suggestions() == []
+    assert _prepare(alert) == (decision_id, False)
+    assert len(erp.calls) == 1
+    # Dismissed, it is offered again, and a tap leaves a new card.
+    assert mark_resolved(decision_id, STATUS_REJECTED, resolver_person_id=roster.principal)
+    assert alert_drafts.open_suggestions() == [(alert.id, "Prepare follow-up")]
+    erp.replies.append(json.dumps(CHECKED))
+    again, new = _prepare(alert)
+    assert new and again != decision_id
+    # Once its draft is made: no button, and a tap says it is in ERPNext.
+    erp.replies.append(json.dumps({**CREATED_TODO}))
+    asyncio.run(drafts.approve(get_decision_instance(again), caller=None, resolver=roster.principal))
+    assert alert_drafts.open_suggestions() == []
+    with pytest.raises(drafts.ApproveRefused) as made:
+        _prepare(alert)
+    assert made.value.code == "already_prepared" and "abc123def" in made.value.message
+
+
+def _untagged_card(roster: SimpleNamespace) -> int:
+    """A waiting card for the follow-up with no alert on it: one from before
+    cards were tied to alerts, or the model proposing those same fields."""
+    principal = people_store.get_person(roster.principal)
+    doctype, fields, why = alert_drafts.draft_for(alert_drafts.parse_suggestion(
+        "overdue_receivable", OVERDUE["key"], FOLLOW_UP_SUGGESTION), OWNER)
+    checked = drafts.check_fields(doctype, fields)
+    assert isinstance(checked, dict)
+    decision_id, new, _ = drafts.propose(principal, doctype, checked, {"fields": [], "lines": [], "notes": []},
+                                         why, asked_by=OWNER, session_id=None)
+    assert new
+    return decision_id
+
+
+def test_a_card_from_before_tagging_still_counts_by_its_audit_row(
+    alerts_db: Path, erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    alert_drafts.remember("overdue_receivable", OVERDUE["key"], FOLLOW_UP_SUGGESTION)
+    alert = _alert("overdue_receivable", OVERDUE["key"])
+    old = _untagged_card(roster)
+    drafts.audit("erpnext_draft_proposed", "Left a card from an alert", {
+        "person_id": roster.principal, "decision_id": old, "doctype": "ToDo", "alert_id": alert.id,
+    })
+    assert alert_drafts.open_suggestions() == []
+    assert _prepare(alert) == (old, False)
+    assert erp.calls == []
+
+
+def test_the_same_draft_waiting_untied_is_tied_to_the_alert(
+    alerts_db: Path, erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    alert_drafts.remember("overdue_receivable", OVERDUE["key"], FOLLOW_UP_SUGGESTION)
+    alert = _alert("overdue_receivable", OVERDUE["key"])
+    model_card = _untagged_card(roster)
+    assert alert_drafts.open_suggestions() == [(alert.id, "Prepare follow-up")]
+    erp.replies.append(json.dumps(CHECKED))
+    # The digest finds the waiting card; the tap ties it to this alert.
+    assert _prepare(alert) == (model_card, False)
+    assert alert_drafts.open_suggestions() == []
+    assert json.loads(get_decision_instance(model_card).proposed_payload_json)["from_alert"] == alert.id
