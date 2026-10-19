@@ -165,10 +165,17 @@ const WORK_TABS: NavItem[] = [
   },
 ];
 
-// The Delegate hub's tabs: what the Executive does as you (Act as me,
-// Handle it for me) and on its own (Take the lead). Each is a named feature,
-// so its tab shows the brand label.
+// The Delegate hub's tabs: what it may do without asking (one read-only
+// page over all of them), then what the Executive does as you (Act as me,
+// Handle it for me) and on its own (Take the lead). Each of those is a named
+// feature, so its tab shows the brand label.
 const DELEGATE_TABS: NavItem[] = [
+  {
+    href: "/delegate/what-it-may-do",
+    label: "What it may do",
+    icon: "eye",
+    description: "Everything that goes out without asking you, and the setting that allows it.",
+  },
   {
     href: "/delegate/act-as-me",
     label: "Act as me",
@@ -442,7 +449,27 @@ export function advancedItemsByGroup(): {
 // notes to keep (signed in and on the People list). `hashes` are the anchors the
 // old one-page Settings used (`/settings#workspace`): links that still
 // carry one land on the matching page (see settingsPageForHash).
-export type SettingsPageId = "executive" | "memory" | "workspace" | "advanced" | "about";
+export type SettingsPageId =
+  | "executive"
+  | "notifications"
+  | "memory"
+  | "workspace"
+  | "advanced"
+  | "about";
+
+// The headed groups the Settings hub sorts its pages into, in order.
+export type SettingsGroupId = "you" | "company" | "more";
+
+export interface SettingsGroupDef {
+  id: SettingsGroupId;
+  label: string;
+}
+
+export const SETTINGS_GROUPS: SettingsGroupDef[] = [
+  { id: "you", label: "You and your Executive" },
+  { id: "company", label: "Company" },
+  { id: "more", label: "More" },
+];
 
 export interface SettingsPageDef {
   id: SettingsPageId;
@@ -452,11 +479,14 @@ export interface SettingsPageDef {
   /** What's on the page, as the hub tile says it. */
   description: string;
   hashes: string[];
+  /** The hub group the page is listed under. */
+  group: SettingsGroupId;
 }
 
 export const SETTINGS_PAGES: SettingsPageDef[] = [
   {
     id: "executive",
+    group: "you",
     label: "Your Executive",
     href: "/settings/executive",
     icon: "cog",
@@ -464,7 +494,17 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
     hashes: ["executive", "on-its-own"],
   },
   {
+    id: "notifications",
+    group: "you",
+    label: "Notifications",
+    href: "/settings/notifications",
+    icon: "bell",
+    description: "Quiet hours, and whether things reach you as they happen or in your briefs.",
+    hashes: [],
+  },
+  {
     id: "memory",
+    group: "you",
     label: "About you",
     href: "/settings/memory",
     icon: "user",
@@ -473,6 +513,7 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
   },
   {
     id: "workspace",
+    group: "company",
     label: "Workspace",
     href: "/settings/workspace",
     icon: "building",
@@ -481,6 +522,7 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
   },
   {
     id: "advanced",
+    group: "more",
     label: "Advanced",
     href: "/settings/advanced",
     icon: "grid",
@@ -490,6 +532,7 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
   },
   {
     id: "about",
+    group: "more",
     label: "About",
     href: "/settings/about",
     icon: "info",
@@ -497,6 +540,17 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
     hashes: ["about"],
   },
 ];
+
+// The hub's groups with the pages in each, in group order and each page in
+// the order given; a group with no page left is dropped.
+export function groupSettingsPages<P extends SettingsPageDef>(
+  pages: P[],
+  groups: SettingsGroupDef[] = SETTINGS_GROUPS,
+): { group: SettingsGroupDef; pages: P[] }[] {
+  return groups
+    .map((group) => ({ group, pages: pages.filter((p) => p.group === group.id) }))
+    .filter((g) => g.pages.length > 0);
+}
 
 // The page an old `/settings#<hash>` link meant, or null for no hash or one
 // that never named a section. Takes the hash with or without its "#".

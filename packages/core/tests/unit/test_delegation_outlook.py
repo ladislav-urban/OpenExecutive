@@ -16,6 +16,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 from urllib.parse import unquote
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -23,6 +24,7 @@ import pytest
 from openexecutive.delegation import gmail as gm
 from openexecutive.delegation import outlook as ol
 from openexecutive.delegation.gmail import (
+    CalendarNotGranted,
     DelegateGmail,
     DraftSpec,
     GmailAuthError,
@@ -83,6 +85,7 @@ def test_the_script_writes_what_the_client_reads(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
     assert load_credential(EMAIL, directory=tmp_path / "creds") == OutlookCredential(
         email=EMAIL, refresh_token="r1", client_id="cid", tenant="11111111-2222-3333-4444-555555555555",
+        scopes=frozenset({"user.read", "mail.readwrite", "mail.send"}),
     )
     # No secret is ever written into a person's file, and the token stays out of a repr.
     assert "client_secret" not in path.read_text()
@@ -699,3 +702,126 @@ def test_a_chat_chip_links_to_an_outlook_draft() -> None:
     evil = json.dumps({"status": "drafted", "to": [], "gmail_link": "https://outlook.office.com.evil.example/mail/"})
     chip = summarize_action(tool_name="ghostwrite_email", tool_input={}, tool_result=evil)
     assert chip is not None and chip["link"] is None
+
+
+
+# --------------------------------------------------------------------------- #
+# Read my calendar
+# --------------------------------------------------------------------------- #
+
+
+_DAY = (datetime(2026, 10, 14, 7, tzinfo=UTC), datetime(2026, 10, 15, 7, tzinfo=UTC))
+_CALENDAR = {
+    "value": [
+        {"id": "e1", "subject": "Pilot review", "isAllDay": False,
+         "start": {"dateTime": "2026-10-14T16:00:00.0000000", "timeZone": "UTC"},
+         "end": {"dateTime": "2026-10-14T16:30:00.0000000", "timeZone": "UTC"},
+         "location": {"displayName": "Room 4"},
+         "organizer": {"emailAddress": {"name": "Dana", "address": "dana@northpeak.example"}},
+         "responseStatus": {"response": "tentativelyAccepted"}},
+        {"id": "e2", "subject": "Gone", "isCancelled": True, "start": {"dateTime": "2026-10-14T17:00:00"}},
+        {"id": "e3", "subject": "Offsite", "isAllDay": True, "start": {"dateTime": "2026-10-14T00:00:00.0000000"},
+         "end": {"dateTime": "2026-10-15T00:00:00.0000000"}},
+    ],
+}
+
+
+def _calendar_graph(scope: str, *, status: int = 200) -> tuple[list[httpx.Request], DelegateOutlook]:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.host == "login.microsoftonline.com":
+            return httpx.Response(200, json={"access_token": "at", "expires_in": 3600, "scope": scope})
+        return httpx.Response(status, json=_CALENDAR if status == 200 else {"error": {"code": "x"}})
+
+    cred = OutlookCredential(email=EMAIL, refresh_token="r1", client_id="cid", tenant="common")
+    return seen, DelegateOutlook(EMAIL, credential=cred, transport=httpx.MockTransport(handler))
+
+
+_MAIL = "https://graph.microsoft.com/User.Read https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send"
+
+
+def test_their_outlook_calendar_is_read_in_utc() -> None:
+    seen, client = _calendar_graph(f"{_MAIL} https://graph.microsoft.com/Calendars.Read")
+    events = asyncio.run(client.list_events(*_DAY))
+    assert [e.id for e in events] == ["e1", "e3"]
+    pilot, offsite = events
+    assert pilot.start == "2026-10-14T16:00:00+00:00" and pilot.response == "tentative"
+    assert pilot.location == "Room 4" and pilot.organizer == "Dana <dana@northpeak.example>"
+    assert offsite.all_day and offsite.start == "2026-10-14"
+    call = seen[-1]
+    assert call.url.path == "/v1.0/me/calendarView" and call.headers["Prefer"] == 'outlook.timezone="UTC"'
+
+
+def test_an_outlook_sign_in_without_the_calendar_says_so() -> None:
+    seen, client = _calendar_graph(_MAIL)
+    with pytest.raises(CalendarNotGranted):
+        asyncio.run(client.list_events(*_DAY))
+    assert all(r.url.host == "login.microsoftonline.com" for r in seen)
+    _seen, refused = _calendar_graph("", status=403)
+    with pytest.raises(CalendarNotGranted):
+        asyncio.run(refused.list_events(*_DAY))
+
+
+def test_an_outlook_sign_in_says_whether_it_includes_the_calendar() -> None:
+    _seen, with_it = _calendar_graph(f"{_MAIL} https://graph.microsoft.com/Calendars.Read")
+    assert asyncio.run(with_it.calendar_granted()) is True
+    ol._TOKENS.clear()
+    _seen, without = _calendar_graph(_MAIL)
+    assert asyncio.run(without.calendar_granted()) is False
+
+
+def test_the_outlook_script_asks_for_the_calendar_only_with_the_flag() -> None:
+    script = _script()
+    assert "Calendars.Read" not in script.SCOPE
+    assert "https://graph.microsoft.com/Calendars.Read" in script.scope_for((*script.GRAPH_SCOPES, script.CALENDAR_SCOPE))
+
+
+def test_the_refresh_asks_for_the_calendar_only_when_it_was_granted(tmp_path: Path) -> None:
+    script = _script()
+    payload = script.credential_payload(
+        EMAIL, "r1", "cid", "common", personal=False, graph_scopes=(*script.GRAPH_SCOPES, script.CALENDAR_SCOPE),
+    )
+    script.write_credential(tmp_path, EMAIL, payload)
+    with_calendar = load_credential(EMAIL, directory=tmp_path)
+    assert with_calendar is not None
+    assert unquote(_refresh_form(with_calendar)["scope"]).endswith("https://graph.microsoft.com/Calendars.Read")
+    _write(tmp_path)
+    mail_only = load_credential(EMAIL, directory=tmp_path)
+    assert mail_only is not None and "Calendars" not in unquote(_refresh_form(mail_only)["scope"])
+
+
+def _refresh_form(cred: OutlookCredential) -> dict[str, str]:
+    """The form one token refresh for ``cred`` posts."""
+    forms: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        forms.append(dict(pair.split("=", 1) for pair in request.content.decode().split("&")))
+        return httpx.Response(200, json={"access_token": "at", "expires_in": 3600, "scope": ""})
+
+    async def refresh() -> None:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            await DelegateOutlook(EMAIL, credential=cred)._access_token(http)
+
+    ol._TOKENS.clear()
+    asyncio.run(refresh())
+    return forms[0]
+
+
+def test_an_outlook_all_day_event_keeps_its_day_east_and_west_of_utc() -> None:
+    def day(start: str, end: str, zone: str) -> tuple[str, str]:
+        event = ol.parse_event({"id": "e", "subject": "Offsite", "isAllDay": True,
+                                "start": {"dateTime": start}, "end": {"dateTime": end}}, ZoneInfo(zone))
+        assert event is not None
+        return event.start, event.end
+
+    # The 14th's midnight, shown in UTC: Tokyo 15:00 and Auckland (+13) 11:00
+    # on the 13th, New York 04:00 on the 14th.
+    assert day("2026-10-13T15:00:00.0000000", "2026-10-14T15:00:00.0000000", "Asia/Tokyo") == ("2026-10-14", "2026-10-15")
+    assert day("2026-10-13T11:00:00.0000000", "2026-10-14T11:00:00.0000000", "Pacific/Auckland") == (
+        "2026-10-14", "2026-10-15",
+    )
+    assert day("2026-10-14T04:00:00.0000000", "2026-10-15T04:00:00.0000000", "America/New_York") == (
+        "2026-10-14", "2026-10-15",
+    )

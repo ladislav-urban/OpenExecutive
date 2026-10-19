@@ -33,10 +33,12 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from openexecutive.briefing.value_summary import ValueSummary
 from openexecutive.clients.cockpit import ClientCockpitCard, format_practice_for_today
 
 if TYPE_CHECKING:
     from openexecutive.alerts.models import Alert
+    from openexecutive.briefing.reader import Reader
     from openexecutive.people.models import Person
 
 logger = logging.getLogger(__name__)
@@ -192,6 +194,9 @@ class ProposalItem(BaseModel):
     # the /decisions endpoints (which book/cancel server-side) instead of the
     # ack-and-handoff-to-chat flow. Null for ordinary alert-backed proposals.
     decision_instance_id: int | None = None
+    # A scheduled run that failed (workflows/failure_alerts.py): the run the
+    # card's Run again queues once more. None on every other card.
+    failed_run_id: str | None = None
     # Set when this card is a roster request ("who is this new sender?",
     # people.roster_requests): the UI answers it at /people/requests/{id}
     # (add / same person as / ignore) instead of ack-and-chat. Private to the
@@ -464,6 +469,30 @@ class HandledItem(BaseModel):
     status: str = ""
 
 
+class FirstWeekFinding(BaseModel):
+    title: str
+    summary: str
+
+
+class FirstWeekCardModel(BaseModel):
+    """Home's first-week card (``briefing.first_week.first_week_card``)."""
+
+    needs_goal: bool = False
+    findings: list[FirstWeekFinding] = Field(default_factory=list)
+    brief_tomorrow: bool = False
+
+
+class HeldBackItem(BaseModel):
+    """Lines grounding left out of one of the principal's briefs (the
+    "Left out of your brief" block on Home, which the brief's note names)."""
+
+    event_id: int
+    # "morning brief" / "end-of-day digest"
+    surface: str
+    at: str
+    lines: list[str]
+
+
 class TodayResponse(BaseModel):
     departments: list[DepartmentBriefItem]
     people: list[PersonBriefItem]
@@ -497,6 +526,14 @@ class TodayResponse(BaseModel):
     # (routed / nudged / escalated / drafted / merged / closed), newest first
     # — the "Executive handled N overnight" pill. Additive, default empty.
     handled_overnight: list[HandledItem] = Field(default_factory=list)
+    # What grounding held back from the principal's briefs in the last day.
+    # Set by GET /today for the principal alone, after the narrative inputs
+    # are taken, so the held lines never reach a prompt.
+    held_back: list[HeldBackItem] = Field(default_factory=list)
+    # The install's first week (``briefing.first_week``), for the principal:
+    # Home shows the first-week card instead of calling the day quiet.
+    first_week: bool = False
+    first_week_card: FirstWeekCardModel | None = None
 
 
 class ActivityItem(BaseModel):
@@ -514,6 +551,10 @@ class ActivityItem(BaseModel):
     target: str | None
     department: str | None
     at: str
+    # A finished run's line on what came of it (`workflows.run_outcome`),
+    # and the artifact id of its write-up when it kept one (`run:<id>`).
+    detail: str | None = None
+    artifact_id: str | None = None
 
 
 class ActivityResponse(BaseModel):
@@ -792,6 +833,8 @@ def _build_today(
     from openexecutive.alerts.lifecycle import list_live_alerts
     from openexecutive.alerts.store import count_superseded_by
     from openexecutive.briefing.ranking import score_and_categorize
+    from openexecutive.workflows.failure_alerts import SOURCE as FAILED_RUN_SOURCE
+    from openexecutive.workflows.failure_alerts import failed_run_id
 
     # Live = unread AND inside its TTL AND not snoozed — the read-side twin of
     # the scheduler's expiry sweep, so the page is right before the sweep runs.
@@ -838,6 +881,11 @@ def _build_today(
             category=item_category,
             surfaced_reason=item_reason,
             decision_instance_id=_parse_decision_instance_id(alert.topic_tags or []),
+            failed_run_id=(
+                failed_run_id(alert.topic_tags or [])
+                if alert.source == FAILED_RUN_SOURCE
+                else None
+            ),
             roster_request=(
                 _roster_request_card(alert.topic_tags or [])
                 if alert.source == "roster_request" else None
@@ -1003,6 +1051,7 @@ def _resolve_channel_target(
 
 # Held Take the lead actions (orchestrator.take_the_lead.DECISION_CLASS).
 TAKE_THE_LEAD_CLASS = "take_the_lead_action"
+DEPARTMENT_ACTION_CLASS = "department_action"
 
 # Terminal decision-instance status → human verb for the activity rail.
 _DECISION_STATUS_LABEL = {
@@ -1185,16 +1234,24 @@ def _build_activity(
     # starve the done ones out of the pool. Bucket at `updated_at` (completion).
     # Team runs only: the rail is shown to everyone, and a run someone started
     # by hand is theirs alone (`persistence.run_visible_to`).
-    for run in wf_persistence.list_runs(status="done", limit=pool, visible_to=None):
+    # Rows say what the work was and what came of it (`run_outcome`), never
+    # the run's log title ("Executive Research (periodic)").
+    from openexecutive.workflows import run_outcome
+
+    for run in wf_persistence.list_runs(
+        status="done", limit=pool, visible_to=None, with_body=True,
+    ):
         if run.get("workflow_name") in exclude_workflows:
             continue
         items.append(ActivityItem(
             kind="workflow_done",
-            summary=run.get("title") or run.get("workflow_name") or "Workflow",
+            summary=run_outcome.plain_name(run),
             actor="Executive",
             target=None,
             department=None,
             at=run["updated_at"],
+            detail=run_outcome.outcome_line(run),
+            artifact_id=run_outcome.write_up_id(run),
         ))
 
     # Initiatives the Executive kicked off / is tracking. `created_at` marks
@@ -1219,6 +1276,8 @@ def _build_activity(
             continue  # a meeting with one of the principal's contacts
         if instance.decision_class == TAKE_THE_LEAD_CLASS:
             continue  # its card quotes the message: the Take the lead rows below say what it did
+        if instance.decision_class == DEPARTMENT_ACTION_CLASS:
+            continue  # it quotes a teammate's conversation; the audit log keeps who approved it
         label = _DECISION_STATUS_LABEL.get(instance.status, "Resolved")
         detail = (
             _payload_headline(instance.final_payload_json)
@@ -1568,22 +1627,31 @@ def _header_live(include_private: bool, now: datetime | None = None) -> tuple[An
     return signals, window, now_label
 
 
+# `_narrative_context(reader=…)` left out: look the reader up there.
+_LOOKUP = object()
+
+
 def _narrative_context(
     today_data: dict[str, Any],
     viewer: PersonBriefItem | None,
     viewer_desc: dict[str, str] | None,
     mode: str = "team",
     scope: str | None = None,
+    reader: Reader | None | object = _LOOKUP,
 ) -> tuple[str, list[dict[str, Any]] | None]:
     """``(context, activity)`` — the exact user turn the model would receive.
+
+    ``reader`` is who the header is written for (``_narrative_reader``); the
+    regeneration resolves it once and hands the same one to the post-check.
 
     The single source both the cache key and the model call come from, so the
     key can never be computed over something the model did not see.
 
     The whole-company scopes (``principal`` / ``company``) also get the live
     blocks (`_header_live`) — what came in today, what is stuck, the rest of
-    the calendar — private rows only in the principal's own scope. A
-    teammate's header is unchanged.
+    the calendar — private rows only in the principal's own scope, and in
+    the first week nothing extra: Home's first-week card says what the week
+    is for (``briefing.first_week.first_week_card``).
 
     On a quiet board — nothing awaiting a decision and nothing live — it
     returns `narrative_cache.QUIET_CONTEXT` and no activity: the narrative is
@@ -1613,8 +1681,22 @@ def _narrative_context(
         live=live,
         live_window=window,
         now_label=now_label,
+        brief_requests=viewer_desc is None and scope == narrative_cache.DEFAULT_SCOPE,
+        reader=_narrative_reader(scope, viewer) if reader is _LOOKUP else reader,  # type: ignore[arg-type]
     )
     return context, activity
+
+
+def _narrative_reader(scope: str | None, viewer: PersonBriefItem | None) -> Reader | None:
+    """Who a scope's header is written for: the teammate on their own scope,
+    else the principal. The whole-company scope (no signed-in caller) uses
+    the same prompt as the principal's, which narrates the principal's day,
+    so it is written to them too, from the shared rows only."""
+    from openexecutive.briefing.reader import person_reader, principal_reader
+
+    if viewer is not None and scope is not None and scope.startswith("person:"):
+        return person_reader(viewer.id)
+    return principal_reader()
 
 
 # One regeneration per scope at a time. Every stale view schedules one, and
@@ -1747,6 +1829,7 @@ async def _regen_briefing_narrative_locked(
     from openexecutive.briefing.narrative import (
         QUIET_PRINCIPAL,
         QUIET_VIEWER,
+        REWRITE_TIMEOUT_S,
         synthesize_briefing_narrative,
     )
     from openexecutive.memory.workspace_settings import get_workspace
@@ -1764,7 +1847,10 @@ async def _regen_briefing_narrative_locked(
                 "regen; skipping write", expected_scope, scope,
             )
             return True
-        context, activity = _narrative_context(today_data, viewer, viewer_desc, mode, scope)
+        reader = _narrative_reader(scope, viewer)
+        context, activity = _narrative_context(
+            today_data, viewer, viewer_desc, mode, scope, reader=reader,
+        )
         input_hash = narrative_cache.build_narrative_input_hash(context, scope=scope, mode=mode)
         cached = narrative_cache.get(scope)
         if cached is not None and cached.input_hash == input_hash:
@@ -1783,8 +1869,10 @@ async def _regen_briefing_narrative_locked(
                     # Hand the model the very string that was hashed.
                     rendered_context=context,
                     mode=mode,
+                    reader=reader,
                 ),
-                timeout=25.0,
+                # 25 s for the draft, plus the rewrite's own budget.
+                timeout=25.0 + REWRITE_TIMEOUT_S,
             )
     except Exception:
         logger.exception("today: briefing narrative regen failed (scope=%s)", expected_scope)
@@ -1811,12 +1899,12 @@ async def refresh_principal_narrative() -> bool:
     """Bring the principal's header up to date without anyone opening the page.
 
     Called from the scheduler's tick: refreshes the calendar read the header
-    quotes, then regenerates the principal's narrative only when its key
+    quotes and settles the chat drafts it counts, then regenerates the principal's narrative only when its key
     moved (new mail, something stuck, a proposal, the hour). True when a
     regeneration ran. Never raises.
     """
     from openexecutive.briefing import narrative_cache
-    from openexecutive.briefing.live_signals import refresh_calendar
+    from openexecutive.briefing.live_signals import refresh_calendar, settle_principal_drafts
     from openexecutive.memory.workspace_settings import get_workspace
     from openexecutive.people.store import find_principal_person
 
@@ -1825,6 +1913,7 @@ async def refresh_principal_narrative() -> bool:
         if principal is None or principal.id is None:
             return False
         await refresh_calendar()
+        await settle_principal_drafts()
         mode = get_workspace().mode
         snapshot = _build_today(include_private=True)
         scope, today_data, desc, viewer = _narrative_inputs(snapshot, principal.id)
@@ -1860,9 +1949,10 @@ async def get_today(request: Request, background_tasks: BackgroundTasks) -> Toda
     from openexecutive.orchestrator.artifact_records import viewer_for_person
 
     caller = _resolve_caller_person_id(request)
+    principal = _is_principal(caller)
     response = _build_today(
         stale_out=stale,
-        include_private=_is_principal(caller),
+        include_private=principal,
         viewer=viewer_for_person(caller),
     )
     response.caller_person_id = caller
@@ -1873,7 +1963,35 @@ async def get_today(request: Request, background_tasks: BackgroundTasks) -> Toda
         caller_person_id=response.caller_person_id,
         background_tasks=background_tasks,
     )
+    if principal:
+        response.held_back = _held_back(datetime.now(UTC))
+        response.first_week_card = _first_week_card()
+        response.first_week = response.first_week_card is not None
     return response
+
+
+def _first_week_card() -> FirstWeekCardModel | None:
+    from dataclasses import asdict
+
+    from openexecutive.briefing.first_week import first_week_card
+
+    card = first_week_card()
+    return FirstWeekCardModel.model_validate(asdict(card)) if card else None
+
+
+# How far back Home lists what grounding left out of the briefs: today's
+# morning brief and last night's digest.
+_HELD_BACK_WINDOW = timedelta(hours=24)
+
+
+def _held_back(now: datetime) -> list[HeldBackItem]:
+    from openexecutive.briefing.grounding import recent_held_back
+
+    since = (now - _HELD_BACK_WINDOW).isoformat()
+    return [
+        HeldBackItem(event_id=h.event_id, surface=h.surface, at=h.at, lines=h.lines)
+        for h in recent_held_back(since=since)
+    ]
 
 
 @router.get("/today/activity", response_model=ActivityResponse, tags=["today"])
@@ -1963,13 +2081,13 @@ class BriefDeliveryNotice(BaseModel):
 
 def _brief_delivery_notice() -> BriefDeliveryNotice | None:
     from openexecutive.briefing.brief_state import (
-        DELIVERY_PROBLEMS,
         brief_name,
         current_problem,
+        describe_problem,
         last_delivery_outcome,
     )
     from openexecutive.config import get_settings
-    from openexecutive.scheduler.runner import principal_delivery_plan
+    from openexecutive.scheduler.runner import mail_gateway_problem, principal_delivery_plan
 
     # With the scheduler off no brief is coming; the Setup status page says so.
     if not get_settings().scheduler_enabled:
@@ -1978,10 +2096,16 @@ def _brief_delivery_notice() -> BriefDeliveryNotice | None:
     if last is None:
         return None
     principal, plan = principal_delivery_plan()
-    reason = current_problem(last, has_owner=principal is not None, can_deliver=bool(plan))
+    blocked = mail_gateway_problem(principal)
+    reason = current_problem(
+        last, has_owner=principal is not None, can_deliver=bool(plan),
+        gateway_down=blocked is not None,
+    )
     if reason is None:
         return None
-    problem, fix = DELIVERY_PROBLEMS[reason]
+    problem, fix = describe_problem(
+        reason, blocked if reason == "gateway_down" else last.detail
+    )
     return BriefDeliveryNotice(
         brief=brief_name(last.kind),
         at=last.at.isoformat(),
@@ -2005,6 +2129,25 @@ async def get_brief_delivery(request: Request) -> BriefDeliveryNotice | None:
     if not await asyncio.to_thread(_caller_is_principal_or_unclaimed, request):
         return None
     return await asyncio.to_thread(_brief_delivery_notice)
+
+
+@router.get("/today/value", response_model=ValueSummary, tags=["today"])
+async def get_today_value(
+    request: Request,
+    period: str = Query("month", pattern="^(month|week)$"),
+    offset: int = Query(0, ge=0, le=24),
+) -> ValueSummary:
+    """What the Executive did for the owner this calendar month or week
+    (``offset`` periods back), with the period before beside each count and
+    the finished reports (``briefing.value_summary``). Every number is counted from the record,
+    none is written by a model. The owner's alone: it counts their private
+    rows, so anyone else gets 403."""
+    from openexecutive.api.routes.people import caller_is_principal
+    from openexecutive.briefing.value_summary import summarize
+
+    if not await asyncio.to_thread(caller_is_principal, request):
+        raise HTTPException(status_code=403, detail="Only the owner sees this summary")
+    return await asyncio.to_thread(summarize, "week" if period == "week" else "month", offset)
 
 
 # --------------------------------------------------------------------------- #

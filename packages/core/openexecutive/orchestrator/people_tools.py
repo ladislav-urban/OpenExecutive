@@ -321,14 +321,41 @@ def _audit(tool: str, kind: str, ok: bool, summary: str, details: dict[str, Any]
 # Surfaces that verify who sent every message: the web chat (the signed-in
 # Google account, stamped by the UI proxy), and Slack / Discord (the platform's
 # own user id, over an authenticated connection). Email (an unauthenticated
-# From header), Google Chat (no sender identity), the CLI, the MCP server and
-# unattended runs (scheduler, workflows, alert review) don't. Telegram only
-# sometimes — see `_is_verified_speaker_surface`.
+# From header), Google Chat (its sender is matched by email for the department gate only), the CLI, the MCP server
+# (unless the turn may act: `Session.mcp_client_may_act`) and unattended runs (scheduler, workflows, alert review) don't. Telegram only
+# sometimes — see `_is_verified_speaker_surface`. A channel adapter this module
+# doesn't know counts when it verified the sender itself
+# (`Session.speaker_verified`, with the `caller_person_id` it resolved).
 _VERIFIED_SPEAKER_CHANNELS = frozenset({"slack", "discord"})
+
+
+def _adapter_verified_turn(session: Any) -> bool:
+    """The rest of what an adapter's ``speaker_verified`` needs to count, as
+    ``history_chat.verified_speaker`` asks of it: a resolved caller, a turn
+    someone is in that no email started, not private to the principal and
+    not run on their behalf (an eval's ``delegation_override``)."""
+    from openexecutive.delegation.settings import DelegationOverride
+
+    return (
+        getattr(session, "caller_person_id", None) is not None
+        and not getattr(session, "email_from", "")
+        and getattr(session, "unattended", False) is not True
+        and getattr(session, "private_to_principal", False) is not True
+        and not isinstance(getattr(session, "delegation_override", None), DelegationOverride)
+    )
 
 
 def _is_verified_speaker_surface(session: Any) -> bool:
     if bool(getattr(session, "from_web_chat", False)):
+        return True
+    # Another AI app over Open Executive's own MCP server: its caller is the
+    # one the API verified (`api.caller`), as for the web chat, but only a
+    # turn allowed to act (`Session.mcp_client_may_act`) counts it, so each
+    # tool's own owner-only and person checks then decide. A read-only one
+    # never does.
+    if getattr(session, "from_mcp_client", False) is True:
+        return getattr(session, "mcp_client_may_act", False) is True and _adapter_verified_turn(session)
+    if getattr(session, "speaker_verified", False) is True and _adapter_verified_turn(session):
         return True
     channel = str(getattr(session, "origin_channel", "") or "")
     if channel in _VERIFIED_SPEAKER_CHANNELS:
@@ -516,33 +543,43 @@ def audit_row_private_to_principal(*payloads: Any) -> bool:
     return _names_a_contact(payloads)
 
 
-def sent_by_principal(channel: str, channel_ref: str, sender: Any) -> bool:
+def sent_by_principal(
+    channel: str, channel_ref: str, sender: Any, *, speaker_verified: bool = False
+) -> bool:
     """Whether a message a chat adapter received on ``channel`` from
     ``sender`` (the Person it resolved, or None) starts the principal's own
     verified turn — what ``is_principal_on_verified_surface`` answers once the
     turn's session is bound. ``channel_ref`` is the id that session carries as
     its ``origin_channel_ref`` (Telegram's chat id decides whether it is
-    verified at all)."""
+    verified at all). ``speaker_verified``: the adapter verified ``sender``
+    itself, as it will say on the turn's session (``Session.speaker_verified``)."""
     if sender is None or getattr(sender, "is_principal", False) is not True:
         return False
     if getattr(sender, "archived", False) is True:
         return False
-    surface = SimpleNamespace(
-        from_web_chat=False, origin_channel=channel, origin_channel_ref=channel_ref
+    return _is_verified_speaker_surface(_inbound_surface(channel, channel_ref, sender, speaker_verified))
+
+
+def _inbound_surface(channel: str, channel_ref: str, sender: Any, speaker_verified: bool) -> SimpleNamespace:
+    """The surface an inbound message's turn will have, before its session exists."""
+    return SimpleNamespace(
+        from_web_chat=False,
+        origin_channel=channel,
+        origin_channel_ref=channel_ref,
+        speaker_verified=speaker_verified,
+        caller_person_id=getattr(sender, "id", None),
     )
-    return _is_verified_speaker_surface(surface)
 
 
-def sent_by_teammate(channel: str, channel_ref: str, sender: Any) -> int | None:
+def sent_by_teammate(
+    channel: str, channel_ref: str, sender: Any, *, speaker_verified: bool = False
+) -> int | None:
     """The teammate (not the principal) a chat adapter's inbound message on
     ``channel`` is from, when the channel proved who sent it — the person
     whose own turn it starts (``teammate_turn_owner``) — else None."""
     if sender is None or getattr(sender, "id", None) is None:
         return None
-    surface = SimpleNamespace(
-        from_web_chat=False, origin_channel=channel, origin_channel_ref=channel_ref
-    )
-    if not _is_verified_speaker_surface(surface):
+    if not _is_verified_speaker_surface(_inbound_surface(channel, channel_ref, sender, speaker_verified)):
         return None
     return team_member_id(int(sender.id))
 
@@ -834,6 +871,36 @@ async def handle_list_people(tool_input: dict[str, Any]) -> str:
     return json.dumps({"people": out, "count": len(out)})
 
 
+def _hold_until_next_turn(person_id: int) -> None:
+    """Hold a person just written to the roster for the rest of the turn
+    (``outside_content.note_added_person``). The id is held even when the
+    row can't be read back; only the refusal's address text is lost."""
+    from openexecutive.orchestrator import outside_content
+    from openexecutive.people import store as people_store
+
+    try:
+        written = people_store.get_person(person_id)
+    except Exception:
+        written = None
+    outside_content.note_added_person(person_id, written)
+
+
+def _new_way_to_reach(existing: Any, tool_input: dict[str, Any], aliases: list[str] | None) -> bool:
+    """Whether an update gives ``existing`` an address or chat account they
+    did not have: a new email, alias, Slack, Telegram or Discord id."""
+    def norm(value: Any) -> str:
+        return str(value or "").strip().lower()
+
+    for key in ("email", "slack_user_id", "telegram_chat_id", "discord_user_id"):
+        if key in tool_input and norm(tool_input.get(key)) and norm(tool_input.get(key)) != norm(getattr(existing, key, None)):
+            return True
+    if aliases:
+        known = {norm(a) for a in (getattr(existing, "email_aliases", None) or [])}
+        known.add(norm(getattr(existing, "email", None)))
+        return any(norm(a) not in known for a in aliases)
+    return False
+
+
 async def handle_upsert_person(tool_input: dict[str, Any]) -> str:
     from openexecutive.people import registry as people_registry
     from openexecutive.people import store as people_store
@@ -844,6 +911,14 @@ async def handle_upsert_person(tool_input: dict[str, Any]) -> str:
         return json.dumps({"error": err})
 
     refused = _refuse_unless_owner("upsert_person")
+    if refused is not None:
+        return refused
+    # No roster change on a turn that read outside content, nor one Act as
+    # me's lockdown refuses (the chat loop refuses both first; this holds
+    # for any other path).
+    from openexecutive.delegation.lockdown import outside_reach_refusal
+
+    refused = outside_reach_refusal("upsert_person", tool_input)
     if refused is not None:
         return refused
 
@@ -964,6 +1039,7 @@ async def handle_upsert_person(tool_input: dict[str, Any]) -> str:
         kwargs["person_id"] = person_id
 
     action = "updated" if person_id is not None else "created"
+    new_id: int | None = None
     try:
         new_id = people_store.upsert_person(**kwargs)
         if authority_scopes is not None:
@@ -975,6 +1051,10 @@ async def handle_upsert_person(tool_input: dict[str, Any]) -> str:
         # Always invalidate — a partial write (e.g. row inserted but scopes
         # failed) must not leave the registry serving stale data.
         people_registry.invalidate()
+        if new_id is not None:
+            # The row (and maybe a new address) is written: hold it like a
+            # full write.
+            _hold_until_next_turn(new_id)
         # No name or kind in the audit row (readable by everyone): a contact
         # is private to the principal, and a team row must look the same.
         _audit(
@@ -984,6 +1064,10 @@ async def handle_upsert_person(tool_input: dict[str, Any]) -> str:
         )
         return json.dumps({"error": str(exc)})
     people_registry.invalidate()
+    if existing is None or _new_way_to_reach(existing, tool_input, aliases):
+        # Nothing reaches someone added (or given a new address or chat
+        # account) until the next turn: every send check trusts the roster.
+        _hold_until_next_turn(new_id)
     # Someone waiting on a roster request may match now.
     from openexecutive.integrations.roster_intake import after_roster_write
 

@@ -898,6 +898,9 @@ def test_sent_by_teammate(roster: SimpleNamespace, monkeypatch: pytest.MonkeyPat
     assert sent_by_teammate("slack", "U_X", None) is None
     # A surface that proves nobody: Google Chat, or Telegram without the secret.
     assert sent_by_teammate("google_chat", "x", person(roster.teammate)) is None
+    # Unless its adapter verified the sender itself, as the turn's session will say.
+    assert sent_by_teammate("otherchat", "x", person(roster.teammate), speaker_verified=True) == roster.teammate
+    assert sent_by_teammate("otherchat", "x", None, speaker_verified=True) is None
     unverified = get_settings().model_copy(update={"telegram_webhook_secret": None})
     monkeypatch.setattr("openexecutive.config.get_settings", lambda: unverified)
     assert sent_by_teammate("telegram", "5002", person(roster.teammate)) is None
@@ -1654,6 +1657,17 @@ def _run_mcp_round(session: Session) -> tuple[_ScriptedStreams, dict[str, str], 
     import openexecutive.orchestrator.mcp_gateway as gw_module
 
     gateway, reached = _real_gateway()
+    # The outside-content hold and the Google owner check are
+    # test_outside_content's and test_mcp_gateway_google_owner's; this round
+    # is about the private turn's withholding, so they stand aside here.
+    from openexecutive.orchestrator import outside_content
+
+    stand_aside = [
+        patch.object(outside_content, "source_of", return_value=None),
+        patch.object(gw_module, "_check_google_file_write", AsyncMock(return_value=None)),
+    ]
+    for p in stand_aside:
+        p.start()
     # The round reads message m1 as if a search had shown it: the chat reaches
     # mail only by an id it was shown (orchestrator.teammate_mail).
     from openexecutive.orchestrator.teammate_mail import allow_mail_ids
@@ -1662,7 +1676,11 @@ def _run_mcp_round(session: Session) -> tuple[_ScriptedStreams, dict[str, str], 
     with patch.object(
         gw_module, "get_settings", return_value=SimpleNamespace(exec_email_address=EXEC)
     ):
-        provider = _run_loop(session, _mcp_round(), gateway=gateway)
+        try:
+            provider = _run_loop(session, _mcp_round(), gateway=gateway)
+        finally:
+            for p in stand_aside:
+                p.stop()
     results = {r["tool_use_id"]: r["content"] for r in provider.calls[1]["messages"][-1]["content"]}
     return provider, results, reached
 
@@ -1717,7 +1735,11 @@ def test_other_turns_search_and_call_every_mcp_tool_unchanged(
         "principal_web": _principal_web(roster),
         "teammate_web": _teammate_web(roster),
     }[surface]
-    provider, results, reached = _run_mcp_round(session)
+    # A teammate's sends also meet their department's authority first;
+    # that gate is test_department_gate's. This one is about the private
+    # turn's withholding, so it stands aside here.
+    with patch("openexecutive.orchestrator.department_gate.speaker", return_value=None):
+        provider, results, reached = _run_mcp_round(session)
     assert results["tu-1"] == _SEARCH_TEXT
     called = [args["tool_name"] for name, args in reached if name == "call_tool"]
     # Every call reaches the gateway; its own gates alone decide the rest.
@@ -1838,7 +1860,11 @@ def test_a_normal_turn_offers_and_runs_them_unchanged(roster: SimpleNamespace) -
     tool_use = SimpleNamespace(
         type="tool_use", id="tu-1", name="send_company_broadcast", input={"text": "All hands at 3"}
     )
-    with patch.dict(executive_module._ALL_SKILL_HANDLERS, {"send_company_broadcast": handler}):
+    with (
+        patch.dict(executive_module._ALL_SKILL_HANDLERS, {"send_company_broadcast": handler}),
+        # Department authority on a teammate's sends is test_department_gate's.
+        patch("openexecutive.orchestrator.department_gate.speaker", return_value=None),
+    ):
         provider = _run_loop(_teammate_web(roster), [tool_use], gateway=_gateway())
     handler.assert_awaited_once()
     offered = _offered(provider)
@@ -1968,3 +1994,11 @@ def test_a_panel_turn_refuses_anything_else_the_model_emits() -> None:
     for refused in ("tu-1", "tu-2", "tu-3"):
         assert "panel you can only read ERPNext" in results[refused]
     assert "untrusted_content" in results["tu-0"]
+
+
+def test_sent_by_principal_on_an_adapter_verified_channel(roster: SimpleNamespace) -> None:
+    from openexecutive.orchestrator.people_tools import sent_by_principal
+
+    owner = people_store.get_person(roster.principal)
+    assert sent_by_principal("otherchat", "x", owner) is False
+    assert sent_by_principal("otherchat", "x", owner, speaker_verified=True) is True

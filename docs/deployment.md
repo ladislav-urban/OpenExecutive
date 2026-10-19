@@ -149,7 +149,7 @@ with "no company profile" on a fresh volume is expected, not a fault.
 | `BACKEND_SHARED_SECRET` | Gates every API route via `x-api-key`. Generate with `openssl rand -hex 32`; the UI needs the same value. |
 | `CALLER_ASSERTION_PUBLIC_KEYS` (API), `CALLER_ASSERTION_PRIVATE_KEY` (UI) | Signed callers: the UI signs who is signed in and the API checks it, so the shared secret alone can't act as the owner. Recommended. Make the pair with `scripts/make-caller-keys.py`; see [auth.md](auth.md#signed-callers). |
 | `OE_PUBLIC_DEPLOYMENT=1` | **Set this on every internet-reachable instance.** See below. |
-| `BACKEND_ALLOWED_ORIGINS` | Comma-separated UI origins allowed through CORS, e.g. `https://exec.example.com`. |
+| `BACKEND_ALLOWED_ORIGINS` | Comma-separated UI origins allowed through CORS, e.g. `https://exec.example.com`. With `OE_PUBLIC_DEPLOYMENT` set these are the only ones: the `localhost:3000` origins `make dev` uses are dropped. |
 | `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_OIDC_ISSUER`, `AUTH_OIDC_ID`, `AUTH_OIDC_SECRET`, `AUTH_URL`, `ALLOWED_EMAILS` | UI sign-in (Google and/or SSO). See [auth.md](auth.md). |
 
 Integrations (Slack, Discord, email, Google Workspace, Microsoft 365) are all
@@ -321,6 +321,14 @@ The address is checked against Microsoft's directory, never the mail itself:
 a personal account that signs in with another address (a Gmail one, say) and
 has no Outlook address of its own on file is matched by that sign-in address,
 so use it on the People page and with `--email`.
+
+**Read my calendar (optional).** Run either script with `--calendar` to also
+grant read-only access to the person's own calendar (`calendar.readonly` on
+Google, which the OAuth client's consent screen must list; the delegated
+`Calendars.Read` permission on the Microsoft app). Then turn on **Read my
+calendar** in Delegate → Act as me. The Executive reads events fresh each time
+and keeps nothing; a credential minted without `--calendar` keeps working for
+mail, and the switch says to reconnect with the flag.
 
 ```bash
 MS365_MCP_CLIENT_ID=<app id> uv run python scripts/connect-own-outlook.py --email you@example.com

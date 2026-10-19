@@ -99,6 +99,8 @@ EVENT_TYPES: tuple[str, ...] = (
     "delegation_actions_handled",   # a card of actions they allowed was carried out on its own (in training)
     "delegation_actions_held",      # a card of allowed actions waited for them after all; details.reason says why
     "delegation_training_changed",  # a person put Act as me settings in or out of training (PUT /delegation/training)
+    "delegation_disclosure_changed",  # a person changed the AI line on replies sent as them (PUT /delegation/disclosure)
+    "delegation_calendar_changed",  # a person turned Read my calendar on or off (PUT /delegation/calendar, or off with Act as me)
     "fact_retired",                 # the principal (or the teammate who recorded it) retired a standing fact from the Pulse page (memory/facts.py)
     "fact_reviewed",                # the principal approved or declined a teammate's proposed standing fact
     "fact_approval_changed",        # the principal turned "needs my approval" on or off for a teammate's standing facts
@@ -413,6 +415,13 @@ class AuditLogger:
         private rows stay as above.
         """
         try:
+            # A turn another AI app asked to act (``audit.context.via_app``):
+            # every row says which app asked.
+            from openexecutive.audit.context import rows_via
+
+            via = rows_via()
+            if via and not (details and "via" in details):
+                details = {**(details or {}), "via": via}
             owner = _row_owner(private_to_person)
             is_private = (
                 bool(private) or owner is not None or _private_to_principal(summary, details, full)

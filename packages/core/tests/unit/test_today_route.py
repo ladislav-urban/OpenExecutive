@@ -912,7 +912,12 @@ def test_activity_includes_workflow_initiative_decision_alert(
     for it in items:
         by_kind.setdefault(it["kind"], []).append(it)
 
-    assert [i["summary"] for i in by_kind.get("workflow_done", [])] == ["Morning brief"]
+    # Named in plain words, not by the run's log title; a brief gets no line
+    # (its text is the brief) but links to its write-up.
+    [done] = by_kind.get("workflow_done", [])
+    assert done["summary"] == "Sent the morning brief"
+    assert done["detail"] is None
+    assert done["artifact_id"] == "run:run-1"
     assert [i["summary"] for i in by_kind.get("initiative_started", [])] == ["AI Opportunity Assessment"]
     # Decision summary derives the verb from status + a human payload key.
     assert by_kind["decision_resolved"][0]["summary"] == "Approved: Book weekly sync"
@@ -2297,8 +2302,8 @@ def test_rhythm_runs_stay_out_of_the_briefs_activity(
             10, exclude_workflows=today_route.RHYTHM_WORKFLOWS,
         ).items
     ]
-    assert "Executive Reflection 2026-09-28" in rail
-    assert "Executive Reflection 2026-09-28" not in brief
+    assert "Looked back on the day" in rail
+    assert "Looked back on the day" not in brief
     assert "Teardown of Acme" in brief
 
 
@@ -2390,3 +2395,63 @@ def test_a_failed_regen_backs_off_instead_of_retrying_every_view(
     today_route._regen_failed_at["company"] = datetime.now(UTC) - timedelta(minutes=6)
     c.get("/today")
     assert calls["n"] == 2
+
+
+def test_held_back_lines_are_the_principals_alone(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.briefing import grounding
+
+    held = [grounding.HeldBack(event_id=4, surface="morning brief", at="2026-10-13T07:30:00+00:00",
+                               lines=["- Dana's renewal is worth $48K"])]
+    monkeypatch.setattr(grounding, "recent_held_back", lambda since, limit=3: held)
+    people_store.upsert_person(full_name="Founder", email="founder@example.com", is_principal=True)
+    people_store.upsert_person(full_name="Alice Example", email="alice@example.com")
+
+    mine = client.get("/today", headers={"x-caller-email": "founder@example.com"}).json()
+    assert mine["held_back"] == [{
+        "event_id": 4, "surface": "morning brief", "at": "2026-10-13T07:30:00+00:00",
+        "lines": ["- Dana's renewal is worth $48K"],
+    }]
+    theirs = client.get("/today", headers={"x-caller-email": "alice@example.com"}).json()
+    assert theirs["held_back"] == []
+
+
+def test_a_failed_run_card_carries_its_run(client: TestClient) -> None:
+    from openexecutive.workflows.failure_alerts import file_failed_run_card
+
+    file_failed_run_card(
+        run_id="r-9", workflow_name="department_check_in", title="Finance check-in",
+        scope="finance",
+    )
+    alert_store.insert_alert(
+        source="triage", external_id="t-1", severity="medium", headline="other", body="b",
+        topic_tags=["failed_run:spoofed"],
+    )
+    by_headline = {p["headline"]: p for p in client.get("/today").json()["proposals"]}
+    assert by_headline["Finance check-in didn't finish"]["failed_run_id"] == "r-9"
+    assert by_headline["other"]["failed_run_id"] is None  # only a failure card names a run
+
+
+def test_a_delivered_brief_stays_off_the_activity_rail_and_heatmap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A brief's own delivery is not work done: the rail (which every later
+    brief reads) and the heatmap leave it out, so a brief never repeats its
+    last top call as news."""
+    db = tmp_path / "brief_rail.db"
+    _setup_isolated_db(db, monkeypatch)
+    now = datetime.now(UTC).isoformat()
+    for text, kind in (
+        ("**Top call:** pick up the Maple Court buyout", episodic.BRIEF_DELIVERY_KIND),
+        ("Sent the lease summary to Dana", "ad_hoc"),
+    ):
+        episodic.insert_scheduled_action(
+            run_at=now, channel="telegram", channel_ref="42", intent_text=text,
+            kind=kind, status="done", db_path=db,
+        )
+
+    summaries = [i.summary for i in today_route._build_activity(20).items]
+    assert any("lease summary" in s for s in summaries)
+    assert not any("Maple Court" in s for s in summaries)
+    assert dict(episodic.count_activity_by_day(1)) == {now[:10]: 1}

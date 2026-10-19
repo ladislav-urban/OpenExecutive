@@ -9,6 +9,145 @@ From 0.3.0 on, entries are written by release-please from the titles of the
 merged pull requests (`feat` → Added, `fix` → Fixed). The open release PR holds
 the next entry; edit it there before merging if a line needs rewording.
 
+## [0.6.1](https://github.com/SenteLabsAI/OpenExecutive/compare/v0.6.0...v0.6.1) (2026-10-18)
+
+
+### Added
+
+* **briefing:** show a first-week card on Home instead of the getting-started brief ([#523](https://github.com/SenteLabsAI/OpenExecutive/issues/523)) ([fd53d82](https://github.com/SenteLabsAI/OpenExecutive/commit/fd53d827ee62dbdb0cc3c7c44ec1e45c5fdfe619))
+* **chat:** group chats by topic on the Chats page ([#521](https://github.com/SenteLabsAI/OpenExecutive/issues/521)) ([3c6497e](https://github.com/SenteLabsAI/OpenExecutive/commit/3c6497e6a5a4a486dbb725042d7d66b005bf4d27))
+* **chat:** keep a long topic list short with areas and quiet bands ([#531](https://github.com/SenteLabsAI/OpenExecutive/issues/531)) ([88bbb78](https://github.com/SenteLabsAI/OpenExecutive/commit/88bbb78b898fc5adc24d32fd19ec5c40e9616301))
+* **onboarding:** let setup answers be changed and redrafted ([#527](https://github.com/SenteLabsAI/OpenExecutive/issues/527)) ([cecb9f8](https://github.com/SenteLabsAI/OpenExecutive/commit/cecb9f8c97529e9e5b2ed36d869365c44555d56a))
+* **ui:** group the Settings pages under headings ([#530](https://github.com/SenteLabsAI/OpenExecutive/issues/530)) ([86f73e5](https://github.com/SenteLabsAI/OpenExecutive/commit/86f73e56758973100bbea7746d1b862a7575d2e3))
+* **ui:** say what each finished run did in Pulse's Done for you ([#528](https://github.com/SenteLabsAI/OpenExecutive/issues/528)) ([4a4494b](https://github.com/SenteLabsAI/OpenExecutive/commit/4a4494bd221aa9726adf47a106f07e93fd41b8eb))
+
+
+### Fixed
+
+* **alerts:** answer a create_alert call missing its subject or body ([#518](https://github.com/SenteLabsAI/OpenExecutive/issues/518)) ([3b6975c](https://github.com/SenteLabsAI/OpenExecutive/commit/3b6975c708bcacd30238534865744411be07f899))
+* **chat:** open and delete Google Chat chats from the web ([#526](https://github.com/SenteLabsAI/OpenExecutive/issues/526)) ([b3600f1](https://github.com/SenteLabsAI/OpenExecutive/commit/b3600f1975654cbbe0b2c7f01818836768a1e733))
+* **chat:** show the Executive's name over its replies ([#524](https://github.com/SenteLabsAI/OpenExecutive/issues/524)) ([5b9b79d](https://github.com/SenteLabsAI/OpenExecutive/commit/5b9b79deca654acd7f3934dbb6a827d9df85f6ed))
+* **chat:** word next-message holds as a yes with a reason ([#532](https://github.com/SenteLabsAI/OpenExecutive/issues/532)) ([b62af21](https://github.com/SenteLabsAI/OpenExecutive/commit/b62af213f097b8c3ce1937528eb58d9a72bede1b))
+* **memory:** keep an adapter's speaker check on turns the chat review grades ([#520](https://github.com/SenteLabsAI/OpenExecutive/issues/520)) ([cb49225](https://github.com/SenteLabsAI/OpenExecutive/commit/cb4922557e2dc121bbe08e24e87141dd7e3a54fd))
+* **ui:** make the getting-started Ask button open a chat, and drop "overnight" ([#522](https://github.com/SenteLabsAI/OpenExecutive/issues/522)) ([95f98ef](https://github.com/SenteLabsAI/OpenExecutive/commit/95f98efbdaf16826eab4b0bb4f68f624e38caf64))
+* **ui:** show the Home ⋯ menu only in a chat ([#525](https://github.com/SenteLabsAI/OpenExecutive/issues/525)) ([c29a90a](https://github.com/SenteLabsAI/OpenExecutive/commit/c29a90a39904518579974c13bf39d9b3623b8516))
+
+## [0.6.0](https://github.com/SenteLabsAI/OpenExecutive/compare/v0.5.6...v0.6.0) (2026-10-16)
+
+
+### Added
+
+* **chat:** check a reply's claims against the tools it ran ([#487](https://github.com/SenteLabsAI/OpenExecutive/issues/487)) ([dcde468](https://github.com/SenteLabsAI/OpenExecutive/commit/dcde468d0e2e918e17135aab1cb9cdb71b9751d7))
+* **chat:** let people in a shared chat write in it live ([#495](https://github.com/SenteLabsAI/OpenExecutive/issues/495)) ([fa4d503](https://github.com/SenteLabsAI/OpenExecutive/commit/fa4d5036eb6ae059ae4a441ff465805283bf39e7))
+* **chat:** review quiet chats and fix what the replies left undone ([#490](https://github.com/SenteLabsAI/OpenExecutive/issues/490)) ([cd19d1b](https://github.com/SenteLabsAI/OpenExecutive/commit/cd19d1b7d31cd00a6042ea9a4eecd85da6c57acf))
+* **chat:** show a meeting's approval card under the chat reply ([#512](https://github.com/SenteLabsAI/OpenExecutive/issues/512)) ([5f9ad3c](https://github.com/SenteLabsAI/OpenExecutive/commit/5f9ad3cd66e92a4268952c33904f06e9a1ac04f0))
+* **delegation:** save a file from the owner's own mail to Drive or OneDrive ([#499](https://github.com/SenteLabsAI/OpenExecutive/issues/499)) ([b0489b2](https://github.com/SenteLabsAI/OpenExecutive/commit/b0489b2c6a45ca7ccf03801865ed09f9262631cf))
+* **delegation:** show whether the mailbox sign-in includes the calendar ([#492](https://github.com/SenteLabsAI/OpenExecutive/issues/492)) ([b0ffa85](https://github.com/SenteLabsAI/OpenExecutive/commit/b0ffa85f4666eb3ff03ade996e50b43486db5236))
+* **mcp:** answer MCP clients as the signed-in caller ([#498](https://github.com/SenteLabsAI/OpenExecutive/issues/498)) ([07ffd1e](https://github.com/SenteLabsAI/OpenExecutive/commit/07ffd1edd4679e2466aeaa2ea775181411804d59))
+* **memory:** grade each turn in the conversation review and show what it got wrong ([#504](https://github.com/SenteLabsAI/OpenExecutive/issues/504)) ([8669a84](https://github.com/SenteLabsAI/OpenExecutive/commit/8669a8457c44c60177958000310cf599e081f131))
+* **memory:** keep a lesson from a miss and read it on later turns ([#505](https://github.com/SenteLabsAI/OpenExecutive/issues/505)) ([da44f43](https://github.com/SenteLabsAI/OpenExecutive/commit/da44f43fb7957bb8169c5d65e3fb2d5213b8323f))
+* **memory:** replay the misses nightly and show how many would go right today ([#506](https://github.com/SenteLabsAI/OpenExecutive/issues/506)) ([4c79fa4](https://github.com/SenteLabsAI/OpenExecutive/commit/4c79fa4d4147d0cb463c7cbd3d4e009b50ca949d))
+* **orchestrator:** consult specialists for judgment questions ([#484](https://github.com/SenteLabsAI/OpenExecutive/issues/484)) ([ad56027](https://github.com/SenteLabsAI/OpenExecutive/commit/ad56027fe18c25c12c9c9e6416d10fefc68e419c))
+* **ui:** give Handle it for me its own picker and split it from Act as me ([#493](https://github.com/SenteLabsAI/OpenExecutive/issues/493)) ([18356a1](https://github.com/SenteLabsAI/OpenExecutive/commit/18356a13cd2bebc4dd95c914a4d5157f6f8f65b6))
+* **ui:** keep the How far it goes as you dial on Act as me only ([#482](https://github.com/SenteLabsAI/OpenExecutive/issues/482)) ([bb8e4c5](https://github.com/SenteLabsAI/OpenExecutive/commit/bb8e4c53aab56db5f19bf325857e94b9840ab1cc))
+* **ui:** let the help panel answer questions about any part of the app ([#494](https://github.com/SenteLabsAI/OpenExecutive/issues/494)) ([5f734e3](https://github.com/SenteLabsAI/OpenExecutive/commit/5f734e3210a4f6d771d72f52ed1b2bff2898b971))
+* **ui:** show each Delegate option as steps and rename For my inbox too ([#514](https://github.com/SenteLabsAI/OpenExecutive/issues/514)) ([15734cc](https://github.com/SenteLabsAI/OpenExecutive/commit/15734cc2758582d5ddc3b3f706596264a3f31450))
+* **ui:** show plain contact lines on a person's page and name them in the breadcrumb ([#481](https://github.com/SenteLabsAI/OpenExecutive/issues/481)) ([8c8da3a](https://github.com/SenteLabsAI/OpenExecutive/commit/8c8da3a937cf6c1f3cf94865c4da13b4011a5482))
+* **ui:** show who writes and who sends on What it may do ([#496](https://github.com/SenteLabsAI/OpenExecutive/issues/496)) ([3f1d22f](https://github.com/SenteLabsAI/OpenExecutive/commit/3f1d22f1d9e07263e760b6eccbc01529e9fbf1bf))
+
+
+### Fixed
+
+* **alerts:** label alerts team members raise and limit what they can dismiss ([47084a3](https://github.com/SenteLabsAI/OpenExecutive/commit/47084a3dc10eb25a06969928dec1d8d8c336f613))
+* **briefing:** date inbound mail, name the reader and stop repeats in the brief ([#485](https://github.com/SenteLabsAI/OpenExecutive/issues/485)) ([871d0a6](https://github.com/SenteLabsAI/OpenExecutive/commit/871d0a6e64e84b579e1a1239494784b9f2b3af12))
+* **briefing:** label the principal's own chat messages in the brief ([#515](https://github.com/SenteLabsAI/OpenExecutive/issues/515)) ([1888e3c](https://github.com/SenteLabsAI/OpenExecutive/commit/1888e3c48a143db763d35f25cbfa03b54ce85c75))
+* **briefing:** stop counting chat drafts sent from Gmail as waiting ([#486](https://github.com/SenteLabsAI/OpenExecutive/issues/486)) ([23a76eb](https://github.com/SenteLabsAI/OpenExecutive/commit/23a76eb38fd054df4b835efc1f8f1efb0ed6ec1a))
+* **briefing:** write every brief to its reader as you, never by name ([#516](https://github.com/SenteLabsAI/OpenExecutive/issues/516)) ([e9e4309](https://github.com/SenteLabsAI/OpenExecutive/commit/e9e4309839df9d1f99b14d9f6ac7a6827b2d05d1))
+* **calendar:** read a booked event's id and Meet link only from the reply's own link ([#511](https://github.com/SenteLabsAI/OpenExecutive/issues/511)) ([a65de76](https://github.com/SenteLabsAI/OpenExecutive/commit/a65de7675458c5682597047455107457d0c40481))
+* **calendar:** read workspace-mcp's plain-text reply when booking or cancelling ([#510](https://github.com/SenteLabsAI/OpenExecutive/issues/510)) ([635de4a](https://github.com/SenteLabsAI/OpenExecutive/commit/635de4a8d69ad4e1dc8c8d08bbb562447f9ede96))
+* **chat:** count a channel whose adapter verified the sender as a verified surface ([#513](https://github.com/SenteLabsAI/OpenExecutive/issues/513)) ([0dd25b1](https://github.com/SenteLabsAI/OpenExecutive/commit/0dd25b16b8da8726a0c19ba7602be96113558c3b))
+* **chat:** find the JSON object around prose in fast-model answers ([#488](https://github.com/SenteLabsAI/OpenExecutive/issues/488)) ([df9d7a0](https://github.com/SenteLabsAI/OpenExecutive/commit/df9d7a003b040846333d2146cc7c85076d1dd997))
+* **chat:** stop teammates' lines in a shared chat from steering sends ([#501](https://github.com/SenteLabsAI/OpenExecutive/issues/501)) ([229c119](https://github.com/SenteLabsAI/OpenExecutive/commit/229c11935e0b50fc0b2ebed07096e5a4a9845c93))
+* **delegation:** forward a chosen message and stop the second mail-read refusal ([#491](https://github.com/SenteLabsAI/OpenExecutive/issues/491)) ([f6d61bc](https://github.com/SenteLabsAI/OpenExecutive/commit/f6d61bcac653f1408ff66fcda955e61f1aaf4f68))
+* **delegation:** stop false refusals and stray folders when saving mail files ([#502](https://github.com/SenteLabsAI/OpenExecutive/issues/502)) ([6fe4c63](https://github.com/SenteLabsAI/OpenExecutive/commit/6fe4c63d423c2d128fc1b258c332c78897a1be03))
+* **integrations:** hold the whole turn for mail from outside People ([#508](https://github.com/SenteLabsAI/OpenExecutive/issues/508)) ([c200368](https://github.com/SenteLabsAI/OpenExecutive/commit/c2003684d47dcd82453fb7ed5ed9640311f8bd01))
+* **monitoring:** check every redirect hop and pin the fetched IP ([#507](https://github.com/SenteLabsAI/OpenExecutive/issues/507)) ([49e0872](https://github.com/SenteLabsAI/OpenExecutive/commit/49e08727195c27db46faeaae92696e87975c7099))
+* **orchestrator:** hold writes and new contacts after a turn reads outside content ([#503](https://github.com/SenteLabsAI/OpenExecutive/issues/503)) ([58f9aa2](https://github.com/SenteLabsAI/OpenExecutive/commit/58f9aa2361a757163c9e097731d50d01f7249aae))
+* **scheduler:** run a teammate's scheduled follow-up as that teammate ([#500](https://github.com/SenteLabsAI/OpenExecutive/issues/500)) ([1ee5fd6](https://github.com/SenteLabsAI/OpenExecutive/commit/1ee5fd6ecc7ad71d64e66ae3edf86163de7fdd8a))
+* **ui:** say plainly what Take the lead On skips ([#497](https://github.com/SenteLabsAI/OpenExecutive/issues/497)) ([a77d55b](https://github.com/SenteLabsAI/OpenExecutive/commit/a77d55b3966bee5a5d4eb0fac10c1c6b667da3dc))
+
+
+### Changed
+
+* **config:** build settings once and rebuild only when their inputs change ([#489](https://github.com/SenteLabsAI/OpenExecutive/issues/489)) ([04612b1](https://github.com/SenteLabsAI/OpenExecutive/commit/04612b13edd915c55dff4ea2ed49e79ce9667268))
+
+## [0.5.6](https://github.com/SenteLabsAI/OpenExecutive/compare/v0.5.5...v0.5.6) (2026-10-14)
+
+
+### Added
+
+* **briefing:** approve a proposal card on the server ([#458](https://github.com/SenteLabsAI/OpenExecutive/issues/458)) ([99eca81](https://github.com/SenteLabsAI/OpenExecutive/commit/99eca81dcb5fc71d6511495f5a739f1af767ea1a))
+* **briefing:** open the first week's briefs with getting-started moves ([#465](https://github.com/SenteLabsAI/OpenExecutive/issues/465)) ([1a28256](https://github.com/SenteLabsAI/OpenExecutive/commit/1a28256e14c11f9e50a5b7a01d0c7510f4e844bd))
+* **chat:** pin, rename, share, export and redo the last turn ([#471](https://github.com/SenteLabsAI/OpenExecutive/issues/471)) ([8068e43](https://github.com/SenteLabsAI/OpenExecutive/commit/8068e43144ca80aae699dbbb16ff9f63e0ffb29f))
+* **delegation:** add What it may do and one dial for acting as you ([#473](https://github.com/SenteLabsAI/OpenExecutive/issues/473)) ([c8eec03](https://github.com/SenteLabsAI/OpenExecutive/commit/c8eec039c1cba71405a8b516c8b30d7c75fc9d33))
+* **delegation:** read the person's own calendar under Act as me ([#469](https://github.com/SenteLabsAI/OpenExecutive/issues/469)) ([b94352b](https://github.com/SenteLabsAI/OpenExecutive/commit/b94352bb7c3be8f4d6659cfc325d1aa798cc3b75))
+* **onboarding:** open the first hour on a question and the first week's brief ([#476](https://github.com/SenteLabsAI/OpenExecutive/issues/476)) ([6a232ec](https://github.com/SenteLabsAI/OpenExecutive/commit/6a232ec1f4eba0bcd698c8f4d158b13823a21047))
+* **orchestrator:** hold a chat-channel sender's sends when they match no one on People ([#462](https://github.com/SenteLabsAI/OpenExecutive/issues/462)) ([5541ed0](https://github.com/SenteLabsAI/OpenExecutive/commit/5541ed062d2579a4764afb3681b766a1b0543478))
+* **orchestrator:** put a team member's chat sends and edits under department authority ([#459](https://github.com/SenteLabsAI/OpenExecutive/issues/459)) ([8b195c2](https://github.com/SenteLabsAI/OpenExecutive/commit/8b195c2b566e92394aecfffb90ae921585b15202))
+* **today:** show the owner what the Executive did and tell people their tasks ([#464](https://github.com/SenteLabsAI/OpenExecutive/issues/464)) ([de3c788](https://github.com/SenteLabsAI/OpenExecutive/commit/de3c7888792b57590feadd16d37845dee43427eb))
+* **ui:** redraw the Executive's mark as the Council Ring ([#461](https://github.com/SenteLabsAI/OpenExecutive/issues/461)) ([35808c2](https://github.com/SenteLabsAI/OpenExecutive/commit/35808c2b36456892aa67ab1f797a5574f26a1f08))
+
+
+### Fixed
+
+* **chat:** re-read a resumed chat's transcript every turn ([#468](https://github.com/SenteLabsAI/OpenExecutive/issues/468)) ([f9fcb8b](https://github.com/SenteLabsAI/OpenExecutive/commit/f9fcb8bc3ffdf1d632d97310be26e482c9333189))
+* **delegation:** resolve the Act as me caller through the shared caller resolver ([#478](https://github.com/SenteLabsAI/OpenExecutive/issues/478)) ([7e04496](https://github.com/SenteLabsAI/OpenExecutive/commit/7e044965182380bf4f9f83401e5e39e7eac686e4))
+* **delegation:** resolve the What it may do viewer through the shared caller resolver ([#477](https://github.com/SenteLabsAI/OpenExecutive/issues/477)) ([7189ce5](https://github.com/SenteLabsAI/OpenExecutive/commit/7189ce55f0067e500a7a9fe40453b99ab37d7fbd))
+* **delegation:** show all-day calendar events on their own day ([#470](https://github.com/SenteLabsAI/OpenExecutive/issues/470)) ([00290b4](https://github.com/SenteLabsAI/OpenExecutive/commit/00290b4206aa626bbf500594311d2e7001f81203))
+* **integrations:** give email turns, gateway calls and the chat stream deadlines ([#463](https://github.com/SenteLabsAI/OpenExecutive/issues/463)) ([a7ef7a9](https://github.com/SenteLabsAI/OpenExecutive/commit/a7ef7a920a0fa87a94de2758f48c62dd1ea6543a))
+* **integrations:** log a mail source whose loop stops with an error ([#474](https://github.com/SenteLabsAI/OpenExecutive/issues/474)) ([5bf5dba](https://github.com/SenteLabsAI/OpenExecutive/commit/5bf5dbaa32796db0ca11c2b4f47927819e1a8a5b))
+* **integrations:** put an email that got no reply in Needs you ([#479](https://github.com/SenteLabsAI/OpenExecutive/issues/479)) ([4b6ede6](https://github.com/SenteLabsAI/OpenExecutive/commit/4b6ede6bd942e3b012eba67b60cd0373b02abcb6))
+* **orchestrator:** find mail the reader is on even when a teammate is too ([#475](https://github.com/SenteLabsAI/OpenExecutive/issues/475)) ([25c827b](https://github.com/SenteLabsAI/OpenExecutive/commit/25c827bdcc3df9f7cf050a6b72ea89bd0747d43b))
+
+## [0.5.5](https://github.com/SenteLabsAI/OpenExecutive/compare/v0.5.4...v0.5.5) (2026-10-13)
+
+
+### Added
+
+* **api:** answer a chat to the end on the server with POST /chat/background ([#431](https://github.com/SenteLabsAI/OpenExecutive/issues/431)) ([e8f2b19](https://github.com/SenteLabsAI/OpenExecutive/commit/e8f2b19234a41cc49deb35f3015de209bb442e48))
+* **api:** report the pinned Google tools priming could not find ([#428](https://github.com/SenteLabsAI/OpenExecutive/issues/428)) ([b49c5f6](https://github.com/SenteLabsAI/OpenExecutive/commit/b49c5f64436a1f58a114b61da62ab9ba2cfe3844))
+* **chat:** give each chat in the list its last line ([#440](https://github.com/SenteLabsAI/OpenExecutive/issues/440)) ([d9d2d55](https://github.com/SenteLabsAI/OpenExecutive/commit/d9d2d5570fb12bd7893cb293964078a416fe3495))
+* **departments:** check in weekly by default, with a plain schedule picker ([#455](https://github.com/SenteLabsAI/OpenExecutive/issues/455)) ([861c8dc](https://github.com/SenteLabsAI/OpenExecutive/commit/861c8dcbfaa483ca20172a7765f03b41c68d10b3))
+* **evals:** pick the judge model with EVAL_JUDGE_MODEL ([#446](https://github.com/SenteLabsAI/OpenExecutive/issues/446)) ([0964522](https://github.com/SenteLabsAI/OpenExecutive/commit/096452239c789b95f4880ce9250a490145600d07))
+* **integrations:** say it is an AI on mail and chat the Executive sends ([#449](https://github.com/SenteLabsAI/OpenExecutive/issues/449)) ([b5677f4](https://github.com/SenteLabsAI/OpenExecutive/commit/b5677f48d97a2c799b86a8a04d2d5f013bbb4d53))
+* **onboarding:** send the owner to setup, keep the interview, name their row, add a checklist ([26451db](https://github.com/SenteLabsAI/OpenExecutive/commit/26451db5f835d25466c2f8fedfd02cb4ff44e4a0))
+* **people:** add quiet hours and a digest setting for the Executive's own messages ([#457](https://github.com/SenteLabsAI/OpenExecutive/issues/457)) ([0545f35](https://github.com/SenteLabsAI/OpenExecutive/commit/0545f356ffc462343b4a7b018405ab84ff9a9ec5))
+* **scheduler:** retry the MCP gateway and say why a brief was not sent ([#448](https://github.com/SenteLabsAI/OpenExecutive/issues/448)) ([d11d802](https://github.com/SenteLabsAI/OpenExecutive/commit/d11d802870642fa9748e4fb2283cbb59f107904f))
+* **slack:** take Slack events over HTTP at /webhook/slack ([#444](https://github.com/SenteLabsAI/OpenExecutive/issues/444)) ([9a662f2](https://github.com/SenteLabsAI/OpenExecutive/commit/9a662f2773099625c55834670223afc7a5b4949e))
+
+
+### Fixed
+
+* **alerts:** name chat senders by their People record in triage ([#434](https://github.com/SenteLabsAI/OpenExecutive/issues/434)) ([85f0350](https://github.com/SenteLabsAI/OpenExecutive/commit/85f0350609bf337b3bab3ab42f017f147038f2a1))
+* **api:** drop the localhost CORS origins on a public deployment ([#452](https://github.com/SenteLabsAI/OpenExecutive/issues/452)) ([e8bac77](https://github.com/SenteLabsAI/OpenExecutive/commit/e8bac77f8878c2ca752ba4b28a20b2652fe0a266))
+* **audit:** log model usage from every call site ([#427](https://github.com/SenteLabsAI/OpenExecutive/issues/427)) ([37d97b3](https://github.com/SenteLabsAI/OpenExecutive/commit/37d97b336b5734f4f07e6c7ed7fa6ed4e3cc91dc))
+* **briefing:** let owners snooze cards and rerun failed scheduled runs ([#456](https://github.com/SenteLabsAI/OpenExecutive/issues/456)) ([714ade9](https://github.com/SenteLabsAI/OpenExecutive/commit/714ade96ab620300594ca45b2a54c9ac5732a7f4))
+* **chat:** keep a teammate's chats and activity private to them ([#439](https://github.com/SenteLabsAI/OpenExecutive/issues/439)) ([4d39810](https://github.com/SenteLabsAI/OpenExecutive/commit/4d39810f51a254df7395f60f013a93830dc6841d))
+* **chat:** keep a teammate's mail with the Executive private to them ([#433](https://github.com/SenteLabsAI/OpenExecutive/issues/433)) ([80c297b](https://github.com/SenteLabsAI/OpenExecutive/commit/80c297b3fc9705cd451bb70a913e9ddaecadf0df))
+* **chat:** word the suggested follow-up as the user's own request ([#442](https://github.com/SenteLabsAI/OpenExecutive/issues/442)) ([b0bad78](https://github.com/SenteLabsAI/OpenExecutive/commit/b0bad78d709d66fc18c0a96f984bbe6f5f50c03e))
+* **integrations:** drop replayed and retried Slack events ([#454](https://github.com/SenteLabsAI/OpenExecutive/issues/454)) ([ef390b7](https://github.com/SenteLabsAI/OpenExecutive/commit/ef390b75a16195165634da503ec52e3bfde8e382))
+* **integrations:** keep outside text from booking or cancelling meetings ([#443](https://github.com/SenteLabsAI/OpenExecutive/issues/443)) ([290f6d3](https://github.com/SenteLabsAI/OpenExecutive/commit/290f6d376f1482eab244169abcf39a0b2a6349bb))
+* **integrations:** retry a Telegram reply as plain text only on a refusal ([#437](https://github.com/SenteLabsAI/OpenExecutive/issues/437)) ([681e237](https://github.com/SenteLabsAI/OpenExecutive/commit/681e237544cd270ea253170aef3dc452864f3bc1))
+* **integrations:** show Telegram replies' Markdown as formatting ([#436](https://github.com/SenteLabsAI/OpenExecutive/issues/436)) ([e510133](https://github.com/SenteLabsAI/OpenExecutive/commit/e5101338303fd0b28f3bd9fb3cc96ffe221420eb))
+* **knowledge:** read scanned PDFs from Drive with OCR ([#453](https://github.com/SenteLabsAI/OpenExecutive/issues/453)) ([eb70dfe](https://github.com/SenteLabsAI/OpenExecutive/commit/eb70dfe9c2e46502a708728d54031b065978a323))
+* **providers:** keep the question's shape so the second call reads its cache ([#445](https://github.com/SenteLabsAI/OpenExecutive/issues/445)) ([0f55f64](https://github.com/SenteLabsAI/OpenExecutive/commit/0f55f643954f0ffe7fc5f52791040a94ba2d42a8))
+
+
+### Changed
+
+* **chat:** cache each question's context once and cap knowledge excerpts ([#432](https://github.com/SenteLabsAI/OpenExecutive/issues/432)) ([bc6d4e8](https://github.com/SenteLabsAI/OpenExecutive/commit/bc6d4e874b4cb7d7af35d0fc5995c710fdfd0ae7))
+* **chat:** read only the start of each chat's last message for its preview ([#441](https://github.com/SenteLabsAI/OpenExecutive/issues/441)) ([fa86287](https://github.com/SenteLabsAI/OpenExecutive/commit/fa8628794cc4fdcd23e03fcc6e3094453e1b6e43))
+
 ## [0.5.4](https://github.com/SenteLabsAI/OpenExecutive/compare/v0.5.3...v0.5.4) (2026-10-10)
 
 

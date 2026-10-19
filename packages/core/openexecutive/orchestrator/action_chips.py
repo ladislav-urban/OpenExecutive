@@ -51,6 +51,12 @@ SIDE_EFFECTING_TOOLS: frozenset[str] = frozenset({
     # assigning one starts it
     "close_open_loop",
     "assign_open_loop",
+    # Corrections (orchestrator/correction_tools.py): a brief item left out,
+    # a follow-up cancelled or moved, a chat draft marked sent
+    "leave_out_of_brief",
+    "cancel_followup",
+    "move_followup",
+    "mark_draft_sent",
     # Department goal mutations (Phase B — chat-driven progress updates)
     "update_department_goal",
     # A new goal (and, when its area did not exist, a new area)
@@ -73,12 +79,23 @@ SIDE_EFFECTING_TOOLS: frozenset[str] = frozenset({
     "load_mcp_server",
     # Act as me: a draft saved in the speaker's own Gmail (nothing sent)
     "ghostwrite_email",
+    # Act as me: a file from their mail copied to the Executive's storage,
+    # shared with them alone
+    "save_my_email_attachment",
     # Act as me: a reminder to the speaker alone
     "remind_me",
     # Act as me: a card of actions left for the speaker to approve
     "propose_actions",
     # ERPNext: a draft card left for the principal to approve
     "propose_erpnext_draft",
+    # Meetings: booked, or proposed on an approval card
+    "create_calendar_event",
+    "create_instant_meeting",
+    "cancel_calendar_event",
+    # App control (orchestrator/app_control.py): done, or a card waiting for a
+    # tap; and a link to a screen
+    "do_in_app",
+    "open_in_app",
 })
 
 
@@ -200,6 +217,15 @@ def summarize_action(
     }
     if iteration is not None:
         payload["iteration"] = iteration
+    if (
+        parsed is not None
+        and parsed.get("status") == "waiting_for_approval"
+        and tool_name not in ("propose_actions", "do_in_app", "propose_erpnext_draft")
+    ):
+        # Held for someone's approval (a team member's send or change, the
+        # department gate): nothing happened yet, so no "done" chip.
+        payload["summary"] = "Waiting for approval"
+        return payload
     if extension:
         # An installed extension's tool (orchestrator/extensions.py) words
         # its own chip; a link stays inside the app.
@@ -237,6 +263,17 @@ def summarize_action(
         # Built server-side from a fixed prefix (delegation.gmail.mailbox_link).
         if isinstance(link, str) and link.startswith(MAILBOX_LINK_PREFIXES):
             payload["link"] = link
+    elif tool_name == "save_my_email_attachment":
+        # Only a saved copy earns a chip. No link or name: the link opens
+        # outside the app, and the name is whatever the sender called it.
+        status = (parsed or {}).get("status")
+        if status not in ("saved", "saved_not_shared"):
+            return None
+        where = str((parsed or {}).get("where") or "")
+        payload["summary"] = "Saved a file from your email to OneDrive" if "OneDrive" in where else (
+            "Saved a file from your email to Google Drive"
+        )
+        payload["target"] = None
     elif tool_name == "remind_me":
         # Only a stored reminder earns a chip.
         if (parsed or {}).get("status") != "set":
@@ -285,6 +322,27 @@ def summarize_action(
         decision_id = (parsed or {}).get("decision_id")
         if isinstance(decision_id, int) and not isinstance(decision_id, bool):
             payload["decision_id"] = decision_id
+    elif tool_name == "cancel_calendar_event":
+        if (parsed or {}).get("status") != "cancelled":
+            return None
+        payload["summary"] = "Cancelled the meeting"
+    elif tool_name in ("create_calendar_event", "create_instant_meeting"):
+        title = str(tool_input.get("title") or "").strip()[:80]
+        status = (parsed or {}).get("status")
+        if status == "created":
+            payload["summary"] = f"Booked: {title}" if title else "Booked the meeting"
+            return payload
+        if status not in ("proposed", "already_proposed"):
+            return None
+        here = (parsed or {}).get("approve_here") is True
+        lead = "Waiting for your approval" if here else "Sent for approval"
+        payload["summary"] = f"{lead}: {title}" if title else lead
+        payload["link"] = "/today"
+        # The chat shows the approval card itself under its message, by this
+        # id, when the person chatting is the one who approves it.
+        decision_id = (parsed or {}).get("decision_instance_id")
+        if here and isinstance(decision_id, int) and not isinstance(decision_id, bool):
+            payload["decision_id"] = decision_id
     elif tool_name == "message_person":
         pid = tool_input.get("person_id")
         payload["summary"] = (
@@ -312,6 +370,18 @@ def summarize_action(
         payload["target"] = full_name or None
         if isinstance(pid, int):
             payload["link"] = f"/people/{pid}"
+    elif tool_name == "leave_out_of_brief":
+        item = " ".join(str(tool_input.get("item", "") or "").split())[:60]
+        payload["summary"] = f"Left out of your brief: {item}" if item else "Left an item out of your brief"
+    elif tool_name == "cancel_followup":
+        payload["summary"] = "Cancelled a follow-up"
+    elif tool_name == "move_followup":
+        moved_to = (parsed or {}).get("run_at")
+        payload["summary"] = (
+            f"Moved a follow-up to {_humanize_iso(str(moved_to))}" if moved_to else "Moved a follow-up"
+        )
+    elif tool_name == "mark_draft_sent":
+        payload["summary"] = "Marked your draft sent"
     elif tool_name == "close_open_loop":
         loop_id = tool_input.get("loop_id")
         payload["summary"] = f"Closed open loop #{loop_id}" if loop_id else "Closed an open loop"
@@ -481,6 +551,25 @@ def summarize_action(
         url = tool_input.get("url", "")
         payload["summary"] = f"Connected MCP server: {url}" if url else "Connected MCP server"
         payload["target"] = url or None
+    elif tool_name == "do_in_app":
+        status = (parsed or {}).get("status")
+        if status == "done":
+            payload["summary"] = str((parsed or {}).get("did") or "Done")
+        elif status == "waiting_for_approval":
+            card = str((parsed or {}).get("card") or "")
+            payload["summary"] = f"Waiting for your OK: {card}" if card else "Waiting for your OK"
+            # The chat shows the card itself under its message, by this id.
+            decision_id = (parsed or {}).get("decision_id")
+            if isinstance(decision_id, int) and not isinstance(decision_id, bool):
+                payload["decision_id"] = decision_id
+        else:
+            return None
+    elif tool_name == "open_in_app":
+        link = (parsed or {}).get("link")
+        if (parsed or {}).get("status") != "link" or not isinstance(link, str) or not link.startswith("/") or link.startswith("//"):
+            return None
+        payload["summary"] = f"Open {(parsed or {}).get('screen') or 'it'}"
+        payload["link"] = link
     elif tool_name == "run_workflow":
         wf = str(tool_input.get("workflow", "")).replace("_", " ")
         run_id = (parsed or {}).get("run_id")

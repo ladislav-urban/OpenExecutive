@@ -601,6 +601,16 @@ def _rule_hit(rules: list[Rule], text: str, recipients: list[str]) -> Hit | None
     return None
 
 
+def _mcp_deletes(tool: str, tool_input: dict[str, Any]) -> bool:
+    """Whether a connected tool deletes, cancels or shares: by its name, or
+    by its ``action`` (Google's ``manage_event`` deletes with
+    ``action="delete"``)."""
+    if _MCP_DELETE_RE.search(tool):
+        return True
+    action = tool_input.get("action") if isinstance(tool_input, dict) else None
+    return isinstance(action, str) and bool(_MCP_DELETE_RE.search(action))
+
+
 def check(
     tool: str,
     tool_input: dict[str, Any],
@@ -623,7 +633,7 @@ def check(
     if hit is not None:
         return hit
     checks: list[tuple[str, bool, str]] = [
-        (DELETE_SHARE, tool in _DELETE_TOOLS or (mcp and bool(_MCP_DELETE_RE.search(tool))),
+        (DELETE_SHARE, tool in _DELETE_TOOLS or (mcp and _mcp_deletes(tool, tool_input)),
          "it deletes, cancels or shares something"),
         (BIG_SEND, tool in _BROADCAST_TOOLS or len(recipients) > BIG_SEND_RECIPIENTS,
          "it goes to a lot of people"),
@@ -1509,7 +1519,12 @@ def gated_handlers(handlers: dict[str, Any], *, source: str) -> dict[str, Any]:
 def mcp_tool_acts(name: str) -> bool:
     """Whether a connected tool may change something. Fails closed: only a
     name that starts with a read verb (after its server prefix) and says
-    nothing anywhere about acting passes."""
+    nothing anywhere about acting passes. ERPNext's pinned reads pass too
+    (``erpnext__run_report`` runs a report, which changes nothing)."""
+    from openexecutive.prompts.connected_systems import PINNED_ERPNEXT_TOOLS
+
+    if name.strip().lower().replace("-", "_") in PINNED_ERPNEXT_TOOLS:
+        return False
     if _MCP_ACTING_RE.search(name):
         return True
     own = re.split(r"__|\.", name)[-1]

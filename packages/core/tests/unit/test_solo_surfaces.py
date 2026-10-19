@@ -597,7 +597,7 @@ def test_brief_context_in_solo_has_no_department_or_people_block() -> None:
             period_label="p", today_data=_today_data(), activity=[], since=since
         )
         assert "DEPARTMENTS WITH RISK:" in team
-        assert "PEOPLE WAITING ON YOU:" in team
+        assert "PEOPLE YOU ARE WAITING ON" in team
 
 
 def test_eod_context_in_solo_has_no_department_or_people_block() -> None:
@@ -612,7 +612,7 @@ def test_eod_context_in_solo_has_no_department_or_people_block() -> None:
     assert "PEOPLE STILL WAITING" not in solo
     team = _render_eod_context(period_label="p", today_data=_today_data(), activity=[], since=since)
     assert "DEPARTMENTS WITH RISK CARRIED FORWARD:" in team
-    assert "PEOPLE STILL WAITING ON YOU:" in team
+    assert "PEOPLE YOU ARE STILL WAITING ON" in team
 
 
 def test_solo_brief_prompts_drop_the_team_sections() -> None:
@@ -632,7 +632,7 @@ def test_solo_brief_prompts_drop_the_team_sections() -> None:
         assert "departments / goals" not in prompt
     for section in ("**Top call**", "**What changed**", "**Needs you**", "**Goals at risk**"):
         assert section in STANDALONE_BRIEF_SOLO_SYSTEM
-    assert "**Open decisions**" in _EOD_DIGEST_SOLO_SYSTEM
+    assert "**Next**" in _EOD_DIGEST_SOLO_SYSTEM and "named with its area" in _EOD_DIGEST_SOLO_SYSTEM
     assert "name the person and what's blocking" not in _EOD_DIGEST_SOLO_SYSTEM
 
 

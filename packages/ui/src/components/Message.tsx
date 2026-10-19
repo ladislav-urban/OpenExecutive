@@ -12,9 +12,11 @@ import { groupActions, opensDetails, type ChipGroup } from "@/lib/actionChips";
 import { loadsInline } from "@/lib/markdownImages";
 import { isMailboxLink } from "@/lib/replyCards";
 import { hostOf } from "@/lib/url";
+import { initials } from "@/lib/initials";
 import FeatureName from "@/components/FeatureName";
 import { ChatActionCards } from "@/components/ActionCards";
 import { ChatErpnextDraftCards } from "@/components/ErpnextDraftCards";
+import { useExecutiveName } from "@/components/executive/ExecutiveStatusContext";
 
 interface MessageProps {
   role: "user" | "assistant";
@@ -39,6 +41,37 @@ interface MessageProps {
   // Shown under the text while the reply streams, e.g. the "still working"
   // line when the Executive goes quiet mid-reply to run a tool.
   status?: ReactNode;
+  // The chat's last reply only: take the turn back and ask again.
+  onRetry?: () => void;
+  // The user's last message only: put it back in the composer to change.
+  onEdit?: () => void;
+  // A shared chat's messages from people: who wrote it. Someone else's sits
+  // on the left under their name; the viewer's own stays on the right.
+  author?: { name: string; mine: boolean };
+}
+
+// The small text buttons under a message (Copy, Try again, Edit).
+const TOOL_BUTTON =
+  "min-h-[2rem] px-2 rounded-md text-xs font-medium text-fg-muted hover:text-fg hover:bg-surface-overlay transition-colors";
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard
+      .writeText(text)
+      .then(() => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+      })
+      .catch(() => {
+        // No clipboard (an insecure page, or permission refused): nothing to show.
+      });
+  };
+  return (
+    <button type="button" onClick={copy} className={TOOL_BUTTON}>
+      <span role="status">{copied ? "Copied" : "Copy"}</span>
+    </button>
+  );
 }
 
 function FeedbackButtons({
@@ -71,7 +104,7 @@ function FeedbackButtons({
     );
   };
   return (
-    <div className="mt-2 flex items-center gap-1" aria-label="Rate this reply">
+    <div className="flex items-center gap-1" aria-label="Rate this reply">
       {button("up", "👍", "Helpful")}
       {button("down", "👎", "Not helpful")}
       {value && (
@@ -235,7 +268,11 @@ export default function Message({
   feedback,
   onFeedback,
   status,
+  onRetry,
+  onEdit,
+  author,
 }: MessageProps) {
+  const executiveName = useExecutiveName();
   // Approval cards this reply left, shown under it (ActionCards), and the
   // ERPNext draft cards (ErpnextDraftCards), by the chip that left each.
   const cardIds = useMemo(
@@ -254,12 +291,36 @@ export default function Message({
         .filter((id): id is number => typeof id === "number"),
     [actions],
   );
+  if (role === "user" && author && !author.mine) {
+    return (
+      <div className="flex gap-2.5 mb-6">
+        <span
+          aria-hidden
+          className="mt-5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-surface-overlay ring-1 ring-line text-[11px] font-semibold text-fg"
+        >
+          {initials(author.name)}
+        </span>
+        <div className="min-w-0">
+          <div className="mb-1 text-xs font-medium text-fg-muted">{author.name}</div>
+          <div className="max-w-xl px-4 py-3 rounded-2xl rounded-tl-sm bg-surface-elevated border border-line text-fg text-sm leading-relaxed">
+            <p className="whitespace-pre-wrap">{content}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (role === "user") {
     return (
-      <div className="flex justify-end mb-6">
+      <div className="flex flex-col items-end mb-6">
         <div className="max-w-xl px-4 py-3 rounded-2xl rounded-tr-sm bg-surface-overlay text-fg text-sm leading-relaxed">
           <p className="whitespace-pre-wrap">{content}</p>
         </div>
+        {onEdit && (
+          <button type="button" onClick={onEdit} className={`${TOOL_BUTTON} mt-1`}>
+            Edit
+          </button>
+        )}
       </div>
     );
   }
@@ -274,7 +335,7 @@ export default function Message({
 
       {/* Content */}
       <div className="flex-1 min-w-0">
-        <div className="text-xs text-fg-muted mb-2 font-medium tracking-wide uppercase">Executive</div>
+        <div className="text-xs text-fg-muted mb-2 font-medium tracking-wide uppercase">{executiveName}</div>
         <div className="prose prose-invert prose-sm max-w-none
           prose-code:px-1.5 prose-code:py-0.5 prose-code:rounded prose-code:text-xs prose-code:bg-surface-overlay prose-code:before:content-none prose-code:after:content-none
           prose-pre:bg-surface-overlay prose-pre:text-fg prose-pre:border
@@ -321,8 +382,16 @@ export default function Message({
           <p className="mt-2 text-xs text-fg-muted">Stopped by you</p>
         )}
 
-        {onFeedback && !isStreaming && (
-          <FeedbackButtons value={feedback} onChange={onFeedback} />
+        {!isStreaming && (content.trim() || onRetry || onFeedback) && (
+          <div className="mt-2 flex flex-wrap items-center gap-1">
+            {content.trim() && <CopyButton text={content} />}
+            {onRetry && (
+              <button type="button" onClick={onRetry} className={TOOL_BUTTON}>
+                Try again
+              </button>
+            )}
+            {onFeedback && <FeedbackButtons value={feedback} onChange={onFeedback} />}
+          </div>
         )}
       </div>
     </div>

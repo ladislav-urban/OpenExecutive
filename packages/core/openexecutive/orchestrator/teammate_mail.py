@@ -11,7 +11,8 @@ model makes (the chat's ``call_tool``, a script's calls, a workflow step run
 from chat) with three rules:
 
 1. **Searches leave teammates out.** A Gmail search gets ``-from: -to: -cc:``
-   for every other teammate's address and always asks for headers; an
+   for every other teammate's address, unless the reader is on the message
+   too (not on a background run), and always asks for headers; an
    Outlook list always selects who a message is from and to. What comes back
    is filtered again, entry by entry.
 2. **Mail is reached only by an id the conversation was shown.** Every other
@@ -36,7 +37,9 @@ is answering when Gmail authenticated it; on any other turn every
 teammate's mail is left out. A conversation in which a teammate other than
 the principal was shown their own mail becomes theirs alone, as Act as me's
 do (``session_store.mark_mail_private``), and so do the rest of that turn's
-audit rows. A background run the model drives (a follow-up, the reflection)
+audit rows. In a web chat its owner shared with teammates
+(``Session.shared_chat``) a teammate is no reader: everyone in it would see
+their mail. A background run the model drives (a follow-up, the reflection)
 reads as the principal it reports to; a workflow step outside any session
 reads as nobody. An Outlook inbox rule that forwards, or names another
 teammate, is refused. The internal callers that reach the gateway directly
@@ -132,6 +135,7 @@ class _Sides:
     reader: RosterAllow
     others: RosterAllow
     other_addresses: list[str]
+    reader_addresses: list[str] = field(default_factory=list)
     reader_id: int | None = None
     reader_is_principal: bool = False
     seen: set[str] = field(default_factory=set)
@@ -214,17 +218,30 @@ def _reader_id(session: Any) -> int | None:
 
     caller = getattr(session, "caller_person_id", None)
     if getattr(session, "unattended", False) is True:
-        # A background run (a follow-up, the reflection) works for the
-        # principal and reports to them: it reads as them.
+        # A follow-up a teammate queued reads as them: what it writes is
+        # sent to them (`Session.run_for_person_id`).
+        run_for = getattr(session, "run_for_person_id", None)
+        if isinstance(run_for, int) and not isinstance(run_for, bool):
+            return run_for
+        # Any other background run (a follow-up, the reflection) works for
+        # the principal and reports to them: it reads as them.
         principal = find_principal_person()
         return principal.id if principal is not None else None
     if principal_speaking(session):
+        # Not in a web chat they shared: everyone in it reads the reply.
+        if getattr(session, "shared_chat", False) is True:
+            return None
         if caller is not None:
             return int(caller)
         principal = find_principal_person()
         return principal.id if principal is not None else None
     teammate = teammate_on_verified_surface(session)
     if teammate is not None:
+        # A chat the owner shared is read by everyone in it, and their mail
+        # with the Executive can't become theirs alone there
+        # (``mark_mail_private`` keeps the owner's): none of it is shown.
+        if getattr(session, "shared_chat", False) is True:
+            return None
         return int(teammate.id)
     if (
         str(getattr(session, "origin_channel", "") or "") == "email"
@@ -255,6 +272,12 @@ def _sides(session: Any) -> _Sides | None:
         reader=RosterAllow(reader),
         others=RosterAllow(others),
         other_addresses=sorted({a.strip().lower() for p in others for a in addresses_of(p) if a}),
+        # A background run reads as the principal but may report to someone
+        # else (a teammate's follow-up), so its searches keep every other
+        # teammate out even where the principal is on the mail too.
+        reader_addresses=[] if getattr(session, "unattended", False) is True else sorted(
+            {a.strip().lower() for p in reader for a in addresses_of(p) if a}
+        ),
         reader_id=reader_id,
         reader_is_principal=any(p.is_principal for p in reader),
         seen=seen if isinstance(seen, set) else set(),
@@ -337,6 +360,12 @@ def _gmail_query(query: str, sides: _Sides) -> str:
     excluded = " ".join(f"-{{from:{a} to:{a} cc:{a}}}" for a in sides.other_addresses)
     if not excluded:
         return query
+    if sides.reader_addresses:
+        # Mail the reader is on is theirs too, whoever else it went to: an
+        # email the Executive sent to the reader and a teammate stays
+        # findable. Reading it is still decided message by message.
+        mine = " ".join(f"from:{a} to:{a} cc:{a}" for a in sides.reader_addresses)
+        excluded = f"{{({excluded}) {mine}}}"
     return f"({query}) {excluded}" if query.strip() else excluded
 
 
@@ -550,12 +579,16 @@ def _keep_private(session: Any, sides: _Sides) -> None:
     if sides.reader_id is None or sides.reader_is_principal or not session_id:
         return
     from openexecutive.delegation.settings import history_len
+    from openexecutive.memory.replay import is_replay
     from openexecutive.memory.session_store import mark_mail_private
 
-    try:
-        mark_mail_private(str(session_id), sides.reader_id, history_len=history_len(session))
-    except Exception:
-        logger.exception("teammate_mail: couldn't mark the conversation private")
+    # A replay (memory.replay) keeps no conversation: marking one would leave
+    # an empty chat in the teammate's list.
+    if not is_replay(session):
+        try:
+            mark_mail_private(str(session_id), sides.reader_id, history_len=history_len(session))
+        except Exception:
+            logger.exception("teammate_mail: couldn't mark the conversation private")
     # The rest of this turn's rows, its answer included, are theirs too.
     from openexecutive.delegation.settings import turn_delegation
 

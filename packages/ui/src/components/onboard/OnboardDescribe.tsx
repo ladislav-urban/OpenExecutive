@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import RoleFields from "@/components/workspace/RoleFields";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
+import { recall, remember, STORAGE_KEYS } from "@/lib/firstRun";
 import {
   startOnboardInterview,
   understandOnboarding,
@@ -61,9 +62,16 @@ function Steps({ at }: { at: 1 | 2 }) {
   );
 }
 
-export default function OnboardDescribe({ onReady }: { onReady: (r: DescribeResult) => void }) {
+interface DescribeProps {
+  onReady: (r: DescribeResult) => void;
+  /** "I'll do this later": Home, with the checklist keeping setup one tap away. */
+  onLater?: () => void;
+}
+
+export default function OnboardDescribe({ onReady, onLater }: DescribeProps) {
   const { role, refresh } = useWorkspace();
-  const [text, setText] = useState("");
+  // What was typed survives a refresh until Continue starts the interview.
+  const [text, setText] = useState(() => recall(STORAGE_KEYS.description) ?? "");
   const [files, setFiles] = useState<File[]>([]);
   const [step, setStep] = useState<"describe" | "confirm">("describe");
   const [reading, setReading] = useState(false);
@@ -76,6 +84,10 @@ export default function OnboardDescribe({ onReady }: { onReady: (r: DescribeResu
   const [error, setError] = useState<string | null>(null);
 
   const hasInput = text.trim().length > 0 || files.length > 0;
+
+  useEffect(() => {
+    remember(STORAGE_KEYS.description, text.trim() ? text : null);
+  }, [text]);
 
   function toConfirm(u: OnboardUnderstanding | null) {
     setUnderstood(u);
@@ -127,7 +139,9 @@ export default function OnboardDescribe({ onReady }: { onReady: (r: DescribeResu
       const description = text.trim();
       const turn = await startOnboardInterview(description, files);
       const turns: DescribeResult["turns"] = [];
-      if (description) turns.push({ role: "user", text: description });
+      // Files alone still make the opening answer (the server's first turn),
+      // so the answers line up with the server's when one is edited.
+      if (description || files.length > 0) turns.push({ role: "user", text: description });
       if (turn.phase === "question" && turn.question) {
         turns.push({ role: "assistant", text: turn.question });
       }
@@ -190,6 +204,20 @@ export default function OnboardDescribe({ onReady }: { onReady: (r: DescribeResu
             Skip, I&apos;ll answer questions instead
           </button>
         </div>
+        {onLater && (
+          <p className="mt-10 text-sm text-fg-subtle">
+            Not now?{" "}
+            <button
+              type="button"
+              onClick={onLater}
+              disabled={reading}
+              className="font-semibold text-accent hover:underline cursor-pointer disabled:opacity-50"
+            >
+              I&apos;ll do this later
+            </button>
+            . Home keeps setup one tap away.
+          </p>
+        )}
       </div>
     );
   }

@@ -257,6 +257,7 @@ def _resolve_attendees(
     the gateway's calendar gate applies when the event is created. On any
     other turn a contact's id reads as "not found", like an unknown one.
     """
+    from openexecutive.orchestrator import outside_content
     from openexecutive.orchestrator.people_tools import (
         PRIVATE_TURN_REFUSAL,
         contacts_reachable_now,
@@ -290,6 +291,8 @@ def _resolve_attendees(
             return {"error": f"person {person.full_name!r} (id={person_id}) is archived"}
         if turn_is_private_to_principal() and not person.is_principal:
             return {"error": PRIVATE_TURN_REFUSAL}
+        if outside_content.added_this_turn(person_id):
+            return json.loads(outside_content.added_person_error(f"person_id {person_id}"))
         if getattr(person, "is_principal", False) and not include_principal:
             return {"error": (
                 f"{person.full_name!r} is the principal. Set include_principal=true "
@@ -503,6 +506,34 @@ def _propose_via_decision_alert(
         )
 
 
+# What the model is told when the person in this web chat approves the booking
+# themselves: the card sits under its reply (action_chips carries its id), so
+# it should point there, not send them to the briefing.
+_CARD_HERE = (
+    "The approval card is shown right here in the chat, under your reply, and "
+    "also on the briefing. The booking happens when they tap Approve on it; "
+    "nothing in the chat books it."
+)
+
+
+def _approval_card_here(session: Any, approver_person_id: int | None, private: bool) -> bool:
+    """Whether the person in this web chat may approve the booking, so its card
+    is shown under the reply. The same rule as ``decisions._resolver``: the
+    principal, or the approver it went to unless it is the principal's private
+    booking. A chat app that shows cards with buttons
+    (``channel_cards.shows_cards``) counts as the web chat; any other surface
+    (Slack, email, a scheduled run) shows no card."""
+    from openexecutive.integrations.channel_cards import card_here
+    from openexecutive.orchestrator.people_tools import is_principal_on_verified_surface
+
+    if session is None or not card_here(session):
+        return False
+    if is_principal_on_verified_surface(session):
+        return True
+    caller = getattr(session, "caller_person_id", None)
+    return not private and caller is not None and caller == approver_person_id
+
+
 def _asked_on_a_verified_surface(session: Any) -> bool:
     """Whether someone on the team started this turn on a surface that
     verified who they are: the principal (``is_principal_on_verified_surface``)
@@ -674,10 +705,17 @@ async def handle_create_calendar_event(tool_input: dict[str, Any]) -> str:
     idem = _idem_key(attendee_emails, start.isoformat(), end.isoformat(), title)
     existing = get_live_by_idem(idem)
     if existing is not None:
+        here = _approval_card_here(
+            current_session.get(), existing.approver_person_id, _payload_private(existing)
+        )
         return json.dumps({
             "status": "already_proposed",
             "decision_instance_id": existing.id,
-            "message": "An identical proposal is already pending approval.",
+            "approve_here": here,
+            "message": (
+                "An identical proposal is already pending approval. " + _CARD_HERE
+                if here else "An identical proposal is already pending approval."
+            ),
         })
 
     # 10. Authority gate.
@@ -793,12 +831,16 @@ async def handle_create_calendar_event(tool_input: dict[str, Any]) -> str:
         severity="high" if gate_decision.action == "escalate" else "medium",
         private=private,
     )
+    here = _approval_card_here(session, approver_person_id, private)
     return json.dumps({
         "status": "proposed",
         "decision_instance_id": instance_id,
+        "approve_here": here,
         "message": (
-            "The booking has been surfaced on the briefing for approval. "
-            "The approver will be notified."
+            _CARD_HERE if here else (
+                "The booking has been surfaced on the briefing for approval. "
+                "The approver will be notified."
+            )
         ),
     })
 
@@ -973,6 +1015,12 @@ async def _do_delete_event(
     return await get_calendar_provider().delete_event(gateway, external_event_id)
 
 
+_NO_EVENT_ID = (
+    "This meeting was booked, but its calendar event id wasn't recorded, so it "
+    "can't be cancelled from here. Delete it in the calendar itself."
+)
+
+
 async def handle_cancel_calendar_event(tool_input: dict[str, Any]) -> str:
     """Cancel a booked event by its decision_instance_id."""
     from openexecutive.memory.decision_ledger import (
@@ -1009,6 +1057,11 @@ async def handle_cancel_calendar_event(tool_input: dict[str, Any]) -> str:
         return json.dumps({
             "error": f"cannot cancel a decision_instance with status={instance.status!r}",
         })
+
+    # A booked meeting whose event id was never read can't be deleted here:
+    # saying it was cancelled would leave it on everyone's calendar.
+    if instance.status != "proposed" and not instance.external_event_id:
+        return json.dumps({"error": _NO_EVENT_ID})
 
     # If there's an actual calendar event, delete it via the MCP.
     if instance.external_event_id:

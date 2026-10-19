@@ -13,6 +13,9 @@ from openexecutive.config import get_settings
 from openexecutive.orchestrator.people_tools import audit_rows_on_senders_turn
 
 logger = logging.getLogger(__name__)
+
+# (file_id, filename, content_type, voice_note)
+TelegramFile = tuple[str, str, str, bool]
 router = APIRouter()
 
 _TELEGRAM_API = "https://api.telegram.org/bot{token}/{method}"
@@ -122,6 +125,122 @@ async def send_message(token: str, chat_id: int, text: str) -> str | None:
     return last_message_id
 
 
+async def send_card(token: str, chat_id: int, decision_id: int, text: str) -> None:
+    """Send an approval card as a message with Approve and Skip buttons
+    (``integrations.channel_cards``). Plain text: the card quotes what the
+    Executive proposed, which may come from someone's mail."""
+    from openexecutive.integrations import channel_cards
+
+    resp = await _get_http_client().post(
+        _tg_url(token, "sendMessage"),
+        json={
+            "chat_id": chat_id,
+            "text": text[:_MAX_MSG_LEN],
+            "link_preview_options": {"is_disabled": True},
+            "reply_markup": {"inline_keyboard": [[
+                {"text": "Approve", "callback_data": channel_cards.callback_data(decision_id, channel_cards.APPROVE)},
+                {"text": "Skip", "callback_data": channel_cards.callback_data(decision_id, channel_cards.SKIP)},
+            ]]},
+        },
+    )
+    if resp.is_error:
+        logger.error("Telegram: sending card %d failed: %s %s", decision_id, resp.status_code, resp.text)
+
+
+async def _send_cards(token: str, chat_id: int, cards: list[int]) -> None:
+    from openexecutive.integrations import channel_cards
+
+    for decision_id in cards[: channel_cards.MAX_CARDS]:
+        try:
+            text = await asyncio.to_thread(channel_cards.card_text, decision_id)
+            if text:
+                await send_card(token, chat_id, decision_id, text)
+        except Exception:
+            logger.exception("Telegram: couldn't send card %d", decision_id)
+
+
+async def _handle_card_tap(
+    *, callback_id: str, chat_id: int, message_id: int, card_text: str, data: str, token: str,
+) -> None:
+    """A tap on a card's Approve or Skip button. The webhook checked that
+    only Telegram can call it and that the tapper is the private chat's own
+    person; the chat must be someone on the roster, and
+    ``decisions.resolve_in_chat`` decides whether the card is theirs."""
+    from openexecutive.audit import log_event as audit_log
+    from openexecutive.integrations import channel_cards
+    from openexecutive.people.store import find_person_by_telegram_chat_id
+
+    client = _get_http_client()
+    parsed = channel_cards.parse_callback(data)
+    person = await asyncio.to_thread(find_person_by_telegram_chat_id, str(chat_id))
+    if parsed is None or person is None:
+        try:
+            await client.post(
+                _tg_url(token, "answerCallbackQuery"),
+                json={"callback_query_id": callback_id, "text": "This card is no longer there."},
+            )
+        except Exception:
+            logger.exception("Telegram: couldn't answer a tap on chat %s", chat_id)
+        return
+    decision_id, approve = parsed
+    line = await channel_cards.resolve(decision_id, person, approve=approve)
+    choice = "approve" if approve else "skip"
+    await asyncio.to_thread(
+        audit_log,
+        "integration_inbound",
+        f"Telegram card {decision_id}: tapped {choice.capitalize()}: {line[:120]}",
+        actor="telegram",
+        details={"channel": "telegram", "chat_id": chat_id, "decision_id": decision_id,
+                 "choice": choice, "outcome": channel_cards.outcome_of(line), "person_id": person.id},
+    )
+    try:
+        await client.post(
+            _tg_url(token, "answerCallbackQuery"),
+            json={"callback_query_id": callback_id, "text": line[:190]},
+        )
+        if line == channel_cards.BUSY:
+            # The tap still deciding it updates the card.
+            return
+        # The card keeps what it said, with the outcome under it and no buttons.
+        await client.post(
+            _tg_url(token, "editMessageText"),
+            json={
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "text": f"{card_text}\n\n{line}"[:_MAX_MSG_LEN],
+                "link_preview_options": {"is_disabled": True},
+            },
+        )
+    except Exception:
+        logger.exception("Telegram: couldn't update card %d after the tap", decision_id)
+
+
+def _card_tap(callback: Any) -> dict[str, Any] | None:
+    """The fields of a card button tap that proves who made it, or None: a
+    private chat, tapped by that chat's own Telegram user."""
+    if not isinstance(callback, dict):
+        return None
+    message = callback.get("message")
+    sender = callback.get("from")
+    if not isinstance(message, dict) or not isinstance(sender, dict):
+        return None
+    chat = message.get("chat")
+    if not isinstance(chat, dict) or chat.get("type") != "private":
+        return None
+    chat_id = chat.get("id")
+    if not isinstance(chat_id, int) or isinstance(chat_id, bool) or chat_id <= 0 or sender.get("id") != chat_id:
+        return None
+    if not isinstance(callback.get("id"), str) or not isinstance(message.get("message_id"), int):
+        return None
+    return {
+        "callback_id": callback["id"],
+        "chat_id": chat_id,
+        "message_id": message["message_id"],
+        "card_text": str(message.get("text") or ""),
+        "data": str(callback.get("data") or ""),
+    }
+
+
 async def _get_telegram_file_bytes(token: str, file_id: str) -> tuple[str, bytes]:
     """Resolve a Telegram file_id to a download URL and fetch the bytes.
 
@@ -163,12 +282,12 @@ async def _process_and_reply(
     chat_id: int,
     message_id: int,
     token: str,
-    attachment_file_ids: list[tuple[str, str, str]] | None = None,
+    attachment_file_ids: list[TelegramFile] | None = None,
 ) -> None:
     """Handle one inbound Telegram message.
 
-    ``attachment_file_ids`` is a list of ``(file_id, filename, content_type)``
-    tuples for any files or photos attached to the message.
+    ``attachment_file_ids`` is a list of ``(file_id, filename, content_type,
+    voice_note)`` tuples for any files or photos attached to the message.
     """
     # Per-conversation session id — stamped on every audit row (inbound,
     # chat_turn, specialist_consult, tool_invocation) so a single request can
@@ -238,7 +357,7 @@ async def _process_and_reply(
         try:
             from openexecutive.integrations.attachments import build_attachment_output
 
-            for file_id, filename, content_type in attachment_file_ids:
+            for file_id, filename, content_type, voice_note in attachment_file_ids:
                 try:
                     _file_path, data = await _get_telegram_file_bytes(token, file_id)
                     # build_attachment_output works on bytes directly — we
@@ -246,7 +365,7 @@ async def _process_and_reply(
                     # Telegram requires a separate getFile API call rather than
                     # a direct URL download.
                     att_text, img_blocks = await build_attachment_output(
-                        filename, data, content_type
+                        filename, data, content_type, voice_note=voice_note
                     )
                     if att_text:
                         message_text = (
@@ -333,6 +452,13 @@ async def _process_and_reply(
                     user_message=message_text,
                 )
 
+            from openexecutive.integrations.channel_cards import shows_cards
+
+            # A private chat on a webhook only Telegram can call shows the
+            # reply's cards with Approve and Skip buttons.
+            cards_here = shows_cards(session)
+            cards: list[int] = []
+
             briefing_context = await asyncio.to_thread(
                 attach_briefing_context,
                 session,
@@ -348,10 +474,17 @@ async def _process_and_reply(
                 episodic_context=episodic_context,
                 attachment_blocks=att_image_blocks or None,
                 briefing_context=briefing_context,
-                channel_context_block=build_channel_context_block("telegram"),
+                channel_context_block=build_channel_context_block("telegram", cards_here=cards_here),
                 person_id=person_id,
+                cards=cards if cards_here else None,
             )
-            await send_message(token, chat_id, response)
+            from openexecutive.orchestrator.disclosure import with_chat_line
+
+            await send_message(
+                token, chat_id, with_chat_line(response, f"telegram:{session_id}")
+            )
+            if cards:
+                await _send_cards(token, chat_id, cards)
         except Exception:
             logger.exception("Telegram: handler error for message %s", message_id)
             try:
@@ -416,16 +549,16 @@ async def _start_fresh_and_reply(chat_id: int, token: str) -> None:
 _COMMAND_RE = re.compile(r"^/(start|help|ask)(?:@\w+)?\s*", re.IGNORECASE)
 
 
-def _message_content(message: dict[str, Any]) -> tuple[str, list[tuple[str, str, str]]]:
+def _message_content(message: dict[str, Any]) -> tuple[str, list[TelegramFile]]:
     """A Telegram message's text (known bot commands stripped) and its
-    attachments as ``(file_id, filename, content_type)``. Downloads happen
+    attachments as ``(file_id, filename, content_type, voice_note)``. Downloads happen
     later, in ``_process_and_reply``, so the webhook stays fast."""
     text: str = message.get("text", "") or message.get("caption", "")
     text = text.strip()
     # Only strip known bot commands (/start, /help, /ask), not arbitrary slash-prefixed content.
     text = _COMMAND_RE.sub("", text).strip()
 
-    attachment_file_ids: list[tuple[str, str, str]] = []
+    attachment_file_ids: list[TelegramFile] = []
 
     # Single document (any file type).
     doc = message.get("document")
@@ -434,7 +567,7 @@ def _message_content(message: dict[str, Any]) -> tuple[str, list[tuple[str, str,
         filename = doc.get("file_name") or f"file_{file_id}"
         content_type = doc.get("mime_type") or ""
         if file_id:
-            attachment_file_ids.append((file_id, filename, content_type))
+            attachment_file_ids.append((file_id, filename, content_type, False))
 
     # Photos — Telegram sends an array of sizes; pick the largest.
     photos = message.get("photo")
@@ -442,7 +575,24 @@ def _message_content(message: dict[str, Any]) -> tuple[str, list[tuple[str, str,
         largest = max(photos, key=lambda p: p.get("file_size", 0))
         file_id = largest.get("file_id", "")
         if file_id:
-            attachment_file_ids.append((file_id, f"photo_{file_id}.jpg", "image/jpeg"))
+            attachment_file_ids.append((file_id, f"photo_{file_id}.jpg", "image/jpeg", False))
+
+    # A voice note or a round video note, recorded in Telegram, is the
+    # sender's own speech; an audio file (a recorded call, a clip) is a
+    # file's words, read like a document.
+    for key, default_name, default_type, voice_note in (
+        ("voice", "voice.ogg", "audio/ogg", True),
+        ("video_note", "video_note.mp4", "video/mp4", True),
+        ("audio", "audio.mp3", "audio/mpeg", False),
+    ):
+        media = message.get(key)
+        if isinstance(media, dict) and media.get("file_id"):
+            filename = media.get("file_name") or default_name
+            content_type = media.get("mime_type") or default_type
+            if key == "video_note":
+                # Its sound is what matters; the speech service takes mp4.
+                content_type = "audio/mp4"
+            attachment_file_ids.append((media["file_id"], filename, content_type, voice_note))
     return text, attachment_file_ids
 
 
@@ -453,7 +603,7 @@ async def _hold_unknown_sender(
     chat_id: int,
     message_id: int,
     token: str,
-    attachment_file_ids: list[tuple[str, str, str]],
+    attachment_file_ids: list[TelegramFile],
 ) -> None:
     """Hold a private-chat message from someone off the roster for the
     principal to confirm (``integrations.roster_intake``) and tell them it
@@ -492,10 +642,11 @@ async def _replay_held(message: Any, _request: Any) -> bool:
     payload = message.payload
     if not token or not payload.get("chat_id"):
         return False
-    attachments = [
-        (str(a[0]), str(a[1]), str(a[2]))
+    # Messages held before voice notes were told apart carry three fields.
+    attachments: list[TelegramFile] = [
+        (str(a[0]), str(a[1]), str(a[2]), len(a) == 4 and a[3] is True)
         for a in payload.get("attachment_file_ids") or []
-        if isinstance(a, (list, tuple)) and len(a) == 3
+        if isinstance(a, (list, tuple)) and len(a) in (3, 4)
     ]
     await _process_and_reply(
         message_text=str(payload.get("message_text") or ""),
@@ -544,6 +695,25 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
         body = await request.json()
     except Exception:
         logger.warning("Telegram: failed to parse JSON body")
+        return {}
+
+    # Remember the chat by name for the People and department pickers
+    # (Telegram has no API that lists them). Only on a webhook whose secret
+    # was checked above: without one, anyone could post a made-up update.
+    if settings.telegram_webhook_secret and isinstance(body, dict):
+        from openexecutive.integrations.telegram_chats import record_from_update
+
+        record_from_update(body)
+
+    # A tap on a card's Approve or Skip button (integrations.channel_cards).
+    # Only on a webhook Telegram alone can call: otherwise anyone could post
+    # a tap naming someone's chat.
+    if "callback_query" in body:
+        from openexecutive.integrations.channel_cards import telegram_proves_taps
+
+        tap = _card_tap(body.get("callback_query"))
+        if tap is not None and telegram_proves_taps():
+            background_tasks.add_task(_handle_card_tap, token=settings.telegram_bot_token, **tap)
         return {}
 
     # Only handle regular messages (ignore channel posts, edited messages, etc.)
