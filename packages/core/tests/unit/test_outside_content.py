@@ -213,9 +213,25 @@ def test_erpnext_reads_count_but_its_next_read_and_a_draft_card_stay_open() -> N
             assert oc.outside_withholds("call_tool", WRITE_DOC)
             assert oc.outside_withholds("upsert_person", CONTACT)
             assert not oc.outside_withholds("propose_erpnext_draft", {})
+            assert not oc.outside_withholds("run_script", {})
+            # A script's own calls are still checked one by one.
+            assert oc.outside_withholds("call_tool", WRITE_DOC)
+            # The card's own check, marked for exactly this call, gets
+            # through; the same call unmarked, or with other arguments, not.
+            from openexecutive.orchestrator import erpnext_caller
+
+            check_args = {"doctype": "ToDo", "fields": {"description": "x"}}
+            check = {"name": "erpnext__draft_check", "arguments": check_args}
+            assert oc.outside_withholds("call_tool", check)
+            with erpnext_caller.draft_check_run(check_args):
+                assert not oc.outside_withholds("call_tool", check)
+                assert oc.outside_withholds(
+                    "call_tool", {"name": "erpnext__draft_check", "arguments": {"doctype": "ToDo", "fields": {}}}
+                )
             # Anything else read from outside shuts the card again.
             oc.mark(oc.WEB)
             assert oc.outside_withholds("propose_erpnext_draft", {})
+            assert oc.outside_withholds("run_script", {})
         finally:
             oc.end_turn(state)
 
@@ -432,6 +448,19 @@ def test_a_scripts_writes_after_its_reads_are_refused() -> None:
     provider = _run([ToolUseBlock("tu1", "run_script", {"script": script})], gateway=gateway)
     assert [c["name"] for c in gateway.calls] == ["drive__list_items"]
     assert "outside the team" in _result(provider, "tu1")
+
+
+def test_a_script_runs_after_erpnext_reads_but_its_writes_do_not() -> None:
+    gateway = _Gateway()
+    read = {"name": "erpnext__run_report", "arguments": {"report_name": "Stock Balance"}}
+    script = 'erpnext__list_records(doctype="Item")\ndrive__move_file(file_id="f1", folder_id="y")'
+    provider = _run(
+        [ToolUseBlock("tu1", "call_tool", read)],
+        [ToolUseBlock("tu2", "run_script", {"script": script})],
+        gateway=gateway,
+    )
+    assert [c["name"] for c in gateway.calls] == ["erpnext__run_report", "erpnext__list_records"]
+    assert "outside the team" in _result(provider, "tu2")
 
 
 def test_a_vendor_app_read_counts(monkeypatch: pytest.MonkeyPatch) -> None:

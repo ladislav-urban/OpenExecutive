@@ -297,24 +297,57 @@ def _is_erpnext_read(tool_name: object) -> bool:
     return isinstance(tool_name, str) and tool_name.strip().lower().replace("-", "_") in PINNED_ERPNEXT_TOOLS
 
 
+def _is_marked_erpnext_draft_call(call_input: Any) -> bool:
+    """The one ``erpnext__draft*`` call the draft path marked for itself
+    (``erpnext_caller.draft_call_for``): ``propose_erpnext_draft``'s own check,
+    once that tool has passed this hold. The gateway refuses every other."""
+    from openexecutive.orchestrator import erpnext_caller
+
+    if not isinstance(call_input, dict):
+        return False
+    named, arguments = call_input.get("name"), call_input.get("arguments")
+    if not isinstance(named, str) or not isinstance(arguments, dict):
+        return False
+    normalized = named.strip().lower().replace("-", "_")
+    if not normalized.startswith(erpnext_caller.DRAFT_TOOL_PREFIX):
+        return False
+    plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
+    return erpnext_caller.draft_call_for(normalized, plain) is not None
+
+
 def outside_allows_mcp_call(call_input: Any) -> bool:
     """The gateway calls a turn that read outside content may still make:
     the reads another AI app may make (``MCP_CLIENT_MCP_TOOLS``, the Google
     and Microsoft 365 reads), a OneDrive file read and ERPNext's reads (an
-    answer from ERPNext takes several). No write of any kind."""
+    answer from ERPNext takes several), and the draft path's own marked check
+    (``_is_marked_erpnext_draft_call``). No write of any kind."""
     from openexecutive.orchestrator.schedule_tools import (
         is_onedrive_file_read,
         mcp_client_allows_mcp_tool,
     )
 
     named = call_input.get("name") if isinstance(call_input, dict) else None
-    return mcp_client_allows_mcp_tool(named) or is_onedrive_file_read(call_input) or _is_erpnext_read(named)
+    return (
+        mcp_client_allows_mcp_tool(named)
+        or is_onedrive_file_read(call_input)
+        or _is_erpnext_read(named)
+        or _is_marked_erpnext_draft_call(call_input)
+    )
+
+
+# Still open while ERPNext is all the turn read. A draft is looked up in
+# ERPNext first (an item, a customer), and only leaves a card the person
+# approves as it stands; a script works out an answer from several ERPNext
+# reads, and each call it makes is still checked here (``outside_withholds``).
+# Mail read this turn still shuts both (the Act as me lockdown's own check).
+_AFTER_ERPNEXT_READ: frozenset[str] = frozenset({"propose_erpnext_draft", "run_script"})
 
 
 def _only_erpnext_read() -> bool:
-    """Whether everything the turn in progress read from outside was ERPNext."""
+    """Whether everything the turn in progress read from outside was ERPNext.
+    No turn bound: no (fails closed)."""
     state = current()
-    return state is None or state.sources <= {ERPNEXT}
+    return state is not None and state.sources <= {ERPNEXT}
 
 
 def answers_off_team_mail() -> bool:
@@ -338,10 +371,7 @@ def outside_withholds(tool_name: str, tool_input: Any) -> bool:
         return True
     if tool_name == "call_tool":
         return not outside_allows_mcp_call(tool_input)
-    if tool_name == "propose_erpnext_draft" and _only_erpnext_read():
-        # A draft is looked up in ERPNext first (an item, a customer), and
-        # it only leaves a card the person approves as it stands. Mail read
-        # this turn still shuts it (the Act as me lockdown's own check).
+    if tool_name in _AFTER_ERPNEXT_READ and _only_erpnext_read():
         return False
     from openexecutive.delegation.lockdown import mail_touched_withholds
 
