@@ -321,10 +321,20 @@ caching:
     cached tool list. Act as me's lockdown refuses them after a mail read
     (unclassified, fails closed), except one registered with
     after_mail_read=True: it only reads the install's own data and carries
-    nothing the model wrote anywhere outside. A tool may sit in a tool group, new or
+    nothing the model wrote anywhere outside. ExtraTool(known_caller=False)
+    is asked on a turn with no verified caller too (a surface that names its
+    user without proving who is speaking, e.g. ERPNext's panel); it must
+    have its own offered(), which decides alone. private_row=True makes its
+    dispatch audit row private (executive._private_tool_row);
+    activity_label names the chat's activity line while it runs
+    (activity_labels._extension_label). A tool may sit in a tool group, new or
     existing (tool_groups.add_to_group, done at load, so the groups are
     fixed per process). Its chip goes through summarize_action's usual
-    no-chip rules, and a chip link must be a path inside the app. A
+    no-chip rules, and a chip link must be a path inside the app; a chip may
+    carry decision_id (the card the chat shows under its message), and an
+    extension tool's waiting_for_approval result is its own chip's to
+    describe (the department gate never holds an extension tool, so it is
+    never core's held action). A
     collection is a drafted artifact tagged collection:<name>: the record
     carries it, GET /artifacts returns collection / collection_label, the
     Documents page shows one filter per collection, and archive, restore and
@@ -9345,8 +9355,9 @@ integrations:
     payables; sales_week), never a report or filters chosen in a
     conversation; sent to the principal's own channel
     (runner._deliver_to_principal); the principal's alone. The model's only
-    levers are schedule_erp_metric / cancel_erp_metric, their own registry
-    offered by erp_metrics.offered (the principal speaking; not unattended,
+    levers are schedule_erp_metric / cancel_erp_metric, tools of the ERPNext
+    extension (integrations.erpnext_extension, offered only while
+    OPENEXECUTIVE_EXTENSIONS lists it) offered by erp_metrics.offered (the principal speaking; not unattended,
     private, email or panel; ERPNEXT_BRIEF_COMPANY set; ERPNext connected):
     a metric slug and a daily@HH:MM or weekly@DOW@HH:MM spec in the user's
     zone, one schedule per metric, MAX_SCHEDULED 5. Rows: scheduled_actions
@@ -9464,11 +9475,15 @@ integrations:
       email. The card's approver is that person, approver_only, so nobody
       else (the principal included) sees or approves it; never an unattended run, a turn private to the principal or an email
       turn (origin_channel "email": mail text), and never after the turn read the
-      owner's mail (lockdown.MAIL_TOUCHED_WITHHELD_TOOLS). Also in
-      UNATTENDED_WITHHELD_TOOLS and PRIVATE_TURN_WITHHELD_TOOLS. The tool
-      joins the offered list per turn, its own registry like recall_history,
-      so on any other turn a call to it is an unknown tool; the handler
-      re-checks all of it.
+      owner's mail (the lockdown refuses every extension tool not registered
+      after_mail_read). It is a tool of the ERPNext extension
+      (integrations.erpnext_extension, offered only while
+      OPENEXECUTIVE_EXTENSIONS lists it), registered known_caller=False so
+      ERPNext's panel can be offered it, private_row=True, with its own chip
+      (erpnext_drafts.chip) and activity line; as an extension tool it is
+      never offered on an unattended, private, AI-app or replay turn, so on
+      any other turn a call to it is an unknown tool; the handler re-checks
+      all of it.
     Proposing: propose_erpnext_draft {why, doctype, fields}. check_fields
     allows only oe_connector's own fields (ToDo: description, allocated_to,
     priority, date, reference_type + reference_name; Material Request:

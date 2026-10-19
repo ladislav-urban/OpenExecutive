@@ -86,8 +86,6 @@ SIDE_EFFECTING_TOOLS: frozenset[str] = frozenset({
     "remind_me",
     # Act as me: a card of actions left for the speaker to approve
     "propose_actions",
-    # ERPNext: a draft card left for the principal to approve
-    "propose_erpnext_draft",
     # Meetings: booked, or proposed on an approval card
     "create_calendar_event",
     "create_instant_meeting",
@@ -220,10 +218,13 @@ def summarize_action(
     if (
         parsed is not None
         and parsed.get("status") == "waiting_for_approval"
-        and tool_name not in ("propose_actions", "do_in_app", "propose_erpnext_draft")
+        and tool_name not in ("propose_actions", "do_in_app")
+        and not extension
     ):
         # Held for someone's approval (a team member's send or change, the
-        # department gate): nothing happened yet, so no "done" chip.
+        # department gate): nothing happened yet, so no "done" chip. An
+        # extension's tool is never held there; a card of its own is its
+        # chip's to describe.
         payload["summary"] = "Waiting for approval"
         return payload
     if extension:
@@ -301,21 +302,6 @@ def summarize_action(
         count = len(actions) if isinstance(actions, list) else 0
         noun = "action" if count == 1 else "actions"
         payload["summary"] = f"Waiting for your approval: {count} {noun}" if count else "Waiting for your approval"
-        payload["target"] = None
-        payload["link"] = "/today"
-        # The chat shows the card itself under its message, by this id.
-        decision_id = (parsed or {}).get("decision_id")
-        if isinstance(decision_id, int) and not isinstance(decision_id, bool):
-            payload["decision_id"] = decision_id
-    elif tool_name == "propose_erpnext_draft":
-        # Only a stored card earns a chip; it says nothing is in ERPNext yet.
-        if (parsed or {}).get("status") != "waiting_for_approval":
-            return None
-        from openexecutive.integrations.erpnext_drafts import DRAFT_TOOLS
-
-        doctype = (parsed or {}).get("doctype")
-        noun = doctype if doctype in DRAFT_TOOLS else "ERPNext"
-        payload["summary"] = f"Waiting for your approval: {noun} draft"
         payload["target"] = None
         payload["link"] = "/today"
         # The chat shows the card itself under its message, by this id.

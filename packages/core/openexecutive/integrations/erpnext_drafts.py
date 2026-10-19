@@ -984,6 +984,21 @@ def draft_tools() -> list[dict[str, Any]]:
     return [propose_tool(enabled_doctypes())]
 
 
+def chip(tool_input: dict[str, Any], parsed: dict[str, Any] | None) -> dict[str, Any] | None:
+    """The chat chip for a proposal: only a stored card earns one, and it says
+    nothing is in ERPNext yet. The chat shows the card itself under its
+    message, by ``decision_id``."""
+    if (parsed or {}).get("status") != "waiting_for_approval":
+        return None
+    doctype = (parsed or {}).get("doctype")
+    noun = doctype if doctype in DRAFT_TOOLS else "ERPNext"
+    return {
+        "summary": f"Waiting for your approval: {noun} draft",
+        "link": "/today",
+        "decision_id": (parsed or {}).get("decision_id"),
+    }
+
+
 ERPNEXT_DRAFT_TOOL_HANDLERS: dict[str, Any] = {PROPOSE: handle_propose}
 
 

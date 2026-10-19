@@ -143,6 +143,26 @@ def test_only_the_principal_on_their_own_turn_is_offered_it(gateway: _Gateway, r
     assert "not available" in out["error"]
 
 
+def test_the_tools_come_from_the_erpnext_extension(gateway: _Gateway, roster: SimpleNamespace) -> None:
+    from openexecutive.delegation import lockdown
+    from openexecutive.integrations import erpnext_extension
+    from openexecutive.orchestrator import extensions
+
+    extensions._reset_for_tests()
+    try:
+        erpnext_extension.register()
+        names = {t.name for t in extensions.offered_tools(_turn(roster.principal))}
+        assert {erp_metrics.SCHEDULE, erp_metrics.CANCEL} <= names
+        assert not {erp_metrics.SCHEDULE, erp_metrics.CANCEL} & {
+            t.name for t in extensions.offered_tools(_turn(roster.teammate))
+        }
+        # A standing send, never set up on the say-so of mail just read.
+        assert lockdown.mail_touched_withholds(erp_metrics.SCHEDULE, {})
+        assert lockdown.mail_touched_withholds(erp_metrics.CANCEL, {})
+    finally:
+        extensions._reset_for_tests()
+
+
 # --------------------------------------------------------------------------- #
 # The scheduler's run
 # --------------------------------------------------------------------------- #

@@ -31,12 +31,7 @@ from openexecutive.orchestrator import erpnext_caller, mcp_gateway
 from openexecutive.orchestrator.action_chips import summarize_action
 from openexecutive.orchestrator.erpnext_caller import ASSERTION_ARG, ErpnextCaller
 from openexecutive.orchestrator.mcp_gateway import MCPGateway
-from openexecutive.orchestrator.schedule_tools import (
-    PRIVATE_TURN_WITHHELD_TOOLS,
-    UNATTENDED_WITHHELD_TOOLS,
-    erpnext_panel_withholds,
-    set_session,
-)
+from openexecutive.orchestrator.schedule_tools import erpnext_panel_withholds, set_session
 from openexecutive.orchestrator.session import Session
 from openexecutive.people import registry as people_registry
 from openexecutive.people import store as people_store
@@ -97,6 +92,19 @@ def erp(monkeypatch: pytest.MonkeyPatch) -> Iterator[FakeErpnext]:
     gateway.server_names = ("erpnext",)
     monkeypatch.setattr(mcp_gateway, "_active_gateway", gateway)
     yield fake
+
+
+@pytest.fixture(autouse=True)
+def extension() -> Iterator[None]:
+    """The draft tool registered as the install would (``OPENEXECUTIVE_EXTENSIONS``
+    listing integrations.erpnext_extension), and forgotten after."""
+    from openexecutive.integrations import erpnext_extension
+    from openexecutive.orchestrator import extensions
+
+    extensions._reset_for_tests()
+    erpnext_extension.register()
+    yield
+    extensions._reset_for_tests()
 
 
 @pytest.fixture
@@ -241,10 +249,44 @@ def test_it_is_offered_to_the_principal_alone_and_never_unattended(erp: FakeErpn
     assert "email" in str(drafts.offer_refusal(Session(origin_channel="email", caller_person_id=roster.principal)))
     assert "email" in str(drafts.offer_refusal(Session(private_to_principal=True)))
     assert drafts.offer_refusal(None) is not None
-    # Every list that keeps a tool from a turn names it.
-    assert drafts.PROPOSE in UNATTENDED_WITHHELD_TOOLS and drafts.PROPOSE in PRIVATE_TURN_WITHHELD_TOOLS
-    assert drafts.PROPOSE in lockdown.MAIL_TOUCHED_WITHHELD_TOOLS
+    # An extension tool: never on an unattended, private, AI-app or replay
+    # turn (the chat loop's extension rule), refused once the turn has read
+    # the owner's mail, and outside the panel's own tools.
+    from openexecutive.orchestrator import extensions
+
+    assert drafts.PROPOSE in {t.name for t in extensions.offered_tools(_owner_turn(roster))}
+    assert not extensions.allowed_after_mail_read(drafts.PROPOSE)
+    assert lockdown.mail_touched_withholds(drafts.PROPOSE, {})
     assert erpnext_panel_withholds(drafts.PROPOSE, {})
+
+
+def test_it_is_registered_to_be_asked_in_the_panel_and_kept_private() -> None:
+    from openexecutive.orchestrator import extensions
+    from openexecutive.orchestrator.activity_labels import summarize_activity
+
+    # ERPNext's panel has no verified caller: the tool's own offered decides.
+    (tool,) = [t for t in extensions._tools.values() if t.name == drafts.PROPOSE]
+    assert tool.known_caller is False and tool.offered is drafts.offered
+    assert extensions.private_row(drafts.PROPOSE)
+    assert extensions.activity_label(drafts.PROPOSE) == "Checking the draft with ERPNext…"
+    activity = summarize_activity([{"name": drafts.PROPOSE, "input": {}}])
+    assert "Checking the draft with ERPNext" in str(activity)
+
+
+def test_the_handler_refuses_on_its_own_after_a_mail_read() -> None:
+    from openexecutive.delegation.settings import TurnDelegation
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    session = Session()
+    token = current_session.set(session)
+    try:
+        session.turn_delegation = TurnDelegation(  # type: ignore[attr-defined]
+            offered=True, touched_mail=True, read_mail=True, session_id=session.session_id,
+        )
+        result = json.loads(asyncio.run(drafts.handle_propose({})))
+        assert "next message" in result["error"] and drafts.PROPOSE in result["error"]
+    finally:
+        current_session.reset(token)
 
 
 def test_it_is_off_until_turned_on(erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
