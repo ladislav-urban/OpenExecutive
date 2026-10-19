@@ -142,6 +142,28 @@ SURFACE_ERPNEXT_PANEL = "erpnext_panel"
 # The ERPNext user a panel scenario's turn is from. Only marks the turn as the
 # panel's (schedule_tools.erpnext_panel_turn); nothing is signed or sent.
 EVAL_PANEL_EMAIL = "principal@eval.example"
+# Who a scenario's turn is from, when it says (`speaker`): the install's
+# principal, as the product sees them. Without it a turn has no speaker, so
+# whatever is the principal's alone (ERPNext reads, drafts, scheduled
+# metrics) is refused, and the scenario is judged on that refusal.
+SPEAKER_PRINCIPAL = "principal"
+
+
+def scenario_speaker(scenario: dict[str, Any]) -> str | None:
+    """The scenario's ``speaker``: None (no one, the default), or
+    ``principal``. Anything else raises ValueError."""
+    speaker = scenario.get("speaker")
+    if speaker is None:
+        return None
+    if speaker != SPEAKER_PRINCIPAL:
+        raise ValueError(f"speaker must be {SPEAKER_PRINCIPAL!r}, got {speaker!r}")
+    return SPEAKER_PRINCIPAL
+
+
+def _principal() -> Any:
+    from openexecutive.people.store import find_principal_person
+
+    return find_principal_person()
 
 
 def scenario_surface(scenario: dict[str, Any]) -> str | None:
@@ -163,20 +185,32 @@ def scenario_turn_surface(scenario: dict[str, Any]) -> tuple[dict[str, Any], str
     (``evals.runner`` and ``evals/run_evals.py``): extra ``Session`` fields and
     the ``channel_context_block`` for ``Executive.chat``. The web app adds
     nothing; ERPNext's panel adds what ``integrations.erpnext_panel`` gives a
-    turn."""
-    if scenario_surface(scenario) != SURFACE_ERPNEXT_PANEL:
-        return {}, ""
-    from openexecutive.integrations.erpnext_panel import context_block
+    turn. With ``speaker: principal`` the turn is the install's principal: in
+    the web app signed in as them (no principal on the roster yet: the
+    single-user operator, as a header-less request is), in the panel as their
+    own email."""
     from openexecutive.orchestrator.session import Session
 
+    principal = _principal() if scenario_speaker(scenario) else None
+    if scenario_surface(scenario) != SURFACE_ERPNEXT_PANEL:
+        if not scenario_speaker(scenario):
+            return {}, ""
+        return {
+            "from_web_chat": True,
+            "caller_person_id": principal.id if principal is not None else None,
+            "web_caller_signed_in": principal is not None,
+        }, ""
+    from openexecutive.integrations.erpnext_panel import context_block
+
+    email = (getattr(principal, "email", None) or "").strip().lower() or EVAL_PANEL_EMAIL
     session_fields = {
         "origin_channel": "erpnext",
-        "erpnext_panel_email": EVAL_PANEL_EMAIL,
+        "erpnext_panel_email": email,
         "read_erpnext": True,
     }
     # The block the panel gives that person: with drafts when they are
     # offered them (phase 4b), as integrations.erpnext_panel chooses it.
-    probe = Session(origin_channel="erpnext", erpnext_panel_email=EVAL_PANEL_EMAIL, read_erpnext=True)
+    probe = Session(origin_channel="erpnext", erpnext_panel_email=email, read_erpnext=True)
     return session_fields, context_block(probe)
 
 
@@ -381,6 +415,11 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             raise ValueError(f"`principal_role`: {e}") from e
     if s.get("voice_persona") is not None:
         scenario_voice_persona(s)
+    if s.get("speaker") is not None:
+        try:
+            scenario_speaker(s)
+        except ValueError as e:
+            raise ValueError(f"`speaker`: {e}") from e
     if s.get("surface") is not None:
         try:
             scenario_surface(s)

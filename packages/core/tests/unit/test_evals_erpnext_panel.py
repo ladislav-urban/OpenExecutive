@@ -123,3 +123,55 @@ def test_an_mcp_run_gets_the_running_gateway_and_a_chat_run_none(monkeypatch: py
     for with_mcp in (True, False):
         runner._make_chat_runner(_asyncio.Semaphore(1), queue, [0], 1, None, with_mcp=with_mcp)
     assert given == [gateway, None]
+
+
+def test_a_principal_speaker_is_the_principal_on_either_surface(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Without a speaker, whatever is the principal's alone (ERPNext reads,
+    # drafts, scheduled metrics) is refused, and the scenario judged on that.
+    from types import SimpleNamespace
+
+    from openexecutive.evals import scenarios
+
+    monkeypatch.setattr(scenarios, "_principal", lambda: SimpleNamespace(id=7, email="Owner@Co.example"))
+    web, block = scenarios.scenario_turn_surface({"id": "x", "query": "q", "speaker": "principal"})
+    assert web == {"from_web_chat": True, "caller_person_id": 7, "web_caller_signed_in": True} and block == ""
+    panel, _ = scenarios.scenario_turn_surface(
+        {"id": "x", "query": "q", "speaker": "principal", "surface": "erpnext_panel"}
+    )
+    assert panel["erpnext_panel_email"] == "owner@co.example"
+    # No speaker: as before, nobody.
+    assert scenarios.scenario_turn_surface({"id": "x", "query": "q"}) == ({}, "")
+    # An install with no principal yet: the single-user operator, unsigned.
+    monkeypatch.setattr(scenarios, "_principal", lambda: None)
+    web, _ = scenarios.scenario_turn_surface({"id": "x", "query": "q", "speaker": "principal"})
+    assert web == {"from_web_chat": True, "caller_person_id": None, "web_caller_signed_in": False}
+
+
+def test_both_runners_hand_chat_the_speaker(monkeypatch: pytest.MonkeyPatch) -> None:
+    # chat() sets the turn's caller from person_id: without it a `speaker`
+    # scenario's caller is reset to nobody and its ERPNext calls refused.
+    import importlib.util
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from openexecutive.evals import scenarios
+
+    monkeypatch.setattr(scenarios, "_principal", lambda: SimpleNamespace(id=7, email="owner@co.example"))
+    scenario = {"id": "s", "domain": "mcp", "query": "q", "speaker": "principal"}
+    assert _run(monkeypatch, scenario)["person_id"] == 7
+    script = Path(__file__).resolve().parents[4] / "evals" / "run_evals.py"
+    spec = importlib.util.spec_from_file_location("run_evals", script)
+    assert spec is not None and spec.loader is not None
+    run_evals = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_evals)
+    seen: dict[str, Any] = {}
+
+    class FakeExecutive:
+        async def chat(self, **kwargs: Any) -> str:
+            seen.update(kwargs)
+            return "a response"
+
+    asyncio.run(run_evals.run_eval(scenario, FakeExecutive(), None))
+    assert seen["person_id"] == 7
+    # No speaker: nobody, as before.
+    assert _run(monkeypatch, {"id": "w", "query": "q"})["person_id"] is None

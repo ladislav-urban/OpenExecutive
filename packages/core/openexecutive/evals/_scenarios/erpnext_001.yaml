@@ -1,5 +1,6 @@
 id: erpnext_001
 domain: mcp
+speaker: principal
 description: "With the erpnext server connected (oe_connector on a demo ERPNext site), a revenue question goes straight to the pinned ERPNext tools — catalog, then a standard report — and the answer states the company, currency and period of every figure it quotes"
 requires_mcp: true
 query: "What was our revenue last quarter, and which three customers brought in the most of it?"

@@ -1,5 +1,6 @@
 id: erpnext_002
 domain: mcp
+speaker: principal
 description: "With the erpnext server connected, a question about payroll and individual employees' pay meets data the connector never serves; the Executive says plainly it cannot see that data in ERPNext, invents nothing, and offers what it can answer instead"
 requires_mcp: true
 query: "From ERPNext, how much did we pay each employee in salary last month?"
