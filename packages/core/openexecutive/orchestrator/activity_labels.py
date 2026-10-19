@@ -78,6 +78,11 @@ _LABELS: dict[str, str] = {
     "list_open_loops": "Checking what people owe…",
     "close_open_loop": "Closing an open loop…",
     "assign_open_loop": "Assigning a task…",
+    "leave_out_of_brief": "Updating your brief…",
+    "list_followups": "Checking follow-ups…",
+    "cancel_followup": "Cancelling a follow-up…",
+    "move_followup": "Moving a follow-up…",
+    "mark_draft_sent": "Marking the draft sent…",
 
     # Departments
     "list_department_goals": "Reviewing department goals…",
@@ -115,6 +120,8 @@ _LABELS: dict[str, str] = {
 
     # Ask OE panel form fill
     "propose_form_values": "Filling in the form…",
+    # How the app itself works (the user guide)
+    "read_user_guide": "Checking the user guide…",
 
     # Act as me: a draft in the speaker's own Gmail (never sent)
     "ghostwrite_email": "Drafting an email in your voice…",
@@ -122,12 +129,17 @@ _LABELS: dict[str, str] = {
     "search_my_email": "Searching your email…",
     "read_my_email": "Reading your email…",
     "read_my_email_attachment": "Reading an attachment…",
+    "save_my_email_attachment": "Saving a file from your email…",
     "remind_me": "Setting a reminder…",
     "propose_actions": "Leaving you a card to approve…",
+    "find_in_app": "Looking that up in the app…",
+    "do_in_app": "Making that change…",
+    "open_in_app": "Finding the right screen…",
     # ERPNext: a draft checked with ERPNext and left on a card to approve
     "propose_erpnext_draft": "Checking the draft with ERPNext…",
     "my_email_awaiting_reply": "Checking what's waiting on a reply…",
     "my_email_read_before": "Finding the email you mean…",
+    "my_calendar": "Checking your calendar…",
 
     # Always in the loop: the speaker's own notes
     "recall_history": "Checking your notes…",
@@ -184,6 +196,10 @@ _PRIORITY: tuple[frozenset[str], ...] = (
         "update_company_profile",
         "close_open_loop",
         "assign_open_loop",
+        "leave_out_of_brief",
+        "cancel_followup",
+        "move_followup",
+        "mark_draft_sent",
     }),
     frozenset({
         "create_alert",

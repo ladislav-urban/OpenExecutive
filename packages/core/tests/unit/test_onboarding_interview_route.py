@@ -15,6 +15,7 @@ must not behave like the fixture loader.
 from __future__ import annotations
 
 import sqlite3
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,7 @@ from openexecutive.api.models import ONBOARD_MESSAGE_MAX_CHARS
 from openexecutive.api.routes import onboarding as route
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding import interview as iv
+from openexecutive.onboarding import interview_store
 from openexecutive.onboarding.commit import (
     save_onboarding_people as _real_save_onboarding_people,
 )
@@ -97,6 +99,7 @@ def client(
 
     monkeypatch.setattr(route, "_fire_post_onboarding_research", _no_research)
     monkeypatch.setattr(route, "_interview_sessions", OrderedDict())
+    monkeypatch.setattr(interview_store, "DB_PATH", tmp_path / "interviews.db")
     monkeypatch.setattr(route, "_onboarding_research_fired", set())
     monkeypatch.setattr(route, "_wizard_sessions", {})
     # No people/department DB writes unless a test asks for them.
@@ -114,8 +117,13 @@ def client(
     return c
 
 
-def _start(client: TestClient, description: str = "We sell industrial tools.") -> str:
-    resp = client.post("/onboard/interview/start", data={"description": description})
+def _start(
+    client: TestClient, description: str = "We sell industrial tools.", caller: str | None = None
+) -> str:
+    # A session belongs to whoever started it, so a test that commits as
+    # someone starts as them too (the UI sends the same caller on every call).
+    headers = {"x-caller-email": caller} if caller else {}
+    resp = client.post("/onboard/interview/start", data={"description": description}, headers=headers)
     assert resp.status_code == 200, resp.text
     return resp.json()["session_id"]
 
@@ -834,7 +842,7 @@ def test_a_teammate_cannot_take_the_owner_role_by_rerunning_setup(
 
     _seed_owner_and_teammate()
     seeded.append(_draft())
-    sid = _start(client)
+    sid = _start(client, caller="bob@example.com")
     resp = client.post(
         "/onboard/interview/commit",
         json=_bob_as_owner(sid),
@@ -853,7 +861,7 @@ def test_the_owner_can_hand_the_role_on(
 
     _seed_owner_and_teammate()
     seeded.append(_draft())
-    sid = _start(client)
+    sid = _start(client, caller="dana@example.com")
     resp = client.post(
         "/onboard/interview/commit",
         json=_bob_as_owner(sid),
@@ -869,7 +877,7 @@ def test_anyone_may_rerun_setup_that_keeps_the_owner(
 ) -> None:
     _seed_owner_and_teammate()
     seeded.append(_draft())
-    sid = _start(client)
+    sid = _start(client, caller="bob@example.com")
     resp = client.post(
         "/onboard/interview/commit",
         json=_commit_body(sid),
@@ -932,7 +940,7 @@ def _seed_owner_without_email_and_teammate() -> None:
 def _commit_with_owner_email(
     client: TestClient, email: str, caller: str | None
 ) -> Any:
-    sid = _start(client)
+    sid = _start(client, caller=caller)
     body = _commit_body(sid)
     body["owner_email"] = email
     headers = {"x-caller-email": caller} if caller else {}
@@ -1100,3 +1108,386 @@ def test_solo_commit_keeps_workspace_settings_and_saves_one_person(
     saved = CompanyProfile.load_from_yaml(profile_path)
     assert saved.org_structure.departments == []
     assert saved.org_structure.leadership_team == ["Dana Reyes, Founder"]
+
+
+# ── persistence: a session outlives the process that started it ─────────────
+
+
+def test_session_is_found_again_after_the_process_forgets_it(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    """A restart (or another worker) empties the in-memory table; the stored
+    copy answers GET and the interview carries on from the same question."""
+    seeded.append(iv.Question(question="Who runs ops?", hint="A name is enough."))
+    sid = _start(client)
+    route._interview_sessions.clear()
+
+    resp = client.get(f"/onboard/interview/{sid}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["phase"] == "question"
+    assert body["question"] == "Who runs ops?"
+    assert body["question_hint"] == "A name is enough."
+    assert [t["role"] for t in body["turns"]] == ["user", "assistant"]
+    assert body["questions_asked"] == 1
+
+    seeded.append(_draft())
+    route._interview_sessions.clear()
+    resp = client.post("/onboard/interview/message", json={"session_id": sid, "message": "Sam."})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["phase"] == "draft"
+
+
+def test_stored_draft_survives_a_restart(client: TestClient, seeded: list[Any]) -> None:
+    seeded.append(_draft())
+    sid = _start(client)
+    route._interview_sessions.clear()
+    resp = client.get(f"/onboard/interview/{sid}")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["phase"] == "draft"
+    assert resp.json()["draft"]["name"] == "Northwind Tools"
+
+
+def test_saving_deletes_the_stored_transcript(
+    client: TestClient, seeded: list[Any], profile_path: Path
+) -> None:
+    """The transcript carries financials: once the profile is on disk, the
+    stored copy is gone, so a later GET does not bring it back."""
+    seeded.append(_draft())
+    sid = _start(client)
+    assert interview_store.load(sid) is not None
+    resp = client.post("/onboard/interview/commit", json=_commit_body(sid))
+    assert resp.status_code == 200, resp.text
+    assert interview_store.load(sid) is None
+    route._interview_sessions.clear()
+    assert client.get(f"/onboard/interview/{sid}").status_code == 404
+
+
+def test_an_expired_session_is_gone_from_the_store_too(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    seeded.append(iv.Question(question="Who runs ops?"))
+    sid = _start(client)
+    route._interview_sessions[sid].last_touched -= route._INTERVIEW_TTL_SECONDS + 1
+    assert client.get(f"/onboard/interview/{sid}").status_code == 404
+    assert interview_store.load(sid) is None
+
+
+def test_a_store_failure_does_not_fail_the_turn(
+    client: TestClient, seeded: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(interview_store, "DB_PATH", Path("/nonexistent/dir/interviews.db"))
+    seeded.append(iv.Question(question="Who runs ops?"))
+    sid = _start(client)
+    assert client.get(f"/onboard/interview/{sid}").status_code == 200
+
+
+def test_a_turn_taken_on_another_worker_is_seen_here(
+    client: TestClient, seeded: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two workers hold the same session. The other one takes a turn (its
+    stored row is newer); this one must carry on from that, not from its
+    own stale copy, or its next save would overwrite the other's turns."""
+    seeded.append(iv.Question(question="Who runs ops?"))
+    sid = _start(client)
+    stale = route._interview_sessions[sid]
+
+    # "Worker B": the same session, advanced and stored a moment later.
+    other = interview_store.load(sid)
+    assert other is not None
+    other.transcript.append(iv.Turn(role="user", text="Sam runs ops."))
+    other.transcript.append(iv.Turn(role="assistant", text="And finance?"))
+    other.questions_asked = 2
+    later = stale.stored_at + 1
+    monkeypatch.setattr(interview_store.time, "time", lambda: later)
+    interview_store.save(sid, other)
+
+    body = client.get(f"/onboard/interview/{sid}").json()
+    assert body["question"] == "And finance?"
+    assert body["questions_asked"] == 2
+    assert len(body["turns"]) == 4
+    assert route._interview_sessions[sid] is not stale
+
+
+def test_a_local_copy_as_new_as_the_store_is_kept(client: TestClient, seeded: list[Any]) -> None:
+    seeded.append(iv.Question(question="Who runs ops?"))
+    sid = _start(client)
+    held = route._interview_sessions[sid]
+    client.get(f"/onboard/interview/{sid}")
+    assert route._interview_sessions[sid] is held
+
+
+def test_another_caller_cannot_read_or_continue_the_session(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    """The id is not a capability: a session answers only to whoever started
+    it, with the same 404 an unknown id gets."""
+    seeded.append(iv.Question(question="Who runs ops?"))
+    sid = _start(client, caller="dana@example.com")
+    other = {"x-caller-email": "bob@example.com"}
+    assert client.get(f"/onboard/interview/{sid}", headers=other).status_code == 404
+    resp = client.post(
+        "/onboard/interview/message", json={"session_id": sid, "message": "Sam"}, headers=other
+    )
+    assert resp.status_code == 404
+    assert client.post("/onboard/interview/draft", json={"session_id": sid}, headers=other).status_code == 404
+    assert client.post("/onboard/interview/commit", json=_commit_body(sid), headers=other).status_code == 404
+    # Still theirs, also after a restart.
+    route._interview_sessions.clear()
+    assert (
+        client.get(f"/onboard/interview/{sid}", headers={"x-caller-email": "dana@example.com"}).status_code
+        == 200
+    )
+
+
+def test_a_stranger_neither_keeps_a_session_alive_nor_caches_it(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    """A refused read must not touch the session (which would extend its TTL)
+    nor pull the stored transcript into this worker's table."""
+    seeded.append(iv.Question(question="Who runs ops?"))
+    sid = _start(client, caller="dana@example.com")
+    held = route._interview_sessions[sid]
+    touched = held.last_touched
+    other = {"x-caller-email": "bob@example.com"}
+    assert client.get(f"/onboard/interview/{sid}", headers=other).status_code == 404
+    assert held.last_touched == touched
+
+    route._interview_sessions.clear()
+    assert client.get(f"/onboard/interview/{sid}", headers=other).status_code == 404
+    assert sid not in route._interview_sessions
+
+
+def test_an_abandoned_stored_session_is_swept_on_the_next_read(
+    client: TestClient, seeded: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seeded.append(iv.Question(question="Who runs ops?"))
+    sid = _start(client)
+    route._interview_sessions.clear()
+    later = time.time() + route._INTERVIEW_TTL_SECONDS + 1
+    monkeypatch.setattr(interview_store.time, "time", lambda: later)
+    assert interview_store.load("someone-else") is None
+    with sqlite3.connect(interview_store._path()) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM onboarding_interviews").fetchone()[0] == 0
+    assert client.get(f"/onboard/interview/{sid}").status_code == 404
+
+
+# ── changing an earlier answer (/onboard/interview/revise) ───────────────────
+
+
+def _two_answers(client: TestClient, seeded: list[Any]) -> str:
+    seeded.append(iv.Question(question="What do you sell?"))
+    sid = _start(client, "We are Northwind.")
+    seeded.append(iv.Question(question="How big is the team?"))
+    client.post("/onboard/interview/message", json={"session_id": sid, "message": "Tools."})
+    seeded.append(iv.Question(question="Who runs ops?"))
+    client.post("/onboard/interview/message", json={"session_id": sid, "message": "Forty."})
+    return sid
+
+
+def test_revise_drops_what_followed_and_asks_again(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    sid = _two_answers(client, seeded)
+    assert client.get(f"/onboard/interview/{sid}").json()["questions_asked"] == 3
+
+    seeded.append(iv.Question(question="Who are your customers?", hint="Trades?"))
+    resp = client.post(
+        "/onboard/interview/revise",
+        json={"session_id": sid, "answer": 1, "message": "Tool rentals."},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["question"] == "Who are your customers?"
+    assert body["question_hint"] == "Trades?"
+    assert body["questions_asked"] == 2
+    turns = [t["text"] for t in client.get(f"/onboard/interview/{sid}").json()["turns"]]
+    assert turns == [
+        "We are Northwind.",
+        "What do you sell?",
+        "Tool rentals.",
+        "Who are your customers?",
+    ]
+
+
+def test_revise_can_redraft_and_clears_a_stale_draft(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    sid = _two_answers(client, seeded)
+    seeded.append(_draft())
+    client.post("/onboard/interview/draft", json={"session_id": sid})
+
+    seeded.append(_draft(summary="Rentals, not sales."))
+    resp = client.post(
+        "/onboard/interview/revise",
+        json={"session_id": sid, "answer": 2, "message": "Twelve."},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["phase"] == "draft"
+    assert resp.json()["summary"] == "Rentals, not sales."
+    roles = [t.role for t in route._interview_sessions[sid].transcript]
+    assert all(a != b for a, b in zip(roles, roles[1:], strict=False)), roles
+
+
+def test_revising_the_description_keeps_its_attachments(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    seeded.append(iv.Question(question="What do you sell?"))
+    resp = client.post(
+        "/onboard/interview/start",
+        data={"description": "We are Northwind."},
+        files=[("files", ("brief.md", b"Northwind brief text", "text/markdown"))],
+    )
+    sid = resp.json()["session_id"]
+
+    seeded.append(iv.Question(question="Who runs ops?"))
+    resp = client.post(
+        "/onboard/interview/revise",
+        json={"session_id": sid, "answer": 0, "message": "We are Northwind Tools."},
+    )
+    assert resp.status_code == 200
+    first = route._interview_sessions[sid].transcript[0].text
+    assert first.startswith("We are Northwind Tools.\n\n=== Attached: brief.md")
+    assert "Northwind brief text" in first
+    assert resp.json()["questions_asked"] == 1
+
+
+def test_a_failed_revise_changes_nothing(client: TestClient, seeded: list[Any]) -> None:
+    sid = _two_answers(client, seeded)
+    before = client.get(f"/onboard/interview/{sid}").json()
+
+    seeded.append(iv.InterviewError("The setup assistant is unavailable right now."))
+    resp = client.post(
+        "/onboard/interview/revise",
+        json={"session_id": sid, "answer": 0, "message": "SECRET-ARR-123"},
+    )
+    assert resp.status_code == 502
+    assert "SECRET-ARR-123" not in resp.text
+    assert client.get(f"/onboard/interview/{sid}").json() == before
+
+
+def test_revise_rejects_a_missing_answer_and_a_saved_session(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    sid = _two_answers(client, seeded)
+    for answer in (-1, 3):
+        resp = client.post(
+            "/onboard/interview/revise",
+            json={"session_id": sid, "answer": answer, "message": "x"},
+        )
+        assert resp.status_code == 404
+    resp = client.post(
+        "/onboard/interview/revise", json={"session_id": sid, "answer": 0, "message": "  "}
+    )
+    assert resp.status_code == 422
+
+    route._interview_sessions[sid].saved = True
+    resp = client.post(
+        "/onboard/interview/revise", json={"session_id": sid, "answer": 0, "message": "x"}
+    )
+    assert resp.status_code == 409
+
+
+def test_revise_is_owner_only(client: TestClient, seeded: list[Any]) -> None:
+    sid = _two_answers(client, seeded)
+    resp = client.post(
+        "/onboard/interview/revise",
+        json={"session_id": sid, "answer": 0, "message": "x"},
+        headers={"x-caller-email": "someone@else.test"},
+    )
+    assert resp.status_code == 404
+
+
+def test_start_over_forgets_the_session_everywhere(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    sid = _two_answers(client, seeded)
+    resp = client.delete(
+        f"/onboard/interview/{sid}", headers={"x-caller-email": "someone@else.test"}
+    )
+    assert resp.status_code == 404
+    assert client.delete(f"/onboard/interview/{sid}").status_code == 204
+    assert sid not in route._interview_sessions
+    assert interview_store.load(sid) is None
+    assert client.get(f"/onboard/interview/{sid}").status_code == 404
+
+
+def test_revising_a_files_only_description_keeps_every_file(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    seeded.append(iv.Question(question="What do you sell?"))
+    resp = client.post(
+        "/onboard/interview/start",
+        data={"description": ""},
+        files=[("files", ("brief.md", b"Northwind brief text", "text/markdown"))],
+    )
+    sid = resp.json()["session_id"]
+    seeded.append(iv.Question(question="Who runs ops?"))
+    client.post(
+        "/onboard/interview/revise",
+        json={"session_id": sid, "answer": 0, "message": "We are Northwind."},
+    )
+    first = route._interview_sessions[sid].transcript[0].text
+    assert first.startswith("We are Northwind.\n\n=== Attached: brief.md")
+    assert "Northwind brief text" in first
+
+
+def test_a_revise_missing_its_answer_is_404_without_echo(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    sid = _two_answers(client, seeded)
+    resp = client.post(
+        "/onboard/interview/revise", json={"session_id": sid, "message": "SECRET-ARR-123"}
+    )
+    assert resp.status_code == 404
+    assert "SECRET-ARR-123" not in resp.text
+
+
+def test_an_unexpected_error_mid_revise_restores_the_session(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    sid = _two_answers(client, seeded)
+    seeded.append(_draft())
+    client.post("/onboard/interview/draft", json={"session_id": sid})
+    held = route._interview_sessions[sid]
+    before = (list(held.transcript), held.questions_asked, held.draft)
+
+    seeded.append(RuntimeError("database is locked"))
+    no_raise = TestClient(client.app, raise_server_exceptions=False)
+    resp = no_raise.post(
+        "/onboard/interview/revise", json={"session_id": sid, "answer": 1, "message": "x"}
+    )
+    assert resp.status_code == 500
+    assert (held.transcript, held.questions_asked, held.draft) == before
+
+
+def test_a_turn_finishing_after_start_over_does_not_store_it_again(
+    client: TestClient, seeded: list[Any]
+) -> None:
+    sid = _two_answers(client, seeded)
+    in_flight = route._interview_sessions[sid]
+    assert client.delete(f"/onboard/interview/{sid}").status_code == 204
+    route._persist_interview(sid, in_flight)
+    assert interview_store.load(sid) is None
+    assert client.get(f"/onboard/interview/{sid}").status_code == 404
+
+
+def test_a_failed_revise_never_rolls_back_a_turn_added_meanwhile(
+    client: TestClient, seeded: list[Any], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The revise turn runs on a copy, so another request's turn on the
+    same session survives a revise that fails."""
+    sid = _two_answers(client, seeded)
+    held = route._interview_sessions[sid]
+
+    async def _concurrent_then_fail(transcript: list[iv.Turn], **kwargs: Any) -> Any:
+        held.transcript.append(iv.Turn(role="user", text="added meanwhile"))
+        raise iv.InterviewError("The setup assistant is unavailable right now.")
+
+    monkeypatch.setattr(iv, "advance", _concurrent_then_fail)
+    resp = client.post(
+        "/onboard/interview/revise", json={"session_id": sid, "answer": 0, "message": "x"}
+    )
+    assert resp.status_code == 502
+    assert held.transcript[-1].text == "added meanwhile"
+    assert held.transcript[0].text == "We are Northwind."

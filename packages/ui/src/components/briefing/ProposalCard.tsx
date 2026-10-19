@@ -12,8 +12,10 @@ import OverflowMenu, { type OverflowItem } from "@/components/ui/OverflowMenu";
 import type { PersonBriefItem, ProposalItem } from "@/lib/api";
 import { MEMORY_ACTIONS, briefingMemoryLine, nudgeAction } from "@/lib/briefing-memory";
 import { ageLabel, daysUntil, proposalStatusChip } from "@/lib/briefingSummary";
+import { type SnoozeChoice, snoozeChoices } from "@/lib/snooze";
 import { hostOf } from "@/lib/url";
 
+import HeldActionCard, { isHeldAction } from "./HeldActionCard";
 import LeadTrainingCard, { isLeadTraining } from "./LeadTrainingCard";
 import { Chip, TONE_TEXT, buildMonitoringSeed, type ContinueHandler } from "./shared";
 
@@ -180,6 +182,8 @@ export default function ProposalCard({
   onContinue,
   onApprove,
   onDismiss,
+  onSnooze,
+  onRerun,
   onApproveWithEdits,
   busy = false,
   defaultBodyExpanded = false,
@@ -190,6 +194,10 @@ export default function ProposalCard({
   onContinue?: ContinueHandler;
   onApprove?: (p: ProposalItem) => void;
   onDismiss?: (p: ProposalItem) => void;
+  // Hide the card until a later time; it comes back on its own.
+  onSnooze?: (p: ProposalItem, choice: SnoozeChoice) => void;
+  // Queue a failed scheduled run again (cards with `failed_run_id`).
+  onRerun?: (p: ProposalItem) => void;
   onApproveWithEdits?: (p: ProposalItem, editedBody: string) => void;
   busy?: boolean;
   // Show the whole body while closed (no clamp) — the first card in the
@@ -202,8 +210,8 @@ export default function ProposalCard({
   // Local edit-mode state. Entering edit mode replaces the body with a
   // textarea pre-filled with the proposal body; the action row becomes
   // Cancel / Send approval. Send approval pipes the edited text up through
-  // onApproveWithEdits so Briefing can ack the alert + seed the chat with a
-  // verbatim-send instruction.
+  // onApproveWithEdits, and the server sends exactly that text
+  // (POST /alerts/{id}/approve).
   const [editing, setEditing] = useState(false);
   const [editedBody, setEditedBody] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -223,6 +231,11 @@ export default function ProposalCard({
   // Approve, Approve + allow, Edit and Decline (LeadTrainingCard).
   if (isLeadTraining(proposal)) {
     return <LeadTrainingCard proposal={proposal} emphasized={emphasized} onResolved={() => onDismiss?.(proposal)} />;
+  }
+  // A team member's chat send their department held: approved on its own
+  // card once the whole call is on screen (HeldActionCard).
+  if (isHeldAction(proposal)) {
+    return <HeldActionCard proposal={proposal} emphasized={emphasized} onResolved={() => onDismiss?.(proposal)} />;
   }
   function startEditing() {
     setEditedBody(proposal.body || proposal.headline);
@@ -356,10 +369,20 @@ export default function ProposalCard({
           href: `/jobs/${proposal.suggested_workflow}`,
         }
       : null;
+  // A scheduled run that failed: Run again leads, the run page is a click
+  // away, and there is nothing to approve.
+  const failedRun = proposal.failed_run_id ?? null;
+  const rerun: CardAction | null =
+    failedRun && onRerun ? { label: "Run again", onSelect: () => onRerun(proposal) } : null;
+  const openRun: CardAction | null = failedRun
+    ? { label: "Open the run", href: `/jobs/runs/${encodeURIComponent(failedRun)}` }
+    : null;
   const approve: CardAction | null =
-    !isMonitoring && !isArtifact && onApprove ? { label: "Approve", onSelect: () => onApprove(proposal) } : null;
+    !isMonitoring && !isArtifact && !failedRun && onApprove
+      ? { label: "Approve", onSelect: () => onApprove(proposal) }
+      : null;
   const editApprove: CardAction | null =
-    !isMonitoring && !isArtifact && !isDecision && onApproveWithEdits
+    !isMonitoring && !isArtifact && !isDecision && !failedRun && onApproveWithEdits
       ? { label: "Edit & approve", onSelect: startEditing }
       : null;
   const dismiss: CardAction | null = onDismiss
@@ -385,14 +408,20 @@ export default function ProposalCard({
   if (isArtifact) primary = openDoc;
   else if (isMonitoring) primary = null; // Discuss leads
   else if (isLikelyStale && dismiss) primary = dismiss;
-  else primary = nudge ?? workflow ?? approve;
-  const menu = [nudge, workflow, approve, editApprove, dismiss, openInApp, personPage].filter(
+  else primary = rerun ?? nudge ?? workflow ?? approve;
+  // Snooze: one item per choice, just above Dismiss. Not offered on a
+  // drafted document, which lives in the gallery rather than the queue.
+  const snoozes: CardAction[] =
+    onSnooze && !isArtifact
+      ? snoozeChoices().map((c) => ({ label: c.label, onSelect: () => onSnooze(proposal, c) }))
+      : [];
+  const menu = [rerun, openRun, nudge, workflow, approve, editApprove, ...snoozes, dismiss, openInApp, personPage].filter(
     (a): a is CardAction => a != null && a !== primary,
   );
   const showActions = Boolean(onApprove || onDismiss || onApproveWithEdits);
 
   const status = isMonitoring ? null : proposalStatusChip(proposal);
-  const visibleTags = proposal.topic_tags.filter((t) => t !== "artifact");
+  const visibleTags = proposal.topic_tags.filter((t) => t !== "artifact" && !t.startsWith("failed_run:"));
   const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal);
   const surfacedNote = proposal.surfaced_reason ? (
     <p className="text-sm text-fg-muted leading-snug">{proposal.surfaced_reason}</p>

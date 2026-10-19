@@ -1016,7 +1016,10 @@ async def _handle_message(
             # to silently no-op than to spam the channel with an error
             # message that itself confuses users.
             if response.strip():
-                for chunk in _split_message(response):
+                from openexecutive.orchestrator.disclosure import with_chat_line
+
+                reply = with_chat_line(response, f"discord:{session_id}")
+                for chunk in _split_message(reply):
                     await effective_send_fn(chunk)
             else:
                 logger.info(
@@ -1513,6 +1516,7 @@ def create_discord_bot():
                         filename=a.filename,
                         content_type=a.content_type or "",
                         size=a.size,
+                        voice_note=a.is_voice_message(),
                     )
                     for a in message.attachments
                 ])

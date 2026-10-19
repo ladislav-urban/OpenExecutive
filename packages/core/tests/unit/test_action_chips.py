@@ -318,6 +318,8 @@ def test_non_json_result_still_surfaces() -> None:
 # of SIDE_EFFECTING_TOOLS, or it's a silent omission (the user fires the
 # tool and the chip never renders).
 _KNOWN_READ_ONLY_TOOLS: frozenset[str] = frozenset({
+    # correction_tools
+    "list_followups",
     # schedule_tools
     "lookup_person",
     "find_alerts",
@@ -339,11 +341,14 @@ _KNOWN_READ_ONLY_TOOLS: frozenset[str] = frozenset({
     # workflow_run_tools — catalog read (run_workflow is in SIDE_EFFECTING_TOOLS)
     "list_workflows",
     # mail_read_tools — reads of the speaker's own mailbox (Act as me)
+    "my_calendar",
     "search_my_email",
     "read_my_email",
     "read_my_email_attachment",
     "my_email_awaiting_reply",
     "my_email_read_before",
+    # app_control — a list of what the person may change
+    "find_in_app",
 })
 
 
@@ -354,8 +359,11 @@ def _all_registered_tool_names() -> set[str]:
     of truth — drift between them would defeat the guard.
     """
     from openexecutive.integrations.erpnext_drafts import ERPNEXT_DRAFT_TOOL_HANDLERS
+    from openexecutive.orchestrator.app_control import APP_TOOL_HANDLERS
     from openexecutive.orchestrator.artifact_tools import DRAFT_ARTIFACT_TOOL_HANDLERS
     from openexecutive.orchestrator.broadcast_tools import BROADCAST_TOOL_HANDLERS
+    from openexecutive.orchestrator.calendar_tools import CALENDAR_TOOL_HANDLERS
+    from openexecutive.orchestrator.correction_tools import CORRECTION_TOOL_HANDLERS
     from openexecutive.orchestrator.decision_tools import DECISION_TOOL_HANDLERS
     from openexecutive.orchestrator.delegation_tools import DELEGATION_TOOL_HANDLERS
     from openexecutive.orchestrator.department_tools import DEPARTMENT_TOOL_HANDLERS
@@ -371,14 +379,17 @@ def _all_registered_tool_names() -> set[str]:
         set(SCHEDULE_TOOL_HANDLERS)
         | set(PEOPLE_TOOL_HANDLERS)
         | set(OPEN_LOOP_TOOL_HANDLERS)
+        | set(CORRECTION_TOOL_HANDLERS)
         | set(DEPARTMENT_TOOL_HANDLERS)
         | set(DECISION_TOOL_HANDLERS)
         | set(FACT_TOOL_HANDLERS)
         | set(SKILL_TOOL_HANDLERS)
         | set(BROADCAST_TOOL_HANDLERS)
+        | set(CALENDAR_TOOL_HANDLERS)
         | set(DRAFT_ARTIFACT_TOOL_HANDLERS)
         | set(MCP_TOOL_NAMES)
         | set(WORKFLOW_RUN_TOOL_HANDLERS)
+        | set(APP_TOOL_HANDLERS)
         # Act as me: its own registry, offered per turn (never _ALL_SKILL_TOOLS).
         | set(DELEGATION_TOOL_HANDLERS)
         # ERPNext drafts: the same, the principal's own turns only.
@@ -414,3 +425,58 @@ def test_no_silent_omission_from_side_effecting_tools() -> None:
         f"(to emit a chip) or _KNOWN_READ_ONLY_TOOLS (to deliberately skip): "
         f"{sorted(unclassified)}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Meetings: booked, or waiting on an approval card
+# ---------------------------------------------------------------------------
+
+def test_a_proposed_meeting_chip_carries_its_card_for_its_approver() -> None:
+    chip = summarize_action(
+        tool_name="create_calendar_event",
+        tool_input={"title": "Block for John"},
+        tool_result=json.dumps({"status": "proposed", "decision_instance_id": 17, "approve_here": True}),
+    )
+    assert chip is not None
+    assert chip["summary"] == "Waiting for your approval: Block for John"
+    assert chip["decision_id"] == 17
+
+
+def test_a_proposed_meeting_for_someone_else_has_no_card() -> None:
+    chip = summarize_action(
+        tool_name="create_calendar_event",
+        tool_input={"title": "Sync"},
+        tool_result=json.dumps({"status": "already_proposed", "decision_instance_id": 4, "approve_here": False}),
+    )
+    assert chip is not None
+    assert chip["summary"] == "Sent for approval: Sync"
+    assert "decision_id" not in chip
+
+
+def test_a_booked_meeting_says_booked() -> None:
+    chip = summarize_action(
+        tool_name="create_instant_meeting",
+        tool_input={"title": "Quick call"},
+        tool_result=json.dumps({"status": "created", "decision_instance_id": 5, "event_id": "e"}),
+    )
+    assert chip is not None and chip["summary"] == "Booked: Quick call"
+    assert "decision_id" not in chip
+
+
+def test_a_held_send_is_not_a_done_chip() -> None:
+    chip = summarize_action(
+        tool_name="send_slack_dm",
+        tool_input={"channel_ref": "U1", "text": "hi"},
+        tool_result=json.dumps({"status": "waiting_for_approval", "decision_instance_id": 9}),
+    )
+    assert chip is not None and chip["summary"] == "Waiting for approval"
+    assert "decision_id" not in chip
+
+
+def test_a_cancelled_meeting_says_so() -> None:
+    chip = summarize_action(
+        tool_name="cancel_calendar_event",
+        tool_input={"decision_instance_id": 3},
+        tool_result=json.dumps({"status": "cancelled", "decision_instance_id": 3}),
+    )
+    assert chip is not None and chip["summary"] == "Cancelled the meeting"

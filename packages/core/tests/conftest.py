@@ -47,6 +47,29 @@ Settings.model_config["env_file"] = None
 
 
 @pytest.fixture(autouse=True)
+def _no_ai_disclosure(monkeypatch: pytest.MonkeyPatch):
+    """Leave the AI disclosure line (orchestrator.disclosure) off what tests
+    send, so a test's exact-text assertions don't depend on it, and forget
+    which chats have seen it. test_ai_disclosure.py turns it back on."""
+    from openexecutive.orchestrator import disclosure
+
+    monkeypatch.setenv("AI_DISCLOSURE", "false")
+    disclosure.reset()
+    yield
+    disclosure.reset()
+
+
+@pytest.fixture(autouse=True)
+def _no_claim_check(monkeypatch: pytest.MonkeyPatch):
+    """Keep the end-of-turn claim check (orchestrator.claim_check) from making
+    a provider call in tests that script a turn; test_claim_check.py turns it
+    back on. The conversation review (memory.chat_review) likewise records
+    nothing and schedules no review; test_chat_review.py turns it on."""
+    monkeypatch.setenv("CLAIM_CHECK_ENABLED", "false")
+    monkeypatch.setenv("CHAT_REVIEW_ENABLED", "false")
+
+
+@pytest.fixture(autouse=True)
 def reset_active_gateway():
     """Ensure the module-level MCP gateway singleton is cleared between tests."""
     from openexecutive.orchestrator.mcp_gateway import set_active_gateway
@@ -124,3 +147,18 @@ def _no_artifact_indexing(monkeypatch: pytest.MonkeyPatch):
         "openexecutive.orchestrator.artifact_tools._knowledge_store", lambda: None
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _chat_topics_title_only(monkeypatch: pytest.MonkeyPatch):
+    """Naming a chat (utils.chat_topics.name_chat) asks for its title and
+    topic in one call. Route it through session_title.generate_session_title,
+    looked up at call time, so a test's stub of that keeps naming the chat
+    and nothing reaches the provider; no topic is filed.
+    test_chat_topics.py restores the real call."""
+    from openexecutive.utils import chat_topics, session_title
+
+    async def _title_only(user_msg: str, assistant_msg: str, names: list[str]):
+        return await session_title.generate_session_title(user_msg, assistant_msg), None
+
+    monkeypatch.setattr(chat_topics, "_title_and_topic", _title_only)

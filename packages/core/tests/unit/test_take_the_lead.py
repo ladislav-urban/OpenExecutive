@@ -430,6 +430,11 @@ def test_mcp_reads_pass_and_sends_are_gated(owner: Any) -> None:
     ("mail__unsubscribe_from_list", True),
     ("drive.searchFiles", False),
     ("ms365__read_mail_message", False),
+    # ERPNext's pinned reads; its draft tools stay gated.
+    ("erpnext__run_report", False),
+    ("erpnext__list-records", False),
+    ("erpnext__draft_todo", True),
+    ("erpnext__run_anything_else", True),
 ])
 def test_connected_tools_fail_closed(name: str, acts: bool) -> None:
     assert ttl.mcp_tool_acts(name) is acts
@@ -1201,3 +1206,10 @@ def test_the_owners_act_as_me_ones_share_the_list_and_nobody_elses(client: TestC
     assert client.delete(f"/take-the-lead/learned/{others.id}").status_code == 404
     assert client.delete(f"/take-the-lead/learned/{mine.id}").status_code == 200
     assert training.allowed_sender(owner.id, "dana@northpeak.example") is None
+
+
+def test_a_calendar_delete_by_action_counts_as_deleting(owner: Any) -> None:
+    hit = ttl.check("google_workspace__manage_event", {"action": "delete", "event_id": "e1"}, lead=_lead(), rules=[], mcp=True)
+    assert hit is not None and hit.kind == ttl.DELETE_SHARE
+    hit = ttl.check("google_workspace__manage_event", {"action": "update", "event_id": "e1"}, lead=_lead(), rules=[], mcp=True)
+    assert hit is None or hit.kind != ttl.DELETE_SHARE

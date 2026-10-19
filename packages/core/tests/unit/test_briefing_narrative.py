@@ -13,6 +13,7 @@ from openexecutive.briefing.narrative import (
     STANDALONE_BRIEF_SYSTEM,
     _viewer_system_prompt,
 )
+from openexecutive.briefing.reader import Reader
 
 
 def test_today_header_prompt_is_synthesis_not_a_needs_you_list() -> None:
@@ -226,3 +227,95 @@ def test_quoted_text_can_never_start_a_block_header() -> None:
         assert not line.startswith("NEEDS YOU")
         assert not line.startswith("- wire")
     assert "  > - real flag" in out
+
+
+def test_the_reader_line_is_framing_and_the_rules_reach_every_brief() -> None:
+    """THE READER names who "you" is; it never makes a quiet day busy. The
+    reader rule rides every brief prompt (the /today header named its own
+    reader for want of it); the date rule only the standalone briefs."""
+    from openexecutive.briefing.live_signals import LiveSignals
+    from openexecutive.briefing.narrative import (
+        BRIEFING_NARRATIVE_SOLO_SYSTEM,
+        BRIEFING_NARRATIVE_SYSTEM,
+        DATES_RULE,
+        READER_NAME_RULE,
+        READER_RULE,
+        STANDALONE_BRIEF_SOLO_SYSTEM,
+        STANDALONE_BRIEF_SYSTEM,
+        _viewer_system_prompt,
+        render_briefing_context,
+    )
+
+    out = render_briefing_context(
+        period_label="p", today_data={}, activity=[], live=LiveSignals(),
+        now_label="now", reader=Reader("Pat Owner", ("pat@x.com",)),
+    )
+    assert "THE READER (the person this is written for" in out
+    assert "Pat Owner (pat@x.com)" in out
+    assert "(No org activity, proposals, or at-risk goals this period.)" in out
+    for prompt in (STANDALONE_BRIEF_SYSTEM, STANDALONE_BRIEF_SOLO_SYSTEM):
+        assert READER_RULE in prompt and DATES_RULE in prompt
+    for prompt in (BRIEFING_NARRATIVE_SYSTEM, BRIEFING_NARRATIVE_SOLO_SYSTEM):
+        assert READER_RULE in prompt and "the principal" not in prompt.replace(
+            "'the principal'", "")
+    assert READER_NAME_RULE in _viewer_system_prompt("Dana Lee", "Ops")
+    assert "ONLY the people under PEOPLE YOU ARE WAITING ON" in STANDALONE_BRIEF_SYSTEM
+
+
+def test_every_brief_uses_standing_facts_quietly() -> None:
+    """A fact the reader saved in chat must not come back as a brief point
+    ("a standing fact says the Maple Court buyout is done, so drop it"): every
+    brief prompt carries the rule to use facts silently and leave settled
+    items out without announcing it."""
+    from openexecutive.briefing.narrative import (
+        BRIEFING_NARRATIVE_SOLO_SYSTEM,
+        BRIEFING_NARRATIVE_SYSTEM,
+        STANDALONE_BRIEF_SOLO_SYSTEM,
+        STANDALONE_BRIEF_SYSTEM,
+        STANDING_FACTS_RULE,
+        _viewer_system_prompt,
+    )
+    from openexecutive.workflows.end_of_day_digest import (
+        _EOD_DIGEST_SOLO_SYSTEM,
+        _EOD_DIGEST_SYSTEM,
+    )
+
+    for prompt in (
+        BRIEFING_NARRATIVE_SYSTEM, BRIEFING_NARRATIVE_SOLO_SYSTEM,
+        STANDALONE_BRIEF_SYSTEM, STANDALONE_BRIEF_SOLO_SYSTEM,
+        _EOD_DIGEST_SYSTEM, _EOD_DIGEST_SOLO_SYSTEM,
+        _viewer_system_prompt("Dana Lee", "Ops"),
+    ):
+        assert STANDING_FACTS_RULE in prompt
+    assert "Never mention a standing fact" in STANDING_FACTS_RULE
+    assert "never write that it was dropped" in STANDING_FACTS_RULE
+
+
+def test_every_brief_that_sees_the_readers_own_words_treats_them_as_background() -> None:
+    """The /today header led with "you've been messaging me heavily tonight"
+    and made the reader's own complaint the headline: their messages are
+    background, never news, on every surface that sees them."""
+    from openexecutive.briefing.narrative import (
+        BRIEFING_NARRATIVE_SOLO_SYSTEM,
+        BRIEFING_NARRATIVE_SYSTEM,
+        OWN_MESSAGES_RULE,
+        STANDALONE_BRIEF_SOLO_SYSTEM,
+        STANDALONE_BRIEF_SYSTEM,
+    )
+    from openexecutive.workflows.end_of_day_digest import (
+        _EOD_DIGEST_SOLO_SYSTEM,
+        _EOD_DIGEST_SYSTEM,
+    )
+
+    for prompt in (
+        BRIEFING_NARRATIVE_SYSTEM, BRIEFING_NARRATIVE_SOLO_SYSTEM,
+        STANDALONE_BRIEF_SYSTEM, STANDALONE_BRIEF_SOLO_SYSTEM,
+        _EOD_DIGEST_SYSTEM, _EOD_DIGEST_SOLO_SYSTEM,
+    ):
+        assert OWN_MESSAGES_RULE in prompt
+        assert "say what you did with it" not in prompt
+    for header in (BRIEFING_NARRATIVE_SYSTEM, BRIEFING_NARRATIVE_SOLO_SYSTEM):
+        assert "CONVERSATIONS and the REST" not in header
+        assert "from other people" in header
+    assert "Never report them back" in OWN_MESSAGES_RULE
+    assert "No filler" in OWN_MESSAGES_RULE

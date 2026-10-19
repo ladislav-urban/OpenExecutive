@@ -486,6 +486,17 @@ def archive_person(person_id: int, request: Request) -> Response:
 # Open loops (attunement) — what each person owes
 # --------------------------------------------------------------------------- #
 
+class AssignNoticeOut(BaseModel):
+    """Whether the person was told about a task just assigned to them:
+    ``sent`` (on ``channel``), ``held`` for their quiet hours or brief,
+    ``not_reached`` (no channel worked) or ``skipped`` (their own task, or
+    notices are off). A teammate assigning gets no channel, and ``later``
+    in place of ``held``: those are the person's own settings."""
+
+    status: str
+    channel: str | None = None
+
+
 class OpenLoopOut(BaseModel):
     loop_id: int
     owner_person_id: int
@@ -493,6 +504,8 @@ class OpenLoopOut(BaseModel):
     description: str
     due_at: str
     created_at: str
+    # Set only on the response to an assignment.
+    notified: AssignNoticeOut | None = None
 
 
 class OpenLoopClose(BaseModel):
@@ -555,14 +568,19 @@ _ASSIGN_REFUSED: dict[str, tuple[int, str]] = {
     response_model=OpenLoopOut,
     status_code=status.HTTP_201_CREATED,
 )
-def assign_person_open_loop(person_id: int, body: OpenLoopCreate, request: Request) -> OpenLoopOut:
+async def assign_person_open_loop(
+    person_id: int, body: OpenLoopCreate, request: Request
+) -> OpenLoopOut:
     """Assign this person a task: an open loop, followed up once it is due.
 
     The principal or any active team member may assign one to anyone on the
-    team (themselves included); nobody is messaged now. Listing stays the
+    team (themselves included). Someone assigned a task by another person is
+    told once on their own channel (``attunement.assignment_notice``), and
+    ``notified`` says how that went. Listing stays the
     principal's or the owner's (``GET`` above), so a teammate who assigns Ben
     a task gets it back here but does not see Ben's other loops."""
     from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.attunement.assignment_notice import notify_assignee
     from openexecutive.attunement.open_loops import assign_open_loop, get_open_loop
 
     _visible_person(person_id, request)
@@ -582,6 +600,10 @@ def assign_person_open_loop(person_id: int, body: OpenLoopCreate, request: Reque
             reason = "unknown_owner"
         code, detail = _ASSIGN_REFUSED.get(reason, (409, "Could not assign the task"))
         raise HTTPException(status_code=code, detail=detail)
+    notice = await notify_assignee(
+        loop_id=loop.id, owner_person_id=person_id, assigned_by_person_id=assigner.id,
+        task=body.task, due_at=loop.due_at,
+    )
     return OpenLoopOut(
         loop_id=loop.id,
         owner_person_id=loop.owner_person_id,
@@ -589,6 +611,9 @@ def assign_person_open_loop(person_id: int, body: OpenLoopCreate, request: Reque
         description=loop.description,
         due_at=loop.due_at,
         created_at=loop.created_at,
+        notified=AssignNoticeOut.model_validate(
+            notice.as_dict(for_principal=bool(assigner.is_principal))
+        ),
     )
 
 
@@ -660,7 +685,7 @@ class WorkingStyleIn(BaseModel):
     """``rules`` omitted keeps the current rules (and their provenance) and
     only sets the lock."""
 
-    rules: list[str] | None = Field(default=None, max_length=4)
+    rules: list[str] | None = Field(default=None, max_length=8)  # style.MAX_RULES
     locked: bool = False
 
 

@@ -109,6 +109,9 @@ class TurnDelegation:
     searches: int = 0
     threads_read: int = 0
     attachments_read: int = 0
+    # Files copied from their mail to the Executive's Drive or OneDrive
+    # (``save_my_email_attachment``).
+    files_saved: int = 0
     # Reminders set this turn (orchestrator.reminder_tools).
     reminders: int = 0
     # Approval cards left this turn (orchestrator.action_card_tools).
@@ -340,12 +343,20 @@ _DM_SESSION_PREFIXES = {"slack": "slack:dm:", "discord": "discord:dm:"}
 
 def private_conversation(session: Any) -> bool:
     """Whether only the speaker (and the Executive) can read this
-    conversation: the web chat, a Slack or Discord DM, or a Telegram chat
-    (``is_principal_on_verified_surface`` already accepts only a private one).
+    conversation: the web chat, a Slack or Discord DM, a Telegram chat
+    (``is_principal_on_verified_surface`` already accepts only a private one),
+    or one a channel adapter marked so (``Session.private_chat``) for a
+    sender it verified (``Session.speaker_verified``).
     Also the morning brief's rule for reading what is private to the
-    principal from a chat turn (``workflows.morning_brief``)."""
+    principal from a chat turn (``workflows.morning_brief``). A web chat
+    shared with teammates (``Session.shared_chat``) is read by all of them,
+    so it isn't."""
     if getattr(session, "from_web_chat", False) is True:
-        return True
+        return getattr(session, "shared_chat", False) is not True
+    if getattr(session, "private_chat", False) is True:
+        # Whose conversation it is matters to callers that ask nothing else
+        # (``correction_tools._scheduled_by``).
+        return getattr(session, "speaker_verified", False) is True
     channel = str(getattr(session, "origin_channel", "") or "")
     if channel == "telegram":
         return True
@@ -389,6 +400,9 @@ def _offered(session: Any, person: Person | None, enabled: bool) -> bool:
     if getattr(session, "unattended", False) is True:
         return False
     if getattr(session, "private_to_principal", False) is True:
+        return False
+    # Another AI app asking over the MCP server: nobody is here to approve.
+    if getattr(session, "from_mcp_client", False) is True:
         return False
     override = getattr(session, "delegation_override", None)
     if isinstance(override, DelegationOverride):

@@ -69,7 +69,7 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     }
 
 
-async def judge_response(scenario: dict, response: str, client) -> dict:
+async def judge_response(scenario: dict, response: str) -> dict:
     judge_prompt = f"""You are an evaluator for an AI executive advisory system.
 
 Evaluate this response to an executive question on a 1-5 scale for each dimension.
@@ -92,13 +92,9 @@ Rate each dimension (1=poor, 3=acceptable, 5=excellent):
 Respond in JSON format:
 {{"persona_coherence": N, "domain_accuracy": N, "actionability": N, "topic_coverage": N, "specificity": N, "concision": N, "overall": N, "notes": "brief explanation"}}"""
 
-    message = await client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=500,
-        messages=[{"role": "user", "content": judge_prompt}],
-    )
+    from openexecutive.evals.judges import judge_message
 
-    text = message.content[0].text
+    text = await judge_message(judge_prompt)
     try:
         start = text.find("{")
         end = text.rfind("}") + 1
@@ -140,7 +136,7 @@ async def run_workflow_eval(scenario: dict, store) -> dict:
     }
 
 
-async def judge_workflow(scenario: dict, artifact: str, client) -> dict:
+async def judge_workflow(scenario: dict, artifact: str) -> dict:
     expected_sections = scenario.get("expected_artifact_sections", []) or []
     quality_criteria = scenario.get("quality_criteria", {}) or {}
 
@@ -168,13 +164,9 @@ Rate each dimension 1-5 (1=poor, 3=acceptable, 5=excellent):
 Respond in JSON:
 {{"structure": N, "specificity": N, "actionability": N, "coherence": N, "completeness": N, "overall": N, "notes": "brief"}}"""
 
-    message = await client.messages.create(
-        model="claude-opus-4-7",
-        max_tokens=500,
-        messages=[{"role": "user", "content": judge_prompt}],
-    )
+    from openexecutive.evals.judges import judge_message
 
-    text = message.content[0].text
+    text = await judge_message(judge_prompt)
     try:
         start = text.find("{")
         end = text.rfind("}") + 1
@@ -183,7 +175,7 @@ Respond in JSON:
         return {"overall": 0, "notes": "Failed to parse judge response"}
 
 
-async def run_triage_eval(scenario: dict, client) -> dict:
+async def run_triage_eval(scenario: dict) -> dict:
     """Runs a triage scenario directly against the TriageAgent (no Executive loop).
 
     Scenario YAML must include `event` + `context` (with `recent_alerts`,
@@ -286,12 +278,10 @@ async def main() -> None:
     initialize_overrides_db()
     ReviewStore.initialize_db()
 
-    # Built through the app's factory so an organisation-scoped key gets its
-    # `anthropic-workspace-id` header here too — a bare AsyncAnthropic() 400s
-    # on every judge call for those keys (#128).
-    from openexecutive.providers.anthropic_provider import configured_async_client
-
-    client = configured_async_client()
+    # Judges go through the provider registry (openexecutive.evals.judges),
+    # which builds the Anthropic client with the `anthropic-workspace-id`
+    # header an organisation-scoped key needs (#128) and picks the judge
+    # model from EVAL_JUDGE_MODEL.
 
     scenario_dir = Path(args.scenarios)
     output_dir = Path(args.output)
@@ -339,8 +329,8 @@ async def main() -> None:
         for scenario in scenarios:
             print(f"  [{scenario['id']}] {scenario['description']}")
             try:
-                result = await run_triage_eval(scenario, client)
-                scores = await judge_triage(scenario, result["decision"], client)
+                result = await run_triage_eval(scenario)
+                scores = await judge_triage(scenario, result["decision"])
                 result["scores"] = scores
                 result["passed"] = scores.get("overall", 0) >= 3.5
                 results.append(result)
@@ -372,7 +362,7 @@ async def main() -> None:
             print(f"  [{scenario['id']}] {scenario['description']}")
             try:
                 result = await run_workflow_eval(scenario, store)
-                scores = await judge_workflow(scenario, result["artifact"], client)
+                scores = await judge_workflow(scenario, result["artifact"])
                 result["scores"] = scores
                 result["passed"] = scores.get("overall", 0) >= 3.5
                 results.append(result)
@@ -395,7 +385,7 @@ async def main() -> None:
                 print(f"  [{scenario['id']}] {scenario['description']}")
                 try:
                     result = await run_eval(scenario, executive, None)
-                    scores = await judge_response(scenario, result["response"], client)
+                    scores = await judge_response(scenario, result["response"])
                     result["scores"] = scores
                     result["passed"] = scores.get("overall", 0) >= 3.5
                     results.append(result)

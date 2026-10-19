@@ -64,6 +64,7 @@ from typing import Any
 from openexecutive.evals.judges import judge_chat, judge_inbox, judge_triage, judge_workflow
 from openexecutive.evals.scenarios import (
     load_scenarios,
+    routing_check,
     scenario_delegation,
     scenario_inbox,
     scenario_principal_role,
@@ -485,6 +486,7 @@ def _make_chat_runner(
     with_mcp: bool = False,
 ) -> RunOne:
     from openexecutive.memory.company_profile import CompanyProfile
+    from openexecutive.orchestrator.debug_events import DebugCollector
     from openexecutive.orchestrator.executive import Executive
     from openexecutive.orchestrator.mcp_gateway import get_active_gateway
     from openexecutive.orchestrator.session import Session
@@ -540,6 +542,9 @@ def _make_chat_runner(
                         **surface,
                     )
                     query = scenario["query"]
+                    # Records which specialists the turn consulted, for
+                    # the scenario's routing expectation (routing_check).
+                    collector = DebugCollector()
                     response = await executive.chat(
                         user_message=query,
                         session=session,
@@ -548,6 +553,7 @@ def _make_chat_runner(
                         # route passes the signed-in person: a `speaker`
                         # scenario's caller, else None.
                         person_id=surface.get("caller_person_id"),
+                        debug_collector=collector,
                         # A scenario may supply the <peer_memory> body itself.
                         # Evals run with no person_id, so the Honcho prefetch
                         # never fires; this is the only way to exercise how the
@@ -564,6 +570,17 @@ def _make_chat_runner(
                     else:
                         scores = await judge_chat(scenario, response)
                     ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD
+                    routing = routing_check(
+                        scenario,
+                        [
+                            str(e.data.get("specialist", ""))
+                            for e in collector.events
+                            if e.kind == "specialist_start"
+                        ],
+                    )
+                    if routing is not None:
+                        scores["routing"] = routing
+                        ok = ok and routing["ok"]
                     if ok:
                         passed[0] += 1
                     await queue.put(
