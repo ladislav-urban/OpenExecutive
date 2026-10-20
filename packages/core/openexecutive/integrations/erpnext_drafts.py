@@ -45,7 +45,9 @@ draft it read; the card keeps it and the approval sends it back
 makes nothing if it now comes out differently (a source document, a price
 or a rate changed since): that card is closed with the reason
 (``CHANGED_SINCE_PROPOSED``), and asking again leaves a card with the draft
-as it is now. Asking again while the card still waits refreshes it in place.
+as it is now. Asking again while the card still waits, when ERPNext now reads
+it differently, closes that card and leaves a new one: a card is never
+changed under a screen that shows it.
 
 Take the lead never makes one: unattended runs are not offered the tool, and
 the gateway refuses every ``erpnext__draft*`` call outside the executor's
@@ -700,22 +702,22 @@ def propose(
 ) -> tuple[int, bool, dict[str, Any]]:
     """Store a card for ``person`` (``fields`` already checked); returns its
     decision id, whether it is new and the view it shows. The same draft
-    still waiting is that card, not a new one: with the view it was left
-    with, or, when ERPNext now reads it differently (another ``fingerprint``),
-    refreshed in place to this check's view. ``waiting``:
-    ``open_cards(person.id)``, if read."""
-    from openexecutive.memory.decision_ledger import create_decision_instance, update_open_payload
+    still waiting is that card, not a new one, with the view it was left
+    with, unless ERPNext now reads it differently (another ``fingerprint``):
+    then that card is closed and a new one left. Never changed in place,
+    since a screen still showing the old card would approve the new draft
+    (security review); the old card's screen gets "already handled".
+    ``waiting``: ``open_cards(person.id)``, if read."""
+    from openexecutive.memory.decision_ledger import close_externally, create_decision_instance
 
     digest = _digest(person.id, doctype, fields)
     for card in open_cards(person.id) if waiting is None else waiting:
         stored = _payload(card)
         if stored.get("digest") == digest:
+            if fingerprint is not None and stored.get("fingerprint") != fingerprint:
+                close_externally(card.id, reason="changed")
+                break
             shown = stored.get("view")
-            if fingerprint is not None and stored.get("fingerprint") != fingerprint and update_open_payload(
-                card.id, {**stored, "view": view, "fingerprint": fingerprint},
-                expected_json=card.proposed_payload_json,
-            ):
-                return int(card.id), False, view
             return int(card.id), False, shown if isinstance(shown, dict) else view
     card_key = f"oe:{DECISION_CLASS}:{uuid.uuid4().hex}"
     payload = {

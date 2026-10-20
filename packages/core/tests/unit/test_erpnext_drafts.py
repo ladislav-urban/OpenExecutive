@@ -1124,21 +1124,28 @@ def test_a_draft_that_changed_since_its_card_closes_the_card(
     assert fresh.id != card.id and json.loads(fresh.proposed_payload_json)["fingerprint"] == NOW
 
 
-def test_asking_again_while_the_card_waits_refreshes_it_when_erpnext_reads_it_differently(
-    erp: FakeErpnext, roster: SimpleNamespace,
+def test_asking_again_when_erpnext_reads_it_differently_replaces_the_card_never_changes_it(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
 ) -> None:
+    # A screen still showing the old card must not approve the new reading
+    # (security review): the old card is closed, and a new one left.
     card = _fingerprinted_card(erp, roster)
-    erp.replies.append(json.dumps({
-        **CHECKED_RESTOCK, "fingerprint": NOW,
-        "summary": {**CHECKED_RESTOCK["summary"], "currency": "USD"},
-    }))
+    changed = {**CHECKED_RESTOCK, "fingerprint": NOW, "summary": {**CHECKED_RESTOCK["summary"], "currency": "USD"}}
+    erp.replies.append(json.dumps(changed))
     again = _propose(_owner_turn(roster), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
-    assert again["decision_id"] == card.id
-    refreshed = json.loads(get_decision_instance(card.id).proposed_payload_json)  # type: ignore[union-attr]
-    assert refreshed["fingerprint"] == NOW
-    assert refreshed["view"] != json.loads(card.proposed_payload_json)["view"]
-    # The same reading again leaves the card as it is.
-    erp.replies.append(json.dumps({**CHECKED_RESTOCK, "fingerprint": NOW,
-                                   "summary": {**CHECKED_RESTOCK["summary"], "currency": "USD"}}))
-    _propose(_owner_turn(roster), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
-    assert json.loads(get_decision_instance(card.id).proposed_payload_json) == refreshed  # type: ignore[union-attr]
+    assert again["decision_id"] != card.id
+    old = get_decision_instance(card.id)
+    assert old is not None and old.status != STATUS_PROPOSED
+    assert json.loads(old.proposed_payload_json)["fingerprint"] == SHOWN
+    new = get_decision_instance(again["decision_id"])
+    assert new is not None and json.loads(new.proposed_payload_json)["fingerprint"] == NOW
+    assert new.idempotency_key != card.idempotency_key
+    # The old card's screen approves nothing.
+    calls = len(erp.calls)
+    with pytest.raises(drafts.ApproveRefused) as stale:
+        _approve(old)
+    assert stale.value.code == "already_handled" and len(erp.calls) == calls
+    # The same reading again is the new card, unchanged.
+    erp.replies.append(json.dumps(changed))
+    same = _propose(_owner_turn(roster), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
+    assert same["decision_id"] == new.id

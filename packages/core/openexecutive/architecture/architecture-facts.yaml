@@ -9527,9 +9527,11 @@ integrations:
     CARDS_PER_TURN 3 (TurnDelegation.erpnext_drafts), OPEN_CARDS_MAX 10,
     CARD_TTL 3 days; the same draft still waiting is the same card, and
     counts towards neither the turn's three nor the audit; when the new
-    check's fingerprint differs from the waiting card's, propose refreshes
-    that card's view and fingerprint in place (update_open_payload,
-    compare-and-set on the payload read). Reading the
+    check's fingerprint differs from the waiting card's, propose closes
+    that card (close_externally, reason "changed") and leaves a new one
+    with its own id and card_key. A card is never changed in place: a
+    screen still showing it would approve the new reading (security
+    review), and approving the closed one answers already_handled. Reading the
     cards (open_cards) first tidies: a card past CARD_TTL is closed
     (close_externally, reason "expired"), and a card left executing that
     no approval in this process is carrying out (_APPROVING; the API runs
