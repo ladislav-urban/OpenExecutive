@@ -714,10 +714,16 @@ def propose(
     for card in open_cards(person.id) if waiting is None else waiting:
         stored = _payload(card)
         if stored.get("digest") == digest:
-            if fingerprint is not None and stored.get("fingerprint") != fingerprint:
-                close_externally(card.id, reason="changed")
-                break
             shown = stored.get("view")
+            # A replacement only once the old card is closed: if another API
+            # process claimed or closed it meanwhile, no second card for the
+            # same draft; that one answers for it.
+            if (
+                fingerprint is not None and stored.get("fingerprint") != fingerprint
+                and close_externally(card.id, reason="changed")
+            ):
+                break
+            return int(card.id), False, shown if isinstance(shown, dict) else view
             return int(card.id), False, shown if isinstance(shown, dict) else view
     card_key = f"oe:{DECISION_CLASS}:{uuid.uuid4().hex}"
     payload = {
