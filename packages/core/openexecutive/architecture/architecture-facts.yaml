@@ -9499,7 +9499,10 @@ integrations:
     back to the model wrapped as untrusted and leaves no card. The card is
     an erpnext_draft decision (approver_only, alert_source None) with
     payload {private, person_id, why, digest, doctype, tool, fields,
-    asked_by, card_key, view, attempts, last_error?}; idempotency_key =
+    asked_by, card_key, view, fingerprint?, attempts, last_error?};
+    fingerprint is draft_check's (oe_connector drafts.fingerprint: SHA-256
+    of the card's summary minus estimated_value / unpriced_items), kept only
+    when it is 64 lowercase hex (fingerprint_of); idempotency_key =
     card_key = "oe:erpnext_draft:<uuid hex>". view is card_view: what
     approval sends, i.e. the stored fields and a Material Request's stored
     lines (never draft_check's item list, which could merge or omit one),
@@ -9510,20 +9513,26 @@ integrations:
     lines with ERPNext's rate and amount beside each only where its reading
     at the same index is the same item and qty; a stated rate stays as
     stated (a note says when ERPNext's pricing rules moved it), an unstated
-    one is ERPNext's price-list rate at the check (a note says it is
-    re-applied at insert); and Grand total in the document's currency,
+    one is ERPNext's price-list rate at the check (a note says that if it
+    changes before approval, nothing is made); and Grand total in the document's currency,
     plus base_grand_total when the company's differs. A Purchase Order from
     a material_request or supplier_quotation stores no lines: approval
     sends the source and ERPNext's mapper makes them, so the card shows the
     mapper's lines from the check (at most 20, then a count) and notes that
-    approval brings over only what is not ordered yet then. Values are plain()
+    if what it brings over or its prices change before approval, nothing
+    is made (the card's fingerprint). Values are plain()
     one-line text capped at 300 chars, numbers exact (no rounding), except
     a ToDo's "What": the stored description in full (up to TEXT_MAX 1000,
     line breaks kept), since a cut would hide text the assignee gets under
     the approver's name (security review). Limits:
     CARDS_PER_TURN 3 (TurnDelegation.erpnext_drafts), OPEN_CARDS_MAX 10,
     CARD_TTL 3 days; the same draft still waiting is the same card, and
-    counts towards neither the turn's three nor the audit. Reading the
+    counts towards neither the turn's three nor the audit; when the new
+    check's fingerprint differs from the waiting card's, propose closes
+    that card (close_externally, reason "changed") and leaves a new one
+    with its own id and card_key. A card is never changed in place: a
+    screen still showing it would approve the new reading (security
+    review), and approving the closed one answers already_handled. Reading the
     cards (open_cards) first tidies: a card past CARD_TTL is closed
     (close_externally, reason "expired"), and a card left executing that
     no approval in this process is carrying out (_APPROVING; the API runs
@@ -9538,13 +9547,21 @@ integrations:
     name another human; security review 4b teammates); drafts still on, TTL, and that the stored
     payload still passes check_fields unchanged with the tool its doctype
     names; then claim_for_execution (once), then the stored call with
-    {**fields, idempotency_key: card_key, asked_by} inside
+    {**fields, idempotency_key: card_key, asked_by, expected_fingerprint?}
+    (the card's fingerprint, when it has one; a card left before has none
+    and is made as before) inside
     draft_executor_run, 60s timeout; a cancelled request releases the
     claim before re-raising. Success needs ok, docstatus 0 and a
     plain name: finish_execution approved_unchanged with
     final_payload.created {doctype, name, url (only an http(s) desk link:
     /desk/ from Frappe 16 on, /app/ before),
-    already_created}, external_event_id = the draft's name. Failure:
+    already_created}, external_event_id = the draft's name. A refusal
+    containing CHANGED_SINCE_PROPOSED (oe_connector built the draft again
+    and it no longer matches the card's fingerprint: a source document, a
+    price or a rate changed) closes the card (finish_execution failed, with
+    last_error, attempts unchanged), audits erpnext_draft_changed and
+    answers 409 changed_since_proposed; asking again leaves a fresh card.
+    Any other failure:
     update_open_payload(while_executing=True) with last_error and attempts
     while the claim is still held, then release_claim, so a second tap
     can't claim it in between and lose the count; so

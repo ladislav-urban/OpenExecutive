@@ -770,7 +770,9 @@ def test_an_order_from_a_request_shows_erpnexts_lines_and_says_whose() -> None:
     assert view["lines"] == [
         {"item_code": "ITEM-1", "qty": "40", "warehouse": "Stores - AC", "rate": "8.00", "amount": "320.00"},
     ]
-    assert any("not ordered yet" in n and "more or less" in n and "prices them again" in n for n in view["notes"])
+    # Approval makes this draft or nothing (the card's fingerprint): never more or less than shown.
+    assert any("change before you approve" in n and "nothing is made" in n for n in view["notes"])
+    assert not any("more or less" in n for n in view["notes"])
 
 
 def test_the_same_draft_again_answers_with_the_card_it_left(
@@ -1058,3 +1060,94 @@ def test_dismissing_a_card_writes_nothing(
     assert resp.status_code == 200 and resp.json()["status"] == "rejected"
     assert len(erp.calls) == 1
     assert client.post(f"/decisions/{card.id}/cancel", headers={"x-caller-email": OWNER}).status_code == 409
+
+
+# --------------------------------------------------------------------------- #
+# Only the draft the card showed
+# --------------------------------------------------------------------------- #
+
+SHOWN = "a" * 64
+NOW = "b" * 64
+
+
+def _fingerprinted_card(erp: FakeErpnext, roster: SimpleNamespace, fingerprint: Any = SHOWN) -> Any:
+    erp.replies.append(json.dumps({**CHECKED_RESTOCK, "fingerprint": fingerprint}))
+    result = _propose(_owner_turn(roster), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
+    card = get_decision_instance(result["decision_id"])
+    assert card is not None
+    return card
+
+
+def test_approving_sends_back_the_fingerprint_erpnext_checked(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    card = _fingerprinted_card(erp, roster)
+    erp.replies.append(json.dumps(CREATED))
+    _approve(card)
+    # Signed with it: the assertion covers the exact arguments sent.
+    assert erp.claims()["tool"] == "draft_material_request"
+    _, sent = erp.calls[-1]
+    sent.pop(ASSERTION_ARG)
+    assert sent == {**RESTOCK, "idempotency_key": card.idempotency_key, "asked_by": OWNER,
+                    "expected_fingerprint": SHOWN}
+
+
+@pytest.mark.parametrize("bad", ["abc", "A" * 64, 7, None])
+def test_a_fingerprint_that_is_not_one_is_neither_kept_nor_sent(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], bad: Any,
+) -> None:
+    card = _fingerprinted_card(erp, roster, fingerprint=bad)
+    assert "fingerprint" not in json.loads(card.proposed_payload_json)
+    erp.replies.append(json.dumps(CREATED))
+    _approve(card)
+    assert "expected_fingerprint" not in erp.calls[-1][1]
+
+
+def test_a_draft_that_changed_since_its_card_closes_the_card(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    monkeypatch.setattr(drafts, "audit", lambda event, *_a: events.append(event))
+    card = _fingerprinted_card(erp, roster)
+    # As oe_connector refuses it, with the MCP layer's own words in front.
+    erp.replies.append(
+        f"Tool error: {drafts.CHANGED_SINCE_PROPOSED}: ERPNext would now make it differently. Nothing was made."
+    )
+    with pytest.raises(drafts.ApproveRefused) as refused:
+        _approve(card)
+    assert (refused.value.status, refused.value.code) == (409, "changed_since_proposed")
+    assert "Ask for it again" in refused.value.message
+    closed = get_decision_instance(card.id)
+    assert closed is not None and closed.status == STATUS_FAILED
+    assert json.loads(closed.proposed_payload_json).get("attempts") == 0
+    assert events[-1] == "erpnext_draft_changed"
+    # Asked again, a new card with the draft as ERPNext reads it now.
+    fresh = _fingerprinted_card(erp, roster, fingerprint=NOW)
+    assert fresh.id != card.id and json.loads(fresh.proposed_payload_json)["fingerprint"] == NOW
+
+
+def test_asking_again_when_erpnext_reads_it_differently_replaces_the_card_never_changes_it(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    # A screen still showing the old card must not approve the new reading
+    # (security review): the old card is closed, and a new one left.
+    card = _fingerprinted_card(erp, roster)
+    changed = {**CHECKED_RESTOCK, "fingerprint": NOW, "summary": {**CHECKED_RESTOCK["summary"], "currency": "USD"}}
+    erp.replies.append(json.dumps(changed))
+    again = _propose(_owner_turn(roster), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
+    assert again["decision_id"] != card.id
+    old = get_decision_instance(card.id)
+    assert old is not None and old.status != STATUS_PROPOSED
+    assert json.loads(old.proposed_payload_json)["fingerprint"] == SHOWN
+    new = get_decision_instance(again["decision_id"])
+    assert new is not None and json.loads(new.proposed_payload_json)["fingerprint"] == NOW
+    assert new.idempotency_key != card.idempotency_key
+    # The old card's screen approves nothing.
+    calls = len(erp.calls)
+    with pytest.raises(drafts.ApproveRefused) as stale:
+        _approve(old)
+    assert stale.value.code == "already_handled" and len(erp.calls) == calls
+    # The same reading again is the new card, unchanged.
+    erp.replies.append(json.dumps(changed))
+    same = _propose(_owner_turn(roster), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
+    assert same["decision_id"] == new.id
