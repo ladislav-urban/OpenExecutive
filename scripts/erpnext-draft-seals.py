@@ -35,7 +35,8 @@ def main() -> int:
     json.dump(seals, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
     print(f"{len(seals)} recorded seals", file=sys.stderr)
-    return 0
+    # None means nothing to compare (or the wrong ledger): never a pass.
+    return 0 if seals else 1
 
 
 if __name__ == "__main__":
