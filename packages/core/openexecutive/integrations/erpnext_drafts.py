@@ -1158,9 +1158,12 @@ async def _carry_out(
         }
         # The "OE Draft" row's seal in oe_connector's hash chain: kept here too,
         # so the log in ERPNext and this record check each other.
-        seal = result.get("row_hash")
+        seal, place = result.get("row_hash"), result.get("chain_index")
         if isinstance(seal, str) and _FINGERPRINT_RE.fullmatch(seal):
             created["row_hash"] = seal
+            # Its place too, so a check can tell the newest rows are gone.
+            if isinstance(place, int) and not isinstance(place, bool) and place > 0:
+                created["chain_index"] = place
         if not finish_execution(
             instance.id, STATUS_APPROVED_UNCHANGED,
             final_payload={**payload, "created": created}, external_event_id=name,
@@ -1171,7 +1174,7 @@ async def _carry_out(
         audit("erpnext_draft_created", f"Person {person.id} approved an ERPNext {doctype} draft", {
             "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "name": name,
             "already_created": created["already_created"],
-            **({"row_hash": created["row_hash"]} if "row_hash" in created else {}),
+            **{k: created[k] for k in ("row_hash", "chain_index") if k in created},
         })
         return created
     reason = _refusal_text(raw)
@@ -1218,3 +1221,22 @@ async def dismissed(instance: Any) -> None:
     audit("erpnext_draft_dismissed", f"Person {person_id} dismissed an ERPNext draft card", {
         "person_id": person_id, "decision_id": instance.id, "doctype": payload.get("doctype"),
     })
+
+
+def recorded_seals() -> dict[str, dict[str, Any]]:
+    """Every draft made from a card, as oe_connector's "OE Draft" log should
+    hold it: {card key: {"row_hash", "chain_index"}}. The JSON
+    ``oe-connector-verify-drafts --expect`` compares with the log, so rows
+    removed or rewritten there show (``scripts/erpnext-draft-seals.py``)."""
+    from openexecutive.memory.decision_ledger import list_instances
+
+    seals: dict[str, dict[str, Any]] = {}
+    for card in list_instances(DECISION_CLASS, limit=100000):
+        try:
+            created = json.loads(card.final_payload_json or "{}").get("created") or {}
+        except (TypeError, ValueError):
+            continue
+        seal, place = created.get("row_hash"), created.get("chain_index")
+        if isinstance(seal, str) and _FINGERPRINT_RE.fullmatch(seal) and isinstance(card.idempotency_key, str):
+            seals[card.idempotency_key] = {"row_hash": seal, "chain_index": place if isinstance(place, int) else 0}
+    return seals

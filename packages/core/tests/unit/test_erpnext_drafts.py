@@ -1166,12 +1166,15 @@ def test_the_draft_logs_seal_is_kept_on_the_card_and_in_the_audit(
     rows: list[tuple[str, dict[str, Any]]] = []
     monkeypatch.setattr(drafts, "audit", lambda event, _summary, details: rows.append((event, details)))
     card = _restock_card(erp, roster)
-    erp.replies.append(json.dumps({**CREATED, "row_hash": "c" * 64}))
+    erp.replies.append(json.dumps({**CREATED, "row_hash": "c" * 64, "chain_index": 4}))
     created = _approve(card)
-    assert created["row_hash"] == "c" * 64
+    assert (created["row_hash"], created["chain_index"]) == ("c" * 64, 4)
     done = get_decision_instance(card.id)
     assert done is not None and json.loads(done.final_payload_json or "{}")["created"]["row_hash"] == "c" * 64
     assert dict(rows)["erpnext_draft_created"]["row_hash"] == "c" * 64
+    assert dict(rows)["erpnext_draft_created"]["chain_index"] == 4
+    # What oe-connector-verify-drafts --expect compares with the log, by card key.
+    assert drafts.recorded_seals() == {card.idempotency_key: {"row_hash": "c" * 64, "chain_index": 4}}
 
 
 @pytest.mark.parametrize("seal", ["abc", "C" * 64, 7, None])
@@ -1181,3 +1184,12 @@ def test_a_seal_that_is_not_one_is_not_kept(
     card = _restock_card(erp, roster)
     erp.replies.append(json.dumps({**CREATED, "row_hash": seal}))
     assert "row_hash" not in _approve(card)
+
+
+def test_a_draft_without_a_seal_is_not_in_the_export(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    card = _restock_card(erp, roster)
+    erp.replies.append(json.dumps(CREATED))
+    _approve(card)
+    assert drafts.recorded_seals() == {}
