@@ -276,7 +276,7 @@ async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
     waiting = _room_for(person.id, doctype, fields)
     decision_id, new, _ = drafts.propose(
         person, doctype, fields, view, why, asked_by=email, session_id=None, waiting=waiting,
-        from_alert=getattr(alert, "id", None),
+        from_alert=getattr(alert, "id", None), fingerprint=drafts.fingerprint_of(checked),
     )
     if not new:
         _tag(decision_id, getattr(alert, "id", None))

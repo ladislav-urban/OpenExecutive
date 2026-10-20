@@ -39,6 +39,14 @@ which the gateway passes a draft tool, signed as the approver with
 approval returns the same draft. On failure the card waits again with the
 reason (``last_error``), up to ``ATTEMPTS_MAX`` tries.
 
+**Only what the card showed.** ``draft_check`` returns a fingerprint of the
+draft it read; the card keeps it and the approval sends it back
+(``expected_fingerprint``). oe_connector builds the draft again then, and
+makes nothing if it now comes out differently (a source document, a price
+or a rate changed since): that card is closed with the reason
+(``CHANGED_SINCE_PROPOSED``), and asking again leaves a card with the draft
+as it is now. Asking again while the card still waits refreshes it in place.
+
 Take the lead never makes one: unattended runs are not offered the tool, and
 the gateway refuses every ``erpnext__draft*`` call outside the executor's
 marker, so a draft always waits on its card.
@@ -99,6 +107,11 @@ _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _KEY_RE = re.compile(r"[A-Za-z0-9_:.-]{8,140}")
 # A draft's name as ERPNext gives it (MAT-MR-2026-00012, a ToDo's hash).
 _DOC_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._/-]{0,139}")
+# draft_check's fingerprint of the draft a card shows (oe_connector's
+# drafts.fingerprint), and how oe_connector's refusal of a draft that no
+# longer matches it begins (drafts.CHANGED_SINCE_PROPOSED): keep both in step.
+_FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
+CHANGED_SINCE_PROPOSED = "This draft changed since its card was proposed"
 _CURRENCY_RE = re.compile(r"[A-Z]{3}")
 
 _TODO_FIELDS = frozenset({"description", "allocated_to", "priority", "date", "reference_type", "reference_name"})
@@ -674,22 +687,35 @@ def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
     ).hexdigest()[:32]
 
 
+def fingerprint_of(checked: dict[str, Any]) -> str | None:
+    """draft_check's fingerprint of the draft it read, if it gave a sound one."""
+    value = checked.get("fingerprint")
+    return value if isinstance(value, str) and _FINGERPRINT_RE.fullmatch(value) else None
+
+
 def propose(
     person: Any, doctype: str, fields: dict[str, Any], view: dict[str, Any], why: str,
     *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None, asked_in: str = "",
-    from_alert: int | None = None,
+    from_alert: int | None = None, fingerprint: str | None = None,
 ) -> tuple[int, bool, dict[str, Any]]:
     """Store a card for ``person`` (``fields`` already checked); returns its
     decision id, whether it is new and the view it shows. The same draft
-    still waiting is that card, not a new one, with the view it was left
-    with. ``waiting``: ``open_cards(person.id)``, if read."""
-    from openexecutive.memory.decision_ledger import create_decision_instance
+    still waiting is that card, not a new one: with the view it was left
+    with, or, when ERPNext now reads it differently (another ``fingerprint``),
+    refreshed in place to this check's view. ``waiting``:
+    ``open_cards(person.id)``, if read."""
+    from openexecutive.memory.decision_ledger import create_decision_instance, update_open_payload
 
     digest = _digest(person.id, doctype, fields)
     for card in open_cards(person.id) if waiting is None else waiting:
         stored = _payload(card)
         if stored.get("digest") == digest:
             shown = stored.get("view")
+            if fingerprint is not None and stored.get("fingerprint") != fingerprint and update_open_payload(
+                card.id, {**stored, "view": view, "fingerprint": fingerprint},
+                expected_json=card.proposed_payload_json,
+            ):
+                return int(card.id), False, view
             return int(card.id), False, shown if isinstance(shown, dict) else view
     card_key = f"oe:{DECISION_CLASS}:{uuid.uuid4().hex}"
     payload = {
@@ -709,6 +735,8 @@ def propose(
         **({"from_alert": from_alert} if from_alert is not None else {}),
         "card_key": card_key,
         "view": view,
+        # What ERPNext read, sent back on approval so only this draft is made.
+        **({"fingerprint": fingerprint} if fingerprint is not None else {}),
         "attempts": 0,
     }
     return create_decision_instance(
@@ -952,7 +980,7 @@ async def _check_and_leave(
         decision_id, new, view = propose(
             person, doctype, fields, view, why,
             asked_by=email, session_id=getattr(session, "session_id", None),
-            asked_in="erpnext_panel" if from_panel else "",
+            asked_in="erpnext_panel" if from_panel else "", fingerprint=fingerprint_of(checked),
         )
     except Exception:
         logger.warning("erpnext_drafts: couldn't store the card", exc_info=True)
@@ -970,7 +998,7 @@ async def _check_and_leave(
         "doctype": doctype,
         "card": wrap_untrusted(json.dumps(view, ensure_ascii=False), source="erpnext", author="draft_check"),
         "note": (
-            ("" if new else "This is the card already waiting for the same draft, as ERPNext read it then. ")
+            ("" if new else "This is the card already waiting for the same draft. ")
             + "Nothing is in ERPNext yet. The card is on Today in the OpenExecutive web app, "
             "and under this reply in its chat, for them to approve; it then becomes an "
             "unsubmitted draft they review and submit in ERPNext. Outside the web app, say "
@@ -1095,6 +1123,11 @@ async def _carry_out(
     doctype = payload["doctype"]
     asked_by = payload.get("asked_by") if isinstance(payload.get("asked_by"), str) else email
     arguments = {**fields, "idempotency_key": key, "asked_by": asked_by}
+    # Made only if ERPNext still builds the draft the card showed. A card
+    # left before fingerprints has none, and is made as before.
+    expected = payload.get("fingerprint")
+    if isinstance(expected, str) and _FINGERPRINT_RE.fullmatch(expected):
+        arguments["expected_fingerprint"] = expected
     raw: Any = None
     try:
         with erpnext_caller.draft_executor_run(tool, arguments, email):
@@ -1128,6 +1161,19 @@ async def _carry_out(
         })
         return created
     reason = _refusal_text(raw)
+    # Anywhere in it: the MCP layer may put its own words before a tool's error.
+    if CHANGED_SINCE_PROPOSED in reason:
+        # Nothing was made, and approving again would refuse again: the card
+        # is closed, and asking again leaves one with the draft as it is now.
+        finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})
+        audit("erpnext_draft_changed", f"Person {person.id}'s ERPNext {doctype} draft changed since its card", {
+            "person_id": person.id, "decision_id": instance.id, "doctype": doctype,
+        })
+        raise ApproveRefused(
+            409, "changed_since_proposed",
+            "This draft changed in ERPNext since the card was left (a source document, a price or a "
+            "rate), so nothing was made and the card is closed. Ask for it again to see it as it is now.",
+        )
     attempts = int(payload.get("attempts") or 0) + 1
     audit("erpnext_draft_failed", f"Person {person.id}'s ERPNext {doctype} draft wasn't made", {
         "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "attempts": attempts,
