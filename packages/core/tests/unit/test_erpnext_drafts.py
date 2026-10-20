@@ -1151,3 +1151,33 @@ def test_asking_again_when_erpnext_reads_it_differently_replaces_the_card_never_
     erp.replies.append(json.dumps(changed))
     same = _propose(_owner_turn(roster), {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
     assert same["decision_id"] == new.id
+
+
+# --------------------------------------------------------------------------- #
+# The draft log's seal
+# --------------------------------------------------------------------------- #
+
+
+def test_the_draft_logs_seal_is_kept_on_the_card_and_in_the_audit(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # oe_connector's "OE Draft" row is sealed in a hash chain; keeping its
+    # seal here lets the two records check each other.
+    rows: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(drafts, "audit", lambda event, _summary, details: rows.append((event, details)))
+    card = _restock_card(erp, roster)
+    erp.replies.append(json.dumps({**CREATED, "row_hash": "c" * 64}))
+    created = _approve(card)
+    assert created["row_hash"] == "c" * 64
+    done = get_decision_instance(card.id)
+    assert done is not None and json.loads(done.final_payload_json or "{}")["created"]["row_hash"] == "c" * 64
+    assert dict(rows)["erpnext_draft_created"]["row_hash"] == "c" * 64
+
+
+@pytest.mark.parametrize("seal", ["abc", "C" * 64, 7, None])
+def test_a_seal_that_is_not_one_is_not_kept(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], seal: Any,
+) -> None:
+    card = _restock_card(erp, roster)
+    erp.replies.append(json.dumps({**CREATED, "row_hash": seal}))
+    assert "row_hash" not in _approve(card)

@@ -1156,6 +1156,11 @@ async def _carry_out(
             "doctype": doctype, "name": name, "url": _desk_link(result.get("url")),
             "already_created": result.get("already_created") is True,
         }
+        # The "OE Draft" row's seal in oe_connector's hash chain: kept here too,
+        # so the log in ERPNext and this record check each other.
+        seal = result.get("row_hash")
+        if isinstance(seal, str) and _FINGERPRINT_RE.fullmatch(seal):
+            created["row_hash"] = seal
         if not finish_execution(
             instance.id, STATUS_APPROVED_UNCHANGED,
             final_payload={**payload, "created": created}, external_event_id=name,
@@ -1166,6 +1171,7 @@ async def _carry_out(
         audit("erpnext_draft_created", f"Person {person.id} approved an ERPNext {doctype} draft", {
             "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "name": name,
             "already_created": created["already_created"],
+            **({"row_hash": created["row_hash"]} if "row_hash" in created else {}),
         })
         return created
     reason = _refusal_text(raw)
