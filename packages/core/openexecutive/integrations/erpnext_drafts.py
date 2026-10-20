@@ -635,9 +635,9 @@ def _priced_view(
         for row in checked[:MAX_LINES]:
             lines.append(line(row, row.get("rate"), row.get("amount")))
         notes.append(
-            f"ERPNext takes these lines from {source_doctype} {_one_line(source, NAME_MAX)}: on approval it "
-            "brings over what is not ordered yet at that moment, which may be more or less than shown, "
-            "and prices them again."
+            f"ERPNext takes these lines from {source_doctype} {_one_line(source, NAME_MAX)}. If what it would "
+            "bring over, or its prices, change before you approve, nothing is made and you're asked to look "
+            "again."
         )
         if len(checked) > MAX_LINES:
             notes.append(f"And {len(checked) - MAX_LINES} more lines, as ERPNext lists them.")
@@ -665,7 +665,7 @@ def _priced_view(
         if priced_by_erpnext:
             notes.append(
                 f"Rates from ERPNext's price list at the check, for {', '.join(priced_by_erpnext)}; "
-                "ERPNext applies its price list again when it makes the draft."
+                "if they change before you approve, nothing is made and you're asked to look again."
             )
         if unmatched:
             notes.append(

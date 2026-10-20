@@ -9513,13 +9513,14 @@ integrations:
     lines with ERPNext's rate and amount beside each only where its reading
     at the same index is the same item and qty; a stated rate stays as
     stated (a note says when ERPNext's pricing rules moved it), an unstated
-    one is ERPNext's price-list rate at the check (a note says it is
-    re-applied at insert); and Grand total in the document's currency,
+    one is ERPNext's price-list rate at the check (a note says that if it
+    changes before approval, nothing is made); and Grand total in the document's currency,
     plus base_grand_total when the company's differs. A Purchase Order from
     a material_request or supplier_quotation stores no lines: approval
     sends the source and ERPNext's mapper makes them, so the card shows the
     mapper's lines from the check (at most 20, then a count) and notes that
-    approval brings over only what is not ordered yet then. Values are plain()
+    if what it brings over or its prices change before approval, nothing
+    is made (the card's fingerprint). Values are plain()
     one-line text capped at 300 chars, numbers exact (no rounding), except
     a ToDo's "What": the stored description in full (up to TEXT_MAX 1000,
     line breaks kept), since a cut would hide text the assignee gets under

@@ -770,7 +770,9 @@ def test_an_order_from_a_request_shows_erpnexts_lines_and_says_whose() -> None:
     assert view["lines"] == [
         {"item_code": "ITEM-1", "qty": "40", "warehouse": "Stores - AC", "rate": "8.00", "amount": "320.00"},
     ]
-    assert any("not ordered yet" in n and "more or less" in n and "prices them again" in n for n in view["notes"])
+    # Approval makes this draft or nothing (the card's fingerprint): never more or less than shown.
+    assert any("change before you approve" in n and "nothing is made" in n for n in view["notes"])
+    assert not any("more or less" in n for n in view["notes"])
 
 
 def test_the_same_draft_again_answers_with_the_card_it_left(
