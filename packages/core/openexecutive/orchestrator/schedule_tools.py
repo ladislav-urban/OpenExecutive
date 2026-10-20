@@ -1856,9 +1856,6 @@ UNATTENDED_WITHHELD_TOOLS: frozenset[str] = frozenset({
     "remember_fact",
     "resolve_roster_request",
     "update_company_profile",
-    # An ERPNext draft card is the principal's own ask, never a run's
-    # (integrations/erpnext_drafts.py; its handler refuses one too).
-    "propose_erpnext_draft",
     # App control (orchestrator/app_control.py) acts as the person asking, and
     # its cards wait for their tap: nobody is there to ask or to tap.
     "do_in_app",
@@ -1910,8 +1907,6 @@ def unattended_withheld_error(tool_name: str) -> str:
 #   its retirement) and the company profile are read on everyone's turns and
 #   in every brief. They also refuse any surface but the principal's verified
 #   ones, which email is not.
-# - propose_erpnext_draft: an ERPNext draft is the principal's own ask in a
-#   chat, never what a contact's mail asks for (its handler refuses too).
 # Still offered: the email, DM and invite paths reach the principal and
 # refuse anyone else (`people_tools.PRIVATE_TURN_REFUSAL`, the gateway's
 # allow-list), and an alert the turn raises is private to the principal. The
@@ -1932,7 +1927,6 @@ PRIVATE_TURN_WITHHELD_TOOLS: frozenset[str] = frozenset({
     "draft_artifact",
     "forget_fact",
     "load_mcp_server",
-    "propose_erpnext_draft",
     "read_document",
     "remember_fact",
     "run_executive_research",

@@ -358,7 +358,6 @@ def _all_registered_tool_names() -> set[str]:
     Kept here as a helper so both drift tests use the exact same source
     of truth — drift between them would defeat the guard.
     """
-    from openexecutive.integrations.erpnext_drafts import ERPNEXT_DRAFT_TOOL_HANDLERS
     from openexecutive.orchestrator.app_control import APP_TOOL_HANDLERS
     from openexecutive.orchestrator.artifact_tools import DRAFT_ARTIFACT_TOOL_HANDLERS
     from openexecutive.orchestrator.broadcast_tools import BROADCAST_TOOL_HANDLERS
@@ -392,8 +391,6 @@ def _all_registered_tool_names() -> set[str]:
         | set(APP_TOOL_HANDLERS)
         # Act as me: its own registry, offered per turn (never _ALL_SKILL_TOOLS).
         | set(DELEGATION_TOOL_HANDLERS)
-        # ERPNext drafts: the same, the principal's own turns only.
-        | set(ERPNEXT_DRAFT_TOOL_HANDLERS)
         # `create_alert` is in chat module rather than a HANDLERS dict.
         | {"create_alert"}
     )

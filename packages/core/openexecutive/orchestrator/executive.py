@@ -21,7 +21,6 @@ from openexecutive.audit.redaction import (
     audit_tool_result_full,
 )
 from openexecutive.audit.usage import log_model_usage
-from openexecutive.briefing import erp_metrics
 from openexecutive.config import get_settings
 from openexecutive.delegation.lockdown import (
     mail_touched_withheld_error,
@@ -833,7 +832,6 @@ def builtin_tool_names() -> frozenset[str]:
         *DELEGATION_TOOL_HANDLERS,
         *MAILBOX_TOOL_NAMES,
         *HISTORY_TOOL_HANDLERS,
-        *erpnext_drafts.ERPNEXT_DRAFT_TOOL_HANDLERS,
         *MCP_TOOL_NAMES,
         step_script.RUN_SCRIPT_TOOL,
         step_script.LIST_SAVED_TOOLS_TOOL,
@@ -852,8 +850,9 @@ def _private_tool_row(tool_name: str) -> bool:
         tool_name in DELEGATION_TOOL_NAMES
         or tool_name in FACT_TOOL_HANDLERS
         or tool_name in HISTORY_TOOL_NAMES
-        # The asker's own ERPNext view, as every ERPNext read is.
-        or tool_name == erpnext_drafts.PROPOSE
+        # An installed extension's tool that quotes the speaker's own data
+        # (orchestrator/extensions.py, private_row).
+        or extensions.private_row(tool_name)
     )
 
 
@@ -2333,33 +2332,20 @@ class Executive:
         if history_offered:
             delegation_tools = [*delegation_tools, *HISTORY_TOOLS]
             turn_handlers = {**turn_handlers, **HISTORY_TOOL_HANDLERS}
-        # ERPNext drafts (phase 4): turns whose speaker may have one prepared
-        # for themselves (erpnext_drafts.offer_refusal). Its own registry, as
-        # above, so on any other turn a call to it is an unknown tool. Never
-        # on a turn from another AI app or a replay, like the tools above.
-        drafts_offered = (
-            not mcp_client and not replaying and erpnext_drafts.offered(current_session.get())
-        )
-        if drafts_offered:
-            delegation_tools = [*delegation_tools, *erpnext_drafts.draft_tools()]
-            turn_handlers = {**turn_handlers, **erpnext_drafts.ERPNEXT_DRAFT_TOOL_HANDLERS}
-        # Scheduled ERP metrics: the principal's own chat turns, while
-        # ERPNEXT_BRIEF_COMPANY is set and ERPNext is connected
-        # (erp_metrics.offered). Their own registry, like the drafts.
-        if not mcp_client and not replaying and erp_metrics.offered(current_session.get()):
-            delegation_tools = [*delegation_tools, *erp_metrics.METRIC_TOOLS]
-            turn_handlers = {**turn_handlers, **erp_metrics.METRIC_TOOL_HANDLERS}
-        # In ERPNext's panel, propose_erpnext_draft as well when this turn is
-        # offered it (phase 4b: its card is approved in the app, signed in).
-        panel_tools = ERPNEXT_PANEL_TOOLS | ({erpnext_drafts.PROPOSE} if drafts_offered else frozenset())
         # Tools an installed extension adds (orchestrator/extensions.py): only
         # on a turn someone is in, never an unattended run or a turn private
         # to the principal, and only where each tool says it is offered.
+        extra_tools: list[extensions.ExtraTool] = []
         if not unattended_withheld and not private_turn and not mcp_client and not replaying:
             extra_tools = extensions.offered_tools(current_session.get())
             if extra_tools:
                 delegation_tools = [*delegation_tools, *(t.definition for t in extra_tools)]
                 turn_handlers = {**turn_handlers, **{t.name: t.handler for t in extra_tools}}
+        # In ERPNext's panel, the ERPNext draft tool as well when this turn is
+        # offered it (integrations.erpnext_extension; phase 4b: its card is
+        # approved in the app, signed in).
+        drafts_offered = any(t.name == erpnext_drafts.PROPOSE for t in extra_tools)
+        panel_tools = ERPNEXT_PANEL_TOOLS | ({erpnext_drafts.PROPOSE} if drafts_offered else frozenset())
         # Take the lead as the Executive: an unattended run's acting tools,
         # its own and the MCP ones, go through the gate (take_the_lead).
         leading = bool(unattended_withheld) and take_the_lead.executive_on()

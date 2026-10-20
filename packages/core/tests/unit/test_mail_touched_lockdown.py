@@ -15,11 +15,9 @@ import pytest
 
 from openexecutive.audit import logger as audit_logger
 from openexecutive.audit.logger import AuditLogger, log_event
-from openexecutive.briefing import erp_metrics
 from openexecutive.delegation import ghostwriter as gw
 from openexecutive.delegation import lockdown
 from openexecutive.delegation.settings import DelegationOverride, TurnDelegation
-from openexecutive.integrations.erpnext_drafts import draft_tools
 from openexecutive.memory import episodic
 from openexecutive.orchestrator import executive as ex
 from openexecutive.orchestrator.delegation_tools import DELEGATION_TOOLS
@@ -145,7 +143,6 @@ def test_every_tool_is_classified_once() -> None:
         t["name"]
         for t in [
             *ex._ALL_SKILL_TOOLS, *SPECIALIST_TOOLS, *MCP_TOOLS, *DELEGATION_TOOLS, *HISTORY_TOOLS,
-            *draft_tools(), *erp_metrics.METRIC_TOOLS,
             step_script.CHAT_TOOL_DEFINITION, step_script.LIST_SAVED_TOOLS_DEFINITION,
         ]
     }
@@ -174,8 +171,7 @@ def test_only_links_scripts_workflows_posts_and_lasting_text_are_withheld() -> N
         "send_department_message", "send_company_broadcast", "create_alert",
         "archive_person", "set_department_head", "resolve_roster_request",
         "schedule_followup", "create_goal", "update_department_goal",
-        "record_decision_outcome", "propose_erpnext_draft",
-        "schedule_erp_metric", "cancel_erp_metric",
+        "record_decision_outcome",
     } == lockdown.MAIL_TOUCHED_WITHHELD_TOOLS
     for tool in ("message_person", "send_slack_dm", "create_calendar_event",
                  "remember_fact", "remind_me", "update_company_profile"):
@@ -473,7 +469,6 @@ def test_every_withheld_tool_is_refused_only_on_the_reading_turn(tool: str) -> N
     ("openexecutive.orchestrator.research_tools:handle_run_executive_research", "run_executive_research"),
     ("openexecutive.orchestrator.broadcast_tools:handle_send_department_message", "send_department_message"),
     ("openexecutive.orchestrator.broadcast_tools:handle_send_company_broadcast", "send_company_broadcast"),
-    ("openexecutive.integrations.erpnext_drafts:handle_propose", "propose_erpnext_draft"),
 ])
 def test_link_workflow_and_broadcast_handlers_refuse_on_their_own(handler: str, tool: str) -> None:
     import importlib

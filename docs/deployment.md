@@ -669,8 +669,13 @@ outstanding (receivables today against the last 90 days of sales), cash this
 month, receivables, payables, and sales last week. Each goes to the owner's
 own channel the way the brief does, daily or weekly at a time in their zone.
 The owner can have five at most, and asks again to change or stop one.
-Nothing else needs setting; a metric whose report ERPNext refuses is skipped
-for that run.
+A metric whose report ERPNext refuses is skipped for that run. The chat tools
+for this, like the drafts below, are an extension the API loads only when
+listed:
+
+```bash
+OPENEXECUTIVE_EXTENSIONS=openexecutive.integrations.erpnext_extension   # the API's environment
+```
 
 **ERPNext alerts (phase 3).** oe_connector can raise alerts on the
 principal's board: a receivable overdue past a threshold, stock below its
@@ -712,6 +717,8 @@ needs per-person access (above) and signed sign-ins
 ERPNEXT_DRAFTS_ENABLED=true   # the API's environment
 # Which DocTypes (default: ToDo,Material Request); list the same on the site.
 ERPNEXT_DRAFT_DOCTYPES=ToDo,Material Request
+# The draft tool is an extension, as the metrics' are (above).
+OPENEXECUTIVE_EXTENSIONS=openexecutive.integrations.erpnext_extension
 ```
 
 ```bash
