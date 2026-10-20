@@ -9556,7 +9556,15 @@ integrations:
     plain name: finish_execution approved_unchanged with
     final_payload.created {doctype, name, url (only an http(s) desk link:
     /desk/ from Frappe 16 on, /app/ before),
-    already_created}, external_event_id = the draft's name. A refusal
+    already_created, row_hash?, chain_index?}, external_event_id = the
+    draft's name. row_hash and chain_index are the "OE Draft" row's seal and
+    place in oe_connector's hash chain (draft_chain.py), kept only when the
+    hash is 64 lowercase hex (and the place a positive int) and copied into
+    the erpnext_draft_created audit row. The chain alone cannot show its
+    newest rows removed or a consistent rewrite (no secret key), so
+    recorded_seals() exports {card key - row_hash, chain_index}
+    (scripts/erpnext-draft-seals.py) for oe-connector-verify-drafts --expect
+    to compare with the log. A refusal
     containing CHANGED_SINCE_PROPOSED (oe_connector built the draft again
     and it no longer matches the card's fingerprint: a source document, a
     price or a rate changed) closes the card (finish_execution failed, with
