@@ -11,6 +11,11 @@ Routes:
                         else, as ERPNext alerts are the principal's alone.
   POST /erpnext/alert-drafts/{alert_id} — the principal's tap: ERPNext checks
                         the suggested draft as them and the usual card is left.
+  GET /erpnext/drafts/oversight — one oversight record per ERPNext draft card
+                        (``integrations.erpnext_oversight``), for the principal
+                        alone: ``since`` / ``until`` (ISO dates or times),
+                        ``format`` json or csv, and ``erpnext=1`` for what
+                        became of each draft in ERPNext since.
 
 A card is its person's alone: the caller is resolved the way the decisions
 routes resolve an approver (``chat._resolve_caller_person_id``), and anyone
@@ -20,8 +25,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict
+from datetime import UTC, datetime
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 router = APIRouter()
@@ -143,3 +151,55 @@ async def prepare_erpnext_alert_draft(alert_id: int, request: Request) -> Prepar
             status_code=refused.status, detail={"code": refused.code, "message": refused.message},
         ) from None
     return PreparedOut(decision_id=decision_id, already_waiting=not new)
+
+
+def _moment(value: str | None, name: str) -> datetime | None:
+    if value is None or value == "":
+        return None
+    try:
+        at = datetime.fromisoformat(value)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"{name} must be an ISO date or time") from None
+    return at if at.tzinfo is not None else at.replace(tzinfo=UTC)
+
+
+@router.get("/erpnext/drafts/oversight")
+async def get_erpnext_draft_oversight(
+    request: Request,
+    since: str | None = None,
+    until: str | None = None,
+    format: Literal["json", "csv"] = "json",  # noqa: A002 - the query parameter's name
+    erpnext: bool = False,
+) -> Any:
+    """Every ERPNext draft card in [since, until), with who asked, what it
+    showed, who decided and what came of it: the evidence a person oversaw
+    each draft. The principal's alone (it names everyone who asked); what
+    someone else's card said stays theirs (``erpnext_oversight``)."""
+    from openexecutive.api.routes.people import caller_is_principal
+    from openexecutive.integrations import erpnext_oversight
+
+    if not caller_is_principal(request):
+        raise HTTPException(status_code=403, detail="Only the account owner can read the oversight record.")
+    from openexecutive.people.store import find_principal_person
+
+    principal = find_principal_person()
+    rows = erpnext_oversight.records(
+        since=_moment(since, "since"), until=_moment(until, "until"),
+        reader=principal.id if principal else None,
+    )
+    if erpnext:
+        try:
+            rows = await erpnext_oversight.with_erpnext_state(rows)
+        except Exception:
+            logger.exception("erpnext_oversight: asking ERPNext what became of the drafts failed")
+            raise HTTPException(
+                status_code=502, detail="ERPNext didn't answer, so the drafts' state there isn't included."
+            ) from None
+    if format == "csv":
+        stamp = datetime.now(UTC).strftime("%Y%m%d")
+        return Response(
+            content=erpnext_oversight.to_csv(rows),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="erpnext-draft-oversight-{stamp}.csv"'},
+        )
+    return {"generated_at": datetime.now(UTC).isoformat(), "erpnext_state": erpnext, "records": rows}

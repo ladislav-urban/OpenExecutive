@@ -132,6 +132,12 @@ ERPNEXT_DRAFT_TOOLS: frozenset[str] = frozenset({
     "erpnext__draft_todo",
 })
 
+# oe_connector's oversight tool: what became of the drafts made here. Never
+# listed to the model; the gateway lets it through only inside
+# erpnext_caller.oversight_run, signed as the service caller
+# (integrations.erpnext_oversight).
+ERPNEXT_AUDIT_TOOL = "erpnext__audit_drafts"
+
 # How to read ERPNext figures, the conventions oe_connector's own catalog
 # states. Constant text, so block 0 stays cacheable.
 _ERPNEXT_GUIDE = (

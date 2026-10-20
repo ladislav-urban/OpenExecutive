@@ -114,6 +114,26 @@ def in_brief_run() -> bool:
     return _brief_run.get()
 
 
+# Set only by integrations.erpnext_oversight, around its own audit call.
+_oversight_run: ContextVar[bool] = ContextVar("erpnext_oversight_run", default=False)
+
+
+@contextmanager
+def oversight_run() -> Iterator[None]:
+    """Mark the ERPNext call made inside as the principal's oversight export
+    asking what became of its drafts (``service``; the gateway lets only
+    ``erpnext__audit_drafts`` through then). Code only: no tool sets it."""
+    token = _oversight_run.set(True)
+    try:
+        yield
+    finally:
+        _oversight_run.reset(token)
+
+
+def in_oversight_run() -> bool:
+    return _oversight_run.get()
+
+
 @dataclass(frozen=True)
 class ErpnextCaller:
     kind: ErpnextCallerKind
@@ -207,7 +227,7 @@ def caller_for(session: Any) -> ErpnextCaller:
     from openexecutive.orchestrator.content_trust import principal_speaking
     from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
 
-    if in_brief_run():
+    if in_brief_run() or in_oversight_run():
         return ErpnextCaller("service")
     if session is None:
         raise CallerRefused("ERPNext is not available outside a conversation.", "no_session")
