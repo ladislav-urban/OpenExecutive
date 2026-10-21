@@ -159,7 +159,10 @@ def test_the_audit_tool_is_refused_outside_the_export_and_runs_nothing_else_insi
     assert erp.calls == []
 
 
-def test_the_model_is_never_offered_the_audit_tool() -> None:
+def test_the_model_is_never_offered_the_audit_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.unit._erpnext_pins import pin_listing
+
+    pin_listing(monkeypatch, _search_text())
     kept = mcp_gateway._drop_blocked_tools(_search_text())
     assert "erpnext__run_report" in kept and "erpnext__audit_drafts" not in kept
 

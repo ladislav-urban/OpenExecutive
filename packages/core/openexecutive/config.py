@@ -894,6 +894,12 @@ class Settings(BaseSettings):
     # Executive" panel inside ERPNext. Unset, POST /webhook/erpnext/chat
     # answers 503.
     erpnext_panel_public_keys: str | None = Field(None, alias="ERPNEXT_PANEL_PUBLIC_KEYS")
+    # ERPNext A2A (integrations/erpnext_a2a.py): the suppliers whose own agents
+    # may ask about their orders and invoices, as JSON
+    # {"<key id>": {"supplier": "<Supplier name in ERPNext>", "key": "<Ed25519
+    # public key>"}}. Unset, the agent card is not served and POST /a2a/suppliers
+    # answers 503. Needs ERPNEXT_CALLER_PRIVATE_KEY.
+    erpnext_a2a_suppliers: str | None = Field(None, alias="ERPNEXT_A2A_SUPPLIERS")
     # ERPNext phase 3b (briefing/erp_numbers.py): the company whose totals the
     # principal's morning brief shows (cash, receivables, payables, yesterday's
     # sales). Unset, the brief has no ERP NUMBERS block.

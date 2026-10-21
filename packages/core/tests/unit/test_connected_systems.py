@@ -325,9 +325,12 @@ def _erpnext_gateway(replies: list[str]) -> tuple[MCPGateway, AsyncMock]:
 
 
 def test_an_erpnext_tool_refused_as_undiscovered_is_discovered_and_retried_once(
-    principal_turn: None,
+    principal_turn: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from tests.unit._erpnext_pins import pin_listing
+
     name = "erpnext__run_report"
+    pin_listing(monkeypatch, _search_hit(name))
     gateway, forwarded = _erpnext_gateway([_undiscovered(name), _search_hit(name), '{"rows": []}'])
     out = asyncio.run(
         gateway.call_tool({"name": name, "arguments": {"report_name": "General Ledger"}})
@@ -337,6 +340,18 @@ def test_an_erpnext_tool_refused_as_undiscovered_is_discovered_and_retried_once(
     assert [c[0] for c in calls] == ["call_tool", "search_tools", "call_tool"]
     assert calls[1][1] == {"query": "erpnext run report", "top_k": 10}
     assert calls[0] == calls[2]
+
+
+def test_an_erpnext_tool_whose_definition_changed_is_never_retried(principal_turn: None) -> None:
+    # Discovery shows the served definition; one off its pin is refused, and
+    # every later call too, without asking ERPNext again.
+    name = "erpnext__run_report"
+    gateway, forwarded = _erpnext_gateway([_undiscovered(name), _search_hit(name)])
+    out = json.loads(asyncio.run(gateway.call_tool({"name": name, "arguments": {"report_name": "GL"}})))
+    assert "has not pinned" in out["error"]
+    again = json.loads(asyncio.run(gateway.call_tool({"name": name, "arguments": {"report_name": "GL"}})))
+    assert "has not pinned" in again["error"]
+    assert [c.args[0] for c in forwarded.await_args_list] == ["call_tool", "search_tools"]
 
 
 def test_no_erpnext_retry_unless_the_config_named_erpnext(principal_turn: None) -> None:
