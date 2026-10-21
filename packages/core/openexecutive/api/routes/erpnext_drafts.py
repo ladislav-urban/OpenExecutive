@@ -15,7 +15,8 @@ Routes:
                         (``integrations.erpnext_oversight``), for the principal
                         alone: ``since`` / ``until`` (ISO dates or times),
                         ``format`` json or csv, and ``erpnext=1`` for what
-                        became of each draft in ERPNext since.
+                        became of each draft in ERPNext since and the
+                        share submitted unchanged (``unchanged_share``).
 
 A card is its person's alone: the caller is resolved the way the decisions
 routes resolve an approver (``chat._resolve_caller_person_id``), and anyone
@@ -220,4 +221,7 @@ async def get_erpnext_draft_oversight(
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="erpnext-draft-oversight-{stamp}.csv"'},
         )
-    return {"generated_at": datetime.now(UTC).isoformat(), "erpnext_state": erpnext, "records": rows}
+    out: dict[str, Any] = {"generated_at": datetime.now(UTC).isoformat(), "erpnext_state": erpnext}
+    if erpnext:
+        out["unchanged_share"] = erpnext_oversight.unchanged_share(rows)
+    return {**out, "records": rows}
