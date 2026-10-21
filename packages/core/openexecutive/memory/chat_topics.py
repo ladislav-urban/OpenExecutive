@@ -275,6 +275,9 @@ def owner_only(session_id: str, owner: int, db_path: Path = DB_PATH) -> bool:
             "AND ((sender_person_id IS NOT NULL AND sender_person_id != ?) "
             "OR sender_surface IS NOT NULL) LIMIT 1",
             (session_id, owner),
+        ).fetchone() or conn.execute(
+            # A host line taken back and sent again is saved as the owner's.
+            "SELECT 1 FROM sessions WHERE session_id = ? AND host_wrote = 1", (session_id,)
         ).fetchone()
     return other is None
 

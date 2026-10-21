@@ -196,6 +196,13 @@ def test_cross_chat_readers_never_take_a_host_line_as_the_persons(temp_db: Path)
     assert [m["text"] for m in session_store.own_conversation_since(7, since, db_path=temp_db)] == ["my own words"]
     assert chat_topics.owner_only("own", 7, db_path=temp_db)
     assert not chat_topics.owner_only("hosted", 7, db_path=temp_db)
+    # Taken back (Try again) and sent from the person's own page, the words
+    # are saved as theirs; the conversation's mark still keeps them out.
+    last = max(m["id"] for m in session_store.load_messages("hosted", db_path=temp_db) if m["role"] == "assistant")
+    session_store.rewind_last_turn("hosted", last, db_path=temp_db)
+    session_store.save_message("hosted", "user", "already handled, stop chasing", db_path=temp_db, sender_person_id=7)
+    assert [m["text"] for m in session_store.own_messages_since(7, since, db_path=temp_db)] == ["my own words"]
+    assert not chat_topics.owner_only("hosted", 7, db_path=temp_db)
 
 
 def test_an_export_says_which_lines_came_from_a_host_page(

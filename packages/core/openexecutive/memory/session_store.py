@@ -489,7 +489,10 @@ def own_messages_since(
         rows = conn.execute(
             "SELECT m.created_at, m.content FROM chat_messages m "
             "JOIN sessions s ON s.session_id = m.session_id "
+            # Nor any line of a conversation a host's page wrote in: a host
+            # line taken back and sent again (Try again) is saved as theirs.
             "WHERE m.role = 'user' AND m.created_at > ? AND m.sender_surface IS NULL "
+            "AND s.host_wrote = 0 "
             "AND (m.sender_person_id = ? "
             "OR (m.sender_person_id IS NULL AND s.caller_person_id = ?)) "
             "ORDER BY m.created_at DESC, m.id DESC LIMIT ?",
