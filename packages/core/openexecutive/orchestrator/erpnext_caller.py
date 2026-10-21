@@ -29,6 +29,11 @@ anything the model or the message says:
   ``briefing.erp_numbers`` around the gateway calls it makes itself, never
   by the model): ``service``, which oe_connector holds to the reports its
   operator lists. Their audience is fixed, the principal;
+- a supplier's own agent over A2A (``supplier_run``, set only by
+  integrations/erpnext_a2a.py around its narrow agent, for the supplier whose
+  registered key signed the request): ``supplier``, ``sub`` the Supplier's
+  name in ERPNext, never anything the model or the message says. oe_connector
+  holds it to that supplier's own documents (its mcp/suppliers.py);
 - anyone else is refused here, before ERPNext is asked. That includes every
   other run nobody is watching (``Session.unattended``): a scheduled
   follow-up's text and recipient come from whoever scheduled it, so signing
@@ -93,7 +98,7 @@ PURPOSE_DRAFT = "draft"
 DRAFT_TOOL_PREFIX = "erpnext__draft"
 DRAFT_CHECK_TOOL = "erpnext__draft_check"
 
-ErpnextCallerKind = Literal["user", "service"]
+ErpnextCallerKind = Literal["user", "service", "supplier"]
 
 # Set only by briefing.erp_numbers, around the report runs it makes itself.
 _brief_run: ContextVar[bool] = ContextVar("erpnext_brief_run", default=False)
@@ -134,11 +139,49 @@ def in_oversight_run() -> bool:
     return _oversight_run.get()
 
 
+# Set only by integrations.erpnext_a2a, around its narrow agent's turn: the
+# Supplier whose registered key signed the request.
+_supplier_run: ContextVar[str] = ContextVar("erpnext_supplier_run", default="")
+# oe_connector's own bound on a supplier caller's `sub` (its caller.py).
+MAX_SUPPLIER_LEN = 140
+
+
+def valid_supplier(name: object) -> bool:
+    """Whether ``name`` is a Supplier name oe_connector takes as ``sub``."""
+    return (
+        isinstance(name, str)
+        and 0 < len(name) <= MAX_SUPPLIER_LEN
+        and name == name.strip()
+        and name.isprintable()
+    )
+
+
+@contextmanager
+def supplier_run(supplier: str) -> Iterator[None]:
+    """Mark the ERPNext calls made inside as answering ``supplier``'s own
+    agent over A2A (``supplier``; the gateway lets only the supplier tools
+    through then, and nothing else). Code only: no tool sets it."""
+    if not valid_supplier(supplier):
+        raise ValueError("a supplier caller is named by its Supplier in ERPNext")
+    token = _supplier_run.set(supplier)
+    try:
+        yield
+    finally:
+        _supplier_run.reset(token)
+
+
+def in_supplier_run() -> str:
+    """The Supplier this A2A turn answers, or "" outside one."""
+    return _supplier_run.get()
+
+
 @dataclass(frozen=True)
 class ErpnextCaller:
     kind: ErpnextCallerKind
-    # The asker's email, lowercased; "" for ``service``.
+    # The asker's email, lowercased; "" for ``service`` and ``supplier``.
     email: str = ""
+    # The Supplier's name in ERPNext, for ``supplier`` only.
+    supplier: str = ""
 
 
 @dataclass(frozen=True)
@@ -227,6 +270,9 @@ def caller_for(session: Any) -> ErpnextCaller:
     from openexecutive.orchestrator.content_trust import principal_speaking
     from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
 
+    supplier = in_supplier_run()
+    if supplier:
+        return ErpnextCaller("supplier", supplier=supplier)
     if in_brief_run() or in_oversight_run():
         return ErpnextCaller("service")
     if session is None:
@@ -329,8 +375,12 @@ def mint(
     malformed key; the message never includes it."""
     if caller.kind == "user" and "@" not in caller.email:
         raise ValueError("a user is named by their email")
-    if caller.kind == "service" and caller.email:
+    if caller.kind == "service" and (caller.email or caller.supplier):
         raise ValueError("the service caller names no one")
+    if caller.kind == "supplier" and (caller.email or not valid_supplier(caller.supplier)):
+        raise ValueError("a supplier caller is named by its Supplier in ERPNext")
+    if caller.kind == "user" and caller.supplier:
+        raise ValueError("a user is named by their email")
     if purpose is not None and (purpose != PURPOSE_DRAFT or caller.kind != "user"):
         raise ValueError("only a person's draft carries a purpose")
     kid, key = load_private_key(setting)
@@ -343,7 +393,7 @@ def mint(
         "jti": jti or secrets.token_urlsafe(18),
         "kid": kid,
         "kind": caller.kind,
-        "sub": caller.email,
+        "sub": caller.supplier if caller.kind == "supplier" else caller.email,
         "tool": tool,
     }
     if purpose is not None:

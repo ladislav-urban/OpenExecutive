@@ -760,6 +760,13 @@ def _check_erpnext_caller(tool_name: str) -> tuple[str | None, ErpnextCaller | N
     from openexecutive.orchestrator.schedule_tools import current_session
 
     setting = erpnext_caller.signing_setting()
+    if not setting and erpnext_caller.in_supplier_run():
+        # oe_connector answers a supplier only as a signed `supplier` caller.
+        return _refuse_erpnext_call(
+            tool_name, "supplier-needs-keys",
+            "A supplier's agent is answered only with per-person access "
+            "(ERPNEXT_CALLER_PRIVATE_KEY).",
+        ), None
     if not setting:
         # The morning brief's own report runs are for the principal alone.
         if erpnext_caller.in_brief_run() or principal_speaking(current_session.get()):
@@ -3409,18 +3416,44 @@ def _show_outside_panel(name: str) -> bool:
     return name == ERPNEXT_SHOW_TOOL and not erpnext_panel_turn(current_session.get())
 
 
+def _erpnext_mismatches(text: object) -> dict[str, str]:
+    """The ``erpnext__*`` tools in this ``search_tools`` output whose
+    definition doesn't match its pin (``erpnext_tool_pin``), with why."""
+    from openexecutive.orchestrator.erpnext_tool_pin import mismatch
+    from openexecutive.workflows.tool_catalog import parse_search_results
+
+    if not isinstance(text, str):
+        return {}
+    found: dict[str, str] = {}
+    for info in parse_search_results(text):
+        normalized = _normalize_tool_name(info.name)
+        if normalized.startswith(_ERPNEXT_PREFIX):
+            why = mismatch(normalized, info.description, info.input_schema)
+            if why is not None:
+                found[info.name] = why
+    return found
+
+
 def _drop_blocked_tools(text: object) -> Any:
     """``search_tools`` output without the tools `call_tool` always refuses
     here (the Microsoft 365 account tools; ERPNext's show tool off its panel;
-    ERPNext's oversight tool, which runs only for the export), so the model is
-    never offered them. Output naming none of them comes back unchanged."""
-    from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL
+    ERPNext's oversight tool, which runs only for the export; its supplier
+    tools, which run only for a supplier's agent; any ERPNext tool whose
+    definition doesn't match its pin), so the model is never offered them.
+    Output naming none of them comes back unchanged."""
+    from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL, ERPNEXT_SUPPLIER_TOOLS
     from openexecutive.workflows.tool_catalog import filter_search_results, parse_search_results
+
+    changed = _erpnext_mismatches(text)
 
     def blocked(name: str) -> bool:
         normalized = _normalize_tool_name(name)
         return (
-            _is_blocked_m365_auth_tool(name) or _show_outside_panel(normalized) or normalized == ERPNEXT_AUDIT_TOOL
+            _is_blocked_m365_auth_tool(name)
+            or _show_outside_panel(normalized)
+            or normalized == ERPNEXT_AUDIT_TOOL
+            or normalized in ERPNEXT_SUPPLIER_TOOLS
+            or name in changed
         )
 
     if not isinstance(text, str):
@@ -3444,6 +3477,7 @@ def _is_undiscovered_refusal(
         ERPNEXT_DRAFT_TOOLS,
         ERPNEXT_SERVER,
         ERPNEXT_SHOW_TOOL,
+        ERPNEXT_SUPPLIER_TOOLS,
         PINNED_ERPNEXT_TOOLS,
         PINNED_GOOGLE_TOOLS,
     )
@@ -3455,6 +3489,7 @@ def _is_undiscovered_refusal(
     pinned = tool_name in PINNED_GOOGLE_TOOLS or (
         (
             tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS
+            or tool_name in ERPNEXT_SUPPLIER_TOOLS
             or tool_name in (ERPNEXT_AUDIT_TOOL, ERPNEXT_SHOW_TOOL)
         )
         and ERPNEXT_SERVER in server_names
@@ -3582,6 +3617,13 @@ class MCPGateway:
         # MCP_TOOL_TIMEOUT_S, read on first use (`_call_timeout`) and kept:
         # `get_settings()` builds a fresh Settings on every call.
         self._tool_timeout_s: float | None = None
+        # ERPNext tools as this gateway's searches last saw them (normalized
+        # names): those whose definition matched its pin, and those that
+        # didn't, with why (``erpnext_tool_pin``). A call to the second is
+        # refused: extensible-mcp runs only a tool a search returned, and
+        # every search passes ``_search``.
+        self._erpnext_verified: set[str] = set()
+        self._erpnext_changed: dict[str, str] = {}
 
     def _call_timeout(self, settings: Settings | None = None) -> float:
         """The per-call ceiling, read once per gateway (from ``settings``
@@ -3662,7 +3704,46 @@ class MCPGateway:
         if isinstance(tool_input.get("top_k"), int):
             args["top_k"] = tool_input["top_k"]
         result = await _session_call(session, "search_tools", args, self._call_timeout())
-        return result.content[0].text if result.content else json.dumps({"tools": []})
+        text = result.content[0].text if result.content else json.dumps({"tools": []})
+        self._note_erpnext_definitions(text)
+        return text
+
+    def _note_erpnext_definitions(self, text: object) -> None:
+        """Check every ``erpnext__*`` tool this search returned against its
+        pinned digest, and keep the outcome for ``call_tool``."""
+        from openexecutive.workflows.tool_catalog import parse_search_results
+
+        if not isinstance(text, str):
+            return
+        changed = _erpnext_mismatches(text)
+        for info in parse_search_results(text):
+            name = _normalize_tool_name(info.name)
+            if not name.startswith(_ERPNEXT_PREFIX):
+                continue
+            why = changed.get(info.name)
+            if why is None:
+                self._erpnext_verified.add(name)
+                self._erpnext_changed.pop(name, None)
+                continue
+            self._erpnext_verified.discard(name)
+            if self._erpnext_changed.get(name) != why:
+                logger.warning(
+                    "MCPGateway: dropped %s: its definition doesn't match the pin (%s); "
+                    "update orchestrator/erpnext_tool_pin.py with oe_connector's release "
+                    "(bench oe-connector-tool-digests)",
+                    name, why,
+                )
+            self._erpnext_changed[name] = why
+
+    async def verified_erpnext_tools(self, names: Iterable[str]) -> bool:
+        """Whether every one of these ``erpnext__*`` tools was found and
+        matched its pin, discovering any this gateway has not seen yet."""
+        for name in names:
+            if name not in self._erpnext_verified:
+                await self._discover(name)
+            if name not in self._erpnext_verified:
+                return False
+        return True
 
     async def _discover(self, tool_name: str, settings: Settings | None = None) -> bool:
         """Run the exact-name search that registers ``tool_name`` with
@@ -3792,6 +3873,15 @@ class MCPGateway:
                 arguments = {}
         tool_name = tool_input.get("name", "")
         normalized = _normalize_tool_name(tool_name)
+        # A supplier's agent (integrations.erpnext_a2a) reaches its own
+        # documents' tools and nothing else.
+        from openexecutive.prompts.connected_systems import ERPNEXT_SUPPLIER_TOOLS
+
+        if erpnext_caller.in_supplier_run() and normalized not in ERPNEXT_SUPPLIER_TOOLS:
+            return _refuse_erpnext_call(
+                str(tool_name)[:200], "outside-supplier-tools",
+                "a supplier's agent is answered only from its own orders and invoices.",
+            )
         # Files saved from someone's own mail are theirs alone, and their
         # folder is no model's to name (see `_saved_files_hidden`). The save's
         # own code-built calls are the one exception.
@@ -3821,6 +3911,14 @@ class MCPGateway:
                     tool_name, "audit-outside-export",
                     "This is OpenExecutive's own oversight export, not a tool to call here.",
                 )
+            # The supplier tools run only for a supplier's agent (above).
+            if normalized in ERPNEXT_SUPPLIER_TOOLS and not erpnext_caller.in_supplier_run():
+                return _refuse_erpnext_call(
+                    tool_name, "supplier-outside-a2a",
+                    "it answers a supplier's own agent, not a tool to call here.",
+                )
+            if normalized in self._erpnext_changed:
+                return self._refuse_changed_erpnext_tool(tool_name)
             if _show_outside_panel(normalized):
                 return _refuse_erpnext_call(
                     tool_name, "show-outside-panel",
@@ -4000,6 +4098,9 @@ class MCPGateway:
             if _is_undiscovered_refusal(tool_name, result_text, self.server_names) and await self._discover(
                 tool_name
             ):
+                # Discovery is where a changed definition shows: never retry one.
+                if normalized in self._erpnext_changed:
+                    return self._refuse_changed_erpnext_tool(tool_name)
                 result = await _session_call(session, "call_tool", _wire_input(), self._call_timeout())
                 result_text = result.content[0].text if result.content else json.dumps({"result": None})
         except GatewayCallTimeout:
@@ -4084,6 +4185,14 @@ class MCPGateway:
                 failed=bool(getattr(result, "isError", False)) or _is_error_payload(result_text),
             )
         return result_text
+
+    def _refuse_changed_erpnext_tool(self, tool_name: str) -> str:
+        return _refuse_erpnext_call(
+            tool_name, "definition-changed",
+            "ERPNext serves it with a description or schema this install has not "
+            "pinned, so it is not used. Say it is unavailable; an operator must "
+            "update the pin with oe_connector's release.",
+        )
 
     def _note_grant_health(self, tool_name: object, result_text: str) -> None:
         """Read a tool's answer for a dead grant (``grant_failure``) and keep

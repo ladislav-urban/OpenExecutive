@@ -23,6 +23,7 @@ from openexecutive.orchestrator.erpnext_caller import (
 from openexecutive.orchestrator.mcp_gateway import MCPGateway
 from openexecutive.orchestrator.schedule_tools import current_session
 from openexecutive.prompts.connected_systems import render_connected_systems
+from tests.unit._erpnext_pins import pin_listing
 
 # A fixed key, so the token below is byte for byte what oe_connector's
 # tests/test_caller.py verifies (Ed25519 signatures are deterministic).
@@ -190,7 +191,7 @@ def phase2(monkeypatch: pytest.MonkeyPatch, roster: dict[str, Any]) -> Any:
         lambda event, *_a, **k: audited.append({"event": event, **k.get("details", {})}),
     )
     token = current_session.set(_session(from_web_chat=True))
-    yield SimpleNamespace(roster=roster, audited=audited)
+    yield SimpleNamespace(roster=roster, audited=audited, monkeypatch=monkeypatch)
     current_session.reset(token)
 
 
@@ -221,6 +222,7 @@ def test_a_retried_call_gets_a_fresh_assertion(phase2: Any) -> None:
     name = "erpnext__get_record"
     undiscovered = f"Error: Tool '{name}' has not been discovered via search_tools."
     hit = f"## {name}\n**Description:** x\n**Parameters:**\n```json\n{{}}\n```\n"
+    pin_listing(phase2.monkeypatch, hit)
     gateway, forwarded = _gateway([undiscovered, hit, '{"doc": {}}'])
     args = {"doctype": "Customer", "name": "Acme"}
     assert asyncio.run(gateway.call_tool({"name": name, "arguments": args})) == '{"doc": {}}'

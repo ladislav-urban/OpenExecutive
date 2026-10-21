@@ -144,6 +144,16 @@ ERPNEXT_AUDIT_TOOL = "erpnext__audit_drafts"
 # and hides it from tool search, on every other turn.
 ERPNEXT_SHOW_TOOL = "erpnext__show_in_erpnext"
 
+# oe_connector's tools for a supplier's own agent (its mcp/suppliers.py),
+# answered over A2A by integrations.erpnext_a2a. Never listed to the model
+# here: the gateway lets them through only inside erpnext_caller.supplier_run,
+# signed as that supplier, and hides them from every turn's tool search.
+ERPNEXT_SUPPLIER_TOOLS: frozenset[str] = frozenset({
+    "erpnext__supplier_invoices",
+    "erpnext__supplier_order",
+    "erpnext__supplier_orders",
+})
+
 # How to read ERPNext figures, the conventions oe_connector's own catalog
 # states. Constant text, so block 0 stays cacheable.
 _ERPNEXT_GUIDE = (

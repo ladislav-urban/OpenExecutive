@@ -112,6 +112,9 @@ EVENT_TYPES: tuple[str, ...] = (
     "erpnext_draft_failed",     # an approved card's draft wasn't made; the card waits again, retried with the same key
     "erpnext_draft_dismissed",  # the person dismissed a draft card
     "erpnext_oversight_exported",  # the principal exported the drafts' oversight record (range, format, count); private
+    # ERPNext A2A (integrations/erpnext_a2a.py) — private to the principal.
+    "erpnext_a2a_exchange",  # a supplier's agent was answered: supplier, key id, tools called, lengths only
+    "erpnext_a2a_refused",   # a request was refused: unknown key, bad signature, replay, rate limit (details.reason)
 )
 
 

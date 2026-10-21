@@ -50,24 +50,39 @@ An ``inbox`` scenario (``type: inbox``) runs the inbox watcher's two model
 calls on one email (``delegation.inbox.reply_for``): whether it drafts at all
 must match ``expect``, and a draft is judged by ``judge_inbox``. Nothing
 reaches Gmail and nothing is stored.
+
+A ``supplier`` scenario (``type: supplier``) runs the narrow agent that
+answers a supplier's agent over A2A (``integrations.erpnext_a2a_agent``) on
+one message, its tools answering from the scenario's documents as
+oe_connector would (``supplier_tools``), and ``judge_supplier`` scores the
+reply. Nothing reaches ERPNext.
 """
 from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable, Coroutine
 from dataclasses import asdict
 from typing import Any
 
-from openexecutive.evals.judges import judge_chat, judge_inbox, judge_triage, judge_workflow
+from openexecutive.evals.judges import (
+    judge_chat,
+    judge_inbox,
+    judge_supplier,
+    judge_triage,
+    judge_workflow,
+)
 from openexecutive.evals.scenarios import (
+    SupplierCase,
     load_scenarios,
     routing_check,
     scenario_delegation,
     scenario_inbox,
     scenario_principal_role,
+    scenario_supplier,
     scenario_turn_surface,
     scenario_voice_persona,
 )
@@ -186,7 +201,9 @@ def _make_run_one(
     if kind == "triage":
         return _make_triage_runner(sem, queue, passed, total, cancel_event)
     if kind == "inbox":
-        return _make_inbox_runner(sem, queue, passed, total, cancel_event)
+        return _make_outcome_runner(run_inbox_scenario, sem, queue, passed, total, cancel_event)
+    if kind == "supplier":
+        return _make_outcome_runner(run_supplier_scenario, sem, queue, passed, total, cancel_event)
     if kind == "workflow":
         return _make_workflow_runner(store, sem, queue, passed, total, cancel_event)
     # chat (default) and mcp both go through Executive.chat; mcp with the
@@ -338,7 +355,60 @@ async def run_inbox_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _make_inbox_runner(
+def supplier_tools(case: SupplierCase) -> Callable[[str, dict[str, Any]], Coroutine[Any, Any, str]]:
+    """oe_connector's three supplier tools over the scenario's documents,
+    answering as its mcp/suppliers.py does: only this supplier's, and any
+    other order number the same as one that doesn't exist."""
+    done = ("Completed", "Closed")
+
+    async def call(name: str, arguments: dict[str, Any]) -> str:
+        asked = arguments.get("limit")
+        limit = asked if isinstance(asked, int) else 50
+        if name == "erpnext__supplier_orders":
+            rows = [
+                {k: v for k, v in o.items() if k != "items"}
+                for o in case.orders
+                if arguments.get("include_done") is True or o.get("status") not in done
+            ]
+            return json.dumps({"supplier": case.supplier, "orders": rows[:limit], "truncated": len(rows) > limit})
+        if name == "erpnext__supplier_order":
+            wanted = str(arguments.get("name") or "").strip()
+            order = next((o for o in case.orders if o["name"] == wanted), None)
+            if order is None:
+                return "No submitted Purchase Order of yours has that number."
+            return json.dumps({"supplier": case.supplier, "order": order, "truncated": False})
+        if name == "erpnext__supplier_invoices":
+            rows = [
+                i for i in case.invoices
+                if arguments.get("unpaid_only") is not True or i.get("outstanding_amount") not in (0, None)
+            ]
+            return json.dumps({"supplier": case.supplier, "invoices": rows[:limit], "truncated": len(rows) > limit})
+        return f"Unknown tool: {name}"
+
+    return call
+
+
+async def run_supplier_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    """One ``type: supplier`` scenario: the narrow A2A agent answers the
+    supplier's agent over the scenario's documents; ``{"outcome", "scores",
+    "passed"}``. Nothing reaches ERPNext."""
+    from openexecutive.integrations.erpnext_a2a_agent import answer
+
+    case = scenario_supplier(scenario)
+    if case is None:
+        raise ValueError("supplier scenarios require a `supplier` block")
+    result = await answer(case.supplier, case.message, supplier_tools(case))
+    outcome = {"reply": result.reply, "tools": result.tools}
+    scores = await judge_supplier(scenario, outcome)
+    return {
+        "outcome": outcome,
+        "scores": scores,
+        "passed": float(scores.get("overall", 0)) >= _PASS_THRESHOLD,
+    }
+
+
+def _make_outcome_runner(
+    run_scenario: Callable[[dict[str, Any]], Coroutine[Any, Any, dict[str, Any]]],
     sem: asyncio.Semaphore,
     queue: asyncio.Queue[dict[str, Any] | None],
     passed: list[int],
@@ -360,7 +430,7 @@ def _make_inbox_runner(
                     "description": scenario.get("description", ""),
                 })
                 try:
-                    result = await run_inbox_scenario(scenario)
+                    result = await run_scenario(scenario)
                     if result["passed"]:
                         passed[0] += 1
                     await queue.put({

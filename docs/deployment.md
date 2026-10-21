@@ -785,6 +785,73 @@ follow-up ToDo is worded from the invoice's figures and assigned to the
 owner. The DocType must be listed in `ERPNEXT_DRAFT_DOCTYPES` (both are by
 default); nothing else needs setting.
 
+**Suppliers' agents over A2A.** A supplier's own AI agent can ask, over A2A
+(Agent2Agent, JSON-RPC `message/send`), about that supplier's own submitted
+purchase orders and invoices: status, dates, quantities and amounts. A narrow
+agent answers with no one approving the reply. It is offered only
+oe_connector's three supplier tools, and has no memory, specialists,
+knowledge base, mail or other tools. Every exchange is in the audit log.
+It needs per-person access (above). For each supplier, make a key pair:
+
+```bash
+uv run --with cryptography python scripts/make-caller-keys.py --erpnext-a2a-supplier "Northwind Cables Ltd"
+```
+
+The name must be the Supplier's name in ERPNext. The script prints the
+private key, which goes to the supplier privately, and one entry for
+`ERPNEXT_A2A_SUPPLIERS` on the API. A supplier can also make its own pair and
+send you only the public key. Merge the entries into one JSON object, set the
+public HTTPS URL suppliers reach the endpoint at, and restart the API:
+
+```bash
+ERPNEXT_A2A_SUPPLIERS='{"nw1": {"supplier": "Northwind Cables Ltd", "key": "<public key>"}}'
+ERPNEXT_A2A_URL=https://<api-host>/a2a/suppliers
+```
+
+Every request is signed for that URL, so one a supplier sent another of its
+customers can't be replayed here. A2A stays off until it is set (plain HTTP
+only to this machine).
+
+Then list the same Suppliers in the bench, which answers no supplier it
+doesn't list:
+
+```bash
+bench --site <site> set-config -p oe_connector_a2a_suppliers '["Northwind Cables Ltd"]'
+```
+
+- Give the supplier the agent card's URL,
+  `https://<api-host>/.well-known/agent-card.json`. It names two skills,
+  orders and invoices, and the endpoint, `POST /a2a/suppliers`. Both are
+  exempt from `BACKEND_SHARED_SECRET`, and the card is 404 until A2A is set
+  up.
+- Every request carries `x-oe-a2a-assertion`: the panel's format, with claims
+  `{aud, body, exp, iat, jti, kid}` signed by the supplier's key: `aud` is
+  `ERPNEXT_A2A_URL`, `body` the SHA-256 of the exact body, 60 seconds, each
+  `jti` once. An unknown key, a bad signature or a replay gets nothing (401)
+  and is audited.
+- Each supplier may ask 30 times an hour, one question at a time. Each
+  message is answered on its own: nothing is kept between messages, and
+  there is no streaming, push notification or task. The used `jti`s, the
+  rate limit and the one-at-a-time rule live in the API process, so run one
+  API worker, as the image does.
+- The supplier is the one registered for the key that signed, never anything
+  the message says. The agent sees only that supplier's documents, and
+  another supplier's order answers the same as one that doesn't exist.
+- If oe_connector serves a tool whose description or schema doesn't match the
+  digest this release pins (below), the agent doesn't answer until both are
+  updated.
+- To rotate a supplier's key, add the new key id beside the old one for the
+  same supplier, then remove the old one once they use the new key. Remove
+  the supplier's entry to stop answering it at once.
+
+**Pinned tool definitions.** OpenExecutive pins a digest of each tool
+definition oe_connector serves (`orchestrator/erpnext_tool_pin.py`). A tool
+whose description or input schema doesn't match is never shown to the
+model, any call to it is refused, and the API logs which tool and why.
+Upgrade oe_connector and OpenExecutive together: a release that changes a
+tool updates both. To check a site, compare `bench --site <site>
+oe-connector-tool-digests` with the pin.
+
 Once a conversation has read ERPNext, none of its replies, then or later,
 is added to peer or department memory, which other people's turns read, nor
 opens a follow-up loop, so one person's figures do not resurface for someone

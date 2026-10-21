@@ -343,14 +343,16 @@ def test_the_route_returns_what_the_turn_showed(panel: SimpleNamespace, monkeypa
     }
 
 
-def test_the_show_tool_is_for_panel_turns_only() -> None:
+def test_the_show_tool_is_for_panel_turns_only(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.orchestrator import mcp_gateway
     from openexecutive.orchestrator.schedule_tools import current_session
+    from tests.unit._erpnext_pins import pin_listing
 
     listing = (
         "## erpnext__show_in_erpnext\n**Description:** Show it in ERPNext\n\n"
         "## erpnext__run_report\n**Description:** Run a report\n"
     )
+    pin_listing(monkeypatch, listing)
     token = current_session.set(Session())
     try:
         assert mcp_gateway._show_outside_panel("erpnext__show_in_erpnext")

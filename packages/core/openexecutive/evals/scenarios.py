@@ -37,6 +37,8 @@ def scenario_kind(s: dict[str, Any]) -> str:
         return "workflow"
     if s.get("type") == "inbox":
         return "inbox"
+    if s.get("type") == "supplier":
+        return "supplier"
     if s.get("requires_mcp"):
         return "mcp"
     return "chat"
@@ -418,6 +420,52 @@ class InboxCase:
     message: Any
 
 
+@dataclass
+class SupplierCase:
+    supplier: str
+    message: str
+    # The supplier's own submitted documents, as oe_connector's supplier tools
+    # return them (an order may carry its `items`).
+    orders: list[dict[str, Any]]
+    invoices: list[dict[str, Any]]
+
+
+def scenario_supplier(scenario: dict[str, Any]) -> SupplierCase | None:
+    """The scenario's ``supplier`` block (a supplier's agent over A2A,
+    ``type: supplier``) as a ``SupplierCase``, or None when it has none.
+
+    Shape::
+
+        supplier:
+          name: Northwind Cables Ltd          # the signed supplier
+          message: "Is PUR-ORD-2026-00031 open?"   # what its agent sends
+          orders: [{name: PUR-ORD-2026-00012, status: To Receive and Bill, ..., items: [...]}]
+          invoices: [{name: ACC-PINV-2026-00007, outstanding_amount: 1200, ...}]
+
+    Only these documents are the supplier's: the runner's tools answer any
+    other order number as oe_connector does, the same as one that doesn't
+    exist. Raises ValueError on a malformed block."""
+    from openexecutive.orchestrator.erpnext_caller import valid_supplier
+
+    raw = scenario.get("supplier")
+    if raw is None:
+        return None
+    if not isinstance(raw, dict):
+        raise ValueError("supplier must be a mapping")
+    if not valid_supplier(raw.get("name")):
+        raise ValueError("supplier.name must be a Supplier name")
+    message = raw.get("message")
+    if not isinstance(message, str) or not message.strip():
+        raise ValueError("supplier.message is required")
+    docs: dict[str, list[dict[str, Any]]] = {}
+    for key in ("orders", "invoices"):
+        rows = raw.get(key) or []
+        if not isinstance(rows, list) or not all(isinstance(r, dict) and r.get("name") for r in rows):
+            raise ValueError(f"supplier.{key} must be a list of documents with a name")
+        docs[key] = rows
+    return SupplierCase(str(raw["name"]), message.strip(), docs["orders"], docs["invoices"])
+
+
 def builtin_scenario_ids() -> set[str]:
     return {s["id"] for s in _load_builtin_scenarios()}
 
@@ -469,6 +517,11 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_inbox(s)
         except ValueError as e:
             raise ValueError(f"`inbox`: {e}") from e
+    if s.get("supplier") is not None:
+        try:
+            scenario_supplier(s)
+        except ValueError as e:
+            raise ValueError(f"`supplier`: {e}") from e
 
     scenario_routing(s)
 
@@ -479,6 +532,8 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         raise ValueError("workflow scenarios require a `workflow` field")
     if k == "inbox" and s.get("inbox") is None:
         raise ValueError("inbox scenarios require an `inbox` block")
+    if k == "supplier" and s.get("supplier") is None:
+        raise ValueError("supplier scenarios require a `supplier` block")
     if k == "triage" and not s.get("event"):
         raise ValueError("triage scenarios require an `event` field")
 

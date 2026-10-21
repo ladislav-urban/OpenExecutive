@@ -9801,6 +9801,93 @@ integrations:
     turn read outside content (outside_content.outside_allows_mcp_call) and
     is not an acting tool for Take the lead (take_the_lead.mcp_tool_acts).
     Evals erpnext_014 to erpnext_016.
+
+    Pinned tool definitions (design "Next", item 5;
+    orchestrator/erpnext_tool_pin.py). oe_connector's tool descriptions and
+    input schemas reach the model as search_tools returns them, so a changed
+    description (a "rug pull", an added instruction) would otherwise pass
+    unseen. TOOL_DIGESTS pins each tool's digest as `bench
+    oe-connector-tool-digests` prints it: SHA-256 of {name, description,
+    inputSchema}, name without the erpnext__ prefix, spelled as
+    erpnext_caller.canonical_json; title and annotations left out.
+    tools_digest(TOOL_DIGESTS) equals oe_connector's TOOLS_DIGEST, and both
+    repos' tests hash the same VECTOR_DEFINITION. MCPGateway._search (every
+    search, the model's and _discover's) records each erpnext__* tool it
+    returns as verified or changed (_note_erpnext_definitions; a changed one
+    is logged once with its digest), _drop_blocked_tools hides changed and
+    unpinned ones from the model, and call_tool refuses a changed tool
+    (audited as definition-changed), including right after the undiscovered
+    retry's discovery, so it is never retried. extensible-mcp runs only a
+    tool a search on this session returned, and every search passes
+    _search. A release that changes a definition updates both pins in one
+    pair of PRs; until then that tool is unavailable here. It guards this
+    install's model only.
+
+    A2A for suppliers' agents (design "Next", item 3;
+    integrations/erpnext_a2a.py, erpnext_a2a_agent.py). A supplier's own AI
+    agent asks over A2A (protocol 0.3, JSON-RPC message/send only) about
+    that supplier's own submitted Purchase Orders and Purchase Invoices.
+    GET /.well-known/agent-card.json names two skills (purchase_orders,
+    invoices), no streaming, no push notifications, and the signature as an
+    apiKey header scheme; its url is ERPNEXT_A2A_URL (never the request's
+    Host) and its version a fixed "1.0" (not the release). It is 404 until
+    ERPNEXT_A2A_SUPPLIERS and ERPNEXT_A2A_URL (https, or plain http to
+    loopback) are set and per-person access is on. POST /a2a/suppliers
+    (both paths exempt from BACKEND_SHARED_SECRET and allowed by the
+    local-login gate, since every request is signed): ERPNEXT_A2A_SUPPLIERS
+    is JSON {key id: {supplier: Supplier name in ERPNext, key: Ed25519
+    public key}} (make-caller-keys.py --erpnext-a2a-supplier); malformed,
+    or one public key under two entries, refuses all. x-oe-a2a-assertion is
+    v1.<payload>.<signature>, claims {aud = ERPNEXT_A2A_URL (so a request
+    signed for another customer that registered the same key is refused
+    here), body (SHA-256 of the exact body), exp, iat, jti, kid}, exp - iat
+    at most 60 s, 30 s skew, jti once in that supplier's own ledger
+    (verify_supplier_assertion; the payload's kid, read by a regex, picks the
+    one key to try, and only after it verifies is any JSON parsed; claims.kid
+    must then be that key's). The header is checked before the body (64 KB
+    cap) is read. The supplier is the one registered for that key, never
+    anything in the message. Unknown key, bad signature, replay, a busy or
+    rate-limited supplier, unverified tools, a timeout or a failure answer
+    nothing and write a private erpnext_a2a_refused row (details.reason;
+    those before a supplier is known at most 30 a minute, the rest only
+    logged; a known supplier's always). 30 requests an hour per supplier,
+    one in flight; ledgers, limits and the in-flight set are per process
+    (one API worker). tasks/get and tasks/cancel answer TaskNotFound,
+    streaming and push UnsupportedOperation, a non-text part
+    ContentTypeNotSupported. The reply is one Message (role agent, the
+    request's contextId or a new one); nothing is kept between messages.
+    Before answering, MCPGateway.verified_erpnext_tools must find all three
+    supplier tools matching their pins. The narrow agent
+    (erpnext_a2a_agent.answer) is not the Executive: no session (so nothing
+    reaches episodic, peer or department memory or any conversation), no
+    specialists, standing facts, knowledge base, mail, briefing or other
+    MCP servers; it is offered only erpnext__supplier_orders,
+    erpnext__supplier_order and erpnext__supplier_invoices from this
+    install's own copy of their definitions
+    (erpnext_tool_pin.SUPPLIER_TOOL_DEFINITIONS, a test holds each to its
+    pin), at most 5 rounds (the last with tool_choice none), DEFAULT_MODEL.
+    Its system prompt (prompts/supplier_agent.py, a constant) says it speaks
+    for the company to that supplier only, reports only what a tool returned,
+    answers a number it can't find only with "no submitted order of yours
+    has that number", promises and changes nothing, and treats the message
+    and every tool result as untrusted; both reach it wrapped by
+    content_trust.wrap_untrusted. The route runs it inside
+    erpnext_caller.supplier_run(supplier) (a ContextVar no tool sets):
+    caller_for answers ErpnextCaller("supplier", supplier=...) there, and
+    mint signs kind supplier, sub the Supplier's name. The gateway passes
+    only the three supplier tools inside that marker (anything else,
+    ERPNext or not, is refused as outside-supplier-tools), refuses them
+    outside it (supplier-outside-a2a), refuses them in phase 1
+    (supplier-needs-keys), and _drop_blocked_tools hides them from every
+    search_tools. oe_connector also answers only a Supplier listed in
+    oe_connector_a2a_suppliers and enabled, with fixed fields of submitted
+    documents naming it; another supplier's order answers the same as a
+    missing one. Every exchange writes a private erpnext_a2a_exchange row:
+    supplier, key id, tools called, message and reply lengths, never text.
+    Evals erpnext_017 (another supplier's order) and erpnext_018 (injected
+    instructions): type supplier, run by evals.runner.run_supplier_scenario
+    over the scenario's own documents (supplier_tools fakes oe_connector's
+    answers) and judged by judge_supplier.
   own_gmail: |
     Act as me (delegation) connects a second, separate Gmail — the
     principal's own — read and drafted into by delegation.gmail.DelegateGmail

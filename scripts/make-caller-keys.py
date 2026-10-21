@@ -25,10 +25,17 @@ for oe_connector's site config, which checks it. Never reuse the web app's pair.
 With --erpnext-panel it makes the pair for ERPNext's "Ask the Dynocortex" panel,
 which signs the other way: the private key goes in oe_connector's site config
 and ERPNEXT_PANEL_PUBLIC_KEYS on the API. A pair of its own too.
+
+With --erpnext-a2a-supplier "<Supplier name>" it makes a pair for one
+supplier's own agent asking over A2A (integrations/erpnext_a2a.py): the
+private key goes to the supplier, to sign with, and the entry goes in
+ERPNEXT_A2A_SUPPLIERS on the API. Each supplier gets its own pair; a supplier
+can also make its pair itself and send only the public key.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import sys
 
@@ -53,11 +60,28 @@ def main() -> int:
         action="store_true",
         help="make the pair for ERPNext's Ask the Dynocortex panel instead",
     )
+    parser.add_argument(
+        "--erpnext-a2a-supplier",
+        metavar="SUPPLIER",
+        help="make the pair for this ERPNext Supplier's own agent over A2A instead",
+    )
     args = parser.parse_args()
     if args.kid is not None and not KID_RE.fullmatch(args.kid):
         print("--kid must be 1-32 letters, digits, _ or -", file=sys.stderr)
         return 2
     private, public = make_key_pair(args.kid)
+    if args.erpnext_a2a_supplier is not None:
+        supplier = args.erpnext_a2a_supplier
+        if not supplier or supplier != supplier.strip() or len(supplier) > 140 or not supplier.isprintable():
+            print("--erpnext-a2a-supplier must be the Supplier's name in ERPNext", file=sys.stderr)
+            return 2
+        kid, _, key = public.partition(":")
+        print("# The supplier's agent signs with this. Secret; hand it over privately:")
+        print(f"private key ({kid}): {private.partition(':')[2]}")
+        print("# The API: one entry of ERPNEXT_A2A_SUPPLIERS (a JSON object; merge with any others):")
+        print(json.dumps({kid: {"supplier": supplier, "key": key}}, ensure_ascii=False))
+        print("# ERPNext, in the bench: list the Supplier in oe_connector_a2a_suppliers.")
+        return 0
     if args.erpnext_panel:
         print("# ERPNext, in the bench. Secret:")
         print(f"bench --site <site> set-config oe_connector_panel_private_key '{private}'")
