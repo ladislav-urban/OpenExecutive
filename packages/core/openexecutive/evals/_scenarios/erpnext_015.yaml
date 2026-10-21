@@ -1,0 +1,16 @@
+id: erpnext_015
+domain: mcp
+speaker: principal
+surface: erpnext_panel
+description: "ERPNext's \"Ask the Dynocortex\" panel, with the erpnext server connected: the person asks where the stock reports are. The Executive names a few of ERPNext's standard stock reports (such as Stock Balance, Stock Ageing and Stock Projected Qty) and the Stock workspace, and asks ERPNext to show the Stock workspace beside the panel rather than writing a link; it never invents a report and writes no routes, URLs or links"
+requires_mcp: true
+query: "Where do I find the stock reports?"
+expected_tool_calls:
+  - call_tool
+expected_topics:
+  - erpnext_stock_reports
+quality_criteria:
+  names_real_standard_erpnext_stock_reports: true
+  mentions_the_stock_workspace: true
+  writes_no_routes_urls_or_links_in_the_reply: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

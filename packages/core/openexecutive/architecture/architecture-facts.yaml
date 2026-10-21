@@ -9748,6 +9748,25 @@ integrations:
     sink); posts only over HTTPS (HTTP to loopback) with redirects off; and
     lets only an enabled System User ask (not the service user,
     Administrator or a portal user).
+    Views (oe_connector's docs/erpnext-panel-views-plan.md): both panel
+    blocks end with erpnext_panel.SHOW_RULE, asking the Executive to call
+    erpnext__show_in_erpnext (connected_systems.ERPNEXT_SHOW_TOOL, never in
+    block 0) for what the answer is about. The route sets a per-turn holder
+    (erpnext_panel._turn_views, a ContextVar the turn's tasks share); after a
+    successful erpnext__* call the gateway calls
+    erpnext_panel.note_erpnext_call, which keeps each show call's `view`
+    (at most five, 4000 bytes each) and the last list_records, run_report or
+    get_record call's arguments, without the caller assertion. The response
+    adds `views` and `call` when there are any. They are data: oe_connector's
+    panel.ask checks each view again as the signed-in ERPNext user and builds
+    every desk route itself. Off the panel, the gateway refuses
+    erpnext__show_in_erpnext (audited as show-outside-panel) and
+    _drop_blocked_tools hides it from search_tools; on the panel it is
+    discovered on first call like the pinned ERPNext tools. It writes and
+    sends nothing, so like ERPNext's pinned reads it stays open after the
+    turn read outside content (outside_content.outside_allows_mcp_call) and
+    is not an acting tool for Take the lead (take_the_lead.mcp_tool_acts).
+    Evals erpnext_014 to erpnext_016.
   own_gmail: |
     Act as me (delegation) connects a second, separate Gmail — the
     principal's own — read and drafted into by delegation.gmail.DelegateGmail

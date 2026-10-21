@@ -432,6 +432,7 @@ def test_mcp_reads_pass_and_sends_are_gated(owner: Any) -> None:
     ("ms365__read_mail_message", False),
     # ERPNext's pinned reads; its draft tools stay gated.
     ("erpnext__run_report", False),
+    ("erpnext__show_in_erpnext", False),
     ("erpnext__list-records", False),
     ("erpnext__draft_todo", True),
     ("erpnext__run_anything_else", True),

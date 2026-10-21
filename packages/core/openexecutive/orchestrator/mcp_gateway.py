@@ -3400,20 +3400,31 @@ def _remember_drive_read(tool_name: str, arguments: dict[str, Any], result_text:
     return result_text
 
 
+def _show_outside_panel(name: str) -> bool:
+    """Whether ``name`` is ERPNext's show tool on a turn that is not from
+    ERPNext's panel, the only place it can open anything."""
+    from openexecutive.orchestrator.schedule_tools import current_session, erpnext_panel_turn
+    from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL
+
+    return name == ERPNEXT_SHOW_TOOL and not erpnext_panel_turn(current_session.get())
+
+
 def _drop_blocked_tools(text: object) -> Any:
     """``search_tools`` output without the tools `call_tool` always refuses
-    (the Microsoft 365 account tools), so the model is never offered them.
-    Output naming none of them comes back unchanged."""
+    here (the Microsoft 365 account tools; ERPNext's show tool off its panel;
+    ERPNext's oversight tool, which runs only for the export), so the model is
+    never offered them. Output naming none of them comes back unchanged."""
+    from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL
     from openexecutive.workflows.tool_catalog import filter_search_results, parse_search_results
+
+    def blocked(name: str) -> bool:
+        normalized = _normalize_tool_name(name)
+        return (
+            _is_blocked_m365_auth_tool(name) or _show_outside_panel(normalized) or normalized == ERPNEXT_AUDIT_TOOL
+        )
 
     if not isinstance(text, str):
         return text
-    from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL
-
-    def blocked(name: str) -> bool:
-        # ERPNext's oversight tool runs only for the export (erpnext_oversight).
-        return _is_blocked_m365_auth_tool(name) or _normalize_tool_name(name) == ERPNEXT_AUDIT_TOOL
-
     if not any(blocked(t.name) for t in parse_search_results(text)):
         return text
     return filter_search_results(text, lambda name: not blocked(name))
@@ -3432,6 +3443,7 @@ def _is_undiscovered_refusal(
         ERPNEXT_AUDIT_TOOL,
         ERPNEXT_DRAFT_TOOLS,
         ERPNEXT_SERVER,
+        ERPNEXT_SHOW_TOOL,
         PINNED_ERPNEXT_TOOLS,
         PINNED_GOOGLE_TOOLS,
     )
@@ -3441,7 +3453,10 @@ def _is_undiscovered_refusal(
     # The draft tools are never shown to the model, so they are discovered the
     # same way (only the gated draft path calls them, by these exact names).
     pinned = tool_name in PINNED_GOOGLE_TOOLS or (
-        (tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS or tool_name == ERPNEXT_AUDIT_TOOL)
+        (
+            tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS
+            or tool_name in (ERPNEXT_AUDIT_TOOL, ERPNEXT_SHOW_TOOL)
+        )
         and ERPNEXT_SERVER in server_names
     )
     return (
@@ -3806,6 +3821,12 @@ class MCPGateway:
                     tool_name, "audit-outside-export",
                     "This is OpenExecutive's own oversight export, not a tool to call here.",
                 )
+            if _show_outside_panel(normalized):
+                return _refuse_erpnext_call(
+                    tool_name, "show-outside-panel",
+                    "it opens a place in ERPNext beside ERPNext's own panel, and "
+                    "only a turn from that panel has one. Do not retry.",
+                )
             if normalized.startswith(erpnext_caller.DRAFT_TOOL_PREFIX):
                 blocked, erp_caller = _check_erpnext_draft(tool_name, normalized, arguments)
                 erp_purpose = erpnext_caller.PURPOSE_DRAFT
@@ -4052,6 +4073,15 @@ class MCPGateway:
                     "artifact_ids": attached_artifacts,
                     "recipients": _audit_recipients(tool_name, arguments),
                 },
+            )
+        if erpnext_call:
+            # On a panel turn, what the answer showed (integrations.erpnext_panel).
+            from openexecutive.integrations.erpnext_panel import note_erpnext_call
+
+            note_erpnext_call(
+                normalized,
+                arguments,
+                failed=bool(getattr(result, "isError", False)) or _is_error_payload(result_text),
             )
         return result_text
 

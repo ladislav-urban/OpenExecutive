@@ -138,6 +138,12 @@ ERPNEXT_DRAFT_TOOLS: frozenset[str] = frozenset({
 # (integrations.erpnext_oversight).
 ERPNEXT_AUDIT_TOOL = "erpnext__audit_drafts"
 
+# The tool ERPNext's panel uses to open what an answer talks about beside it
+# (oe_connector's views.py). Named only in the panel's own channel block
+# (integrations.erpnext_panel), never here in block 0: the gateway refuses it,
+# and hides it from tool search, on every other turn.
+ERPNEXT_SHOW_TOOL = "erpnext__show_in_erpnext"
+
 # How to read ERPNext figures, the conventions oe_connector's own catalog
 # states. Constant text, so block 0 stays cacheable.
 _ERPNEXT_GUIDE = (

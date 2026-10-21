@@ -209,6 +209,9 @@ def test_erpnext_reads_count_but_its_next_read_and_a_draft_card_stay_open() -> N
             oc.mark(oc.ERPNEXT)
             assert oc.read_outside()
             assert not oc.outside_withholds("call_tool", {"name": "erpnext__list-records", "arguments": {}})
+            # The panel's show tool writes nothing: what the answer read, it may show.
+            show = {"name": "erpnext__show_in_erpnext", "arguments": {"view": {"kind": "tree", "doctype": "Account"}}}
+            assert not oc.outside_withholds("call_tool", show)
             assert oc.outside_withholds("call_tool", {"name": "erpnext__draft_todo", "arguments": {}})
             assert oc.outside_withholds("call_tool", WRITE_DOC)
             assert oc.outside_withholds("upsert_person", CONTACT)

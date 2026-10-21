@@ -1520,10 +1520,12 @@ def mcp_tool_acts(name: str) -> bool:
     """Whether a connected tool may change something. Fails closed: only a
     name that starts with a read verb (after its server prefix) and says
     nothing anywhere about acting passes. ERPNext's pinned reads pass too
-    (``erpnext__run_report`` runs a report, which changes nothing)."""
-    from openexecutive.prompts.connected_systems import PINNED_ERPNEXT_TOOLS
+    (``erpnext__run_report`` runs a report, which changes nothing), and so does
+    its panel's show tool, which only names a view of the asker's own desk."""
+    from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL, PINNED_ERPNEXT_TOOLS
 
-    if name.strip().lower().replace("-", "_") in PINNED_ERPNEXT_TOOLS:
+    normalized = name.strip().lower().replace("-", "_")
+    if normalized in PINNED_ERPNEXT_TOOLS or normalized == ERPNEXT_SHOW_TOOL:
         return False
     if _MCP_ACTING_RE.search(name):
         return True

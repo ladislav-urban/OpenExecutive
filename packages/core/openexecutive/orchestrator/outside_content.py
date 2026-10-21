@@ -297,6 +297,13 @@ def _is_erpnext_read(tool_name: object) -> bool:
     return isinstance(tool_name, str) and tool_name.strip().lower().replace("-", "_") in PINNED_ERPNEXT_TOOLS
 
 
+def _is_erpnext_show(tool_name: object) -> bool:
+    """ERPNext's show tool (``ERPNEXT_SHOW_TOOL``)."""
+    from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL
+
+    return isinstance(tool_name, str) and tool_name.strip().lower().replace("-", "_") == ERPNEXT_SHOW_TOOL
+
+
 def _is_marked_erpnext_draft_call(call_input: Any) -> bool:
     """The one ``erpnext__draft*`` call the draft path marked for itself
     (``erpnext_caller.draft_call_for``): ``propose_erpnext_draft``'s own check,
@@ -319,8 +326,11 @@ def outside_allows_mcp_call(call_input: Any) -> bool:
     """The gateway calls a turn that read outside content may still make:
     the reads another AI app may make (``MCP_CLIENT_MCP_TOOLS``, the Google
     and Microsoft 365 reads), a OneDrive file read and ERPNext's reads (an
-    answer from ERPNext takes several), and the draft path's own marked check
-    (``_is_marked_erpnext_draft_call``). No write of any kind."""
+    answer from ERPNext takes several), ERPNext's show tool (it writes and
+    sends nothing: it names a view of the asker's own desk, which oe_connector
+    checks again, and the gateway allows it on ERPNext's panel only), and the
+    draft path's own marked check (``_is_marked_erpnext_draft_call``). No
+    write of any kind."""
     from openexecutive.orchestrator.schedule_tools import (
         is_onedrive_file_read,
         mcp_client_allows_mcp_tool,
@@ -331,6 +341,7 @@ def outside_allows_mcp_call(call_input: Any) -> bool:
         mcp_client_allows_mcp_tool(named)
         or is_onedrive_file_read(call_input)
         or _is_erpnext_read(named)
+        or _is_erpnext_show(named)
         or _is_marked_erpnext_draft_call(call_input)
     )
 
