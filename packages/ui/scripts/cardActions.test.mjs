@@ -1,14 +1,24 @@
-// In a frame, approving, rejecting or cancelling a card asks twice
-// (lib/cardActions.ts, components/embed/EmbedProvider.tsx).
+// In a frame, a card action, and any other change off the host list that
+// follows a click, asks in a window of its own (lib/cardActions.ts,
+// components/embed/EmbedProvider.tsx, FrameConfirm.tsx, app/confirm).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { cardActionFor, describeDecision } from "../src/lib/cardActions.ts";
+import {
+  CONFIRM_PROTOCOL,
+  cardActionFor,
+  describeDecision,
+  frameActionFor,
+  isConfirmMessage,
+  parseAction,
+} from "../src/lib/cardActions.ts";
 
 const API = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
+const CALLS = JSON.parse(readFileSync(new URL("../src/lib/host-list.json", import.meta.url), "utf8")).calls;
+const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
 
-// Approvals that are no card: a suggested watch going live (a host may do
-// that too, it is on the host list) and knowledge review items.
+// Approvals that are no card: a suggested watch going live (on the host
+// list) and knowledge review items (a change like any other).
 const NOT_CARDS = new Set(["/watchlist/12/approve", "/watchlist/12/decline", "/review/bulk-approve"]);
 
 test("every approve, reject, cancel or decide call in lib/api.ts is a card action or named as none", () => {
@@ -18,7 +28,8 @@ test("every approve, reject, cancel or decide call in lib/api.ts is a card actio
   assert.ok(paths.length >= 8);
   for (const path of new Set(paths)) {
     if (NOT_CARDS.has(path)) continue;
-    assert.ok(cardActionFor("POST", `/api/backend${path}`, JSON.stringify({ decision: "approve" })), path);
+    const action = cardActionFor("POST", `/api/backend${path}`, JSON.stringify({ decision: "approve" }));
+    assert.ok(action?.card, path);
   }
 });
 
@@ -27,6 +38,7 @@ test("what each card action says will happen", () => {
     verb: "approve",
     decisionId: 7,
     what: "Approve card 7: what it shows is carried out now, as you.",
+    card: true,
   });
   assert.equal(cardActionFor("post", "/api/backend/decisions/7/reject").verb, "reject");
   assert.equal(cardActionFor("POST", "http://this.app/api/backend/decisions/7/cancel").verb, "cancel");
@@ -36,16 +48,29 @@ test("what each card action says will happen", () => {
   assert.equal(cardActionFor("POST", "/api/backend/people/requests/4/decline").verb, "reject");
 });
 
-test("reads and everything else go straight through", () => {
+test("in a frame, any change off the host list asks; reads and host-list calls don't", () => {
   for (const [method, url] of [
-    ["GET", "/api/backend/decisions/7"],
-    ["GET", "/api/backend/decisions/7/approve"],
-    ["POST", "/api/backend/chat"],
-    ["POST", "/api/backend/watchlist/x/approve"],
-    ["POST", "/decisions/7/approve"],
-    ["POST", "/api/backend/decisions/x/approve"],
+    ["PUT", "/api/backend/delegation/handle-it"],
+    ["POST", "/api/backend/executive/pause"],
+    ["POST", "/api/backend/people/3/archive"],
+    ["DELETE", "/api/backend/sessions/abc"],
+    ["PATCH", "/api/backend/settings/notifications"],
   ]) {
-    assert.equal(cardActionFor(method, url), null, `${method} ${url}`);
+    const action = frameActionFor(method, url, undefined, CALLS);
+    assert.equal(action?.verb, "change", `${method} ${url}`);
+    assert.equal(action.card, false);
+    assert.match(action.what, new RegExp(`${method} /`));
+  }
+  assert.equal(frameActionFor("POST", "/api/backend/decisions/7/approve", undefined, CALLS).card, true);
+  for (const [method, url] of [
+    ["GET", "/api/backend/delegation/handle-it"],
+    ["HEAD", "/api/backend/today"],
+    ["POST", "/api/backend/chat"],
+    ["POST", "/api/backend/alerts/3/ack"],
+    ["DELETE", "/api/backend/watchlist/x"],
+    ["POST", "/api/auth/signout"],
+  ]) {
+    assert.equal(frameActionFor(method, url, undefined, CALLS), null, `${method} ${url}`);
   }
 });
 
@@ -58,9 +83,30 @@ test("the card is named by its kind and what it says", () => {
   assert.equal(describeDecision({}), "card");
 });
 
-test("the frame checks every request the page sends, in any frame", () => {
-  const provider = readFileSync(new URL("../src/components/embed/EmbedProvider.tsx", import.meta.url), "utf8");
+test("the confirmation window's messages", () => {
+  const nonce = "a".repeat(32);
+  assert.equal(isConfirmMessage({ protocol: CONFIRM_PROTOCOL, type: "answer", nonce, ok: true }, "answer", nonce), true);
+  assert.equal(isConfirmMessage({ protocol: CONFIRM_PROTOCOL, type: "answer", nonce: "b".repeat(32) }, "answer", nonce), false);
+  assert.equal(isConfirmMessage({ protocol: "oe-embed/v1", type: "answer", nonce }, "answer", nonce), false);
+  const action = cardActionFor("POST", "/api/backend/decisions/7/approve");
+  assert.deepEqual(parseAction(action), action);
+  assert.equal(parseAction({ ...action, verb: "send" }), null);
+  assert.equal(parseAction({ ...action, decisionId: -1 }), null);
+  assert.equal(parseAction({ ...action, what: "x".repeat(301) }), null);
+});
+
+test("the frame checks every request, in any frame, and asks in a window of its own", () => {
+  const provider = read("../src/components/embed/EmbedProvider.tsx");
   assert.match(provider, /if \(window\.top === window\.self\) return;/);
-  assert.match(provider, /const action = cardActionFor\(method, url, init\?\.body\);/);
-  assert.match(provider, /if \(action && !\(await confirm\(action\)\)\) throw new CardActionNotConfirmed\(\);/);
+  assert.match(provider, /const action = frameActionFor\(method, url, init\?\.body, HOST_CALLS\);/);
+  assert.match(provider, /action\.card \|\| Date\.now\(\) - lastInput < AFTER_INPUT_MS/);
+  assert.match(provider, /if \(asks && !\(await confirm\(action\)\)\) throw new CardActionNotConfirmed\(\);/);
+  const frame = read("../src/components/embed/FrameConfirm.tsx");
+  assert.match(frame, /window\.open\(`\/confirm\?nonce=\$\{nonce\}`/);
+  assert.match(frame, /event\.origin !== window\.location\.origin \|\| event\.source !== current/);
+  // The frame itself has no Yes: only the window does.
+  assert.doesNotMatch(frame, /finish\(true\)/);
+  const page = read("../src/app/confirm/page.tsx");
+  assert.match(page, /event\.origin !== window\.location\.origin \|\| event\.source !== opener/);
+  assert.match(page, /postMessage\(\{ protocol: CONFIRM_PROTOCOL, type: "answer", nonce, ok \}, window\.location\.origin\)/);
 });

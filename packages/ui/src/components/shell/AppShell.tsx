@@ -28,7 +28,7 @@ import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 // shell — sign-in, the onboarding wizard (full-screen flow), and the
 // chat home (`/`), which keeps its own top bar and debug panel but
 // renders the same `AppSidebar` as every other route.
-const EXEMPT_PREFIXES = ["/signin", "/onboard", "/api"];
+const EXEMPT_PREFIXES = ["/signin", "/onboard", "/api", "/confirm"];
 const EXEMPT_EXACT = new Set(["/"]);
 
 // Human-readable labels for path segments shown in the breadcrumb.

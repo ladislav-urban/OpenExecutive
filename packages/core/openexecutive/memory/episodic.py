@@ -316,6 +316,11 @@ def initialize_db(db_path: Path | None = None) -> None:
             # what their working-style profile learns from; the principal
             # rating someone else's session is not that person's reaction.
             ("feedback_by_person_id", "INTEGER"),
+            # Where a user message was written: "host" for a host origin's
+            # page (api.caller.from_host), else NULL. A conversation holding
+            # such a line stays read-only on every surface
+            # (session_store.host_wrote).
+            ("sender_surface", "TEXT"),
         ):
             if col not in _cm_existing:
                 try:

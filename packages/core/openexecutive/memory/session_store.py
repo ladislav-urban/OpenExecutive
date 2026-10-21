@@ -86,6 +86,7 @@ def save_message(
     stopped: bool = False,
     sender_person_id: int | None = None,
     sources: str | None = None,
+    sender_surface: str | None = None,
 ) -> int:
     """Persist one chat message and return its row id. ``action_chips`` is a
     JSON-encoded list of the assistant turn's action-chip dicts (or None), so
@@ -96,20 +97,39 @@ def save_message(
     sender, never the session owner's principal fallback, so per-person
     learning never reads an outsider's words as someone on the roster.
     ``sources`` is the JSON ``TurnSources.payload()`` of an assistant reply —
-    what it looked at and which areas it had to leave out — or None."""
+    what it looked at and which areas it had to leave out — or None.
+    ``sender_surface`` is ``"host"`` for a user message a host origin's page
+    sent (``host_wrote``)."""
     text = content if isinstance(content, str) else str(content)
     now = datetime.now(UTC).isoformat()
     with _get_conn(db_path) as conn:
         cur = conn.execute(
             "INSERT INTO chat_messages "
             "(session_id, role, content, created_at, action_chips, stopped, sender_person_id, "
-            "sources) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "sources, sender_surface) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session_id, role, text, now, action_chips, 1 if stopped else 0,
-                sender_person_id, sources,
+                sender_person_id, sources, sender_surface,
             ),
         )
         return int(cur.lastrowid or 0)
+
+
+def host_wrote(session_id: str, db_path: Path = DB_PATH) -> bool:
+    """Whether a host origin's page wrote any user message in this
+    conversation (``sender_surface`` ``"host"``). Every turn in it is then
+    held to the host surface's read-only rules, from any page: the line stays
+    in the conversation the model reads, and a script on that page could have
+    written it."""
+    if not db_path.exists():
+        return False
+    with _get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM chat_messages WHERE session_id = ? AND role = 'user' "
+            "AND sender_surface = 'host' LIMIT 1",
+            (session_id,),
+        ).fetchone()
+    return row is not None
 
 
 FEEDBACK_VALUES = frozenset({"up", "down"})

@@ -10,7 +10,7 @@ import { usePageCrumb } from "@/components/shell/PageCrumb";
 import { getDecision, type DecisionInstance } from "@/lib/api";
 
 // One card on a page of its own, by its decision id: what a host's frame
-// opens to have a card approved (embedded mode asks twice there,
+// opens to have a card approved (in a frame its Yes is asked in a window of its own,
 // lib/cardActions.ts), and a link anyone can keep. It shows the card with
 // the same component Home and the chat use; the server answers only the
 // card's own person, so anyone else sees that it isn't there.

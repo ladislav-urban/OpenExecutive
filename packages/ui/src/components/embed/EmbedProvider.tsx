@@ -2,8 +2,9 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 
-import CardActionConfirm from "@/components/embed/CardActionConfirm";
-import { CardActionNotConfirmed, cardActionFor, type CardAction } from "@/lib/cardActions";
+import FrameConfirm from "@/components/embed/FrameConfirm";
+import { CardActionNotConfirmed, frameActionFor, type CardAction } from "@/lib/cardActions";
+import HOST_LIST from "@/lib/host-list.json";
 import {
   acceptsEvent,
   embedRequested,
@@ -20,9 +21,15 @@ import {
 // frame. AppShell reads `embedded` to leave out its own chrome.
 //
 // Apart from that, in ANY frame (embedded or not, since a page on a host
-// origin can frame these pages without saying so), approving, rejecting or
-// cancelling a card asks for a second click on a confirmation inside the
-// frame (lib/cardActions.ts).
+// origin can frame these pages without saying so), a card action, and any
+// other change off the host list that follows a click, waits for a Yes in a
+// window of this app's own that no page can cover (lib/cardActions.ts,
+// FrameConfirm, app/confirm).
+
+const HOST_CALLS = HOST_LIST.calls.map(([method, pattern]) => [method, pattern] as const);
+// A change made this soon after a click or a key in the frame may have been
+// lured, so it asks; later than that, the page made it on its own.
+const AFTER_INPUT_MS = 10_000;
 
 export type EmbedState = {
   embedded: boolean;
@@ -92,9 +99,16 @@ export default function EmbedProvider({
     return () => window.removeEventListener("message", onMessage);
   }, [hostOrigins, version]);
 
-  // In any frame: every card action waits for the confirmation below.
+  // In any frame: every card action, and any change off the host list that
+  // follows a click, waits for the confirmation window.
   useEffect(() => {
     if (window.top === window.self) return;
+    let lastInput = 0;
+    const onInput = (event: Event) => {
+      if (event.isTrusted) lastInput = Date.now();
+    };
+    window.addEventListener("pointerdown", onInput, true);
+    window.addEventListener("keydown", onInput, true);
     const original = window.fetch;
     const confirm = (action: CardAction) =>
       new Promise<boolean>((resolve) => {
@@ -107,12 +121,15 @@ export default function EmbedProvider({
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      const action = cardActionFor(method, url, init?.body);
-      if (action && !(await confirm(action))) throw new CardActionNotConfirmed();
+      const action = frameActionFor(method, url, init?.body, HOST_CALLS);
+      const asks = action !== null && (action.card || Date.now() - lastInput < AFTER_INPUT_MS);
+      if (asks && !(await confirm(action))) throw new CardActionNotConfirmed();
       return original(input, init);
     };
     return () => {
       window.fetch = original;
+      window.removeEventListener("pointerdown", onInput, true);
+      window.removeEventListener("keydown", onInput, true);
     };
   }, []);
 
@@ -127,11 +144,7 @@ export default function EmbedProvider({
     <EmbedContext.Provider value={state}>
       {children}
       {pending && (
-        <CardActionConfirm
-          action={pending.action}
-          productName={state.init?.productName ?? null}
-          onAnswer={answer}
-        />
+        <FrameConfirm action={pending.action} onAnswer={answer} />
       )}
     </EmbedContext.Provider>
   );

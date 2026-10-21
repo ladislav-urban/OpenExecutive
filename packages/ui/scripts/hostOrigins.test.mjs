@@ -156,4 +156,6 @@ test("the proxy marks a host call's surface and signs it", () => {
   assert.match(route, /lower\.startsWith\("x-caller-"\)/);
   // Nor does a session cookie the middleware refreshed reach the API.
   assert.match(route, /lower === "set-cookie"/);
+  // What the API answers with no policy of its own runs nothing here.
+  assert.match(route, /"default-src 'none'; frame-ancestors 'none'; sandbox"/);
 });

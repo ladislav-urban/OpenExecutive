@@ -375,6 +375,11 @@ scripts can't read or drive Open Executive's pages. An entry must be `https://` 
 - `frame-ancestors 'self'` plus the host origins: no other site can frame the Approve and
   Send buttons.
 
+Auth.js's own pages get `frame-ancestors 'self'`, and whatever the API answers through
+the proxy without a policy of its own (JSON, its HTML docs, an error page) gets
+`default-src 'none'; frame-ancestors 'none'; sandbox`, so nothing in it runs on this
+origin. Downloads keep the API's own sandbox policy.
+
 **What a host origin may call: the host list** (`packages/ui/src/lib/host-list.json`).
 Each entry is a method and an API path. It holds: reading the briefing, cards,
 conversations and the watch list; acknowledging, snoozing, reopening and reviewing
@@ -406,9 +411,14 @@ that surface (`Session.from_host`) only reads and advises: it is offered the spe
 the read tools and the gateway's reads, never anything that sends, posts, books,
 schedules, runs or changes stored state (`MCP_CLIENT_WITHHELD_TOOLS`), the principal-only
 tools, Act as me, `recall_history`, scripts or extension tools. A call the model makes
-anyway is refused, telling the person to do it in Open Executive itself. Its words are
-never noted as the person's own, and it can stop or add to its own turns only.
-`tests/unit/test_host_surface_turns.py` lists what it is offered.
+anyway is refused, telling the person to start a new chat in Open Executive itself. Its
+words are never noted as the person's own, and it can stop or add to its own turns only.
+**A conversation a host's page wrote into stays that way on every page:** each user line
+records the surface that sent it (`chat_messages.sender_surface`), and every later turn in
+that conversation, from Open Executive's own pages too, gets the same read-only rules,
+since the host's line stays in what the model reads and could be an instruction planted
+for the person's next turn. `tests/unit/test_host_surface_turns.py` lists what such a turn
+is offered; `tests/integration/test_chat_host_surface.py` checks the conversation rule.
 
 **Embedded mode.** A page opened as `…?embed=1` in a frame whose parent is a listed host
 origin sends that parent `ready`; once the parent answers with a valid `init`, the page
@@ -425,10 +435,17 @@ parent window, and every `init` field is validated. In a frame:
   a host origin, addressed exactly) and closes.
 - **The host's user hint** (an email, display only) shows a warning with Sign out when it
   isn't who is signed in here.
-- **Card actions ask twice, in any frame** (embedded or not): approving, rejecting or
-  cancelling a card, a proposal, a workflow sign-off or a roster request shows a
-  confirmation inside the frame naming what will happen, whose Yes works only a moment
-  after it appears. Each approval card has its own page, `/cards/<id>`.
+- **Changes ask in a window of their own, in any frame** (embedded or not, since a host
+  page can frame these pages without saying so). The page around a frame can make it
+  invisible and lay its own buttons over it, so a confirmation drawn inside the frame
+  can be beaten with two lured clicks. Instead, approving, rejecting or cancelling a
+  card, a proposal, a workflow sign-off or a roster request, and any other change the
+  host list doesn't already allow (a setting, Handle it for me, People) made within
+  10 seconds of a click or key in the frame, opens a small window of Open Executive's
+  own (`/confirm`) naming what will happen; only its Yes goes ahead, and closing it is
+  No. No page can cover another window. The frame checks every request it sends
+  (`lib/cardActions.ts`), so no button can skip it. Each approval card has its own page,
+  `/cards/<id>`.
 
 `make embed-outputs` writes what a host app checks itself against without running this
 app or holding its secrets: `embed-manifest.json` (the navigation and routes),
@@ -439,10 +456,12 @@ everything installed in it, and whatever its administrators add. That code can d
 the host list allows, as whoever has the host open and is signed in here: read the
 briefing, alerts, cards, conversations (whose replies can draw on the person's memory and
 mail) and the watch list; start a chat turn and read its reply; handle alerts and the
-watch list. It can't approve, send, change settings or People, act through a chat turn,
-or read or click inside the frame. It could cover the frame with something misleading,
-which is why card actions ask twice there. Every host origin you list is trusted that
-far: list only apps whose administrators you would trust with it, and read every change
+watch list. It can't approve, send, change settings or People, act through a chat turn
+(its lines make a conversation read-only everywhere), or read or click inside the frame.
+It can lure clicks onto a framed page it has made invisible, but every change beyond the
+host list then needs a Yes in a separate window that shows what will happen; a person who
+says yes there without reading it is the remaining risk. Every host origin you list is
+trusted that far: list only apps whose administrators you would trust with it, and read every change
 to the host list, the `host` surface's tools and these policies with a security review.
 
 ---
@@ -548,7 +567,7 @@ curl -sv -H "x-api-key: $SHARED" https://api.example.com/sessions           # 20
 - Missing-secret deploys silently exposing the API (the `OE_PUBLIC_DEPLOYMENT` fail-closed guard)
 - Other pages on the same site — to a browser, every `localhost` port is one site — posting to the UI proxy with your cookie (it refuses writes whose `Sec-Fetch-Site` isn't `same-origin`)
 - Other sites framing the UI's buttons (clickjacking) and injected scripts running in its pages (the pages' `Content-Security-Policy`: `frame-ancestors` and a nonce per response)
-- A host origin's scripts (`OE_HOST_ORIGINS`) approving cards, sending mail, changing settings or People, or acting through a chat turn (the host list, and the `host` surface's read-only chat)
+- A host origin's scripts (`OE_HOST_ORIGINS`) approving cards, sending mail, changing settings or People, or acting through a chat turn (the host list; the `host` surface's read-only chat, which a conversation keeps once a host's page wrote in it; changes in a frame confirmed in a separate window)
 
 **Does not mitigate:**
 - A compromised `BACKEND_SHARED_SECRET` — anyone who learns it can hit the API as if they were the UI. Rotate if leaked. With signed callers on, they can use it only as a service, never as a signed-in user or the owner.

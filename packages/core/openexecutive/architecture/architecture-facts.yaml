@@ -7753,7 +7753,16 @@ auth:
     as me / recall_history / scripts / extensions), principal-only tools
     withheld, refusals say HOST_REFUSAL, never noted as the person's own
     words (history_chat.verified_speaker), and _stop_owner_key adds
-    "|host" so it stops/adds to its own turns only.
+    "|host" so it stops/adds to its own turns only. Each user line saves
+    chat_messages.sender_surface ("host" or NULL); a conversation with any
+    host line (session_store.host_wrote) holds EVERY later turn to the same
+    rules, own page included, failing closed when unreadable: the line stays
+    in the model's context and could plant an instruction for the person's
+    next full-power turn. delegation.settings._offered refuses host turns.
+    In any frame, card actions and any other change off the host list made
+    within 10 s of a trusted click/key are confirmed in a popup of the app's
+    own (/confirm, oe-confirm/v1 same-origin messages with a nonce): an
+    in-frame dialog can be beaten by two lured clicks on an invisible frame.
 
     Pages (all, host origins set or not): Content-Security-Policy
     script-src 'self' 'nonce-…' 'strict-dynamic' (+ 'unsafe-eval' on the
@@ -7771,9 +7780,10 @@ auth:
     host's tests. /signin offers a popup ending at /signin/done, which
     posts signed-in to its opener (own origin and each host origin) and
     closes. In ANY frame card actions (decisions approve/reject/cancel,
-    alerts approve, workflow decisions, roster requests) wait for a
-    confirmation in the frame whose Yes arms after 800 ms (fetch is
-    checked against lib/cardActions.ts); each card has /cards/<id>.
+    alerts approve, workflow decisions, roster requests), and other
+    changes off the host list after a click, wait for a Yes in the
+    /confirm popup (fetch is checked against lib/cardActions.ts); each
+    card has /cards/<id>.
 
     What remains (docs/auth.md): a host's scripts can read what the
     host list allows (briefing, conversations and replies, watch list)

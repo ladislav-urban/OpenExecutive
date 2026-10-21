@@ -191,6 +191,12 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   );
   respHeaders.set("X-Accel-Buffering", "no");
   for (const [name, value] of Object.entries(cors)) respHeaders.set(name, value);
+  // An answer with no policy of its own (JSON, the API's HTML docs, an error
+  // page) is data, never a page: nothing in it runs on this origin and no
+  // one may frame it. Downloads keep the API's own sandbox policy.
+  if (!respHeaders.has("content-security-policy")) {
+    respHeaders.set("Content-Security-Policy", "default-src 'none'; frame-ancestors 'none'; sandbox");
+  }
 
   return new Response(upstream.body, {
     status: upstream.status,

@@ -73,7 +73,14 @@ export async function middleware(req: NextRequest, ev: NextFetchEvent): Promise<
   if (segments !== null) return backend(req, ev, segments);
 
   const sessionFree = SESSION_FREE_PATH.test(pathname);
-  if (pathname.startsWith("/api/")) return sessionFree ? NextResponse.next() : sessionGate(req, ev);
+  if (pathname.startsWith("/api/")) {
+    if (!sessionFree) return sessionGate(req, ev);
+    // Auth.js's own pages (sign-out, its error page) are HTML too: no other
+    // site may frame them. Its inline scripts get no nonce, so only this.
+    const response = NextResponse.next();
+    response.headers.set("Content-Security-Policy", FRAME_ANCESTORS);
+    return response;
+  }
 
   const csp = contentSecurityPolicy({ nonce: makeNonce(), frameAncestors: FRAME_ANCESTORS, devServer: DEV_SERVER });
   const requestHeaders = new Headers(req.headers);

@@ -1134,9 +1134,22 @@ async def _run_chat_turn(
     # proxy stamps x-caller-email from it). A header-less request resolves to
     # the principal but is no sign-in, so it never gets Act as me.
     session.web_caller_signed_in = api_caller.signed_in(request)
-    # Per turn too: a host origin's page sent it (Session.from_host), so it
-    # only reads and advises, whichever page started the conversation.
-    session.from_host = api_caller.from_host(request)
+    # Per turn too: a host origin's page sent it, or wrote earlier in this
+    # conversation (Session.from_host). Then it only reads and advises,
+    # whichever page asks now: the host's lines stay in what the model reads.
+    # A conversation whose lines can't be read is held the same way.
+    host_call = api_caller.from_host(request)
+    if host_call:
+        session.from_host = True
+    else:
+        from openexecutive.memory.session_store import host_wrote
+
+        try:
+            session.from_host = await asyncio.to_thread(host_wrote, session.session_id)
+        except Exception:
+            logger.exception("chat.host_lines_unreadable session_id=%s", session.session_id)
+            session.from_host = True
+    line_surface = "host" if host_call else None
     is_first_turn = len(session.conversation_history) == 0
 
     # A chat its owner shared (``chat_people``): everyone in it reads every
@@ -1541,14 +1554,16 @@ async def _run_chat_turn(
                 if not is_first_turn:
                     update_session_timestamp(session.session_id)
                 save_message(
-                    session.session_id, "user", message, sender_person_id=caller_person_id
+                    session.session_id, "user", message, sender_person_id=caller_person_id,
+                    sender_surface=line_surface,
                 )
                 # Messages sent while it worked and folded into this reply,
                 # in the order they arrived, before the reply that answers
                 # them.
                 for added_text in added_texts:
                     save_message(
-                        session.session_id, "user", added_text, sender_person_id=caller_person_id
+                        session.session_id, "user", added_text, sender_person_id=caller_person_id,
+                        sender_surface=line_surface,
                     )
                 persisted["assistant_message_id"] = save_message(
                     session.session_id,

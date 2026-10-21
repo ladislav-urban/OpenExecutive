@@ -76,6 +76,7 @@ export const APP_ROUTES = [
   "chats",
   "clients",
   "company-profile",
+  "confirm",
   "council",
   "delegate",
   "demo",
@@ -97,7 +98,7 @@ export const APP_ROUTES = [
 
 // Pages that stay in the frame even if the host shows the same place
 // natively: a card's own page is where it is approved, in this app's origin.
-const NEVER_NATIVE = ["/cards", "/signin"];
+const NEVER_NATIVE = ["/cards", "/confirm", "/signin"];
 
 const MAX_PRODUCT_NAME = 40;
 const MAX_NATIVE_PATHS = 20;

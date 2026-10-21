@@ -2169,9 +2169,10 @@ MCP_CLIENT_RUNS_WHEN_ACTING: frozenset[str] = frozenset({
 MCP_CLIENT_ACTING_WITHHELD_TOOLS: frozenset[str] = MCP_CLIENT_WITHHELD_TOOLS - MCP_CLIENT_RUNS_WHEN_ACTING
 
 HOST_REFUSAL = (
-    "This conversation comes from a page another app shows, so here you can "
-    "read and advise but can't send, post, book or change anything. Tell the "
-    "person to open the chat in Open Executive itself and ask there."
+    "This conversation was written in, at least in part, from a page another "
+    "app shows, so in it you can read and advise but can't send, post, book or "
+    "change anything. Tell the person to start a new chat in Open Executive "
+    "itself and ask there."
 )
 
 MCP_CLIENT_ACTING_REFUSAL = (
