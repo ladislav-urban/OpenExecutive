@@ -78,7 +78,8 @@ export async function middleware(req: NextRequest, ev: NextFetchEvent): Promise<
     // Auth.js's own pages (sign-out, its error page) are HTML too: no other
     // site may frame them. Its inline scripts get no nonce, so only this.
     const response = NextResponse.next();
-    response.headers.set("Content-Security-Policy", FRAME_ANCESTORS);
+    // Not even a host origin: the embedded sign-in is a top-level popup.
+    response.headers.set("Content-Security-Policy", "frame-ancestors 'self'");
     return response;
   }
 

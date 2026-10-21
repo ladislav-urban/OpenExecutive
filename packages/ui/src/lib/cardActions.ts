@@ -34,6 +34,12 @@ type HostCall = readonly [method: string, pattern: string];
 
 const BACKEND = "/api/backend";
 const READS = new Set(["GET", "HEAD", "OPTIONS"]);
+// Chat messages are on the host list, but only a host's own are read-only:
+// sent from this app's page in a frame, a turn is the person's own, with
+// every tool. So in a frame they ask like any other change.
+const CHAT_SENDS = new Set(["/chat", "/chat/upload", "/chat/add"]);
+// Writes a frame may make without asking: they change nothing anyone acts on.
+const HARMLESS = /^\/sessions\/[^/]+\/typing$/;
 
 function verbFromBody(body: unknown): "approve" | "reject" | null {
   if (typeof body !== "string") return null;
@@ -122,8 +128,10 @@ function onHostList(calls: readonly HostCall[], method: string, path: string): b
 
 /**
  * What a request from a framed page must confirm, or null when it may go
- * straight through: a read, anything outside the backend proxy, and a call on
- * the host list (the host may make it itself).
+ * straight through: a read, anything outside the backend proxy, a typing
+ * notice, and a call on the host list the host could make with the same
+ * effect itself (not a chat message: the host's are read-only, this page's
+ * are not).
  */
 export function frameActionFor(
   method: string,
@@ -136,7 +144,16 @@ export function frameActionFor(
   const card = cardActionFor(verb, url, body);
   if (card) return card;
   const path = backendPath(url);
-  if (path === null || onHostList(hostCalls, verb, path)) return null;
+  if (path === null || HARMLESS.test(path)) return null;
+  if (verb === "POST" && CHAT_SENDS.has(path)) {
+    return {
+      verb: "change",
+      decisionId: null,
+      what: "Send this message to the Executive as you. It can act on it: send, schedule or change things.",
+      card: false,
+    };
+  }
+  if (onHostList(hostCalls, verb, path)) return null;
   return {
     verb: "change",
     decisionId: null,

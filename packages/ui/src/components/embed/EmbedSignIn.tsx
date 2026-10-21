@@ -52,7 +52,10 @@ export default function EmbedSignIn({ destination, children }: { destination: st
 
   if (!embedded) return <>{children}</>;
   const open = () => {
-    popup.current = window.open(SIGN_IN_POPUP_PATH, "oe-sign-in", "popup,width=480,height=640");
+    // A name of its own each time: a page that knew the name could take the
+    // window over and show its own look-alike sign-in in it.
+    const name = `oe-sign-in-${crypto.getRandomValues(new Uint32Array(2)).join("-")}`;
+    popup.current = window.open(SIGN_IN_POPUP_PATH, name, "popup,width=480,height=640");
     setBlocked(popup.current === null);
   };
   return (

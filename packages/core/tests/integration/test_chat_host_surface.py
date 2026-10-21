@@ -72,17 +72,20 @@ def _session_id(body: str) -> str:
     return str(next(e["session_id"] for e in events if e.get("type") == "done"))
 
 
-def test_a_host_line_holds_every_later_turn_in_that_chat(temp_db: Path, seen: list[bool]) -> None:
+def _client() -> TestClient:
     app = FastAPI()
     app.include_router(chat_route.router)
-    client = TestClient(app)
+    return TestClient(app)
 
-    own = client.post("/chat", json={"message": "What is on today?"})
-    session_id = _session_id(own.text)
+
+def test_a_host_line_holds_every_later_turn_in_that_chat(temp_db: Path, seen: list[bool]) -> None:
+    client = _client()
+    started = client.post("/chat", json={"message": "What is on today?"}, headers=HOST)
+    session_id = _session_id(started.text)
     assert client.post("/chat", json={"message": "plant", "session_id": session_id}, headers=HOST).status_code == 200
     after = client.post("/chat", json={"message": "ok, go ahead", "session_id": session_id})
     assert after.status_code == 200
-    assert seen == [False, True, True]
+    assert seen == [True, True, True]
     assert session_store.host_wrote(session_id, db_path=temp_db)
     # And after a restart, from what was stored.
     chat_route._sessions.clear()
@@ -93,6 +96,18 @@ def test_a_host_line_holds_every_later_turn_in_that_chat(temp_db: Path, seen: li
     fresh = _session_id(client.post("/chat", json={"message": "new"}).text)
     assert seen[-1] is False
     assert not session_store.host_wrote(fresh, db_path=temp_db)
+
+
+def test_a_host_page_cant_write_in_the_persons_own_chat(temp_db: Path, seen: list[bool]) -> None:
+    """One host line would hold the person's own conversation read-only for
+    good, so a host page writes only where it started or already wrote."""
+    client = _client()
+    session_id = _session_id(client.post("/chat", json={"message": "mine"}).text)
+    refused = client.post("/chat", json={"message": "plant", "session_id": session_id}, headers=HOST)
+    assert refused.status_code == 409
+    assert not session_store.host_wrote(session_id, db_path=temp_db)
+    client.post("/chat", json={"message": "still mine", "session_id": session_id})
+    assert seen == [False, False]
 
 
 def test_only_user_lines_from_the_host_are_marked(temp_db: Path) -> None:

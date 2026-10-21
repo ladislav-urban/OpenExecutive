@@ -205,6 +205,12 @@ def _stop_owner_key(request: Request, caller_person_id: int | None) -> str:
     return f"{key}|host" if api_caller.from_host(request) else key
 
 
+def _host_wrote(session_id: str) -> bool:
+    from openexecutive.memory.session_store import host_wrote
+
+    return host_wrote(session_id)
+
+
 def _sweep_stale_stops() -> None:
     """Reclaim entries that outlived any turn that could still be running.
 
@@ -1121,6 +1127,18 @@ async def _run_chat_turn(
             raise
     try:
         session = await _get_or_create_session(requested_id, request)
+        # A host origin's page writes only in a conversation it started or
+        # already wrote in: one line from it holds the conversation read-only
+        # for good, so it must not reach one of the person's own.
+        if (
+            api_caller.from_host(request)
+            and session.conversation_history
+            and not await asyncio.to_thread(_host_wrote, session.session_id)
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail="This conversation was started in Open Executive. Continue it there.",
+            )
     except BaseException:
         _release_stop(client_turn_id, turn_id)
         if lock_key is not None:
@@ -1142,10 +1160,8 @@ async def _run_chat_turn(
     if host_call:
         session.from_host = True
     else:
-        from openexecutive.memory.session_store import host_wrote
-
         try:
-            session.from_host = await asyncio.to_thread(host_wrote, session.session_id)
+            session.from_host = await asyncio.to_thread(_host_wrote, session.session_id)
         except Exception:
             logger.exception("chat.host_lines_unreadable session_id=%s", session.session_id)
             session.from_host = True

@@ -7758,7 +7758,11 @@ auth:
     host line (session_store.host_wrote) holds EVERY later turn to the same
     rules, own page included, failing closed when unreadable: the line stays
     in the model's context and could plant an instruction for the person's
-    next full-power turn. delegation.settings._offered refuses host turns.
+    next full-power turn. A host call into an existing conversation it
+    never wrote in is a 409 (it would turn the person's own chat read-only).
+    delegation.settings._offered refuses host turns. In a frame, chat sends
+    (/chat, /chat/upload, /chat/add) ask like any change: the framed
+    page's turn is the person's own; typing notices pass.
     In any frame, card actions and any other change off the host list made
     within 10 s of a trusted click/key are confirmed in a popup of the app's
     own (/confirm, oe-confirm/v1 same-origin messages with a nonce): an

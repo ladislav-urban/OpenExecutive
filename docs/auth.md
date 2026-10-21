@@ -413,7 +413,8 @@ schedules, runs or changes stored state (`MCP_CLIENT_WITHHELD_TOOLS`), the princ
 tools, Act as me, `recall_history`, scripts or extension tools. A call the model makes
 anyway is refused, telling the person to start a new chat in Open Executive itself. Its
 words are never noted as the person's own, and it can stop or add to its own turns only.
-**A conversation a host's page wrote into stays that way on every page:** each user line
+A host's page writes only in a conversation it started or already wrote in (`409`
+otherwise), and **a conversation a host's page wrote into stays that way on every page:** each user line
 records the surface that sent it (`chat_messages.sender_surface`), and every later turn in
 that conversation, from Open Executive's own pages too, gets the same read-only rules,
 since the host's line stays in what the model reads and could be an instruction planted
@@ -440,7 +441,9 @@ parent window, and every `init` field is validated. In a frame:
   invisible and lay its own buttons over it, so a confirmation drawn inside the frame
   can be beaten with two lured clicks. Instead, approving, rejecting or cancelling a
   card, a proposal, a workflow sign-off or a roster request, and any other change the
-  host list doesn't already allow (a setting, Handle it for me, People) made within
+  host list doesn't already allow with the same effect (a setting, Handle it for me,
+  People, and a chat message: the host's are read-only, but one sent from this app's page
+  in a frame is the person's own turn) made within
   10 seconds of a click or key in the frame, opens a small window of Open Executive's
   own (`/confirm`) naming what will happen; only its Yes goes ahead, and closing it is
   No. No page can cover another window. The frame checks every request it sends
@@ -455,9 +458,11 @@ app or holding its secrets: `embed-manifest.json` (the navigation and routes),
 everything installed in it, and whatever its administrators add. That code can do what
 the host list allows, as whoever has the host open and is signed in here: read the
 briefing, alerts, cards, conversations (whose replies can draw on the person's memory and
-mail) and the watch list; start a chat turn and read its reply; handle alerts and the
-watch list. It can't approve, send, change settings or People, act through a chat turn
-(its lines make a conversation read-only everywhere), or read or click inside the frame.
+mail) and the watch list; start a read-only chat turn, in a conversation it started, and
+read its reply; handle alerts and the watch list. It can't approve, send, change settings
+or People, act through a chat turn (its lines make a conversation read-only everywhere,
+so a chat started from the host stays read-only in Open Executive too, and it can't
+write in the person's own conversations), or read or click inside the frame.
 It can lure clicks onto a framed page it has made invisible, but every change beyond the
 host list then needs a Yes in a separate window that shows what will happen; a person who
 says yes there without reading it is the remaining risk. Every host origin you list is

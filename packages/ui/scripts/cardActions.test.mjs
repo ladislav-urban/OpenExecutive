@@ -62,10 +62,18 @@ test("in a frame, any change off the host list asks; reads and host-list calls d
     assert.match(action.what, new RegExp(`${method} /`));
   }
   assert.equal(frameActionFor("POST", "/api/backend/decisions/7/approve", undefined, CALLS).card, true);
+  // A chat message is on the host list, but sent from this app's page in a
+  // frame its turn is the person's own, with every tool: it asks.
+  for (const path of ["/chat", "/chat/upload", "/chat/add"]) {
+    const action = frameActionFor("POST", `/api/backend${path}`, "{}", CALLS);
+    assert.equal(action?.verb, "change", path);
+    assert.match(action.what, /It can act on it/);
+  }
   for (const [method, url] of [
     ["GET", "/api/backend/delegation/handle-it"],
     ["HEAD", "/api/backend/today"],
-    ["POST", "/api/backend/chat"],
+    ["POST", "/api/backend/chat/stop"],
+    ["POST", "/api/backend/sessions/abc/typing"],
     ["POST", "/api/backend/alerts/3/ack"],
     ["DELETE", "/api/backend/watchlist/x"],
     ["POST", "/api/auth/signout"],
