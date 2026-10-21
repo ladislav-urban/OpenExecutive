@@ -38,6 +38,16 @@ const READS = new Set(["GET", "HEAD", "OPTIONS"]);
 // sent from this app's page in a frame, a turn is the person's own, with
 // every tool. So in a frame they ask like any other change.
 const CHAT_SENDS = new Set(["/chat", "/chat/upload", "/chat/add"]);
+// The changes a lured click would most like to make, said plainly.
+const NAMED_CHANGES: readonly (readonly [RegExp, string])[] = [
+  [/^\/delegation\/handle-it/, "Change Handle it for me: what the Executive sends as you without asking."],
+  [/^\/delegation\//, "Change what the Executive may do as you (Delegate)."],
+  [/^\/executive\/(pause|resume)$/, "Pause or resume the Executive."],
+  [/^\/people(\/|$)/, "Change People: who is on the roster and what they may do."],
+  [/^\/departments(\/|$)/, "Change a department or who leads it."],
+  [/^\/(settings|workspace|notifications)(\/|$)/, "Change a setting."],
+  [/^\/(documents|knowledge)(\/|$)/, "Change the company knowledge the Executive relies on."],
+];
 // Writes a frame may make without asking: they change nothing anyone acts on.
 const HARMLESS = /^\/sessions\/[^/]+\/typing$/;
 
@@ -176,10 +186,11 @@ export function frameActionFor(
     };
   }
   if (onHostList(hostCalls, verb, path)) return null;
+  const named = NAMED_CHANGES.find(([re]) => re.test(path));
   return {
     verb: "change",
     decisionId: null,
-    what: `Make this change in Open Executive, as you (${verb} ${path.slice(0, 120)}).`,
+    what: `${named ? named[1] : "Make this change in Open Executive, as you."} (${verb} ${path.slice(0, 120)})`,
     card: false,
   };
 }

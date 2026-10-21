@@ -23,6 +23,7 @@ HOST = {"x-caller-surface": "host"}
 @pytest.fixture(autouse=True)
 def _reset_route_state() -> None:
     chat_route._sessions.clear()
+    chat_route._host_sessions.clear()
 
 
 @pytest.fixture()
@@ -150,6 +151,20 @@ def test_a_host_turn_marks_its_chat_before_it_is_saved(
     assert marked == [True]
     assert session_store.host_wrote(session_id, db_path=temp_db)
     assert "host_wrote = 0" in inspect.getsource(live_signals._conversations)
+
+
+def test_a_failed_mark_still_holds_the_chat(
+    temp_db: Path, seen: list[bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _broken(*_a: object, **_k: object) -> None:
+        raise OSError("database is locked")
+
+    monkeypatch.setattr(session_store, "mark_host_wrote", _broken)
+    monkeypatch.setattr(session_store, "host_wrote", lambda *_a, **_k: False)
+    client = _client()
+    session_id = _session_id(client.post("/chat", json={"message": "plant"}, headers=HOST).text)
+    client.post("/chat", json={"message": "ok", "session_id": session_id})
+    assert seen == [True, True]
 
 
 def test_a_host_page_cant_claim_an_empty_chat_of_the_persons(temp_db: Path) -> None:

@@ -467,9 +467,11 @@ read its reply; handle alerts and the watch list. It can't approve, send, change
 or People, act through a chat turn (its lines make a conversation read-only everywhere,
 so a chat started from the host stays read-only in Open Executive too, and it can't
 write in the person's own conversations), or read or click inside the frame. A chat it
-starts shows in the person's chat list (marked from its first moment, never in the
-brief). It can run the alert review when it likes, and add watches on addresses of its
-choosing, whose findings arrive marked as outside content, as any watch's do.
+starts shows in the person's chat list like their own (held read-only from its first
+moment, but not labelled there yet; it is left out of the brief). It can run the alert
+review when it likes, which may itself route, nudge or escalate alerts to teammates as
+the scheduled review would, and add watches on addresses of its choosing, whose findings
+arrive marked as outside content, as any watch's do.
 It can lure clicks onto a framed page it has made invisible, but every change beyond the
 host list then needs a Yes in a separate window that shows what will happen; a person who
 says yes there without reading it is the remaining risk. Every host origin you list is

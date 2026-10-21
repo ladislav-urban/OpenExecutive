@@ -205,10 +205,17 @@ def _stop_owner_key(request: Request, caller_person_id: int | None) -> str:
     return f"{key}|host" if api_caller.from_host(request) else key
 
 
+# Conversations a host origin's page has written in, as this process saw it
+# happen: the stored mark (session_store.host_wrote) can fail to write, and a
+# turn running alongside must be held all the same. The API runs as one
+# process.
+_host_sessions: set[str] = set()
+
+
 def _host_wrote(session_id: str) -> bool:
     from openexecutive.memory.session_store import host_wrote
 
-    return host_wrote(session_id)
+    return session_id in _host_sessions or host_wrote(session_id)
 
 
 def _exists_without_host(session_id: str) -> bool:
@@ -1278,7 +1285,9 @@ async def _run_chat_turn(
         logger.exception("chat.session_persist_failed turn_id=%s", turn_id)
     if host_call:
         # Now, not when the turn is saved: a turn from the person's own page
-        # in this conversation, even one running alongside, is held too.
+        # in this conversation, even one running alongside, is held too
+        # (here first, so a failed write below still holds it).
+        _host_sessions.add(session.session_id)
         try:
             from openexecutive.memory.session_store import mark_host_wrote
 
