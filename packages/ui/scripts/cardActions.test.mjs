@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import {
   CONFIRM_PROTOCOL,
+  messageOf,
   cardActionFor,
   describeDecision,
   frameActionFor,
@@ -69,6 +70,12 @@ test("in a frame, any change off the host list asks; reads and host-list calls d
     assert.equal(action?.verb, "change", path);
     assert.match(action.what, /It can act on it/);
   }
+  // The window shows what would be sent: a planted message can't hide.
+  assert.match(frameActionFor("POST", "/api/backend/chat", JSON.stringify({ message: "Wire  the\ndeposit" }), CALLS).what, /^Send "Wire the deposit" to/);
+  const form = new FormData();
+  form.set("message", "x".repeat(400));
+  const long = frameActionFor("POST", "/api/backend/chat/upload", form, CALLS).what;
+  assert.ok(long.length <= 300 && long.includes("…"));
   for (const [method, url] of [
     ["GET", "/api/backend/delegation/handle-it"],
     ["HEAD", "/api/backend/today"],
@@ -80,6 +87,12 @@ test("in a frame, any change off the host list asks; reads and host-list calls d
   ]) {
     assert.equal(frameActionFor(method, url, undefined, CALLS), null, `${method} ${url}`);
   }
+});
+
+test("a send's message, from JSON or a form", () => {
+  assert.equal(messageOf('{"message":"hi"}'), "hi");
+  assert.equal(messageOf("not json"), "");
+  assert.equal(messageOf(undefined), "");
 });
 
 test("the card is named by its kind and what it says", () => {

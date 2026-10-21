@@ -450,7 +450,7 @@ parent window, and every `init` field is validated. In a frame:
   already allow with the same effect (a setting, Handle it for me, People, an upload)
   made within 10 seconds of a click, key, drop or paste in the frame, or of a Yes, opens
   a small window of Open Executive's own (`/confirm`) naming what will happen; only its
-  Yes goes ahead, and closing it is No. No page can cover another window. The frame checks every request it sends
+  Yes goes ahead, and closing it is No. For a chat message it shows the message. No page can cover another window. The frame checks every request it sends
   (`lib/cardActions.ts`), so no button can skip it. Each approval card has its own page,
   `/cards/<id>`.
 
@@ -466,7 +466,10 @@ mail) and the watch list; start a read-only chat turn, in a conversation it star
 read its reply; handle alerts and the watch list. It can't approve, send, change settings
 or People, act through a chat turn (its lines make a conversation read-only everywhere,
 so a chat started from the host stays read-only in Open Executive too, and it can't
-write in the person's own conversations), or read or click inside the frame.
+write in the person's own conversations), or read or click inside the frame. A chat it
+starts shows in the person's chat list (marked from its first moment, never in the
+brief). It can run the alert review when it likes, and add watches on addresses of its
+choosing, whose findings arrive marked as outside content, as any watch's do.
 It can lure clicks onto a framed page it has made invisible, but every change beyond the
 host list then needs a Yes in a separate window that shows what will happen; a person who
 says yes there without reading it is the remaining risk. Every host origin you list is

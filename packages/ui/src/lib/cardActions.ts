@@ -111,6 +111,23 @@ export function cardActionFor(method: string, url: string, body?: unknown): Card
   return null;
 }
 
+/** The chat message a send carries (JSON or a form), cut short, or "". */
+export function messageOf(body: unknown): string {
+  let message: unknown = null;
+  if (typeof body === "string") {
+    try {
+      message = (JSON.parse(body) as { message?: unknown }).message;
+    } catch {
+      return "";
+    }
+  } else if (body !== null && typeof body === "object" && typeof (body as FormData).get === "function") {
+    message = (body as FormData).get("message");
+  }
+  if (typeof message !== "string") return "";
+  const text = message.replace(/\s+/g, " ").trim();
+  return text.length > 160 ? `${text.slice(0, 159)}…` : text;
+}
+
 function onHostList(calls: readonly HostCall[], method: string, path: string): boolean {
   const segments = path.split("/").slice(1).map((s) => {
     try {
@@ -146,10 +163,13 @@ export function frameActionFor(
   const path = backendPath(url);
   if (path === null || HARMLESS.test(path)) return null;
   if (verb === "POST" && CHAT_SENDS.has(path)) {
+    const words = messageOf(body);
     return {
       verb: "change",
       decisionId: null,
-      what: "Send this message to the Executive as you. It can act on it: send, schedule or change things.",
+      what:
+        `Send ${words ? `"${words}"` : "this message"} to the Executive as you. ` +
+        "It can act on it: send, schedule or change things.",
       // Always: a message sent after a Yes (a queued one, Try again) may
       // carry words that weren't typed here.
       card: true,

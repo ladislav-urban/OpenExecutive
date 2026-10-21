@@ -122,6 +122,36 @@ def test_taking_a_host_line_back_keeps_the_chat_read_only(temp_db: Path, seen: l
     assert seen == [True, True]
 
 
+def test_a_host_turn_marks_its_chat_before_it_is_saved(
+    temp_db: Path, seen: list[bool], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn from the person's own page running alongside the host's first
+    one must already see the mark, and the brief never names the chat."""
+    import inspect
+
+    from openexecutive.briefing import live_signals
+
+    # Marked while the turn runs: what the Executive sees mid-turn.
+    marked: list[bool] = []
+    from openexecutive.orchestrator import executive as exec_mod
+
+    class _Executive:
+        _THINKING = exec_mod.Executive._THINKING
+
+        def __init__(self, **_kwargs: object) -> None:
+            pass
+
+        async def stream_chat(self, *, session: object, **_kwargs: object) -> object:
+            marked.append(session_store.host_wrote(session.session_id, db_path=temp_db))  # type: ignore[attr-defined]
+            yield "ok"
+
+    monkeypatch.setattr(exec_mod, "Executive", _Executive)
+    session_id = _session_id(_client().post("/chat", json={"message": "plant"}, headers=HOST).text)
+    assert marked == [True]
+    assert session_store.host_wrote(session_id, db_path=temp_db)
+    assert "host_wrote = 0" in inspect.getsource(live_signals._conversations)
+
+
 def test_a_host_page_cant_claim_an_empty_chat_of_the_persons(temp_db: Path) -> None:
     """Any stored conversation a host page never wrote in is closed to it,
     an empty one too; a new id (no row yet) and its own are open."""

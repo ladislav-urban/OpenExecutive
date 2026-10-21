@@ -1276,6 +1276,15 @@ async def _run_chat_turn(
         )
     except Exception:  # pragma: no cover - DB write should not block the turn
         logger.exception("chat.session_persist_failed turn_id=%s", turn_id)
+    if host_call:
+        # Now, not when the turn is saved: a turn from the person's own page
+        # in this conversation, even one running alongside, is held too.
+        try:
+            from openexecutive.memory.session_store import mark_host_wrote
+
+            mark_host_wrote(session.session_id)
+        except Exception:
+            logger.exception("chat.host_mark_failed session_id=%s", session.session_id)
 
     # Fan out the three context-fetching steps in parallel. Each one is a few
     # hundred ms to a few seconds on its own and they are mutually independent,
