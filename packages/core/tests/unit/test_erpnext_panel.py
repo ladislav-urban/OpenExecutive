@@ -373,3 +373,99 @@ def test_both_panel_blocks_ask_for_the_show_tool() -> None:
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
         assert block.endswith(erpnext_panel.SHOW_RULE)
         assert "erpnext__show_in_erpnext" in block
+
+
+def test_both_panel_blocks_show_the_place_that_fits() -> None:
+    # The three places the live check missed, as show_in_erpnext's own
+    # description gives them.
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert "'sort': {'field': 'base_grand_total', 'order': 'desc'}" in block
+        assert "{'kind': 'tree', 'doctype': 'Account'}" in block
+        assert "{'kind': 'workspace', 'workspace': 'Stock'}" in block
+
+
+# ── a panel turn's ERPNext reads reach the gateway ──────────────────────────
+
+CALLER_KEY = "vec:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
+
+
+class _Extensible:
+    """extensible-mcp as the live check met it: a search for "erpnext list
+    records" ranks list_records outside the top 10 (its long description
+    outweighs its name), and call_tool runs only a tool a search returned."""
+
+    LIST = (
+        "## erpnext__list_records\n**Description:** Filtered rows of one DocType, or totals with "
+        "group_by and aggregates.\n**Parameters:**\n```json\n{\"type\": \"object\"}\n```\n"
+    )
+    OTHERS = (
+        "## erpnext__get_record\n**Description:** One ERPNext document.\n**Parameters:**\n"
+        "```json\n{\"type\": \"object\"}\n```\n"
+    )
+
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+        self.discovered: set[str] = set()
+        self.ran: list[dict[str, Any]] = []
+
+    async def call_tool(self, name: str, args: dict[str, Any]) -> Any:
+        if name == "search_tools":
+            self.queries.append(args["query"])
+            listing = self.OTHERS
+            if args["query"].startswith("erpnext__list_records: "):
+                listing = self.LIST + self.OTHERS
+                self.discovered.add("erpnext__list_records")
+            return SimpleNamespace(content=[SimpleNamespace(text=listing)])
+        tool = args["tool_name"]
+        if tool not in self.discovered:
+            text = f"Error: Tool '{tool}' has not been discovered via search_tools. Use search_tools first."
+        else:
+            self.ran.append(args)
+            text = json.dumps({"rows": [{"name": "SO-0001"}]})
+        return SimpleNamespace(content=[SimpleNamespace(text=text)])
+
+
+def test_every_erpnext_tool_the_model_calls_has_a_discovery_query() -> None:
+    from openexecutive.orchestrator import erpnext_tool_pin
+    from openexecutive.prompts.connected_systems import (
+        ERPNEXT_DISCOVERY_QUERIES,
+        ERPNEXT_SHOW_TOOL,
+        PINNED_ERPNEXT_TOOLS,
+    )
+
+    assert set(ERPNEXT_DISCOVERY_QUERIES) == PINNED_ERPNEXT_TOOLS | {ERPNEXT_SHOW_TOOL}
+    for name in ERPNEXT_DISCOVERY_QUERIES:
+        assert name.removeprefix(erpnext_tool_pin.ERPNEXT_PREFIX) in erpnext_tool_pin.TOOL_DIGESTS
+
+
+def test_a_panel_turn_lists_records_it_never_searched_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from openexecutive.orchestrator.erpnext_caller import ASSERTION_ARG
+    from openexecutive.orchestrator.mcp_gateway import MCPGateway
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from tests.unit._erpnext_pins import pin_listing
+
+    monkeypatch.setenv("ERPNEXT_CALLER_PRIVATE_KEY", CALLER_KEY)
+    monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **k: None)
+    pin_listing(monkeypatch, _Extensible.LIST + _Extensible.OTHERS)
+    server = _Extensible()
+    gateway = MCPGateway()
+    gateway._session = server
+    gateway.server_names = ("erpnext",)
+    arguments = {"doctype": "Sales Order", "order_by": "base_grand_total desc", "limit": 5}
+
+    token = current_session.set(Session(origin_channel="erpnext", erpnext_panel_email=ASKER))
+    try:
+        out = asyncio.run(gateway.call_tool({"name": "erpnext__list_records", "arguments": arguments}))
+    finally:
+        current_session.reset(token)
+    assert json.loads(out) == {"rows": [{"name": "SO-0001"}]}
+    # Discovered by the words of its definition, then run once, as the asker.
+    assert server.queries == [
+        "erpnext__list_records: Filtered rows of one DocType, or totals with group_by and aggregates"
+    ]
+    (ran,) = server.ran
+    assert ran["tool_name"] == "erpnext__list_records"
+    sent = dict(ran["arguments"])
+    assert sent.pop(ASSERTION_ARG).startswith("v1.") and sent == arguments

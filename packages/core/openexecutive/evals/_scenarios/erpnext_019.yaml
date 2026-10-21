@@ -1,0 +1,17 @@
+id: erpnext_019
+domain: mcp
+speaker: principal
+surface: erpnext_panel
+description: "ERPNext's \"Ask the Dynocortex\" panel, with the erpnext server connected: the person asks to see the chart of accounts. The Executive describes the chart's top-level groups (assets, liabilities, equity, income, expenses) from the company's own Accounts and asks ERPNext to show the Account tree beside the panel (erpnext__show_in_erpnext with a tree view), not the flat Account list or a report; the reply invents no accounts, stays short enough for a side panel and writes no routes, URLs or links"
+requires_mcp: true
+query: "Show me our chart of accounts."
+expected_tool_calls:
+  - call_tool
+expected_topics:
+  - chart_of_accounts_tree
+quality_criteria:
+  describes_the_top_level_account_groups_from_erpnext: true
+  invents_no_accounts: true
+  writes_no_routes_urls_or_links_in_the_reply: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true

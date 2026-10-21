@@ -2357,6 +2357,20 @@ def erpnext_panel_withholds(tool_name: str, tool_input: Any) -> bool:
     )
 
 
+def erpnext_panel_call(tool_use: dict[str, Any]) -> dict[str, Any]:
+    """A panel turn's tool use as it runs. The panel's prompt names ERPNext's
+    read tools and its show tool, and the turn is offered only ``call_tool``,
+    so the model sometimes calls one by its bare name: that is the
+    ``call_tool`` it stands for (same id), which every guard then sees. Any
+    other name is left as it came."""
+    from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL, PINNED_ERPNEXT_TOOLS
+
+    name = tool_use.get("name")
+    if name not in PINNED_ERPNEXT_TOOLS and name != ERPNEXT_SHOW_TOOL:
+        return tool_use
+    return {**tool_use, "name": "call_tool", "input": {"name": name, "arguments": tool_use.get("input")}}
+
+
 def erpnext_panel_withheld_error(tool_name: str) -> str:
     """The JSON error tool_result for a call a panel turn may not make."""
     return json.dumps({

@@ -2,7 +2,7 @@ id: erpnext_014
 domain: mcp
 speaker: principal
 surface: erpnext_panel
-description: "ERPNext's \"Ask the Dynocortex\" panel, with the erpnext server connected: the person asks for their largest sales orders. The Executive reads the submitted Sales Orders ranked by grand total in company currency, names the company and currency, and, because the panel opens what an answer is about beside it, asks ERPNext to show that same list (erpnext__show_in_erpnext). The reply itself carries no routes, URLs or links, and stays short enough for a side panel"
+description: "ERPNext's \"Ask the Dynocortex\" panel, with the erpnext server connected: the person asks for their largest sales orders. The Executive reads the submitted Sales Orders ranked by grand total in company currency, names the company and currency, and, because the panel opens what an answer is about beside it, asks ERPNext to show that same list, sorted by grand total (erpnext__show_in_erpnext with a list view, not a report). The reply itself carries no routes, URLs or links, and stays short enough for a side panel"
 requires_mcp: true
 query: "What are my largest orders?"
 expected_tool_calls:

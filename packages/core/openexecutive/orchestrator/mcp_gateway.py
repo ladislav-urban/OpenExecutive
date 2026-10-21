@@ -3758,12 +3758,19 @@ class MCPGateway:
         Left out (the ``call_tool`` retry, which probes one name), it is read
         only on the path that needs it.
         """
+        from openexecutive.prompts.connected_systems import ERPNEXT_DISCOVERY_QUERIES
         from openexecutive.workflows.tool_catalog import parse_search_results
 
-        query = re.sub(r"[_\-]+", " ", tool_name).strip()
+        named = re.sub(r"[_\-]+", " ", tool_name).strip()
+        hint = ERPNEXT_DISCOVERY_QUERIES.get(tool_name)
+        queries = [f"{tool_name}: {hint}", named] if hint else [named]
         try:
-            text = await self._search({"query": query, "top_k": 10})
-            found = any(info.name == tool_name for info in parse_search_results(text))
+            found = False
+            for query in queries:
+                text = await self._search({"query": query, "top_k": 10})
+                found = any(info.name == tool_name for info in parse_search_results(text))
+                if found:
+                    break
         except Exception as exc:
             logger.warning(
                 "MCPGateway: discovering %s failed (%s)", tool_name, type(exc).__name__
