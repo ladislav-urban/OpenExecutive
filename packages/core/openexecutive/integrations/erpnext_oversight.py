@@ -242,6 +242,8 @@ async def with_erpnext_state(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                     "unchanged",
                 )
             }
+            if not isinstance(got.get("unchanged"), bool):
+                enriched["erpnext"]["unchanged"] = None  # only a real answer counts (``unchanged_share``)
             if row.get("seal"):
                 document = row["erpnext_document"]
                 enriched["seal_in_log"] = (

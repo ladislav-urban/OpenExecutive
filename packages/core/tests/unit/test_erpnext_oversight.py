@@ -174,10 +174,10 @@ def test_unchanged_comes_from_erpnext_into_the_record_the_csv_and_the_summary(
     told = {"in_log": True, "doctype": "Material Request", "name": "MAT-MR-2026-00012", "state": "submitted",
             "chain_index": 7, "row_hash": SEAL, "seal_intact": True}
     column = oversight.CSV_COLUMNS.index("unchanged")
-    for unchanged, cell in ((True, "yes"), (False, "NO"), (None, "")):
+    for unchanged, kept, cell in ((True, True, "yes"), (False, False, "NO"), (None, None, ""), ("true", None, "")):
         erp.replies.append(json.dumps({"ok": True, "drafts": {card.idempotency_key: {**told, "unchanged": unchanged}}}))
         rows = asyncio.run(oversight.with_erpnext_state(oversight.records()))
-        assert rows[0]["erpnext"]["unchanged"] is unchanged
+        assert rows[0]["erpnext"]["unchanged"] is kept
         assert list(csv.reader(io.StringIO(oversight.to_csv(rows))))[1][column] == cell
     # The route's summary, only when ERPNext was asked.
     owner = {"x-caller-email": OWNER}
