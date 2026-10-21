@@ -111,6 +111,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "erpnext_draft_created",    # the person approved a card and ERPNext made the unsubmitted draft (details.name)
     "erpnext_draft_failed",     # an approved card's draft wasn't made; the card waits again, retried with the same key
     "erpnext_draft_dismissed",  # the person dismissed a draft card
+    "erpnext_oversight_exported",  # the principal exported the drafts' oversight record (range, format, count); private
 )
 
 

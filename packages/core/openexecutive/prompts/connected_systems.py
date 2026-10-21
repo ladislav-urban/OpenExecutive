@@ -132,6 +132,12 @@ ERPNEXT_DRAFT_TOOLS: frozenset[str] = frozenset({
     "erpnext__draft_todo",
 })
 
+# oe_connector's oversight tool: what became of the drafts made here. Never
+# listed to the model; the gateway lets it through only inside
+# erpnext_caller.oversight_run, signed as the service caller
+# (integrations.erpnext_oversight).
+ERPNEXT_AUDIT_TOOL = "erpnext__audit_drafts"
+
 # The tool ERPNext's panel uses to open what an answer talks about beside it
 # (oe_connector's views.py). Named only in the panel's own channel block
 # (integrations.erpnext_panel), never here in block 0: the gateway refuses it,

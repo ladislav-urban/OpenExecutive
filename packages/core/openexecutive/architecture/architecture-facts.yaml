@@ -9564,7 +9564,38 @@ integrations:
     newest rows removed or a consistent rewrite (no secret key), so
     recorded_seals() exports {card key - row_hash, chain_index}
     (scripts/erpnext-draft-seals.py) for oe-connector-verify-drafts --expect
-    to compare with the log. A refusal
+    to compare with the log. One oversight record per card, for an auditor
+    (oe_connector plan item 6): integrations/erpnext_oversight.records(since,
+    until) turns each erpnext_draft card into {who asked (asked_by), where
+    (asked_in chat / erpnext_panel / alert), conversation, why, the card's
+    view and fingerprint, outcome (waiting / made / dismissed / expired /
+    replaced / not made: changed since proposed / not made: failed),
+    resolved_at, resolved_by, erpnext_document, seal}. A card is
+    approver_only, the principal's included, so records(reader=principal)
+    gives someone else's card (a teammate's, an ERPNext panel user's) with
+    private true and why, card, fields, fingerprint (an unsalted digest of
+    the card's content, so a guess could be checked), conversation,
+    from_alert and last_error emptied: those were read as that person from
+    their own conversation. GET
+    /erpnext/drafts/oversight serves it to the principal alone (403
+    otherwise) as JSON or CSV (format=csv; a cell starting = + - @ tab or
+    return gets a leading quote so a spreadsheet won't run it).
+    erpnext=1 adds with_erpnext_state: oe_connector's audit_drafts (500 card
+    keys a call) answers each made draft's state now (draft / submitted /
+    cancelled / deleted / missing, modified, modified_by) and its log row's
+    seal, plus seal_intact (the row hashed again equals its stored
+    row_hash), so seal_in_log is true only when the row is intact, carries
+    the card's row_hash and still names the card's doctype and name: a
+    stored hash alone still matches after the row's fields are changed in
+    the database. audit_drafts is service-only in oe_connector
+    (caller.SERVICE_ONLY_TOOLS: no phase 1, kind service), and the gateway
+    passes ERPNEXT_AUDIT_TOOL exactly inside erpnext_caller.oversight_run
+    (signed kind service) and nothing else there (refusal
+    audit-outside-export), and _drop_blocked_tools hides it from
+    search_tools, so no model turn can see or call it. Each export, a 502
+    included, writes a private erpnext_oversight_exported audit row (range,
+    format, erpnext and whether it answered, record count; never the
+    records). A refusal
     containing CHANGED_SINCE_PROPOSED (oe_connector built the draft again
     and it no longer matches the card's fingerprint: a source document, a
     price or a rate changed) closes the card (finish_execution failed, with

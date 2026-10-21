@@ -3411,13 +3411,17 @@ def _show_outside_panel(name: str) -> bool:
 
 def _drop_blocked_tools(text: object) -> Any:
     """``search_tools`` output without the tools `call_tool` always refuses
-    here (the Microsoft 365 account tools; ERPNext's show tool off its panel),
-    so the model is never offered them. Output naming none of them comes back
-    unchanged."""
+    here (the Microsoft 365 account tools; ERPNext's show tool off its panel;
+    ERPNext's oversight tool, which runs only for the export), so the model is
+    never offered them. Output naming none of them comes back unchanged."""
+    from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL
     from openexecutive.workflows.tool_catalog import filter_search_results, parse_search_results
 
     def blocked(name: str) -> bool:
-        return _is_blocked_m365_auth_tool(name) or _show_outside_panel(_normalize_tool_name(name))
+        normalized = _normalize_tool_name(name)
+        return (
+            _is_blocked_m365_auth_tool(name) or _show_outside_panel(normalized) or normalized == ERPNEXT_AUDIT_TOOL
+        )
 
     if not isinstance(text, str):
         return text
@@ -3436,6 +3440,7 @@ def _is_undiscovered_refusal(
     only when `erpnext` is a server the config named (``server_names``), so
     the retry never searches up a same-named server from anywhere else."""
     from openexecutive.prompts.connected_systems import (
+        ERPNEXT_AUDIT_TOOL,
         ERPNEXT_DRAFT_TOOLS,
         ERPNEXT_SERVER,
         ERPNEXT_SHOW_TOOL,
@@ -3448,7 +3453,10 @@ def _is_undiscovered_refusal(
     # The draft tools are never shown to the model, so they are discovered the
     # same way (only the gated draft path calls them, by these exact names).
     pinned = tool_name in PINNED_GOOGLE_TOOLS or (
-        (tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS or tool_name == ERPNEXT_SHOW_TOOL)
+        (
+            tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS
+            or tool_name in (ERPNEXT_AUDIT_TOOL, ERPNEXT_SHOW_TOOL)
+        )
         and ERPNEXT_SERVER in server_names
     )
     return (
@@ -3641,6 +3649,12 @@ class MCPGateway:
         return self._session
 
     async def search_tools(self, tool_input: dict[str, Any]) -> str:
+        return _drop_blocked_tools(await self._search(tool_input))
+
+    async def _search(self, tool_input: dict[str, Any]) -> str:
+        """``search_tools`` as extensible-mcp answered it, blocked tools and
+        all: ``_discover`` needs it to see a pinned tool the model is never
+        shown (ERPNext's oversight tool)."""
         session = self._require_session()
         args: dict[str, Any] = {"query": tool_input["query"]}
         # Optional: callers resolving an exact tool name widen the net
@@ -3648,8 +3662,7 @@ class MCPGateway:
         if isinstance(tool_input.get("top_k"), int):
             args["top_k"] = tool_input["top_k"]
         result = await _session_call(session, "search_tools", args, self._call_timeout())
-        text = result.content[0].text if result.content else json.dumps({"tools": []})
-        return _drop_blocked_tools(text)
+        return result.content[0].text if result.content else json.dumps({"tools": []})
 
     async def _discover(self, tool_name: str, settings: Settings | None = None) -> bool:
         """Run the exact-name search that registers ``tool_name`` with
@@ -3668,7 +3681,7 @@ class MCPGateway:
 
         query = re.sub(r"[_\-]+", " ", tool_name).strip()
         try:
-            text = await self.search_tools({"query": query, "top_k": 10})
+            text = await self._search({"query": query, "top_k": 10})
             found = any(info.name == tool_name for info in parse_search_results(text))
         except Exception as exc:
             logger.warning(
@@ -3798,6 +3811,15 @@ class MCPGateway:
                 return _refuse(
                     tool_name, "arguments", "<non-object>",
                     reason="arguments must be a JSON object — refusing.",
+                )
+            from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL
+
+            # The oversight tool runs only inside the export's own marker, and
+            # that marker runs nothing else.
+            if (normalized == ERPNEXT_AUDIT_TOOL) != erpnext_caller.in_oversight_run():
+                return _refuse_erpnext_call(
+                    tool_name, "audit-outside-export",
+                    "This is OpenExecutive's own oversight export, not a tool to call here.",
                 )
             if _show_outside_panel(normalized):
                 return _refuse_erpnext_call(
