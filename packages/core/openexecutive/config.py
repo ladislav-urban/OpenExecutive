@@ -900,6 +900,9 @@ class Settings(BaseSettings):
     # public key>"}}. Unset, the agent card is not served and POST /a2a/suppliers
     # answers 503. Needs ERPNEXT_CALLER_PRIVATE_KEY.
     erpnext_a2a_suppliers: str | None = Field(None, alias="ERPNEXT_A2A_SUPPLIERS")
+    # This install's public https URL of POST /a2a/suppliers: the audience
+    # every supplier signs and the agent card's url. Unset, A2A stays off.
+    erpnext_a2a_url: str | None = Field(None, alias="ERPNEXT_A2A_URL")
     # ERPNext phase 3b (briefing/erp_numbers.py): the company whose totals the
     # principal's morning brief shows (cash, receivables, payables, yesterday's
     # sales). Unset, the brief has no ERP NUMBERS block.

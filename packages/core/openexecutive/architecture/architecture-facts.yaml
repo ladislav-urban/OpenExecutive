@@ -9795,23 +9795,30 @@ integrations:
     that supplier's own submitted Purchase Orders and Purchase Invoices.
     GET /.well-known/agent-card.json names two skills (purchase_orders,
     invoices), no streaming, no push notifications, and the signature as an
-    apiKey header scheme; it is 404 until ERPNEXT_A2A_SUPPLIERS is set and
-    per-person access is on. POST /a2a/suppliers (both paths exempt from
-    BACKEND_SHARED_SECRET and allowed by the local-login gate, since every
-    request is signed): ERPNEXT_A2A_SUPPLIERS is JSON {key id: {supplier:
-    Supplier name in ERPNext, key: Ed25519 public key}}
-    (make-caller-keys.py --erpnext-a2a-supplier); malformed refuses all.
-    x-oe-a2a-assertion is v1.<payload>.<signature>, claims {aud
-    "openexecutive-erpnext-a2a", body (SHA-256 of the exact body), exp, iat,
-    jti, kid}, exp - iat at most 60 s, 30 s skew, jti once
-    (verify_supplier_assertion; the signature is checked against every
-    registered key before any JSON is parsed, and claims.kid must be the key
-    that signed). The supplier is the one registered for that key, never
+    apiKey header scheme; its url is ERPNEXT_A2A_URL (never the request's
+    Host) and its version a fixed "1.0" (not the release). It is 404 until
+    ERPNEXT_A2A_SUPPLIERS and ERPNEXT_A2A_URL (https, or plain http to
+    loopback) are set and per-person access is on. POST /a2a/suppliers
+    (both paths exempt from BACKEND_SHARED_SECRET and allowed by the
+    local-login gate, since every request is signed): ERPNEXT_A2A_SUPPLIERS
+    is JSON {key id: {supplier: Supplier name in ERPNext, key: Ed25519
+    public key}} (make-caller-keys.py --erpnext-a2a-supplier); malformed,
+    or one public key under two entries, refuses all. x-oe-a2a-assertion is
+    v1.<payload>.<signature>, claims {aud = ERPNEXT_A2A_URL (so a request
+    signed for another customer that registered the same key is refused
+    here), body (SHA-256 of the exact body), exp, iat, jti, kid}, exp - iat
+    at most 60 s, 30 s skew, jti once in that supplier's own ledger
+    (verify_supplier_assertion; the payload's kid, read by a regex, picks the
+    one key to try, and only after it verifies is any JSON parsed; claims.kid
+    must then be that key's). The header is checked before the body (64 KB
+    cap) is read. The supplier is the one registered for that key, never
     anything in the message. Unknown key, bad signature, replay, a busy or
     rate-limited supplier, unverified tools, a timeout or a failure answer
     nothing and write a private erpnext_a2a_refused row (details.reason;
-    at most 30 a minute, the rest only logged). 30 requests an hour per
-    supplier, one in flight. tasks/get and tasks/cancel answer TaskNotFound,
+    those before a supplier is known at most 30 a minute, the rest only
+    logged; a known supplier's always). 30 requests an hour per supplier,
+    one in flight; ledgers, limits and the in-flight set are per process
+    (one API worker). tasks/get and tasks/cancel answer TaskNotFound,
     streaming and push UnsupportedOperation, a non-text part
     ContentTypeNotSupported. The reply is one Message (role agent, the
     request's contextId or a new one); nothing is kept between messages.

@@ -800,12 +800,17 @@ uv run --with cryptography python scripts/make-caller-keys.py --erpnext-a2a-supp
 The name must be the Supplier's name in ERPNext. The script prints the
 private key, which goes to the supplier privately, and one entry for
 `ERPNEXT_A2A_SUPPLIERS` on the API. A supplier can also make its own pair and
-send you only the public key. Merge the entries into one JSON object and
-restart the API:
+send you only the public key. Merge the entries into one JSON object, set the
+public HTTPS URL suppliers reach the endpoint at, and restart the API:
 
 ```bash
 ERPNEXT_A2A_SUPPLIERS='{"nw1": {"supplier": "Northwind Cables Ltd", "key": "<public key>"}}'
+ERPNEXT_A2A_URL=https://<api-host>/a2a/suppliers
 ```
+
+Every request is signed for that URL, so one a supplier sent another of its
+customers can't be replayed here. A2A stays off until it is set (plain HTTP
+only to this machine).
 
 Then list the same Suppliers in the bench, which answers no supplier it
 doesn't list:
@@ -820,13 +825,15 @@ bench --site <site> set-config -p oe_connector_a2a_suppliers '["Northwind Cables
   exempt from `BACKEND_SHARED_SECRET`, and the card is 404 until A2A is set
   up.
 - Every request carries `x-oe-a2a-assertion`: the panel's format, with claims
-  `{aud: "openexecutive-erpnext-a2a", body, exp, iat, jti, kid}` signed by the
-  supplier's key over the SHA-256 of the exact body, 60 seconds, each `jti`
-  once. An unknown key, a bad signature or a replay gets nothing (401) and
-  is audited.
+  `{aud, body, exp, iat, jti, kid}` signed by the supplier's key: `aud` is
+  `ERPNEXT_A2A_URL`, `body` the SHA-256 of the exact body, 60 seconds, each
+  `jti` once. An unknown key, a bad signature or a replay gets nothing (401)
+  and is audited.
 - Each supplier may ask 30 times an hour, one question at a time. Each
   message is answered on its own: nothing is kept between messages, and
-  there is no streaming, push notification or task.
+  there is no streaming, push notification or task. The used `jti`s, the
+  rate limit and the one-at-a-time rule live in the API process, so run one
+  API worker, as the image does.
 - The supplier is the one registered for the key that signed, never anything
   the message says. The agent sees only that supplier's documents, and
   another supplier's order answers the same as one that doesn't exist.

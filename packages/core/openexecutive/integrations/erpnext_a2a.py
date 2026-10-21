@@ -18,12 +18,18 @@ and its Ed25519 public key. Every request carries
 ``x-oe-a2a-assertion: v1.<payload>.<signature>``, as ERPNext's panel does
 (``erpnext_panel``): base64url JSON claims ``{aud, body, exp, iat, jti,
 kid}`` signed by the supplier's private key over ``v1.<payload>``, bound to
-this audience, the SHA-256 of this exact body, at most ``MAX_LIFETIME_S``
-seconds, and one use. The supplier is the one registered for the key that
-signed, never anything in the message. An unknown key, a bad signature or a
-replay gets nothing (401) and is audited (``erpnext_a2a_refused``, at most
-``REFUSAL_AUDITS_PER_MINUTE`` rows a minute; the rest only logged). Each
-supplier may ask ``RATE_LIMIT`` times an hour, one at a time.
+this install (``aud`` is its own endpoint URL, ``ERPNEXT_A2A_URL``, so a
+request one customer received can't be replayed at another that registered
+the same key), the SHA-256 of this exact body, at most ``MAX_LIFETIME_S``
+seconds, and one use. The key is picked by the payload's ``kid`` and only it
+is tried. The supplier is the one registered for the key that signed, never
+anything in the message. An unknown key, a bad signature or a replay gets
+nothing (401) and is audited (``erpnext_a2a_refused``; anyone can send those,
+so at most ``REFUSAL_AUDITS_PER_MINUTE`` such rows a minute, the rest only
+logged). Each supplier may ask ``RATE_LIMIT`` times an hour, one at a time,
+and has its own ledger of used ``jti``s, so one key can't fill another's.
+The ledgers, the rate limit and the one-at-a-time set live in this process:
+run one API worker, as the image does.
 
 **What answers** is ``erpnext_a2a_agent.answer``, inside
 ``erpnext_caller.supplier_run(supplier)``: the gateway signs its ERPNext
@@ -58,7 +64,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from openexecutive.api.caller import CallerKeysError, JtiLedger, parse_public_keys
-from openexecutive.integrations.erpnext_panel import _b64url, _RateLimiter, _read_capped, _signs
+from openexecutive.integrations.erpnext_panel import _b64url, _RateLimiter, _signs
 from openexecutive.orchestrator import erpnext_caller
 
 logger = logging.getLogger(__name__)
@@ -69,7 +75,6 @@ PATH = "/a2a/suppliers"
 CARD_PATH = "/.well-known/agent-card.json"
 ASSERTION_HEADER = "x-oe-a2a-assertion"
 VERSION = "v1"
-AUDIENCE = "openexecutive-erpnext-a2a"
 MAX_LIFETIME_S = 60
 CLOCK_SKEW_S = 30
 A2A_PROTOCOL_VERSION = "0.3.0"
@@ -86,6 +91,11 @@ _KID_RE = re.compile(r"[A-Za-z0-9_-]{1,32}")
 _JTI_RE = re.compile(r"[A-Za-z0-9_-]{16,128}")
 _DIGEST_RE = re.compile(r"[0-9a-f]{64}")
 _ID_RE = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+# The payload's key id, read before the signature only to pick the one key to
+# try; the claims are parsed as JSON only once that key has verified.
+_KID_CLAIM_RE = re.compile(rb'"kid":"([A-Za-z0-9_-]{1,32})"')
+# The card's version: not this server's release.
+CARD_VERSION = "1.0"
 
 # JSON-RPC and A2A error codes.
 PARSE_ERROR = -32700
@@ -148,6 +158,7 @@ def parse_suppliers(raw: str) -> dict[str, Partner]:
     if not isinstance(data, dict) or not data:
         raise SuppliersConfigError("ERPNEXT_A2A_SUPPLIERS must map key ids to suppliers")
     partners: dict[str, Partner] = {}
+    seen_keys: set[str] = set()
     for kid, entry in data.items():
         if not isinstance(kid, str) or not _KID_RE.fullmatch(kid):
             raise SuppliersConfigError("each key id is 1-32 letters, digits, - or _")
@@ -158,6 +169,10 @@ def parse_suppliers(raw: str) -> dict[str, Partner]:
             raise SuppliersConfigError(f"key {kid}: supplier must be the Supplier's name in ERPNext")
         if not isinstance(key, str):
             raise SuppliersConfigError(f"key {kid} is not an Ed25519 public key")
+        if key.strip().rstrip("=") in seen_keys:
+            # Pasted into a second entry by mistake, it would answer the first.
+            raise SuppliersConfigError(f"key {kid} repeats another entry's public key")
+        seen_keys.add(key.strip().rstrip("="))
         try:
             parsed = parse_public_keys(f"{kid}:{key.strip()}")
         except CallerKeysError:
@@ -173,6 +188,23 @@ def suppliers() -> dict[str, Partner]:
     return parse_suppliers(get_settings().erpnext_a2a_suppliers or "")
 
 
+_LOOPBACK_URL_RE = re.compile(r"http://(localhost|127\.0\.0\.1|\[::1\])(:\d{1,5})?/\S*")
+
+
+def endpoint_url() -> str:
+    """``ERPNEXT_A2A_URL``: this install's public URL of ``POST /a2a/suppliers``,
+    the assertion's audience and the card's ``url``. "" when unset or not
+    HTTPS (plain HTTP only on this machine), which keeps A2A off."""
+    from openexecutive.config import get_settings
+
+    url = (get_settings().erpnext_a2a_url or "").strip()
+    if not url.endswith(PATH) or any(c.isspace() for c in url):
+        return ""
+    if url.startswith("https://") or _LOOPBACK_URL_RE.fullmatch(url):
+        return url
+    return ""
+
+
 def _seconds(value: Any) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
         raise A2ARefused("malformed")
@@ -180,11 +212,18 @@ def _seconds(value: Any) -> int:
 
 
 def verify_supplier_assertion(
-    token: str, *, partners: dict[str, Partner], body: bytes, now: int, ledger: JtiLedger
+    token: str,
+    *,
+    partners: dict[str, Partner],
+    body: bytes,
+    now: int,
+    ledgers: dict[str, JtiLedger],
+    audience: str,
 ) -> Partner:
     """The registered supplier whose key signed ``token`` for this one
-    request ``body``; raises ``A2ARefused``. Its ``jti`` is spent only when
-    every other check passes."""
+    request ``body`` to ``audience`` (this install's endpoint URL); raises
+    ``A2ARefused``. Its ``jti`` is spent, in that supplier's own ledger, only
+    when every other check passes."""
     if not token or len(token) > _MAX_ASSERTION_LEN or not token.isascii():
         raise A2ARefused("malformed")
     parts = token.split(".")
@@ -194,10 +233,12 @@ def verify_supplier_assertion(
         payload, signature = _b64url(parts[1]), _b64url(parts[2])
     except ValueError:
         raise A2ARefused("malformed") from None
-    # The signature first, so no unsigned byte reaches the JSON parser.
+    # The signature first, so no unsigned byte reaches the JSON parser; the
+    # key id only picks the one key to try.
+    named = _KID_CLAIM_RE.search(payload)
+    signed_by = partners.get(named.group(1).decode("ascii")) if named else None
     signing_input = f"{parts[0]}.{parts[1]}".encode("ascii")
-    signed_by = next((p for p in partners.values() if _signs(p.key, signature, signing_input)), None)
-    if signed_by is None:
+    if signed_by is None or not _signs(signed_by.key, signature, signing_input):
         raise A2ARefused("signature")
     try:
         claims = json.loads(payload)
@@ -206,7 +247,7 @@ def verify_supplier_assertion(
     if not isinstance(claims, dict) or claims.get("kid") != signed_by.key_id:
         raise A2ARefused("key_id")
     iat, exp = _seconds(claims.get("iat")), _seconds(claims.get("exp"))
-    if claims.get("aud") != AUDIENCE:
+    if not audience or claims.get("aud") != audience:
         raise A2ARefused("audience")
     if not 0 < exp - iat <= MAX_LIFETIME_S:
         raise A2ARefused("lifetime")
@@ -225,16 +266,18 @@ def verify_supplier_assertion(
     if not isinstance(jti, str) or not _JTI_RE.fullmatch(jti):
         raise A2ARefused("malformed")
     try:
-        ledger.claim(jti, exp, now)
+        ledgers.setdefault(signed_by.supplier, JtiLedger(limit=10_000)).claim(jti, exp, now)
     except Exception:
         raise A2ARefused("replayed") from None
     return signed_by
 
 
-_ledger = JtiLedger()
+# The jtis each supplier has used, by supplier.
+_ledgers: dict[str, JtiLedger] = {}
 _rate = _RateLimiter(RATE_LIMIT, RATE_WINDOW_S)
-# Refusals are audited, but anyone can send one: at most this many rows a
-# minute, the rest only logged.
+# Refusals before a supplier is known are audited, but anyone can send one:
+# at most this many rows a minute, the rest only logged. A known supplier's
+# are bounded by its own rate limit, so they are always audited.
 _refusal_audits = _RateLimiter(REFUSAL_AUDITS_PER_MINUTE, 60.0)
 # One question in flight per supplier.
 _in_flight: set[str] = set()
@@ -244,7 +287,7 @@ def _audit_refusal(reason: str, partner: Partner | None = None) -> None:
     logger.warning(
         "erpnext a2a refused reason=%s%s", reason, f" supplier={partner.supplier!r}" if partner else ""
     )
-    if not _refusal_audits.allow("refused", time.monotonic()):
+    if partner is None and not _refusal_audits.allow("refused", time.monotonic()):
         return
     from openexecutive.audit import log_event as audit_log
 
@@ -267,6 +310,8 @@ def _ready() -> str | None:
 
     if not erpnext_caller.signing_setting():
         return "ERPNEXT_CALLER_PRIVATE_KEY is not set (signed ERPNext callers)"
+    if not endpoint_url():
+        return "ERPNEXT_A2A_URL is not this install's https URL of /a2a/suppliers"
     if ERPNEXT_SERVER not in gateway_server_names(get_active_gateway()):
         return "the erpnext MCP server is not configured"
     return None
@@ -297,7 +342,7 @@ async def _answer(partner: Partner, message: str) -> Any:
         return await asyncio.wait_for(answer(partner.supplier, message, call), timeout=TURN_TIMEOUT_S)
 
 
-def agent_card(rpc_url: str, version: str) -> dict[str, Any]:
+def agent_card(rpc_url: str) -> dict[str, Any]:
     """The A2A agent card: the two skills and how a request is signed."""
     return {
         "protocolVersion": A2A_PROTOCOL_VERSION,
@@ -310,7 +355,7 @@ def agent_card(rpc_url: str, version: str) -> dict[str, Any]:
         ),
         "url": rpc_url,
         "preferredTransport": "JSONRPC",
-        "version": version,
+        "version": CARD_VERSION,
         "capabilities": {"streaming": False, "pushNotifications": False, "stateTransitionHistory": False},
         "defaultInputModes": ["text/plain"],
         "defaultOutputModes": ["text/plain"],
@@ -321,7 +366,7 @@ def agent_card(rpc_url: str, version: str) -> dict[str, Any]:
                 "name": ASSERTION_HEADER,
                 "description": (
                     "v1.<payload>.<signature>: base64url JSON claims {aud, body, exp, iat, jti, kid} "
-                    f"with aud \"{AUDIENCE}\", body the SHA-256 (hex) of the exact request body, "
+                    "with aud this card's url, body the SHA-256 (hex) of the exact request body, "
                     f"exp - iat at most {MAX_LIFETIME_S} seconds and a jti used once, signed with "
                     "the supplier's registered Ed25519 key over v1.<payload>."
                 ),
@@ -357,14 +402,14 @@ def agent_card(rpc_url: str, version: str) -> dict[str, Any]:
 
 
 @router.get(CARD_PATH)
-async def erpnext_a2a_agent_card(request: Request) -> JSONResponse:
+async def erpnext_a2a_agent_card() -> JSONResponse:
     try:
         configured = bool(suppliers())
     except SuppliersConfigError:
         configured = False
     if not configured or _ready() is not None:
         return JSONResponse({"error": "not_found"}, status_code=404)
-    return JSONResponse(agent_card(str(request.url_for("erpnext_a2a_rpc")), request.app.version))
+    return JSONResponse(agent_card(endpoint_url()))
 
 
 def _rpc_error(request_id: Any, code: int, message: str, status: int = 200) -> JSONResponse:
@@ -404,24 +449,36 @@ def _message_text(params: Any) -> tuple[str | None, str | None, int, str]:
     return text, context_id or str(uuid.uuid4()), 0, ""
 
 
-@router.post(PATH, name="erpnext_a2a_rpc")
+async def _read_capped(request: Request) -> bytes | None:
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > MAX_BODY_BYTES:
+            return None
+    return bytes(body)
+
+
+@router.post(PATH)
 async def erpnext_a2a_rpc(request: Request) -> JSONResponse:
     try:
         partners = suppliers()
     except SuppliersConfigError as exc:
         logger.error("%s; refusing A2A", exc)
         partners = {}
-    if not partners:
+    audience = endpoint_url()
+    if not partners or not audience:
         return _rpc_error(None, INTERNAL_ERROR, "A2A is not set up here.", 503)
-    body = await _read_capped(request)
-    if body is None:
-        return _rpc_error(None, INVALID_REQUEST, "The request is too large.", 413)
     tokens = request.headers.getlist(ASSERTION_HEADER)
     try:
+        # Before reading the body: an unsigned request costs nothing more.
         if len(tokens) != 1:
             raise A2ARefused("missing" if not tokens else "duplicate_header")
+        body = await _read_capped(request)
+        if body is None:
+            raise A2ARefused("too_large")
         partner = verify_supplier_assertion(
-            tokens[0].strip(), partners=partners, body=body, now=int(time.time()), ledger=_ledger
+            tokens[0].strip(), partners=partners, body=body, now=int(time.time()),
+            ledgers=_ledgers, audience=audience,
         )
     except A2ARefused as refused:
         _audit_refusal(refused.reason)

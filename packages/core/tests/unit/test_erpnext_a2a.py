@@ -42,6 +42,7 @@ from openexecutive.prompts.supplier_agent import SUPPLIER_AGENT_PROMPT
 from tests.unit._erpnext_pins import pin_listing
 
 SUPPLIER = "Northwind Cables Ltd"
+URL = "https://exec.example.com/a2a/suppliers"
 CALLER_KEY = "vec:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
 
 # oe_connector's tests/test_protocol.py hashes the same definition: both sides
@@ -260,7 +261,7 @@ class _Supplier:
     def sign(self, body: bytes, *, now: int | None = None, lifetime: int = 60, **extra: Any) -> str:
         now = int(time.time()) if now is None else now
         claims = {
-            "aud": "openexecutive-erpnext-a2a",
+            "aud": URL,
             "body": hashlib.sha256(body).hexdigest(),
             "exp": now + lifetime,
             "iat": now,
@@ -272,36 +273,44 @@ class _Supplier:
         return f"{signing_input}.{_b64url(self.key.sign(signing_input.encode('ascii')))}"
 
 
-def _verify(token: str, partners: dict[str, Any], body: bytes, ledger: JtiLedger | None = None) -> Any:
+def _verify(
+    token: str, partners: dict[str, Any], body: bytes, ledgers: dict[str, JtiLedger] | None = None
+) -> Any:
     return verify_supplier_assertion(
-        token, partners=partners, body=body, now=int(time.time()), ledger=ledger or JtiLedger()
+        token, partners=partners, body=body, now=int(time.time()),
+        ledgers={} if ledgers is None else ledgers, audience=URL,
     )
 
 
-def _reason(token: str, partners: dict[str, Any], body: bytes, ledger: JtiLedger | None = None) -> str:
+def _reason(
+    token: str, partners: dict[str, Any], body: bytes, ledgers: dict[str, JtiLedger] | None = None
+) -> str:
     with pytest.raises(A2ARefused) as refused:
-        _verify(token, partners, body, ledger)
+        _verify(token, partners, body, ledgers)
     return refused.value.reason
 
 
 def test_a_request_is_its_registered_suppliers_once() -> None:
     north, south = _Supplier(), _Supplier("sw1", "Southwind Metals")
     partners = parse_suppliers(json.dumps({**north.entry, **south.entry}))
-    body, ledger = b'{"jsonrpc":"2.0"}', JtiLedger()
+    body, ledgers = b'{"jsonrpc":"2.0"}', {}
     token = south.sign(body)
-    assert _verify(token, partners, body, ledger).supplier == "Southwind Metals"
-    assert _reason(token, partners, body, ledger) == "replayed"
+    assert _verify(token, partners, body, ledgers).supplier == "Southwind Metals"
+    assert _reason(token, partners, body, ledgers) == "replayed"
+    # Each supplier has its own ledger: one key can't fill another's.
+    assert set(ledgers) == {"Southwind Metals"}
     assert _reason(north.sign(body), partners, b'{"jsonrpc":"2.1"}') == "body"
 
 
 def test_refuses_what_does_not_hold() -> None:
-    north = _Supplier()
-    partners = parse_suppliers(json.dumps(north.entry))
+    north, south = _Supplier(), _Supplier("sw1", "Southwind Metals")
+    partners = parse_suppliers(json.dumps({**north.entry, **south.entry}))
     body = b"{}"
-    assert _reason(_Supplier().sign(body), partners, body) == "signature"
-    # Signed by North's key but claiming another key id: never another supplier.
-    assert _reason(north.sign(body, kid="sw1"), partners, body) == "key_id"
-    assert _reason(north.sign(body, aud="openexecutive-erpnext-panel"), partners, body) == "audience"
+    assert _reason(_Supplier("xx1").sign(body), partners, body) == "signature"
+    # Signed by North's key but naming South's key id: never another supplier.
+    assert _reason(north.sign(body, kid="sw1"), partners, body) == "signature"
+    # A request signed for another install (the same key registered there too).
+    assert _reason(north.sign(body, aud="https://other.example/a2a/suppliers"), partners, body) == "audience"
     assert _reason(north.sign(body, lifetime=61), partners, body) == "lifetime"
     assert _reason(north.sign(body, now=int(time.time()) - 600), partners, body) == "expired"
     assert _reason(north.sign(body, now=int(time.time()) + 600), partners, body) == "not_yet_valid"
@@ -319,6 +328,9 @@ def test_refuses_what_does_not_hold() -> None:
         '{"k1": {"supplier": " A", "key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"}}',
         '{"k1": {"supplier": "A", "key": "short"}}',
         '{"k1": {"supplier": "A", "key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg", "x": 1}}',
+        # One key under two suppliers would answer the first for both.
+        '{"k1": {"supplier": "A", "key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"},'
+        ' "k2": {"supplier": "B", "key": "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg"}}',
     ],
 )
 def test_a_malformed_registry_is_refused(raw: str) -> None:
@@ -445,7 +457,8 @@ def test_the_prompt_is_a_constant_for_the_cache() -> None:
 def a2a(monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
     north, south = _Supplier(), _Supplier("sw1", "Southwind Metals")
     monkeypatch.setenv("ERPNEXT_A2A_SUPPLIERS", json.dumps({**north.entry, **south.entry}))
-    monkeypatch.setattr(erpnext_a2a, "_ledger", JtiLedger())
+    monkeypatch.setenv("ERPNEXT_A2A_URL", URL)
+    monkeypatch.setattr(erpnext_a2a, "_ledgers", {})
     monkeypatch.setattr(erpnext_a2a, "_rate", erpnext_a2a._RateLimiter(2, 3600))
     monkeypatch.setattr(erpnext_a2a, "_refusal_audits", erpnext_a2a._RateLimiter(100, 60))
     monkeypatch.setattr(erpnext_a2a, "_ready", lambda: None)
@@ -527,6 +540,33 @@ def test_an_unknown_key_a_bad_signature_or_a_replay_gets_nothing(a2a: SimpleName
     assert "result" not in unsigned.json() and len(a2a.asked) == 1
 
 
+def test_anyones_refusals_cannot_crowd_out_a_suppliers(
+    a2a: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(erpnext_a2a, "_refusal_audits", erpnext_a2a._RateLimiter(1, 60))
+    body = json.dumps(_send()).encode()
+    for _ in range(3):
+        a2a.client.post(PATH, content=body)
+    assert _post(a2a, _send()).status_code == 200
+    assert _post(a2a, _send()).status_code == 200
+    assert _post(a2a, _send()).status_code == 429
+    refused = [r["reason"] for r in a2a.audited if r["event"] == "erpnext_a2a_refused"]
+    # One unsigned row (the throttle), and the supplier's own always.
+    assert refused == ["missing", "rate_limited"]
+
+
+def test_a2a_needs_this_installs_https_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    for url, kept in (
+        (URL, URL),
+        ("http://localhost:8000/a2a/suppliers", "http://localhost:8000/a2a/suppliers"),
+        ("http://exec.example.com/a2a/suppliers", ""),
+        ("https://exec.example.com/other", ""),
+        ("", ""),
+    ):
+        monkeypatch.setenv("ERPNEXT_A2A_URL", url)
+        assert erpnext_a2a.endpoint_url() == kept
+
+
 def test_thirty_an_hour_per_supplier(a2a: SimpleNamespace) -> None:
     assert erpnext_a2a.RATE_LIMIT == 30
     assert _post(a2a, _send()).status_code == 200
@@ -574,6 +614,9 @@ def test_without_a_registry_or_per_person_access_it_is_off(
     assert _post(a2a, _send()).status_code == 503
     monkeypatch.setenv("ERPNEXT_A2A_SUPPLIERS", "not json")
     assert _post(a2a, _send()).status_code == 503
+    monkeypatch.setenv("ERPNEXT_A2A_SUPPLIERS", json.dumps(a2a.north.entry))
+    monkeypatch.setenv("ERPNEXT_A2A_URL", "")
+    assert _post(a2a, _send()).status_code == 503
     assert a2a.asked == []
 
 
@@ -589,7 +632,8 @@ def test_unverified_tool_definitions_answer_nothing(a2a: SimpleNamespace, monkey
 def test_the_agent_card_names_only_orders_and_invoices(a2a: SimpleNamespace) -> None:
     card = a2a.client.get(CARD_PATH).json()
     assert [s["id"] for s in card["skills"]] == ["purchase_orders", "invoices"]
-    assert card["url"].endswith(PATH) and card["version"] == "9.9.9"
+    # From the setting, never the request's Host; not the server's release.
+    assert card["url"] == URL and card["version"] == erpnext_a2a.CARD_VERSION
     assert card["capabilities"]["streaming"] is False and card["capabilities"]["pushNotifications"] is False
     assert card["securitySchemes"]["supplierSignature"]["name"] == ASSERTION_HEADER
     # Public: it names no supplier.
