@@ -3400,17 +3400,30 @@ def _remember_drive_read(tool_name: str, arguments: dict[str, Any], result_text:
     return result_text
 
 
+def _show_outside_panel(name: str) -> bool:
+    """Whether ``name`` is ERPNext's show tool on a turn that is not from
+    ERPNext's panel, the only place it can open anything."""
+    from openexecutive.orchestrator.schedule_tools import current_session, erpnext_panel_turn
+    from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL
+
+    return name == ERPNEXT_SHOW_TOOL and not erpnext_panel_turn(current_session.get())
+
+
 def _drop_blocked_tools(text: object) -> Any:
     """``search_tools`` output without the tools `call_tool` always refuses
-    (the Microsoft 365 account tools), so the model is never offered them.
-    Output naming none of them comes back unchanged."""
+    here (the Microsoft 365 account tools; ERPNext's show tool off its panel),
+    so the model is never offered them. Output naming none of them comes back
+    unchanged."""
     from openexecutive.workflows.tool_catalog import filter_search_results, parse_search_results
+
+    def blocked(name: str) -> bool:
+        return _is_blocked_m365_auth_tool(name) or _show_outside_panel(_normalize_tool_name(name))
 
     if not isinstance(text, str):
         return text
-    if not any(_is_blocked_m365_auth_tool(t.name) for t in parse_search_results(text)):
+    if not any(blocked(t.name) for t in parse_search_results(text)):
         return text
-    return filter_search_results(text, lambda name: not _is_blocked_m365_auth_tool(name))
+    return filter_search_results(text, lambda name: not blocked(name))
 
 
 def _is_undiscovered_refusal(
@@ -3425,6 +3438,7 @@ def _is_undiscovered_refusal(
     from openexecutive.prompts.connected_systems import (
         ERPNEXT_DRAFT_TOOLS,
         ERPNEXT_SERVER,
+        ERPNEXT_SHOW_TOOL,
         PINNED_ERPNEXT_TOOLS,
         PINNED_GOOGLE_TOOLS,
     )
@@ -3434,7 +3448,7 @@ def _is_undiscovered_refusal(
     # The draft tools are never shown to the model, so they are discovered the
     # same way (only the gated draft path calls them, by these exact names).
     pinned = tool_name in PINNED_GOOGLE_TOOLS or (
-        (tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS)
+        (tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS or tool_name == ERPNEXT_SHOW_TOOL)
         and ERPNEXT_SERVER in server_names
     )
     return (
@@ -3785,6 +3799,12 @@ class MCPGateway:
                     tool_name, "arguments", "<non-object>",
                     reason="arguments must be a JSON object — refusing.",
                 )
+            if _show_outside_panel(normalized):
+                return _refuse_erpnext_call(
+                    tool_name, "show-outside-panel",
+                    "it opens a place in ERPNext beside ERPNext's own panel, and "
+                    "only a turn from that panel has one. Do not retry.",
+                )
             if normalized.startswith(erpnext_caller.DRAFT_TOOL_PREFIX):
                 blocked, erp_caller = _check_erpnext_draft(tool_name, normalized, arguments)
                 erp_purpose = erpnext_caller.PURPOSE_DRAFT
@@ -4031,6 +4051,15 @@ class MCPGateway:
                     "artifact_ids": attached_artifacts,
                     "recipients": _audit_recipients(tool_name, arguments),
                 },
+            )
+        if erpnext_call:
+            # On a panel turn, what the answer showed (integrations.erpnext_panel).
+            from openexecutive.integrations.erpnext_panel import note_erpnext_call
+
+            note_erpnext_call(
+                normalized,
+                arguments,
+                failed=bool(getattr(result, "isError", False)) or _is_error_payload(result_text),
             )
         return result_text
 

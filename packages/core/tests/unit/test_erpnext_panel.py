@@ -280,3 +280,94 @@ def test_a_panel_turns_specialists_read_no_department_memory(monkeypatch: pytest
     finally:
         current_session.reset(token)
     assert asyncio.run(router._prefetch_department_for_call(call, "s")) == "finance memory"
+
+
+# ── showing what the answer talks about ─────────────────────────────────────
+
+
+def _noted() -> Any:
+    return erpnext_panel._TurnViews()
+
+
+def test_a_panel_turn_keeps_its_views_and_last_read_call() -> None:
+    shown = _noted()
+    token = erpnext_panel._turn_views.set(shown)
+    try:
+        view = {"kind": "list", "doctype": "Sales Order", "sort": {"field": "base_grand_total", "order": "desc"}}
+        erpnext_panel.note_erpnext_call(
+            "erpnext__show_in_erpnext", {"view": view, "_oe_caller": "v1.secret"}, failed=False
+        )
+        erpnext_panel.note_erpnext_call(
+            "erpnext__list_records", {"doctype": "Sales Order", "_oe_caller": "v1.secret"}, failed=False
+        )
+        erpnext_panel.note_erpnext_call("erpnext__run_report", {"report_name": "X"}, failed=True)
+        erpnext_panel.note_erpnext_call("erpnext__search_catalog", {"query": "cash"}, failed=False)
+    finally:
+        erpnext_panel._turn_views.reset(token)
+    # The caller assertion never travels back; a failed call is not kept.
+    assert shown.payload() == {
+        "views": [view],
+        "call": {"tool": "list_records", "arguments": {"doctype": "Sales Order"}},
+    }
+
+
+def test_at_most_five_small_views_and_nothing_outside_the_panel() -> None:
+    erpnext_panel.note_erpnext_call("erpnext__show_in_erpnext", {"view": {"kind": "tree"}}, failed=False)
+    shown = _noted()
+    token = erpnext_panel._turn_views.set(shown)
+    try:
+        for _ in range(7):
+            erpnext_panel.note_erpnext_call(
+                "erpnext__show_in_erpnext", {"view": {"kind": "tree", "doctype": "Account"}}, failed=False
+            )
+        big = {"kind": "list", "doctype": "x" * (erpnext_panel.MAX_VIEW_JSON + 1)}
+        erpnext_panel.note_erpnext_call("erpnext__show_in_erpnext", {"view": big}, failed=False)
+        erpnext_panel.note_erpnext_call("erpnext__show_in_erpnext", {"view": "list"}, failed=False)
+    finally:
+        erpnext_panel._turn_views.reset(token)
+    assert len(shown.views) == erpnext_panel.MAX_VIEWS
+
+
+def test_the_route_returns_what_the_turn_showed(panel: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def answer(person: Any, email: str, conversation: str, message: str, page: Any) -> str:
+        erpnext_panel.note_erpnext_call(
+            "erpnext__show_in_erpnext", {"view": {"kind": "tree", "doctype": "Account"}}, failed=False
+        )
+        return "Here is the chart of accounts."
+
+    monkeypatch.setattr(erpnext_panel, "_answer", answer)
+    reply = _post(panel, {"message": "Show the chart of accounts", "conversation": "c1"})
+    assert reply.json() == {
+        "reply": "Here is the chart of accounts.",
+        "views": [{"kind": "tree", "doctype": "Account"}],
+    }
+
+
+def test_the_show_tool_is_for_panel_turns_only() -> None:
+    from openexecutive.orchestrator import mcp_gateway
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    listing = (
+        "## erpnext__show_in_erpnext\n**Description:** Show it in ERPNext\n\n"
+        "## erpnext__run_report\n**Description:** Run a report\n"
+    )
+    token = current_session.set(Session())
+    try:
+        assert mcp_gateway._show_outside_panel("erpnext__show_in_erpnext")
+        assert not mcp_gateway._show_outside_panel("erpnext__run_report")
+        hidden = mcp_gateway._drop_blocked_tools(listing)
+        assert "erpnext__show_in_erpnext" not in hidden and "erpnext__run_report" in hidden
+    finally:
+        current_session.reset(token)
+    token = current_session.set(Session(origin_channel="erpnext", erpnext_panel_email=ASKER))
+    try:
+        assert not mcp_gateway._show_outside_panel("erpnext__show_in_erpnext")
+        assert mcp_gateway._drop_blocked_tools(listing) == listing
+    finally:
+        current_session.reset(token)
+
+
+def test_both_panel_blocks_ask_for_the_show_tool() -> None:
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert block.endswith(erpnext_panel.SHOW_RULE)
+        assert "erpnext__show_in_erpnext" in block

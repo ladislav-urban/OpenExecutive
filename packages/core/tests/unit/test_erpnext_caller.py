@@ -311,3 +311,15 @@ def test_a_conversation_that_read_erpnext_stays_out_of_shared_memory(monkeypatch
 
     monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", broken)
     assert _conversation_read_erpnext(SimpleNamespace(session_id="web-1", read_erpnext=False)) is True
+
+
+def test_the_show_tool_is_refused_off_erpnexts_panel(phase2: Any) -> None:
+    # It opens a place beside ERPNext's panel; no other turn has one.
+    phase2.roster["principal_speaking"] = True
+    gateway, forwarded = _gateway(['{"ok": true}'])
+    out = asyncio.run(gateway.call_tool({
+        "name": "erpnext__show_in_erpnext", "arguments": {"view": {"kind": "tree", "doctype": "Account"}},
+    }))
+    assert "only a turn from that panel" in json.loads(out)["error"]
+    assert forwarded.await_count == 0
+    assert phase2.audited[-1]["address"] == "<show-outside-panel>"
