@@ -9598,7 +9598,30 @@ integrations:
     undone before the export counts as unchanged and a change made after the
     submit to a field still editable then counts as changed; it says nothing
     of what changed. Other people's cards count too; the summary is counts
-    alone. audit_drafts is service-only in oe_connector
+    alone. The JSON also carries gate (erpnext_oversight.gate), the approval
+    gate's own numbers (oe_connector's landscape review, "Approvals turn
+    into rubber stamps"): over everyone and per resolved_by, cards decided,
+    approved (approved_unchanged / approved_with_edit, or failed: approved
+    then not made; not executed, which nobody tapped) and dismissed
+    (rejected), with expired and replaced counted apart over everyone; the
+    approval rate approved / decided (null with none decided); and the
+    median and 10th percentile of resolved_at - proposed_at for approved
+    cards, in seconds. Each for range and for before, the range of equal
+    length just before it (before_range; none when since is unset, until
+    defaulting to now; since after until or now, or a before range reaching
+    past year 1, is a 422 ahead of the audit row), read with records() for
+    who decided and when only.
+    gate.flags names a person when, against before, their approval rate is
+    at least GATE_HIGH_APPROVAL_RATE (0.95) and higher and their median
+    fell to GATE_TIME_FALL (half) or less, on at least GATE_MIN_DECIDED (10)
+    decided cards (approving_more_faster); and, with erpnext=1, when at
+    least GATE_MIN_SUBMITTED (10) of their approved drafts are submitted,
+    none changed, with a median under GATE_FAST_SECONDS (30)
+    (unchanged_and_fast). gate.note says what a flag means: time to decide
+    is when the card was answered (for an approved card, once ERPNext made
+    the draft), not how long it was read, and a flag is a prompt to look,
+    not a finding. A private record keeps resolved_by and both times, so it
+    counts without its content. The CSV is unchanged (no gate). audit_drafts is service-only in oe_connector
     (caller.SERVICE_ONLY_TOOLS: no phase 1, kind service), and the gateway
     passes ERPNEXT_AUDIT_TOOL exactly inside erpnext_caller.oversight_run
     (signed kind service) and nothing else there (refusal

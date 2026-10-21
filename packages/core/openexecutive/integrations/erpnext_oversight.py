@@ -34,6 +34,21 @@ a deleted document, and those are left out of the share. It says nothing of
 what changed. Records of other people's cards count too; the summary is
 counts alone, never what a card said.
 
+``gate`` measures the approval gate itself (the landscape review's
+"Approvals turn into rubber stamps"): per person who decided cards, and over
+everyone, how many were decided, approved and dismissed (expired and
+replaced cards apart: nobody decided them), the approval rate and the time
+to decide approved cards (median and 10th percentile), for the range and
+the range of equal length just before it. ``flags`` names a person whose
+approvals look like waving through (``_gate_flags``). Time to decide runs
+from the card's proposal to when it closed, which for an approved card is
+once ERPNext made the draft, a few seconds after the tap. It is when the
+card was answered, not how long it was read: someone who decides on their
+phone hours later looks slow but may not have read it, and a quick yes to a
+card they asked for a minute ago can be fine. A flag is a prompt to look,
+not a finding. It needs only who decided and when, which a record of
+someone else's card keeps, so it reads no card content.
+
 A card is its person's alone (``approver_only``), the principal's
 included. So a record of someone else's card (a teammate's, or one asked for
 in ERPNext's panel) keeps who asked, when, who decided, what came of it, the
@@ -52,7 +67,8 @@ import csv
 import io
 import json
 import logging
-from datetime import datetime
+from collections import defaultdict
+from datetime import UTC, datetime
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -71,6 +87,27 @@ _PRIVATE: dict[str, Any] = {
     "why": None, "card": {}, "fields": {}, "fingerprint": None, "conversation": None, "from_alert": None,
     "last_error": None,
 }
+# A card a person approved: made, or approved and then not made (failed).
+# Not ``executed``: nobody tapped it, the class's mode acted.
+_APPROVED = frozenset({"approved_unchanged", "approved_with_edit", "failed"})
+# The gate's warning (``_gate_flags``). Approving more, faster: on at least
+# GATE_MIN_DECIDED cards decided in the range, an approval rate of at least
+# GATE_HIGH_APPROVAL_RATE and higher than the range before, with the median
+# time to decide at most GATE_TIME_FALL of what it was then.
+GATE_MIN_DECIDED = 10
+GATE_HIGH_APPROVAL_RATE = 0.95
+GATE_TIME_FALL = 0.5
+# Fast and never changed (erpnext=1): at least GATE_MIN_SUBMITTED of the
+# person's approved drafts now submitted, none changed, and a median time
+# to decide under GATE_FAST_SECONDS.
+GATE_MIN_SUBMITTED = 10
+GATE_FAST_SECONDS = 30.0
+GATE_NOTE = (
+    "Time to decide runs from when a card was proposed to when it was answered (for an approved card, once "
+    "ERPNext made the draft); it is not how long the card was read. Someone who decides on their phone hours "
+    "later looks slow but may not have read it, and a quick yes to a card they asked for a minute ago can be "
+    "fine. A flag is a prompt to look at how that person approves, not a finding."
+)
 # One audit call answers at most this many cards (oe_connector's MAX_KEYS).
 _AUDIT_BATCH = 500
 
@@ -271,6 +308,130 @@ def unchanged_share(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "changed": changed,
         "unknown": len(told) - same - changed,
         "share": round(same / (same + changed), 4) if same + changed else None,
+    }
+
+
+def _seconds(row: dict[str, Any]) -> float | None:
+    """From the card's proposal to its answer, in seconds; None without both."""
+    try:
+        start = datetime.fromisoformat(str(row.get("proposed_at")))
+        end = datetime.fromisoformat(str(row.get("resolved_at")))
+    except (TypeError, ValueError):
+        return None
+    start, end = (at if at.tzinfo else at.replace(tzinfo=UTC) for at in (start, end))
+    return max((end - start).total_seconds(), 0.0)
+
+
+def _percentile(values: list[float], share: float) -> float | None:
+    """The ``share`` percentile of ``values``, interpolated between the two
+    nearest (the median at 0.5); None when there are none."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    at = share * (len(ordered) - 1)
+    low = int(at)
+    high = min(low + 1, len(ordered) - 1)
+    return round(ordered[low] + (ordered[high] - ordered[low]) * (at - low), 1)
+
+
+def _approved(row: dict[str, Any]) -> bool:
+    return row.get("status") in _APPROVED
+
+
+def _decided(row: dict[str, Any]) -> bool:
+    return _approved(row) or row.get("status") == "rejected"
+
+
+def _gate_numbers(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Cards decided, approved and dismissed, the approval rate (null with
+    none decided) and the time to decide approved cards, in seconds."""
+    approved = [r for r in rows if _approved(r)]
+    dismissed = sum(1 for r in rows if r.get("status") == "rejected")
+    decided = len(approved) + dismissed
+    times = [t for t in (_seconds(r) for r in approved) if t is not None]
+    return {
+        "decided": decided,
+        "approved": len(approved),
+        "dismissed": dismissed,
+        "approval_rate": round(len(approved) / decided, 4) if decided else None,
+        "median_seconds": _percentile(times, 0.5),
+        "p10_seconds": _percentile(times, 0.1),
+    }
+
+
+def _by_person(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    """The decided cards in ``rows`` by who decided them."""
+    found: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in rows:
+        if row.get("resolved_by") and _decided(row):
+            found[str(row["resolved_by"])].append(row)
+    return found
+
+
+def _gate_flags(
+    person: str, now: dict[str, Any], before: dict[str, Any] | None, rows: list[dict[str, Any]], erpnext: bool,
+) -> list[dict[str, Any]]:
+    """What in ``person``'s numbers (``now``, ``before``) and cards (``rows``)
+    looks like waving cards through."""
+    flags = []
+    rate, median = now["approval_rate"], now["median_seconds"]
+    if (
+        before is not None and now["decided"] >= GATE_MIN_DECIDED
+        and rate is not None and rate >= GATE_HIGH_APPROVAL_RATE
+        and before["approval_rate"] is not None and rate > before["approval_rate"]
+        and median is not None and before["median_seconds"] is not None
+        and median <= before["median_seconds"] * GATE_TIME_FALL
+    ):
+        flags.append({
+            "resolved_by": person, "flag": "approving_more_faster",
+            "why": (
+                f"Approved {rate:.0%} of {now['decided']} cards (before: {before['approval_rate']:.0%}), "
+                f"deciding in a median {median:g}s (before: {before['median_seconds']:g}s)."
+            ),
+        })
+    if erpnext:
+        told = [
+            (r.get("erpnext") or {}).get("unchanged") for r in rows
+            if _approved(r) and (r.get("erpnext") or {}).get("state") == "submitted"
+        ]
+        same = told.count(True)
+        if same >= GATE_MIN_SUBMITTED and False not in told and median is not None and median < GATE_FAST_SECONDS:
+            flags.append({
+                "resolved_by": person, "flag": "unchanged_and_fast",
+                "why": f"All {same} approved drafts since submitted were unchanged, decided in a median {median:g}s.",
+            })
+    return flags
+
+
+def gate(
+    rows: list[dict[str, Any]], before: list[dict[str, Any]] | None = None, *, erpnext: bool = False,
+) -> dict[str, Any]:
+    """The approval gate's numbers over ``rows`` (the range's records) and
+    ``before`` (the range of equal length just before it; None when the
+    range has no start), over everyone and per person who decided cards,
+    and the flags (``_gate_flags``; the unchanged one only for ``rows`` from
+    ``with_erpnext_state``, ``erpnext``)."""
+    everyone = {
+        **_gate_numbers(rows),
+        "expired": sum(1 for r in rows if r.get("outcome") == "expired"),
+        "replaced": sum(1 for r in rows if str(r.get("outcome") or "").startswith("replaced")),
+    }
+    earlier = _by_person(before) if before is not None else {}
+    people, flags = [], []
+    for person, theirs in sorted(_by_person(rows).items()):
+        now = _gate_numbers(theirs)
+        then = _gate_numbers(earlier.get(person, [])) if before is not None else None
+        people.append({"resolved_by": person, "range": now, "before": then})
+        flags.extend(_gate_flags(person, now, then, theirs, erpnext))
+    return {
+        "everyone": {"range": everyone, "before": _gate_numbers(before) if before is not None else None},
+        "people": people,
+        "flags": flags,
+        "thresholds": {
+            "min_decided": GATE_MIN_DECIDED, "high_approval_rate": GATE_HIGH_APPROVAL_RATE,
+            "time_fall": GATE_TIME_FALL, "min_submitted": GATE_MIN_SUBMITTED, "fast_seconds": GATE_FAST_SECONDS,
+        },
+        "note": GATE_NOTE,
     }
 
 
