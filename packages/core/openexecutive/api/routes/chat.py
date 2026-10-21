@@ -218,6 +218,15 @@ def _host_wrote(session_id: str) -> bool:
     return session_id in _host_sessions or host_wrote(session_id)
 
 
+def _host_wrote_quietly(session_id: str) -> bool:
+    """``_host_wrote``, answering yes when it can't be read (fails closed)."""
+    try:
+        return _host_wrote(session_id)
+    except Exception:
+        logger.warning("chat.host_mark_unreadable session_id=%s", session_id, exc_info=True)
+        return True
+
+
 def _exists_without_host(session_id: str) -> bool:
     """Whether ``session_id`` is a stored conversation that a host origin's
     page has never written in. (A new one has no row yet: the turn writes it
@@ -2659,7 +2668,12 @@ async def get_suggested_prompts(request: Request) -> dict[str, Any]:
         logger.exception("suggested_prompts: session list failed")
         sessions = []
 
-    recent_titles = [s["title"] for s in sessions[:5] if s.get("title")]
+    # Not a chat a host origin's page wrote in: its title is that page's
+    # words, and a starter prompt is sent as the person's own.
+    recent_titles = [
+        s["title"] for s in sessions[:5]
+        if s.get("title") and not _host_wrote_quietly(str(s.get("session_id") or ""))
+    ]
     latest_session_id = sessions[0]["session_id"] if sessions else None
 
     key = _cache_key(profile, latest_session_id, caller_person_id)

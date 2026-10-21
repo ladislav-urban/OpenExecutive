@@ -776,12 +776,13 @@ def list_shared_with_person(person_id: int, db_path: Path = DB_PATH) -> list[dic
 def export_rows(session_id: str, db_path: Path = DB_PATH) -> list[dict[str, Any]]:
     """Every message of ``session_id`` with who wrote it, for an export:
     ``role``, ``content``, ``created_at``, ``sender_person_id``, ``stopped``
-    and the reply's ``sources`` (decoded, or None)."""
+    and the reply's ``sources`` (decoded, or None), and ``sender_surface``
+    ("host" for a line a host origin's page sent)."""
     if not db_path.exists():
         return []
     with _get_conn(db_path) as conn:
         rows = conn.execute(
-            "SELECT role, content, created_at, sender_person_id, stopped, sources "
+            "SELECT role, content, created_at, sender_person_id, stopped, sources, sender_surface "
             "FROM chat_messages WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
@@ -798,6 +799,7 @@ def export_rows(session_id: str, db_path: Path = DB_PATH) -> list[dict[str, Any]
             "content": row["content"],
             "created_at": row["created_at"],
             "sender_person_id": row["sender_person_id"],
+            "sender_surface": row["sender_surface"],
             "stopped": bool(row["stopped"]),
             "sources": sources if isinstance(sources, dict) else None,
         })

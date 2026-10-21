@@ -198,6 +198,22 @@ def test_cross_chat_readers_never_take_a_host_line_as_the_persons(temp_db: Path)
     assert not chat_topics.owner_only("hosted", 7, db_path=temp_db)
 
 
+def test_an_export_says_which_lines_came_from_a_host_page(
+    temp_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.memory import chat_export
+
+    session_store.create_session("hosted", "Plan", "2026-10-21T00:00:00+00:00", db_path=temp_db)
+    session_store.save_message("hosted", "user", "from the host", db_path=temp_db, sender_surface="host")
+    session_store.save_message("hosted", "user", "my own", db_path=temp_db)
+    rows = session_store.export_rows("hosted", db_path=temp_db)
+    assert [r["sender_surface"] for r in rows] == ["host", None]
+    monkeypatch.setattr(chat_export, "export_rows", lambda sid: session_store.export_rows(sid, db_path=temp_db))
+    md = chat_export.to_markdown({"session_id": "hosted", "title": "Plan"}, owner_person_id=None)
+    assert "## You (from another app's page)\n\nfrom the host" in md
+    assert "## You\n\nmy own" in md
+
+
 def test_only_user_lines_from_the_host_are_marked(temp_db: Path) -> None:
     session_store.create_session("s1", "t", "2026-10-21T00:00:00+00:00", db_path=temp_db)
     session_store.save_message("s1", "user", "mine", db_path=temp_db)

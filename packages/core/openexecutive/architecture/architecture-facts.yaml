@@ -7779,7 +7779,9 @@ auth:
     block, which can stand it down), own_conversation_since (the
     end-of-day digest; whole host-written conversations) and
     chat_topics.owner_only. A failed mark still holds the chat through the
-    in-process chat._host_sessions set.
+    in-process chat._host_sessions set. Suggested starter prompts skip
+    host-written chats' titles (fail closed); the Markdown export labels
+    host lines "(from another app's page)".
     In any frame, card actions and any other change off the host list made
     within 10 s of a trusted click/key are confirmed in a popup of the app's
     own (/confirm, oe-confirm/v1 same-origin messages with a nonce): an
