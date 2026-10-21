@@ -179,6 +179,10 @@ def principal_speaking(session: Any) -> bool:
     unrecognised surface or an unreadable roster all answer False."""
     if session is None or getattr(session, "unattended", False) is True:
         return False
+    # A host origin's page (Session.from_host): a script there may have
+    # written it, so it is never the principal's own words.
+    if getattr(session, "from_host", False) is True:
+        return False
     caller = getattr(session, "caller_person_id", None)
     channel = str(getattr(session, "origin_channel", "") or "")
     try:

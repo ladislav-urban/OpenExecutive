@@ -211,6 +211,15 @@ def _host_wrote(session_id: str) -> bool:
     return host_wrote(session_id)
 
 
+def _exists_without_host(session_id: str) -> bool:
+    """Whether ``session_id`` is a stored conversation that a host origin's
+    page has never written in. (A new one has no row yet: the turn writes it
+    after this check.)"""
+    from openexecutive.memory.session_store import get_session_metadata
+
+    return get_session_metadata(session_id) is not None and not _host_wrote(session_id)
+
+
 def _sweep_stale_stops() -> None:
     """Reclaim entries that outlived any turn that could still be running.
 
@@ -1132,8 +1141,8 @@ async def _run_chat_turn(
         # for good, so it must not reach one of the person's own.
         if (
             api_caller.from_host(request)
-            and session.conversation_history
-            and not await asyncio.to_thread(_host_wrote, session.session_id)
+            and requested_id is not None
+            and await asyncio.to_thread(_exists_without_host, requested_id)
         ):
             raise HTTPException(
                 status_code=409,

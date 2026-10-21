@@ -412,13 +412,17 @@ the read tools and the gateway's reads, never anything that sends, posts, books,
 schedules, runs or changes stored state (`MCP_CLIENT_WITHHELD_TOOLS`), the principal-only
 tools, Act as me, `recall_history`, scripts or extension tools. A call the model makes
 anyway is refused, telling the person to start a new chat in Open Executive itself. Its
-words are never noted as the person's own, and it can stop or add to its own turns only.
+words are never taken as the person's own: no memory extraction, open loop, working
+style, History note, conversation review or peer memory learns from it, and it is never
+a verified speaker. It can stop or add to its own turns only.
 A host's page writes only in a conversation it started or already wrote in (`409`
 otherwise), and **a conversation a host's page wrote into stays that way on every page:** each user line
 records the surface that sent it (`chat_messages.sender_surface`), and every later turn in
 that conversation, from Open Executive's own pages too, gets the same read-only rules,
 since the host's line stays in what the model reads and could be an instruction planted
-for the person's next turn. `tests/unit/test_host_surface_turns.py` lists what such a turn
+for the person's next turn. The mark is the conversation's and sticks
+(`sessions.host_wrote`): taking the line back (Try again, Edit) and sending its words
+from Open Executive's page is still read-only. `tests/unit/test_host_surface_turns.py` lists what such a turn
 is offered; `tests/integration/test_chat_host_surface.py` checks the conversation rule.
 
 **Embedded mode.** A page opened as `…?embed=1` in a frame whose parent is a listed host
@@ -440,13 +444,13 @@ parent window, and every `init` field is validated. In a frame:
   page can frame these pages without saying so). The page around a frame can make it
   invisible and lay its own buttons over it, so a confirmation drawn inside the frame
   can be beaten with two lured clicks. Instead, approving, rejecting or cancelling a
-  card, a proposal, a workflow sign-off or a roster request, and any other change the
-  host list doesn't already allow with the same effect (a setting, Handle it for me,
-  People, and a chat message: the host's are read-only, but one sent from this app's page
-  in a frame is the person's own turn) made within
-  10 seconds of a click or key in the frame, opens a small window of Open Executive's
-  own (`/confirm`) naming what will happen; only its Yes goes ahead, and closing it is
-  No. No page can cover another window. The frame checks every request it sends
+  card, a proposal, a workflow sign-off or a roster request, every
+  chat message sent from the frame (the host's are read-only, but one sent from this
+  app's page is the person's own turn), and any other change the host list doesn't
+  already allow with the same effect (a setting, Handle it for me, People, an upload)
+  made within 10 seconds of a click, key, drop or paste in the frame, or of a Yes, opens
+  a small window of Open Executive's own (`/confirm`) naming what will happen; only its
+  Yes goes ahead, and closing it is No. No page can cover another window. The frame checks every request it sends
   (`lib/cardActions.ts`), so no button can skip it. Each approval card has its own page,
   `/cards/<id>`.
 

@@ -112,6 +112,8 @@ def save_message(
                 sender_person_id, sources, sender_surface,
             ),
         )
+        if role == "user" and sender_surface == "host":
+            conn.execute("UPDATE sessions SET host_wrote = 1 WHERE session_id = ?", (session_id,))
         return int(cur.lastrowid or 0)
 
 
@@ -120,14 +122,16 @@ def host_wrote(session_id: str, db_path: Path = DB_PATH) -> bool:
     conversation (``sender_surface`` ``"host"``). Every turn in it is then
     held to the host surface's read-only rules, from any page: the line stays
     in the conversation the model reads, and a script on that page could have
-    written it."""
+    written it. It sticks (``sessions.host_wrote``): taking the line back
+    (Try again, Edit) must not hand its words to a turn that may act."""
     if not db_path.exists():
         return False
     with _get_conn(db_path) as conn:
         row = conn.execute(
-            "SELECT 1 FROM chat_messages WHERE session_id = ? AND role = 'user' "
+            "SELECT 1 FROM sessions WHERE session_id = ? AND host_wrote = 1 "
+            "UNION ALL SELECT 1 FROM chat_messages WHERE session_id = ? AND role = 'user' "
             "AND sender_surface = 'host' LIMIT 1",
-            (session_id,),
+            (session_id, session_id),
         ).fetchone()
     return row is not None
 

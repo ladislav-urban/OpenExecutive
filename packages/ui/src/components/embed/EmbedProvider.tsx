@@ -30,6 +30,9 @@ const HOST_CALLS = HOST_LIST.calls.map(([method, pattern]) => [method, pattern] 
 // A change made this soon after a click or a key in the frame may have been
 // lured, so it asks; later than that, the page made it on its own.
 const AFTER_INPUT_MS = 10_000;
+// What counts as input: a click, a key, a drop or a paste (a page over the
+// frame can lure any of them, and put its own file in a drag).
+const INPUT_EVENTS = ["pointerdown", "keydown", "drop", "paste"] as const;
 
 export type EmbedState = {
   embedded: boolean;
@@ -70,6 +73,7 @@ export default function EmbedProvider({
   const [state, setState] = useState<EmbedState>(NOT_EMBEDDED);
   const [pending, setPending] = useState<Pending | null>(null);
   const pendingRef = useRef<Pending | null>(null);
+  const lastInput = useRef(0);
 
   // The handshake: `ready` to the parent, addressed to each listed host
   // origin (the browser delivers it only to the one the parent is), then
@@ -103,12 +107,10 @@ export default function EmbedProvider({
   // follows a click, waits for the confirmation window.
   useEffect(() => {
     if (window.top === window.self) return;
-    let lastInput = 0;
     const onInput = (event: Event) => {
-      if (event.isTrusted) lastInput = Date.now();
+      if (event.isTrusted) lastInput.current = Date.now();
     };
-    window.addEventListener("pointerdown", onInput, true);
-    window.addEventListener("keydown", onInput, true);
+    for (const type of INPUT_EVENTS) window.addEventListener(type, onInput, true);
     const original = window.fetch;
     const confirm = (action: CardAction) =>
       new Promise<boolean>((resolve) => {
@@ -122,20 +124,21 @@ export default function EmbedProvider({
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const action = frameActionFor(method, url, init?.body, HOST_CALLS);
-      const asks = action !== null && (action.card || Date.now() - lastInput < AFTER_INPUT_MS);
+      const asks = action !== null && (action.card || Date.now() - lastInput.current < AFTER_INPUT_MS);
       if (asks && !(await confirm(action))) throw new CardActionNotConfirmed();
       return original(input, init);
     };
     return () => {
       window.fetch = original;
-      window.removeEventListener("pointerdown", onInput, true);
-      window.removeEventListener("keydown", onInput, true);
+      for (const type of INPUT_EVENTS) window.removeEventListener(type, onInput, true);
     };
   }, []);
 
   const answer = (ok: boolean) => {
     const current = pendingRef.current;
     pendingRef.current = null;
+    // A Yes is input too: what the confirmed change sets off next asks again.
+    lastInput.current = Date.now();
     setPending(null);
     current?.resolve(ok);
   };

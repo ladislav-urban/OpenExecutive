@@ -107,7 +107,11 @@ test("the frame checks every request, in any frame, and asks in a window of its 
   const provider = read("../src/components/embed/EmbedProvider.tsx");
   assert.match(provider, /if \(window\.top === window\.self\) return;/);
   assert.match(provider, /const action = frameActionFor\(method, url, init\?\.body, HOST_CALLS\);/);
-  assert.match(provider, /action\.card \|\| Date\.now\(\) - lastInput < AFTER_INPUT_MS/);
+  assert.match(provider, /action\.card \|\| Date\.now\(\) - lastInput\.current < AFTER_INPUT_MS/);
+  // A drop or a paste is input too (a page over the frame can put its own
+  // file in a drag), and so is a Yes: what it sets off next asks again.
+  assert.match(provider, /const INPUT_EVENTS = \["pointerdown", "keydown", "drop", "paste"\] as const;/);
+  assert.match(provider, /\/\/ A Yes is input too[^\n]*\n\s*lastInput\.current = Date\.now\(\);/);
   assert.match(provider, /if \(asks && !\(await confirm\(action\)\)\) throw new CardActionNotConfirmed\(\);/);
   const frame = read("../src/components/embed/FrameConfirm.tsx");
   assert.match(frame, /window\.open\(`\/confirm\?nonce=\$\{nonce\}`/);

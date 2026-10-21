@@ -475,6 +475,17 @@ def initialize_db(db_path: Path | None = None) -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column" not in str(exc).lower():
                     raise
+        # Host origins: 1 once a host origin's page wrote a line here
+        # (session_store.host_wrote). Never cleared, rewinding included: the
+        # line's words could otherwise be sent again as the person's own.
+        if "host_wrote" not in _sessions_existing:
+            try:
+                conn.execute(
+                    "ALTER TABLE sessions ADD COLUMN host_wrote INTEGER NOT NULL DEFAULT 0"
+                )
+            except sqlite3.OperationalError as exc:
+                if "duplicate column" not in str(exc).lower():
+                    raise
         # Act as me: 1 once a turn here read or drafted in the speaker's own
         # mailbox — from then on the conversation is its owner's alone, the
         # principal included (session_store.mark_mail_private).

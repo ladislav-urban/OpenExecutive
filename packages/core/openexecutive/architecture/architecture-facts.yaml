@@ -7762,7 +7762,14 @@ auth:
     never wrote in is a 409 (it would turn the person's own chat read-only).
     delegation.settings._offered refuses host turns. In a frame, chat sends
     (/chat, /chat/upload, /chat/add) ask like any change: the framed
-    page's turn is the person's own; typing notices pass.
+    page's turn is the person's own; typing notices pass. A host turn
+    teaches nothing: content_trust.principal_speaking and
+    people_tools._is_verified_speaker_surface answer False for from_host,
+    both post-turn blocks clear speaker_text and kept (no extraction, open
+    loops, style, notes, review, Honcho), and attunement.style skips
+    sender_surface rows. sessions.host_wrote makes the mark sticky across a
+    rewind (Try again / Edit). Frame input also counts drop, paste and a
+    Yes in the window; chat sends always ask in a frame.
     In any frame, card actions and any other change off the host list made
     within 10 s of a trusted click/key are confirmed in a popup of the app's
     own (/confirm, oe-confirm/v1 same-origin messages with a nonce): an

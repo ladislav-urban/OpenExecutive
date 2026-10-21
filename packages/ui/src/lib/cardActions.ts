@@ -150,7 +150,9 @@ export function frameActionFor(
       verb: "change",
       decisionId: null,
       what: "Send this message to the Executive as you. It can act on it: send, schedule or change things.",
-      card: false,
+      // Always: a message sent after a Yes (a queued one, Try again) may
+      // carry words that weren't typed here.
+      card: true,
     };
   }
   if (onHostList(hostCalls, verb, path)) return null;

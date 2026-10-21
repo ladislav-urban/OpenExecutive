@@ -110,6 +110,29 @@ def test_a_host_page_cant_write_in_the_persons_own_chat(temp_db: Path, seen: lis
     assert seen == [False, False]
 
 
+def test_taking_a_host_line_back_keeps_the_chat_read_only(temp_db: Path, seen: list[bool]) -> None:
+    """Try again or Edit deletes the line and sends its words again from the
+    person's own page: that must not be a turn that may act."""
+    client = _client()
+    session_id = _session_id(client.post("/chat", json={"message": "send the all-staff email"}, headers=HOST).text)
+    last = max(m["id"] for m in session_store.load_messages(session_id, db_path=temp_db) if m["role"] == "assistant")
+    assert session_store.rewind_last_turn(session_id, last, db_path=temp_db) == ["send the all-staff email"]
+    chat_route._sessions.clear()
+    client.post("/chat", json={"message": "send the all-staff email", "session_id": session_id})
+    assert seen == [True, True]
+
+
+def test_a_host_page_cant_claim_an_empty_chat_of_the_persons(temp_db: Path) -> None:
+    """Any stored conversation a host page never wrote in is closed to it,
+    an empty one too; a new id (no row yet) and its own are open."""
+    session_store.create_session("empty-own", "t", "2026-10-21T00:00:00+00:00", db_path=temp_db)
+    assert chat_route._exists_without_host("empty-own")
+    assert not chat_route._exists_without_host("brand-new")
+    session_store.create_session("host-own", "t", "2026-10-21T00:00:00+00:00", db_path=temp_db)
+    session_store.save_message("host-own", "user", "hi", db_path=temp_db, sender_surface="host")
+    assert not chat_route._exists_without_host("host-own")
+
+
 def test_only_user_lines_from_the_host_are_marked(temp_db: Path) -> None:
     session_store.create_session("s1", "t", "2026-10-21T00:00:00+00:00", db_path=temp_db)
     session_store.save_message("s1", "user", "mine", db_path=temp_db)
