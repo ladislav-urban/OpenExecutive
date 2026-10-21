@@ -417,9 +417,16 @@ def test_the_route_returns_the_gate_with_the_range_before_and_keeps_the_csv(
     assert gate["thresholds"]["min_decided"] == oversight.GATE_MIN_DECIDED
     unbounded = client.get("/erpnext/drafts/oversight", headers=owner).json()["gate"]
     assert unbounded["before_range"] is None and unbounded["everyone"]["before"] is None
-    later = {"since": (now + timedelta(days=2)).isoformat()}
-    empty = client.get("/erpnext/drafts/oversight", params=later, headers=owner).json()["gate"]
+    long_ago = {"since": "2020-01-01", "until": "2020-02-01"}
+    empty = client.get("/erpnext/drafts/oversight", params=long_ago, headers=owner).json()["gate"]
     assert empty["everyone"]["range"]["approval_rate"] is None and empty["people"] == []
+    # A range that runs backwards, or whose range before it would fall
+    # before year 1, is refused before anything is audited or read.
+    for bad in (
+        {"since": (now + timedelta(days=2)).isoformat()}, {"since": "2026-10-20", "until": "2026-10-01"},
+        {"since": "1000-01-01"}, {"since": "0001-01-01", "until": "9999-12-31"},
+    ):
+        assert client.get("/erpnext/drafts/oversight", params=bad, headers=owner).status_code == 422, bad
     # The CSV stays one row per record with the same columns: no summary.
     as_csv = client.get("/erpnext/drafts/oversight?format=csv", headers=owner).text
     assert next(csv.reader(io.StringIO(as_csv))) == list(oversight.CSV_COLUMNS) and len(oversight.CSV_COLUMNS) == 23

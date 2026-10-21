@@ -9608,7 +9608,9 @@ integrations:
     median and 10th percentile of resolved_at - proposed_at for approved
     cards, in seconds. Each for range and for before, the range of equal
     length just before it (before_range; none when since is unset, until
-    defaulting to now), read with records() for who decided and when only.
+    defaulting to now; since after until or now, or a before range reaching
+    past year 1, is a 422 ahead of the audit row), read with records() for
+    who decided and when only.
     gate.flags names a person when, against before, their approval rate is
     at least GATE_HIGH_APPROVAL_RATE (0.95) and higher and their median
     fell to GATE_TIME_FALL (half) or less, on at least GATE_MIN_DECIDED (10)

@@ -829,13 +829,16 @@ Each setting below is read at start, so restart the API after changing it.
   Removing the old key first, on either side, is a stop: every call that
   key signs is refused.
 - **The widest stop needs no access to OpenExecutive:** an ERPNext operator
-  disables the "OE Reader" user. Every call from OpenExecutive then fails,
-  whoever it acts for, from the next request. Use it first when it isn't
-  clear what is wrong.
+  disables the service user `oe-connector-setup-reader` made (first name
+  "OpenExecutive", role "OE Reader"). Every call from OpenExecutive then
+  fails, whoever it acts for, from the next request. Use it first when it
+  isn't clear what is wrong.
 
-Afterwards, `GET /erpnext/drafts/oversight?erpnext=1` lists every card, who
-decided it and what became of each draft, and the audit log has every
-`erpnext__*` call.
+For the evidence, take `GET /erpnext/drafts/oversight?erpnext=1` before
+cutting ERPNext off, if you can: it lists every card, who decided it and
+what became of each draft in ERPNext. Once the gateway can't reach ERPNext,
+`erpnext=1` answers 502, and the plain export still lists the cards and who
+decided them. The audit log has every `erpnext__*` call either way.
 
 ---
 
