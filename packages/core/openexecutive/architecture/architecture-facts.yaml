@@ -7773,7 +7773,13 @@ auth:
     shows the message. A host turn marks a new conversation as soon as its
     session row exists (session_store.mark_host_wrote), so an own-page turn
     running alongside is held too; briefing.live_signals leaves such
-    conversations' titles (the host's words) out of the brief.
+    conversations' titles (the host's words) out of the brief. The
+    cross-chat readers of "the person's own words" skip host lines too:
+    session_store.own_messages_since (a scheduled follow-up's "since"
+    block, which can stand it down), own_conversation_since (the
+    end-of-day digest; whole host-written conversations) and
+    chat_topics.owner_only. A failed mark still holds the chat through the
+    in-process chat._host_sessions set.
     In any frame, card actions and any other change off the host list made
     within 10 s of a trusted click/key are confirmed in a popup of the app's
     own (/confirm, oe-confirm/v1 same-origin messages with a nonce): an

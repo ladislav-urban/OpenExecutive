@@ -205,6 +205,9 @@ Host it like this:
   still stand: the UI's proxy refuses every same-site write except the host list from the
   exact host origin.
 
+Never list the UI's own origin: its pages' writes would then be judged as a host's and
+refused.
+
 Removing an origin from `OE_HOST_ORIGINS` (and restarting the UI) stops that host's
 framing and every call from its pages at once. `make embed-outputs` writes the files a
 host app checks itself against (`embed-manifest.json`, `host-list.json`,

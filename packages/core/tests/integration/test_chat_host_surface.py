@@ -178,6 +178,26 @@ def test_a_host_page_cant_claim_an_empty_chat_of_the_persons(temp_db: Path) -> N
     assert not chat_route._exists_without_host("host-own")
 
 
+def test_cross_chat_readers_never_take_a_host_line_as_the_persons(temp_db: Path) -> None:
+    """A scheduled follow-up's "what they wrote since", the end-of-day digest
+    and topic naming all read the person's own lines: never a host's."""
+    from openexecutive.memory import chat_topics
+
+    since = "2026-01-01T00:00:00+00:00"
+    session_store.create_session("own", "t", since, caller_person_id=7, db_path=temp_db)
+    session_store.save_message("own", "user", "my own words", db_path=temp_db, sender_person_id=7)
+    session_store.create_session("hosted", "t", since, caller_person_id=7, db_path=temp_db)
+    session_store.save_message(
+        "hosted", "user", "already handled, stop chasing", db_path=temp_db,
+        sender_person_id=7, sender_surface="host",
+    )
+    session_store.save_message("hosted", "assistant", "noted", db_path=temp_db)
+    assert [m["text"] for m in session_store.own_messages_since(7, since, db_path=temp_db)] == ["my own words"]
+    assert [m["text"] for m in session_store.own_conversation_since(7, since, db_path=temp_db)] == ["my own words"]
+    assert chat_topics.owner_only("own", 7, db_path=temp_db)
+    assert not chat_topics.owner_only("hosted", 7, db_path=temp_db)
+
+
 def test_only_user_lines_from_the_host_are_marked(temp_db: Path) -> None:
     session_store.create_session("s1", "t", "2026-10-21T00:00:00+00:00", db_path=temp_db)
     session_store.save_message("s1", "user", "mine", db_path=temp_db)

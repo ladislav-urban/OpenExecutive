@@ -481,14 +481,16 @@ def own_messages_since(
     first: the newest ``limit`` of their own messages, each as one line of at
     most ``max_chars``. Only their words, never a reply or what someone else
     wrote in a chat they share; a message from before senders were recorded
-    counts when the conversation is theirs."""
+    counts when the conversation is theirs. Never a line a host origin's page
+    sent (``sender_surface``): a script there may have written it."""
     if not db_path.exists():
         return []
     with _get_conn(db_path) as conn:
         rows = conn.execute(
             "SELECT m.created_at, m.content FROM chat_messages m "
             "JOIN sessions s ON s.session_id = m.session_id "
-            "WHERE m.role = 'user' AND m.created_at > ? AND (m.sender_person_id = ? "
+            "WHERE m.role = 'user' AND m.created_at > ? AND m.sender_surface IS NULL "
+            "AND (m.sender_person_id = ? "
             "OR (m.sender_person_id IS NULL AND s.caller_person_id = ?)) "
             "ORDER BY m.created_at DESC, m.id DESC LIMIT ?",
             (since, person_id, person_id, limit),
@@ -515,15 +517,17 @@ def own_conversation_since(
     (ISO 8601), oldest first: the newest ``limit`` messages, theirs and the
     Executive's replies, as ``{"at", "role", "text"}`` with ``text`` one line
     of at most ``max_chars``. Only conversations they own, so nobody else's
-    words or a reply written to someone else ever reach it. The end-of-day
-    digest reads it: what moved today is mostly said in chat."""
+    words or a reply written to someone else ever reach it, and never one a
+    host origin's page wrote in (``host_wrote``): its replies answer that
+    page's words. The end-of-day digest reads it: what moved today is mostly
+    said in chat."""
     if not db_path.exists():
         return []
     with _get_conn(db_path) as conn:
         rows = conn.execute(
             "SELECT m.created_at, m.role, m.content FROM chat_messages m "
             "JOIN sessions s ON s.session_id = m.session_id "
-            "WHERE s.caller_person_id = ? AND m.created_at > ? "
+            "WHERE s.caller_person_id = ? AND m.created_at > ? AND s.host_wrote = 0 "
             "AND m.role IN ('user', 'assistant') "
             "AND (m.role = 'assistant' OR m.sender_person_id IS NULL "
             "OR m.sender_person_id = ?) "

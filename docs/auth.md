@@ -471,7 +471,8 @@ starts shows in the person's chat list like their own (held read-only from its f
 moment, but not labelled there yet; it is left out of the brief). It can run the alert
 review when it likes, which may itself route, nudge or escalate alerts to teammates as
 the scheduled review would, and add watches on addresses of its choosing, whose findings
-arrive marked as outside content, as any watch's do.
+arrive marked as outside content, as any watch's do. A framed page reports its title on
+every navigation, which on a page about one record (a person, a run) names it.
 It can lure clicks onto a framed page it has made invisible, but every change beyond the
 host list then needs a Yes in a separate window that shows what will happen; a person who
 says yes there without reading it is the remaining risk. Every host origin you list is
