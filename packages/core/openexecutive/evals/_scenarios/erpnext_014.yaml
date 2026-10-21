@@ -1,0 +1,17 @@
+id: erpnext_014
+domain: mcp
+speaker: principal
+surface: erpnext_panel
+description: "ERPNext's \"Ask the Dynocortex\" panel, with the erpnext server connected: the person asks for their largest sales orders. The Executive reads the submitted Sales Orders ranked by grand total in company currency, names the company and currency, and, because the panel opens what an answer is about beside it, asks ERPNext to show that same list (erpnext__show_in_erpnext). The reply itself carries no routes, URLs or links, and stays short enough for a side panel"
+requires_mcp: true
+query: "What are my largest orders?"
+expected_tool_calls:
+  - call_tool
+expected_topics:
+  - largest_sales_orders_by_grand_total
+quality_criteria:
+  ranks_submitted_sales_orders_by_grand_total: true
+  states_the_company_and_currency_of_the_figures: true
+  writes_no_routes_urls_or_links_in_the_reply: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true

@@ -36,6 +36,15 @@ answers 503.
 
 Conversations live in this process (``_Conversations``), keyed by the person
 and the panel's conversation id, and end on restart or after an idle hour.
+
+**Showing what the answer talks about** (oe_connector's
+``docs/erpnext-panel-views-plan.md``). The reply also carries ``views``: the
+``view`` argument of each ``erpnext__show_in_erpnext`` call the turn made, in
+order, and ``call``: the turn's last ``list_records``, ``run_report`` or
+``get_record`` call, for oe_connector to fall back on. The gateway notes them
+(``note_erpnext_call``) once a call succeeded. Both are data for oe_connector,
+which checks every view again as the signed-in ERPNext user and builds each
+route itself; nothing here is shown or followed.
 """
 from __future__ import annotations
 
@@ -47,6 +56,7 @@ import logging
 import re
 import time
 from collections import OrderedDict, deque
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -302,6 +312,15 @@ def page_block(page: Any) -> str:
     return wrap_untrusted(f"Open in ERPNext: {where}.", source="erpnext", author="erpnext_page")
 
 
+# Both panel blocks end with it: the panel opens what the answer is about beside
+# it, from views this tool names (oe_connector checks each one).
+SHOW_RULE = (
+    "When your answer is about something in ERPNext (the list you ranked, the "
+    "report you ran, the document you described), also call "
+    "erpnext__show_in_erpnext with it, with the same filters and sort, once per "
+    "place and the main one first, so ERPNext opens it beside the panel. Never "
+    "write routes or links."
+)
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
     "a chat docked on every ERPNext page; people there call you Dynocortex, "
@@ -310,7 +329,8 @@ PANEL_CONTEXT_BLOCK = (
     "user) and consult your specialists; you cannot send, schedule, save or "
     "change anything, or reach any other system. Keep answers short enough for "
     "a side panel. If they ask for something you cannot do here, say so and "
-    "suggest the OpenExecutive app."
+    "suggest the OpenExecutive app. "
+    + SHOW_RULE
 )
 # The same, for a person this turn may prepare ERPNext drafts for (phase 4b,
 # integrations.erpnext_drafts.offered): proposing is the one thing it may
@@ -327,7 +347,8 @@ PANEL_DRAFTS_CONTEXT_BLOCK = (
     "is in ERPNext until then. You cannot send, schedule or save anything, or "
     "reach any other system. Keep answers short enough for a side panel. If "
     "they ask for something you cannot do here, say so and suggest the "
-    "OpenExecutive app."
+    "OpenExecutive app. "
+    + SHOW_RULE
 )
 
 
@@ -342,6 +363,59 @@ async def _read_capped(request: Request) -> bytes | None:
         if len(body) > MAX_BODY_BYTES:
             return None
     return bytes(body)
+
+
+# What a panel turn showed: its show_in_erpnext views and its last read call.
+MAX_VIEWS = 5
+MAX_VIEW_JSON = 4000
+_READ_CALLS = {
+    "erpnext__list_records": "list_records",
+    "erpnext__run_report": "run_report",
+    "erpnext__get_record": "get_record",
+}
+
+
+@dataclass
+class _TurnViews:
+    views: list[dict[str, Any]] = field(default_factory=list)
+    call: dict[str, Any] | None = None
+
+    def payload(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.views:
+            out["views"] = self.views
+        if self.call is not None:
+            out["call"] = self.call
+        return out
+
+
+# Set by the route around one turn; the turn's tasks share the holder.
+_turn_views: ContextVar[_TurnViews | None] = ContextVar("erpnext_panel_turn_views", default=None)
+
+
+def _small(value: Any) -> bool:
+    try:
+        return len(json.dumps(value, ensure_ascii=False)) <= MAX_VIEW_JSON
+    except (TypeError, ValueError):
+        return False
+
+
+def note_erpnext_call(normalized: str, arguments: Any, *, failed: bool) -> None:
+    """Called by the gateway after an ``erpnext__*`` call: on a panel turn,
+    keep what it showed. Nothing for a failed call, or outside the panel."""
+    from openexecutive.orchestrator.erpnext_caller import ASSERTION_ARG
+    from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL
+
+    turn = _turn_views.get()
+    if turn is None or failed or not isinstance(arguments, dict):
+        return
+    plain = {k: v for k, v in arguments.items() if k != ASSERTION_ARG}
+    if normalized == ERPNEXT_SHOW_TOOL:
+        view = plain.get("view")
+        if isinstance(view, dict) and len(turn.views) < MAX_VIEWS and _small(view):
+            turn.views.append(view)
+    elif normalized in _READ_CALLS and _small(plain):
+        turn.call = {"tool": _READ_CALLS[normalized], "arguments": plain}
 
 
 def context_block(session: Any) -> str:
@@ -469,6 +543,8 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
     if not _rate.allow(email, time.monotonic()):
         return _error(429, "rate_limited", "You have asked a lot this hour; try again later.")
     _in_flight.add(email)
+    shown = _TurnViews()
+    views_token = _turn_views.set(shown)
     try:
         reply = await _answer(person, email, conversation_id, message.strip(), data.get("page"))
     except TimeoutError:
@@ -479,5 +555,6 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
         logger.exception("erpnext panel: the turn failed for person %s", person.id)
         return _error(500, "failed", "Something went wrong answering that; please try again.")
     finally:
+        _turn_views.reset(views_token)
         _in_flight.discard(email)
-    return JSONResponse({"reply": reply})
+    return JSONResponse({"reply": reply, **shown.payload()})
