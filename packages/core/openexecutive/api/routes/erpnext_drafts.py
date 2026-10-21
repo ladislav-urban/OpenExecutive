@@ -17,6 +17,9 @@ Routes:
                         ``format`` json or csv, and ``erpnext=1`` for what
                         became of each draft in ERPNext since and the
                         share submitted unchanged (``unchanged_share``).
+                        The JSON also has ``gate``, the approval gate's
+                        own numbers against the range just before and
+                        its flags (``erpnext_oversight.gate``).
 
 A card is its person's alone: the caller is resolved the way the decisions
 routes resolve an approver (``chat._resolve_caller_person_id``), and anyone
@@ -221,7 +224,19 @@ async def get_erpnext_draft_oversight(
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="erpnext-draft-oversight-{stamp}.csv"'},
         )
-    out: dict[str, Any] = {"generated_at": datetime.now(UTC).isoformat(), "erpnext_state": erpnext}
+    now = datetime.now(UTC)
+    out: dict[str, Any] = {"generated_at": now.isoformat(), "erpnext_state": erpnext}
     if erpnext:
         out["unchanged_share"] = erpnext_oversight.unchanged_share(rows)
+    # The gate's trend compares the range of equal length just before; a
+    # range with no start has none. Only who decided and when is read there.
+    before, previous = None, None
+    if start is not None:
+        earlier = start - ((end or now) - start)
+        before = erpnext_oversight.records(since=earlier, until=start)
+        previous = {"since": earlier.isoformat(), "until": start.isoformat()}
+    out["gate"] = {
+        "range": {"since": asked["since"], "until": (end or now).isoformat()}, "before_range": previous,
+        **erpnext_oversight.gate(rows, before, erpnext=erpnext),
+    }
     return {**out, "records": rows}
