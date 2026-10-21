@@ -205,3 +205,35 @@ def test_the_route_is_the_principals_alone(
     assert "attachment" in as_csv.headers["content-disposition"]
     assert client.get("/erpnext/drafts/oversight", headers={"x-caller-email": "ben@co.example"}).status_code == 403
     assert client.get("/erpnext/drafts/oversight?since=not-a-date", headers=owner).status_code == 422
+
+
+def test_each_export_leaves_a_private_audit_row(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The record is accountability evidence, so taking it is evidenced too:
+    # what was asked and how many came back, never the records.
+    import openexecutive.audit as audit
+
+    rows: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(audit, "log_event", lambda event, _summary, **kw: rows.append((event, kw)))
+    _made(erp, roster)
+    owner = {"x-caller-email": OWNER}
+    assert client.get("/erpnext/drafts/oversight?format=csv&since=2026-10-01", headers=owner).status_code == 200
+    ((event, kw),) = [row for row in rows if row[0] == "erpnext_oversight_exported"]
+    assert kw["private"] is True and kw["actor"] == OWNER
+    assert kw["details"] == {
+        "since": "2026-10-01T00:00:00+00:00", "until": None, "format": "csv", "erpnext": False,
+        "erpnext_answered": None, "records": 1,
+    }
+    rows.clear()
+    assert client.get("/erpnext/drafts/oversight", headers={"x-caller-email": "ben@co.example"}).status_code == 403
+    assert not [row for row in rows if row[0] == "erpnext_oversight_exported"]
+
+    async def no_answer(_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        raise RuntimeError("ERPNext is down")
+
+    monkeypatch.setattr(oversight, "with_erpnext_state", no_answer)
+    assert client.get("/erpnext/drafts/oversight?erpnext=1", headers=owner).status_code == 502
+    ((_, kw),) = [row for row in rows if row[0] == "erpnext_oversight_exported"]
+    assert kw["details"]["erpnext"] is True and kw["details"]["erpnext_answered"] is False

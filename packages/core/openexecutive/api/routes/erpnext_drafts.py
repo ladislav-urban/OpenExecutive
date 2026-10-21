@@ -163,6 +163,20 @@ def _moment(value: str | None, name: str) -> datetime | None:
     return at if at.tzinfo is not None else at.replace(tzinfo=UTC)
 
 
+def _audit_export(request: Request, details: dict[str, Any]) -> None:
+    """One row per export: the record is accountability evidence, so taking
+    it is evidenced too. Private, since the record names everyone who asked;
+    what was asked and how many came back, never the records themselves."""
+    from openexecutive.api import caller as api_caller
+    from openexecutive.audit import log_event as audit_log
+
+    audit_log(
+        "erpnext_oversight_exported",
+        f"Exported the ERPNext draft oversight record ({details['records']} records)",
+        actor=api_caller.actor(request), details=details, private=True,
+    )
+
+
 @router.get("/erpnext/drafts/oversight")
 async def get_erpnext_draft_oversight(
     request: Request,
@@ -183,18 +197,22 @@ async def get_erpnext_draft_oversight(
     from openexecutive.people.store import find_principal_person
 
     principal = find_principal_person()
-    rows = erpnext_oversight.records(
-        since=_moment(since, "since"), until=_moment(until, "until"),
-        reader=principal.id if principal else None,
-    )
+    start, end = _moment(since, "since"), _moment(until, "until")
+    rows = erpnext_oversight.records(since=start, until=end, reader=principal.id if principal else None)
+    asked: dict[str, Any] = {
+        "since": start.isoformat() if start else None, "until": end.isoformat() if end else None,
+        "format": format, "erpnext": erpnext,
+    }
     if erpnext:
         try:
             rows = await erpnext_oversight.with_erpnext_state(rows)
         except Exception:
             logger.exception("erpnext_oversight: asking ERPNext what became of the drafts failed")
+            _audit_export(request, {**asked, "erpnext_answered": False, "records": len(rows)})
             raise HTTPException(
                 status_code=502, detail="ERPNext didn't answer, so the drafts' state there isn't included."
             ) from None
+    _audit_export(request, {**asked, "erpnext_answered": True if erpnext else None, "records": len(rows)})
     if format == "csv":
         stamp = datetime.now(UTC).strftime("%Y%m%d")
         return Response(

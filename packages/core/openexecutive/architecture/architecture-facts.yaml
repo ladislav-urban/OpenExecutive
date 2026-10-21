@@ -9592,7 +9592,10 @@ integrations:
     passes ERPNEXT_AUDIT_TOOL exactly inside erpnext_caller.oversight_run
     (signed kind service) and nothing else there (refusal
     audit-outside-export), and _drop_blocked_tools hides it from
-    search_tools, so no model turn can see or call it. A refusal
+    search_tools, so no model turn can see or call it. Each export, a 502
+    included, writes a private erpnext_oversight_exported audit row (range,
+    format, erpnext and whether it answered, record count; never the
+    records). A refusal
     containing CHANGED_SINCE_PROPOSED (oe_connector built the draft again
     and it no longer matches the card's fingerprint: a source document, a
     price or a rate changed) closes the card (finish_execution failed, with
