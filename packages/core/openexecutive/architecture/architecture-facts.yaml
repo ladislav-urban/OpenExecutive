@@ -9582,12 +9582,23 @@ integrations:
     return gets a leading quote so a spreadsheet won't run it).
     erpnext=1 adds with_erpnext_state: oe_connector's audit_drafts (500 card
     keys a call) answers each made draft's state now (draft / submitted /
-    cancelled / deleted / missing, modified, modified_by) and its log row's
+    cancelled / deleted / missing, modified, modified_by), unchanged (the
+    digest of the fields a person can edit, drafted_digest in the "OE Draft"
+    row, matches the document now; null for a row from before the digest or
+    a deleted document; a CSV column) and its log row's
     seal, plus seal_intact (the row hashed again equals its stored
     row_hash), so seal_in_log is true only when the row is intact, carries
     the card's row_hash and still names the card's doctype and name: a
     stored hash alone still matches after the row's fields are changed in
-    the database. audit_drafts is service-only in oe_connector
+    the database. erpnext=1 also returns unchanged_share
+    {submitted, unchanged, changed, unknown, share} over the range's records,
+    the pilot's value measure (oe_connector plan item 4): share = unchanged
+    / (unchanged + changed) of the drafts now submitted, null when none has
+    a known answer. It compares the document as it is when asked, so an edit
+    undone before the export counts as unchanged and a change made after the
+    submit to a field still editable then counts as changed; it says nothing
+    of what changed. Other people's cards count too; the summary is counts
+    alone. audit_drafts is service-only in oe_connector
     (caller.SERVICE_ONLY_TOOLS: no phase 1, kind service), and the gateway
     passes ERPNEXT_AUDIT_TOOL exactly inside erpnext_caller.oversight_run
     (signed kind service) and nothing else there (refusal

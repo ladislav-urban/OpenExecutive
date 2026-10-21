@@ -143,6 +143,50 @@ def test_a_seal_the_log_no_longer_holds_is_flagged(
         assert record["seal_in_log"] is False, changed
 
 
+def _told(state: str, unchanged: bool | None) -> dict[str, Any]:
+    return {"erpnext": {"state": state, "unchanged": unchanged}}
+
+
+def test_the_share_submitted_unchanged_counts_only_known_answers() -> None:
+    # A row from before the digest, or a deleted document, has no answer and
+    # stays out of the share; drafts not submitted aren't counted at all.
+    rows = [
+        _told("submitted", True), _told("submitted", True), _told("submitted", True),
+        _told("submitted", False), _told("submitted", None),
+        _told("draft", True), _told("cancelled", False), {"erpnext": None}, {},
+    ]
+    assert oversight.unchanged_share(rows) == {
+        "submitted": 5, "unchanged": 3, "changed": 1, "unknown": 1, "share": 0.75,
+    }
+
+
+def test_a_range_with_no_submitted_drafts_has_no_share() -> None:
+    nothing = {"submitted": 0, "unchanged": 0, "changed": 0, "unknown": 0, "share": None}
+    assert oversight.unchanged_share([]) == nothing
+    assert oversight.unchanged_share([_told("draft", True), {"erpnext": None}]) == nothing
+    assert oversight.unchanged_share([_told("submitted", None)]) == {**nothing, "submitted": 1, "unknown": 1}
+
+
+def test_unchanged_comes_from_erpnext_into_the_record_the_csv_and_the_summary(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], client: TestClient,
+) -> None:
+    card = _made(erp, roster)
+    told = {"in_log": True, "doctype": "Material Request", "name": "MAT-MR-2026-00012", "state": "submitted",
+            "chain_index": 7, "row_hash": SEAL, "seal_intact": True}
+    column = oversight.CSV_COLUMNS.index("unchanged")
+    for unchanged, cell in ((True, "yes"), (False, "NO"), (None, "")):
+        erp.replies.append(json.dumps({"ok": True, "drafts": {card.idempotency_key: {**told, "unchanged": unchanged}}}))
+        rows = asyncio.run(oversight.with_erpnext_state(oversight.records()))
+        assert rows[0]["erpnext"]["unchanged"] is unchanged
+        assert list(csv.reader(io.StringIO(oversight.to_csv(rows))))[1][column] == cell
+    # The route's summary, only when ERPNext was asked.
+    owner = {"x-caller-email": OWNER}
+    assert "unchanged_share" not in client.get("/erpnext/drafts/oversight", headers=owner).json()
+    erp.replies.append(json.dumps({"ok": True, "drafts": {card.idempotency_key: {**told, "unchanged": True}}}))
+    got = client.get("/erpnext/drafts/oversight?erpnext=1", headers=owner).json()
+    assert got["unchanged_share"] == {"submitted": 1, "unchanged": 1, "changed": 0, "unknown": 0, "share": 1.0}
+
+
 def test_the_audit_tool_is_refused_outside_the_export_and_runs_nothing_else_inside(erp: FakeErpnext) -> None:
     gateway = mcp_gateway.get_active_gateway()
     assert gateway is not None

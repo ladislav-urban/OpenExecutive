@@ -20,7 +20,19 @@ still a draft, submitted, cancelled or deleted, and when and by whom it was
 last changed. It asks oe_connector's ``audit_drafts`` inside
 ``erpnext_caller.oversight_run``, signed as the service caller, the only way
 the gateway lets that tool through. It also says whether the log still
-holds the seal the card recorded.
+holds the seal the card recorded, and whether the document is still as
+OpenExecutive made it (``unchanged``).
+
+``unchanged_share`` is the pilot's value measure (oe_connector's plan item
+4): of the drafts in the range now submitted in ERPNext, the share submitted
+as OpenExecutive made them. ``unchanged`` compares a digest of the fields a
+person can edit, stored when the draft was made, with the document as it is
+when asked. So an edit undone before the export counts as unchanged, and a
+change made after the submit, to a field that can still be edited then,
+counts as changed. It is null for a draft made before the digest existed or
+a deleted document, and those are left out of the share. It says nothing of
+what changed. Records of other people's cards count too; the summary is
+counts alone, never what a card said.
 
 A card is its person's alone (``approver_only``), the principal's
 included. So a record of someone else's card (a teammate's, or one asked for
@@ -83,6 +95,7 @@ CSV_COLUMNS = (
     "erpnext_modified",
     "erpnext_modified_by",
     "seal_in_log",
+    "unchanged",
     "last_error",
     "private",
 )
@@ -224,7 +237,10 @@ async def with_erpnext_state(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
         if isinstance(got, dict):
             enriched["erpnext"] = {
                 k: got.get(k)
-                for k in ("in_log", "state", "modified", "modified_by", "chain_index", "row_hash", "seal_intact")
+                for k in (
+                    "in_log", "state", "modified", "modified_by", "chain_index", "row_hash", "seal_intact",
+                    "unchanged",
+                )
             }
             if row.get("seal"):
                 document = row["erpnext_document"]
@@ -236,6 +252,28 @@ async def with_erpnext_state(rows: list[dict[str, Any]]) -> list[dict[str, Any]]
                 )
         out.append(enriched)
     return out
+
+
+def unchanged_share(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Of ``rows`` (from ``with_erpnext_state``) now submitted in ERPNext, how
+    many are unchanged, changed or unknown (``unchanged`` null), and the share
+    unchanged of those with a known answer (null when there are none)."""
+    told = [
+        (r.get("erpnext") or {}).get("unchanged") for r in rows
+        if (r.get("erpnext") or {}).get("state") == "submitted"
+    ]
+    same, changed = told.count(True), told.count(False)
+    return {
+        "submitted": len(told),
+        "unchanged": same,
+        "changed": changed,
+        "unknown": len(told) - same - changed,
+        "share": round(same / (same + changed), 4) if same + changed else None,
+    }
+
+
+def _yes(value: Any) -> str:
+    return "" if value is None else ("yes" if value else "NO")
 
 
 def _cell(value: Any) -> Any:
@@ -260,7 +298,7 @@ def to_csv(rows: list[dict[str, Any]]) -> str:
             r.get("outcome"), r.get("resolved_at"), r.get("resolved_by"),
             doc.get("name"), doc.get("url"), seal.get("row_hash"), seal.get("chain_index"),
             erp.get("state"), erp.get("modified"), erp.get("modified_by"),
-            "" if r.get("seal_in_log") is None else ("yes" if r["seal_in_log"] else "NO"),
+            _yes(r.get("seal_in_log")), _yes(erp.get("unchanged")),
             r.get("last_error"), "yes" if r.get("private") else "",
         ]])
     return buffer.getvalue()
