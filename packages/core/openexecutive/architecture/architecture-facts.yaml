@@ -9731,8 +9731,11 @@ integrations:
     every desk route itself. Off the panel, the gateway refuses
     erpnext__show_in_erpnext (audited as show-outside-panel) and
     _drop_blocked_tools hides it from search_tools; on the panel it is
-    discovered on first call like the pinned ERPNext tools. Evals
-    erpnext_014 to erpnext_016.
+    discovered on first call like the pinned ERPNext tools. It writes and
+    sends nothing, so like ERPNext's pinned reads it stays open after the
+    turn read outside content (outside_content.outside_allows_mcp_call) and
+    is not an acting tool for Take the lead (take_the_lead.mcp_tool_acts).
+    Evals erpnext_014 to erpnext_016.
   own_gmail: |
     Act as me (delegation) connects a second, separate Gmail — the
     principal's own — read and drafted into by delegation.gmail.DelegateGmail
