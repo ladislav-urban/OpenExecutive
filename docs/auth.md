@@ -341,6 +341,110 @@ exactly as `curl` sends it, query included.
 The API remembers used assertions in memory, so it must run as one process. It does
 already, because the scheduler runs inside it.
 
+### Host origins (showing Open Executive inside another app)
+
+Another web app can show Open Executive's pages in a frame and call a short list of its
+routes from its own pages, as the signed-in person: a *host origin*. List each one,
+exactly, on the **UI**:
+
+```bash
+OE_HOST_ORIGINS=https://erp.example.com            # comma- or space-separated
+```
+
+Unset (the default), nothing changes apart from the policies under **Every page** below.
+A malformed entry refuses the whole setting (logged at startup), so a typo never widens
+what is trusted.
+
+**Same site, two origins.** Serve the UI on a sibling host of the host app, under one
+registrable domain (`exec.example.com` beside `erp.example.com`; locally two names under
+one domain such as `exec.dynocortex.localhost` and `erp.dynocortex.localhost`, never
+`exec.localhost` beside `erp.localhost`, which browsers treat as two sites). The browser
+then sends the UI's `SameSite=Lax` session cookie with the host's calls and inside its
+frame, while keeping the two origins' pages, storage and responses apart: the host's
+scripts can't read or drive Open Executive's pages. An entry must be `https://` (plain
+`http://` only for a name under `localhost`). `docs/deployment.md` has the hosting rules.
+
+**Every page**, host origins set or not, sends a `Content-Security-Policy`
+(`src/lib/csp.ts`, set by `src/middleware.ts`):
+
+- `script-src 'self' 'nonce-…' 'strict-dynamic'`: a fresh nonce per response, which
+  Next.js puts on its own scripts; no `'unsafe-inline'`, and no `'unsafe-eval'` outside
+  the dev server. An injected script doesn't run. Every page renders on request for this
+  (the root layout waits for it).
+- `object-src 'none'; base-uri 'self'`.
+- `frame-ancestors 'self'` plus the host origins: no other site can frame the Approve and
+  Send buttons.
+
+**What a host origin may call: the host list** (`packages/ui/src/lib/host-list.json`).
+Each entry is a method and an API path. It holds: reading the briefing, cards,
+conversations and the watch list; acknowledging, snoozing, reopening and reviewing
+alerts; chatting (send, stop, add a message, attach, dictate); and the watch list
+(describe, add, approve or decline a proposal, edit, delete). Never approving, rejecting
+or cancelling a card, preparing a draft, Act as me, delegation, settings or People.
+`tests/unit/test_host_list.py` checks every entry against the API's routes and against
+that rule. The proxy enforces it:
+
+- A request whose `Origin` is exactly a listed host origin, with the browser's
+  `Sec-Fetch-Site: same-site`, may call only the host list, and gets CORS for that exact
+  origin with credentials. Anything else naming a host origin gets `403` (with CORS, so
+  the host's page can read why), as does a call off the list.
+- The middleware answers a host origin's preflight (`OPTIONS`, which carries no cookie)
+  before the session check, for listed calls only. A listed call with no session gets
+  `401` with CORS, not the sign-in redirect, so the host can offer sign-in.
+- Once judged, the proxy drops the call's `Origin`, `Referer` and `Sec-Fetch-*` before
+  the API: the API's own local-login rule (`_OWN_PAGE_FETCH_SITES`) would refuse a
+  same-site write, and the call's surface (below) tells the API what it needs.
+- Every other request is judged as before: `lib/crossSite.ts` still refuses every
+  cross-site and same-site write that isn't a host call.
+
+**The `host` surface.** The proxy marks a host origin's call as surface `host`: in the
+signed caller assertion (an optional `surface` claim) and as `x-caller-surface`. A
+client's own copy is stripped with the rest of `x-caller-*`. With signed callers on, the
+API reads it from the verified assertion only, and the header must agree with it (`401`
+otherwise); without them it reads the header, as it does `x-caller-email`. A chat turn on
+that surface (`Session.from_host`) only reads and advises: it is offered the specialists,
+the read tools and the gateway's reads, never anything that sends, posts, books,
+schedules, runs or changes stored state (`MCP_CLIENT_WITHHELD_TOOLS`), the principal-only
+tools, Act as me, `recall_history`, scripts or extension tools. A call the model makes
+anyway is refused, telling the person to do it in Open Executive itself. Its words are
+never noted as the person's own, and it can stop or add to its own turns only.
+`tests/unit/test_host_surface_turns.py` lists what it is offered.
+
+**Embedded mode.** A page opened as `…?embed=1` in a frame whose parent is a listed host
+origin sends that parent `ready`; once the parent answers with a valid `init`, the page
+leaves out its own sidebar, top bar, bottom bar and Ask OE panel and takes the host's
+colours, font and name. Until then it renders as it would anywhere. The messages
+(`oe-embed/v1`: `ready`, `init`, `theme`, `route`, `open`, `badge`, and the popup's
+`signed-in`) are in `src/lib/embed.ts`, with a fixed set of examples in
+`src/lib/embed-examples.json` that a host's own tests check too. They carry no secret,
+token or identity anyone acts on; every message is checked for the exact origin and the
+parent window, and every `init` field is validated. In a frame:
+
+- **Sign-in opens in a popup.** `/signin` shows one button that opens the normal sign-in
+  in a small window ending at `/signin/done`, which tells its opener (this app's origin or
+  a host origin, addressed exactly) and closes.
+- **The host's user hint** (an email, display only) shows a warning with Sign out when it
+  isn't who is signed in here.
+- **Card actions ask twice, in any frame** (embedded or not): approving, rejecting or
+  cancelling a card, a proposal, a workflow sign-off or a roster request shows a
+  confirmation inside the frame naming what will happen, whose Yes works only a moment
+  after it appears. Each approval card has its own page, `/cards/<id>`.
+
+`make embed-outputs` writes what a host app checks itself against without running this
+app or holding its secrets: `embed-manifest.json` (the navigation and routes),
+`host-list.json` and `openapi.json`.
+
+**What remains.** A host origin runs code Open Executive doesn't control: the host app,
+everything installed in it, and whatever its administrators add. That code can do what
+the host list allows, as whoever has the host open and is signed in here: read the
+briefing, alerts, cards, conversations (whose replies can draw on the person's memory and
+mail) and the watch list; start a chat turn and read its reply; handle alerts and the
+watch list. It can't approve, send, change settings or People, act through a chat turn,
+or read or click inside the frame. It could cover the frame with something misleading,
+which is why card actions ask twice there. Every host origin you list is trusted that
+far: list only apps whose administrators you would trust with it, and read every change
+to the host list, the `host` surface's tools and these policies with a security review.
+
 ---
 
 ## Operations
@@ -443,6 +547,8 @@ curl -sv -H "x-api-key: $SHARED" https://api.example.com/sessions           # 20
 - Cookie theft from one session leaking *another* user's data (each session is independent JWT; no shared state)
 - Missing-secret deploys silently exposing the API (the `OE_PUBLIC_DEPLOYMENT` fail-closed guard)
 - Other pages on the same site — to a browser, every `localhost` port is one site — posting to the UI proxy with your cookie (it refuses writes whose `Sec-Fetch-Site` isn't `same-origin`)
+- Other sites framing the UI's buttons (clickjacking) and injected scripts running in its pages (the pages' `Content-Security-Policy`: `frame-ancestors` and a nonce per response)
+- A host origin's scripts (`OE_HOST_ORIGINS`) approving cards, sending mail, changing settings or People, or acting through a chat turn (the host list, and the `host` surface's read-only chat)
 
 **Does not mitigate:**
 - A compromised `BACKEND_SHARED_SECRET` — anyone who learns it can hit the API as if they were the UI. Rotate if leaked. With signed callers on, they can use it only as a service, never as a signed-in user or the owner.
@@ -450,6 +556,7 @@ curl -sv -H "x-api-key: $SHARED" https://api.example.com/sessions           # 20
 - A compromised Google account on the allow-list — that user has full access to all shared data. The product is currently a **shared workspace**; there is no per-user data isolation.
 - A compromised deploy credential — attacker can change secrets, redeploy, or read logs. Rotate deploy credentials if a CI workflow is compromised.
 - Browser-side XSS — Auth.js sessions are httpOnly cookies, so JS can't read them, but a successful XSS could make authenticated requests from the victim's browser. Standard same-origin protections apply.
+- A listed host origin's scripts reading what the host list allows (the briefing, conversations and their replies, the watch list) and starting chat turns as whoever has the host open: see "Host origins", **What remains**.
 - Other users or programs on the same computer while local login is on — anything that can reach `127.0.0.1:3000` can click **Open**. Use it only on a computer that is yours alone.
 
 If/when per-user data isolation matters (e.g. private sessions per teammate), the change is non-trivial — see the original plan note in [PR #86](https://github.com/SenteLabsAI/OpenExecutive/pull/86) about adding `user_id` to the sessions table.

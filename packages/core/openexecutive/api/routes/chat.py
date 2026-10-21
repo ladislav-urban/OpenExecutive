@@ -198,9 +198,11 @@ def _stop_owner_key(request: Request, caller_person_id: int | None) -> str:
     direct curl against a local API, where there is no identity to separate
     (``api.caller.identity_key``).
     """
-    if caller_person_id is not None:
-        return f"person:{caller_person_id}"
-    return api_caller.identity_key(request)
+    key = f"person:{caller_person_id}" if caller_person_id is not None else api_caller.identity_key(request)
+    # A host origin's page (api.caller.from_host) stops and adds to its own
+    # turns only, and the person's own pages to theirs: a script on the host
+    # can't put words into a turn that may act.
+    return f"{key}|host" if api_caller.from_host(request) else key
 
 
 def _sweep_stale_stops() -> None:
@@ -1132,6 +1134,9 @@ async def _run_chat_turn(
     # proxy stamps x-caller-email from it). A header-less request resolves to
     # the principal but is no sign-in, so it never gets Act as me.
     session.web_caller_signed_in = api_caller.signed_in(request)
+    # Per turn too: a host origin's page sent it (Session.from_host), so it
+    # only reads and advises, whichever page started the conversation.
+    session.from_host = api_caller.from_host(request)
     is_first_turn = len(session.conversation_history) == 0
 
     # A chat its owner shared (``chat_people``): everyone in it reads every

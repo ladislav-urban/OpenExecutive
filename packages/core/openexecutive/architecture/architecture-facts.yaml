@@ -7711,6 +7711,75 @@ auth:
       - Parity: packages/core/tests/unit/caller_assertion_vectors.json
         (the public RFC 8032 test key) is signed byte-identically by the
         script and by the UI (scripts/callerAssertion.test.mjs).
+  host_origins: |
+    Optional. OE_HOST_ORIGINS on the UI lists other apps' exact origins
+    (https, or http under localhost; a bad entry refuses all, lib/
+    hostOrigins.ts) that may frame the pages and call the host list
+    (packages/ui/src/lib/host-list.json) from their own pages with the
+    session cookie. They must be sibling hosts under the UI's registrable
+    domain (SameSite=Lax). Why: a host app runs code Open Executive
+    doesn't control (its administrators' scripts, installed apps), so
+    what its origin can do is fixed here, not by the host.
+
+    The host list: GETs of /today*, /decisions, /decisions/{id},
+    /alerts/approvals/{id}, /sessions*, /watchlist*, /chat/voice,
+    /chat/suggested-prompts; alerts ack/snooze/reopen/bulk-ack/review;
+    POST /chat, /chat/stop, /chat/add, /chat/upload, /chat/transcribe;
+    the watch list's describe/add/edit/delete/approve/decline. Never a
+    card's approve/reject/cancel, prepare, Act as me, delegation,
+    settings, People (tests/unit/test_host_list.py checks each entry is
+    a real route and that rule).
+
+    Enforcement (src/middleware.ts, app/api/backend/[...path]/route.ts):
+      - Origin exactly a listed host + Sec-Fetch-Site same-site: only
+        host-list calls, CORS for that origin with credentials; anything
+        else naming a host origin 403 (with CORS). {name} is one plain
+        segment (no . .. / \ ? # % or space).
+      - Preflight answered before the session check; a listed call with
+        no session is 401 with CORS, not the sign-in redirect.
+      - The proxy drops Origin, Referer and Sec-Fetch-* of a host call
+        (api/main.py _OWN_PAGE_FETCH_SITES would refuse its write), and
+        sets the host surface: x-caller-surface: host and the optional
+        signed claim "surface": "host" (after sub in key order; absent
+        otherwise, so older assertions are byte-identical). With signed
+        callers the API reads only the claim and 401s a header that
+        disagrees (surface_mismatch) or comes without an assertion; in
+        open mode any header value means host (narrows, never widens).
+        api.caller.from_host answers it.
+      - Everything else: lib/crossSite.ts as before.
+
+    The host surface: chat sets Session.from_host per turn; it is a
+    read_only_turn (MCP_CLIENT_WITHHELD_TOOLS, gateway reads only, no Act
+    as me / recall_history / scripts / extensions), principal-only tools
+    withheld, refusals say HOST_REFUSAL, never noted as the person's own
+    words (history_chat.verified_speaker), and _stop_owner_key adds
+    "|host" so it stops/adds to its own turns only.
+
+    Pages (all, host origins set or not): Content-Security-Policy
+    script-src 'self' 'nonce-…' 'strict-dynamic' (+ 'unsafe-eval' on the
+    dev server only), object-src 'none', base-uri 'self', frame-ancestors
+    'self' + host origins. The root layout awaits connection() so every
+    page renders per request and gets its nonce.
+
+    Embedded mode (lib/embed.ts, components/embed/): ?embed=1, a parent
+    window, a listed origin and a valid oe-embed/v1 init (contract 1;
+    colours, font pattern, bounded product name, email hint, native
+    paths under the app's routes). AppShell then drops AppSidebar,
+    TopBar, MobileBottomNav and AskOEPanel, keeping HubTabs,
+    PausedBanner and the page. Messages ready/init/theme/route/open/
+    badge/signed-in, examples in lib/embed-examples.json shared with the
+    host's tests. /signin offers a popup ending at /signin/done, which
+    posts signed-in to its opener (own origin and each host origin) and
+    closes. In ANY frame card actions (decisions approve/reject/cancel,
+    alerts approve, workflow decisions, roster requests) wait for a
+    confirmation in the frame whose Yes arms after 800 ms (fetch is
+    checked against lib/cardActions.ts); each card has /cards/<id>.
+
+    What remains (docs/auth.md): a host's scripts can read what the
+    host list allows (briefing, conversations and replies, watch list)
+    and start read-only chat turns as whoever has it open and is signed
+    in here; they can't approve, send, change settings or People, or
+    read/click into the frame.
 
 integrations:
   chat_directory: |
