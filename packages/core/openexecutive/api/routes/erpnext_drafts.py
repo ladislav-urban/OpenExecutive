@@ -15,7 +15,11 @@ Routes:
                         (``integrations.erpnext_oversight``), for the principal
                         alone: ``since`` / ``until`` (ISO dates or times),
                         ``format`` json or csv, and ``erpnext=1`` for what
-                        became of each draft in ERPNext since.
+                        became of each draft in ERPNext since and the
+                        share submitted unchanged (``unchanged_share``).
+                        The JSON also has ``gate``, the approval gate's
+                        own numbers against the range just before and
+                        its flags (``erpnext_oversight.gate``).
 
 A card is its person's alone: the caller is resolved the way the decisions
 routes resolve an approver (``chat._resolve_caller_person_id``), and anyone
@@ -198,6 +202,17 @@ async def get_erpnext_draft_oversight(
 
     principal = find_principal_person()
     start, end = _moment(since, "since"), _moment(until, "until")
+    now = datetime.now(UTC)
+    # The gate's trend compares the range of equal length just before; a
+    # range with no start has none. Checked before anything is audited.
+    earlier = None
+    if start is not None:
+        if start > (end or now):
+            raise HTTPException(status_code=422, detail="since must be before until (or now)")
+        try:
+            earlier = start - ((end or now) - start)
+        except OverflowError:
+            raise HTTPException(status_code=422, detail="since and until span too many years") from None
     rows = erpnext_oversight.records(since=start, until=end, reader=principal.id if principal else None)
     asked: dict[str, Any] = {
         "since": start.isoformat() if start else None, "until": end.isoformat() if end else None,
@@ -220,4 +235,16 @@ async def get_erpnext_draft_oversight(
             media_type="text/csv; charset=utf-8",
             headers={"Content-Disposition": f'attachment; filename="erpnext-draft-oversight-{stamp}.csv"'},
         )
-    return {"generated_at": datetime.now(UTC).isoformat(), "erpnext_state": erpnext, "records": rows}
+    out: dict[str, Any] = {"generated_at": now.isoformat(), "erpnext_state": erpnext}
+    if erpnext:
+        out["unchanged_share"] = erpnext_oversight.unchanged_share(rows)
+    # Only who decided and when is read from the range before.
+    before, previous = None, None
+    if start is not None and earlier is not None:
+        before = erpnext_oversight.records(since=earlier, until=start)
+        previous = {"since": earlier.isoformat(), "until": start.isoformat()}
+    out["gate"] = {
+        "range": {"since": asked["since"], "until": (end or now).isoformat()}, "before_range": previous,
+        **erpnext_oversight.gate(rows, before, erpnext=erpnext),
+    }
+    return {**out, "records": rows}

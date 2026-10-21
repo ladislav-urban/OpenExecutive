@@ -866,6 +866,47 @@ user sees several. Every `erpnext__*` call is in the audit log as a
 write some of ERPNext's text. The design, including later phases (the
 morning brief's ERP block), is in the app's `docs/erpnext-integration.md`.
 
+### Stopping ERPNext access
+
+OpenExecutive's half of the stop runbook. ERPNext's half, its own switches
+and the quarterly rehearsal are in oe_connector's
+[`docs/stop-runbook.md`](https://github.com/ladislav-urban/oe_connector/blob/main/docs/stop-runbook.md).
+Each setting below is read at start, so restart the API after changing it.
+
+- **No new drafts:** `ERPNEXT_DRAFTS_ENABLED=false`. No card is offered, and
+  a card already waiting refuses to approve (`drafts_off`). Drafts already
+  made stay unsubmitted in ERPNext until someone submits or deletes them.
+  Reads, the panel and alerts go on.
+- **No calls into ERPNext at all:** remove the `erpnext` line from
+  `/data/company/tokens`, or the `erpnext` entry from `mcp_servers.json`.
+  The gateway can no longer reach ERPNext. What was already done there
+  stays.
+- **No unattended ERP calls:** leave `ERPNEXT_BRIEF_COMPANY` unset. The
+  brief drops its ERP block and scheduled metrics send nothing, so neither
+  calls ERPNext. Conversations still can.
+- **Rotating a key,** without a stop: add the new key on the other side
+  first, then switch, then drop the old one.
+  - `ERPNEXT_CALLER_PRIVATE_KEY` (who is asking): add the new public half
+    to the site's `oe_connector_caller_public_keys` beside the old one, set
+    the new private key here, then remove the old public key there.
+  - `ERPNEXT_PANEL_PUBLIC_KEYS` (the panel and alert events): add the new
+    public half here beside the old one (it takes several), set the new
+    private key in ERPNext, then remove the old public key here.
+
+  Removing the old key first, on either side, is a stop: every call that
+  key signs is refused.
+- **The widest stop needs no access to OpenExecutive:** an ERPNext operator
+  disables the service user `oe-connector-setup-reader` made (first name
+  "OpenExecutive", role "OE Reader"). Every call from OpenExecutive then
+  fails, whoever it acts for, from the next request. Use it first when it
+  isn't clear what is wrong.
+
+For the evidence, take `GET /erpnext/drafts/oversight?erpnext=1` before
+cutting ERPNext off, if you can: it lists every card, who decided it and
+what became of each draft in ERPNext. Once the gateway can't reach ERPNext,
+`erpnext=1` answers 502, and the plain export still lists the cards and who
+decided them. The audit log has every `erpnext__*` call either way.
+
 ---
 
 ## Operations

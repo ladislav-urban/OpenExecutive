@@ -143,6 +143,50 @@ def test_a_seal_the_log_no_longer_holds_is_flagged(
         assert record["seal_in_log"] is False, changed
 
 
+def _told(state: str, unchanged: bool | None) -> dict[str, Any]:
+    return {"erpnext": {"state": state, "unchanged": unchanged}}
+
+
+def test_the_share_submitted_unchanged_counts_only_known_answers() -> None:
+    # A row from before the digest, or a deleted document, has no answer and
+    # stays out of the share; drafts not submitted aren't counted at all.
+    rows = [
+        _told("submitted", True), _told("submitted", True), _told("submitted", True),
+        _told("submitted", False), _told("submitted", None),
+        _told("draft", True), _told("cancelled", False), {"erpnext": None}, {},
+    ]
+    assert oversight.unchanged_share(rows) == {
+        "submitted": 5, "unchanged": 3, "changed": 1, "unknown": 1, "share": 0.75,
+    }
+
+
+def test_a_range_with_no_submitted_drafts_has_no_share() -> None:
+    nothing = {"submitted": 0, "unchanged": 0, "changed": 0, "unknown": 0, "share": None}
+    assert oversight.unchanged_share([]) == nothing
+    assert oversight.unchanged_share([_told("draft", True), {"erpnext": None}]) == nothing
+    assert oversight.unchanged_share([_told("submitted", None)]) == {**nothing, "submitted": 1, "unknown": 1}
+
+
+def test_unchanged_comes_from_erpnext_into_the_record_the_csv_and_the_summary(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], client: TestClient,
+) -> None:
+    card = _made(erp, roster)
+    told = {"in_log": True, "doctype": "Material Request", "name": "MAT-MR-2026-00012", "state": "submitted",
+            "chain_index": 7, "row_hash": SEAL, "seal_intact": True}
+    column = oversight.CSV_COLUMNS.index("unchanged")
+    for unchanged, kept, cell in ((True, True, "yes"), (False, False, "NO"), (None, None, ""), ("true", None, "")):
+        erp.replies.append(json.dumps({"ok": True, "drafts": {card.idempotency_key: {**told, "unchanged": unchanged}}}))
+        rows = asyncio.run(oversight.with_erpnext_state(oversight.records()))
+        assert rows[0]["erpnext"]["unchanged"] is kept
+        assert list(csv.reader(io.StringIO(oversight.to_csv(rows))))[1][column] == cell
+    # The route's summary, only when ERPNext was asked.
+    owner = {"x-caller-email": OWNER}
+    assert "unchanged_share" not in client.get("/erpnext/drafts/oversight", headers=owner).json()
+    erp.replies.append(json.dumps({"ok": True, "drafts": {card.idempotency_key: {**told, "unchanged": True}}}))
+    got = client.get("/erpnext/drafts/oversight?erpnext=1", headers=owner).json()
+    assert got["unchanged_share"] == {"submitted": 1, "unchanged": 1, "changed": 0, "unknown": 0, "share": 1.0}
+
+
 def test_the_audit_tool_is_refused_outside_the_export_and_runs_nothing_else_inside(erp: FakeErpnext) -> None:
     gateway = mcp_gateway.get_active_gateway()
     assert gateway is not None
@@ -240,3 +284,153 @@ def test_each_export_leaves_a_private_audit_row(
     assert client.get("/erpnext/drafts/oversight?erpnext=1", headers=owner).status_code == 502
     ((_, kw),) = [row for row in rows if row[0] == "erpnext_oversight_exported"]
     assert kw["details"]["erpnext"] is True and kw["details"]["erpnext_answered"] is False
+
+
+# The approval gate's own numbers (``oversight.gate``).
+
+_T0 = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+ANN = "Ann <ann@co.example>"
+
+
+def _decided(
+    who: str | None, status: str, seconds: float | None = None, *, outcome: str = "",
+    erp: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """A record as ``records`` makes it, with just what the gate reads."""
+    return {
+        "proposed_at": _T0.isoformat(), "status": status, "outcome": outcome, "resolved_by": who,
+        "resolved_at": (_T0 + timedelta(seconds=seconds)).isoformat() if seconds is not None else None,
+        "erpnext": erp,
+    }
+
+
+def _person(approved: int, dismissed: int, seconds: float, who: str = ANN) -> list[dict[str, Any]]:
+    return [_decided(who, "approved_unchanged", seconds) for _ in range(approved)] + [
+        _decided(who, "rejected", seconds) for _ in range(dismissed)
+    ]
+
+
+def test_the_gate_counts_rates_and_percentiles_on_a_known_set() -> None:
+    ben = "Ben <ben@co.example>"
+    rows = [
+        _decided(ANN, "approved_unchanged", 10), _decided(ANN, "approved_with_edit", 20),
+        _decided(ANN, "failed", 30), _decided(ANN, "approved_unchanged", 40), _decided(ANN, "rejected", 5),
+        _decided(ben, "rejected", 50),
+        _decided(None, "closed_externally", 3600, outcome="expired"),
+        _decided(None, "closed_externally", 60, outcome="replaced: ERPNext's reading changed"),
+        _decided(None, "proposed"), _decided(None, "executed", 1),
+    ]
+    got = oversight.gate(rows)
+    # Approved: made, or approved and then not made (failed); not the one
+    # nobody tapped (executed). Expired and replaced are counted apart.
+    assert got["everyone"]["range"] == {
+        "decided": 6, "approved": 4, "dismissed": 2, "approval_rate": 0.6667,
+        "median_seconds": 25.0, "p10_seconds": 13.0, "expired": 1, "replaced": 1,
+    }
+    assert got["everyone"]["before"] is None, "a range with no start has nothing before it"
+    by = {p["resolved_by"]: p["range"] for p in got["people"]}
+    assert by[ANN] == {
+        "decided": 5, "approved": 4, "dismissed": 1, "approval_rate": 0.8,
+        "median_seconds": 25.0, "p10_seconds": 13.0,
+    }
+    assert by[ben] == {
+        "decided": 1, "approved": 0, "dismissed": 1, "approval_rate": 0.0,
+        "median_seconds": None, "p10_seconds": None,
+    }
+    assert got["flags"] == [] and "not how long the card was read" in got["note"]
+
+
+def test_a_range_with_nothing_decided_has_nulls_not_a_division_by_zero() -> None:
+    empty = {"decided": 0, "approved": 0, "dismissed": 0, "approval_rate": None, "median_seconds": None,
+             "p10_seconds": None}
+    got = oversight.gate([], [])
+    assert got["everyone"] == {"range": {**empty, "expired": 0, "replaced": 0}, "before": empty}
+    assert (got["people"], got["flags"]) == ([], [])
+    waiting = oversight.gate([_decided(None, "proposed"), _decided(None, "closed_externally", 9, outcome="expired")])
+    assert waiting["everyone"]["range"] == {**empty, "expired": 1, "replaced": 0}
+    # Someone who decided nothing in the range before has nulls there.
+    (ann,) = oversight.gate(_person(10, 0, 30), [])["people"]
+    assert ann["before"] == empty
+
+
+@pytest.mark.parametrize(("now", "before", "fires"), [
+    (_person(10, 0, 30), _person(8, 2, 60), True),       # 100% from 80%, median halved, 10 decided
+    (_person(9, 0, 30), _person(8, 2, 60), False),       # 9 decided
+    (_person(19, 1, 30), _person(8, 2, 60), True),       # 95% exactly
+    (_person(18, 2, 30), _person(8, 2, 60), False),      # 90%
+    (_person(10, 0, 31), _person(8, 2, 60), False),      # the median fell by less than half
+    (_person(10, 0, 30), _person(10, 0, 60), False),     # 100% then too: not higher
+    (_person(10, 0, 30), [], False),                     # nothing decided before to compare with
+    (_person(10, 0, 30), None, False),                   # no range before
+])
+def test_the_approving_more_faster_flag_at_each_threshold(
+    now: list[dict[str, Any]], before: list[dict[str, Any]] | None, fires: bool,
+) -> None:
+    flags = oversight.gate(now, before)["flags"]
+    assert [f["flag"] for f in flags] == (["approving_more_faster"] if fires else [])
+    if fires:
+        assert flags[0]["resolved_by"] == ANN and "median 30s (before: 60s)" in flags[0]["why"]
+
+
+def _submitted(n: int, seconds: float, unchanged: bool | None = True, state: str = "submitted") -> list[dict[str, Any]]:
+    return [
+        _decided(ANN, "approved_unchanged", seconds, erp={"state": state, "unchanged": unchanged}) for _ in range(n)
+    ]
+
+
+@pytest.mark.parametrize(("rows", "erpnext", "fires"), [
+    (_submitted(10, 29), True, True),
+    (_submitted(10, 29), False, False),                               # ERPNext wasn't asked
+    (_submitted(9, 29), True, False),                                 # 9 submitted
+    (_submitted(10, 29) + _submitted(1, 29, False), True, False),     # one changed
+    (_submitted(10, 29) + _submitted(1, 29, None), True, True),       # an unknown answer doesn't count
+    (_submitted(10, 30), True, False),                                # median not under 30s
+    (_submitted(9, 29) + _submitted(1, 29, state="draft"), True, False),  # a draft isn't submitted
+])
+def test_the_unchanged_and_fast_flag_at_each_threshold(rows: list[dict[str, Any]], erpnext: bool, fires: bool) -> None:
+    flags = oversight.gate(rows, erpnext=erpnext)["flags"]
+    assert [f["flag"] for f in flags] == (["unchanged_and_fast"] if fires else [])
+
+
+def test_someone_elses_card_counts_in_the_gate_without_its_content(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    _made(erp, roster)
+    (record,) = oversight.records(reader=roster.teammate)
+    assert record["private"] is True
+    got = oversight.gate([record])
+    assert got["everyone"]["range"]["approved"] == 1
+    ((person, numbers),) = [(p["resolved_by"], p["range"]) for p in got["people"]]
+    assert "Olivia Owner" in person and numbers["median_seconds"] is not None
+    assert "Restock" not in json.dumps(got), "the summary carries no card content"
+
+
+def test_the_route_returns_the_gate_with_the_range_before_and_keeps_the_csv(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], client: TestClient,
+) -> None:
+    _made(erp, roster)
+    owner = {"x-caller-email": OWNER}
+    now = datetime.now(UTC)
+    since, until = now - timedelta(days=1), now + timedelta(days=1)
+    asked = {"since": since.isoformat(), "until": until.isoformat()}
+    gate = client.get("/erpnext/drafts/oversight", params=asked, headers=owner).json()["gate"]
+    assert gate["everyone"]["range"]["approved"] == 1 and gate["everyone"]["before"]["decided"] == 0
+    assert gate["range"] == asked
+    assert gate["before_range"] == {"since": (since - timedelta(days=2)).isoformat(), "until": since.isoformat()}
+    assert gate["thresholds"]["min_decided"] == oversight.GATE_MIN_DECIDED
+    unbounded = client.get("/erpnext/drafts/oversight", headers=owner).json()["gate"]
+    assert unbounded["before_range"] is None and unbounded["everyone"]["before"] is None
+    long_ago = {"since": "2020-01-01", "until": "2020-02-01"}
+    empty = client.get("/erpnext/drafts/oversight", params=long_ago, headers=owner).json()["gate"]
+    assert empty["everyone"]["range"]["approval_rate"] is None and empty["people"] == []
+    # A range that runs backwards, or whose range before it would fall
+    # before year 1, is refused before anything is audited or read.
+    for bad in (
+        {"since": (now + timedelta(days=2)).isoformat()}, {"since": "2026-10-20", "until": "2026-10-01"},
+        {"since": "1000-01-01"}, {"since": "0001-01-01", "until": "9999-12-31"},
+    ):
+        assert client.get("/erpnext/drafts/oversight", params=bad, headers=owner).status_code == 422, bad
+    # The CSV stays one row per record with the same columns: no summary.
+    as_csv = client.get("/erpnext/drafts/oversight?format=csv", headers=owner).text
+    assert next(csv.reader(io.StringIO(as_csv))) == list(oversight.CSV_COLUMNS) and len(oversight.CSV_COLUMNS) == 23
+    assert "approval_rate" not in as_csv
