@@ -11,6 +11,9 @@
 //   frame → host  open       { kind: "host", route } | { kind: "native", path }
 //   frame → host  badge      { counts }
 //   popup → opener signed-in {}                         the popup sign-in is done
+//   popup → opener card-done { alertId, outcome }       a card answered in its own
+//                                                       window (/confirm/alert/<id>,
+//                                                       lib/hostApprove.ts)
 //
 // Each carries `protocol: "oe-embed/v1"` and `type`. None carries a secret, a
 // token or an identity anyone acts on: `userHint` is shown, never trusted.
@@ -266,6 +269,12 @@ export function badgeMessage(counts: Record<string, number>) {
     if (/^[a-z0-9-]{1,40}$/.test(key) && Number.isInteger(value) && value >= 0) clean[key] = value;
   }
   return { protocol: EMBED_PROTOCOL, type: "badge", counts: clean };
+}
+
+export type CardOutcome = "approved" | "not_now";
+
+export function cardDoneMessage(alertId: number, outcome: CardOutcome) {
+  return { protocol: EMBED_PROTOCOL, type: "card-done", alertId, outcome };
 }
 
 export function signedInMessage() {

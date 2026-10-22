@@ -6,3 +6,8 @@
 //
 // No imports, so `npm test` can exercise it.
 export const SESSION_FREE_PATH = /^\/(?:api\/auth(?:\/|$)|signin\/?$)/;
+
+// The confirmation windows (/confirm and /confirm/alert/<id>): no page may
+// frame them, not even a host origin's, since what they confirm must never be
+// drawn under someone else's page.
+export const NEVER_FRAMED_PATH = /^\/confirm(?:\/|$)/;

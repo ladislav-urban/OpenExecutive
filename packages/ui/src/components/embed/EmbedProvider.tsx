@@ -48,6 +48,14 @@ export function useEmbed(): EmbedState {
   return useContext(EmbedContext);
 }
 
+// The listed host origins (OE_HOST_ORIGINS), for a window a host opened that
+// answers it (app/confirm/alert): empty when none is listed.
+const HostOriginsContext = createContext<readonly string[]>([]);
+
+export function useHostOrigins(): readonly string[] {
+  return useContext(HostOriginsContext);
+}
+
 function applyTheme(theme: EmbedTheme, font: string | null): void {
   const root = document.documentElement;
   root.dataset.theme = theme.mode;
@@ -144,11 +152,13 @@ export default function EmbedProvider({
   };
 
   return (
-    <EmbedContext.Provider value={state}>
-      {children}
-      {pending && (
-        <FrameConfirm action={pending.action} onAnswer={answer} />
-      )}
-    </EmbedContext.Provider>
+    <HostOriginsContext.Provider value={hostOrigins}>
+      <EmbedContext.Provider value={state}>
+        {children}
+        {pending && (
+          <FrameConfirm action={pending.action} onAnswer={answer} />
+        )}
+      </EmbedContext.Provider>
+    </HostOriginsContext.Provider>
   );
 }

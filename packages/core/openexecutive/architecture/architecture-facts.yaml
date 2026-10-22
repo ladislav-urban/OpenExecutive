@@ -7833,8 +7833,15 @@ auth:
     paths under the app's routes). AppShell then drops AppSidebar,
     TopBar, MobileBottomNav and AskOEPanel, keeping HubTabs,
     PausedBanner and the page. Messages ready/init/theme/route/open/
-    badge/signed-in, examples in lib/embed-examples.json shared with the
-    host's tests. /signin offers a popup ending at /signin/done, which
+    badge/signed-in/card-done, examples in lib/embed-examples.json shared
+    with the host's tests. A host's native Home approves a card by opening
+    /confirm/alert/<id> (lib/hostApprove.ts) as the person clicks: a
+    top-level window of the app's own (frame-ancestors 'none' on every
+    /confirm path) that loads GET /alerts/{id}/card for the signed-in
+    caller, offers Approve only when the card's actions do, arms it 700 ms
+    after the window is in front (re-armed after each blur, against a lured
+    second click), approves as the app's own page, then posts card-done
+    {alertId, outcome} to its opener at each host origin and closes. /signin offers a popup ending at /signin/done, which
     posts signed-in to its opener (own origin and each host origin) and
     closes. In ANY frame card actions (decisions approve/reject/cancel,
     alerts approve, workflow decisions, roster requests), and other

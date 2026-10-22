@@ -3,7 +3,7 @@ import { auth } from "@/auth";
 import { contentSecurityPolicy, makeNonce } from "@/lib/csp";
 import { HOST_CALLS, HOST_ORIGINS } from "@/lib/hostConfig";
 import { backendSegments, corsHeaders, frameAncestors, hostPreflight, judgeHostRequest } from "@/lib/hostOrigins";
-import { SESSION_FREE_PATH } from "@/lib/middlewarePaths";
+import { NEVER_FRAMED_PATH, SESSION_FREE_PATH } from "@/lib/middlewarePaths";
 
 // Every request but static assets comes through here, in this order:
 //
@@ -83,7 +83,11 @@ export async function middleware(req: NextRequest, ev: NextFetchEvent): Promise<
     return response;
   }
 
-  const csp = contentSecurityPolicy({ nonce: makeNonce(), frameAncestors: FRAME_ANCESTORS, devServer: DEV_SERVER });
+  const csp = contentSecurityPolicy({
+    nonce: makeNonce(),
+    frameAncestors: NEVER_FRAMED_PATH.test(pathname) ? "frame-ancestors 'none'" : FRAME_ANCESTORS,
+    devServer: DEV_SERVER,
+  });
   const requestHeaders = new Headers(req.headers);
   // Next.js reads the nonce from the request's policy and puts it on every
   // script it renders.
