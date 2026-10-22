@@ -79,3 +79,25 @@ def test_an_empty_slug_is_made_from_the_type_and_target(client: TestClient) -> N
     assert res.status_code == 201, res.text
     assert res.json()["slug"] == "stock-msft"
     assert res.json()["trigger_words"].startswith("It moves")
+
+
+def test_a_malformed_trigger_never_breaks_the_list(client: TestClient) -> None:  # noqa: F811
+    # A trigger is stored as sent; showing it in words must not fail on it.
+    bad = [
+        ("stock", "AAPL", {"keywords": 1}),
+        ("stock", "MSFT", {"abs_change_pct_gte": 1e308}),
+        ("stock", "IBM", {"abs_change_pct_gte": int("9" * 400)}),
+        ("edgar", "320193", {"forms": 1}),
+        ("rss", "https://x.com/feed", {"keywords": "pricing"}),
+    ]
+    for signal_type, target, trigger in bad:
+        res = client.post("/watchlist", json={"signal_type": signal_type, "target": target, "trigger": trigger})
+        assert res.status_code == 201, (trigger, res.text)
+        preview = client.post("/watchlist/preview", json={"signal_type": signal_type, "trigger": trigger})
+        assert preview.status_code == 200, (trigger, preview.text)
+    listed = client.get("/watchlist")
+    assert listed.status_code == 200
+    rows = {r["slug"]: r for r in listed.json()}
+    assert rows["stock-msft"]["trigger_words"] == "It moves 5% or more in a day, up or down"
+    assert rows["edgar-320193"]["trigger_words"].startswith("They file a 8-K")
+    assert client.get("/watchlist/stock-ibm").status_code == 200

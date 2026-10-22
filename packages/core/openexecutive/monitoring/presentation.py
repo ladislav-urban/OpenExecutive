@@ -21,9 +21,9 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from openexecutive.monitoring.describe import (
-    STOCK_DEFAULT_PCT,
     cadence_line,
     loudness_line,
+    stock_pct,
     trigger_line,
 )
 from openexecutive.monitoring.models import ORIGIN_RESEARCH, ORIGIN_RESEARCH_PROPOSED
@@ -217,8 +217,7 @@ def decline_menu(origin: str, mode: str) -> DeclineMenu | None:
 
 
 def _pct_of(trigger: dict[str, Any]) -> float:
-    v = trigger.get("abs_change_pct_gte")
-    return float(v) if isinstance(v, int | float) and not isinstance(v, bool) and v > 0 else STOCK_DEFAULT_PCT
+    return stock_pct(trigger)
 
 
 def raise_the_bar(signal_type: str, trigger: dict[str, Any] | None, severity_floor: str) -> RaiseTheBar | None:
