@@ -962,6 +962,32 @@ def test_a_panel_card_says_where_it_was_asked_and_is_approved_in_the_app(
     assert len(erp.calls) == 1
 
 
+def test_the_panel_reply_names_the_cards_its_turn_left(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    from openexecutive.integrations import erpnext_panel
+
+    def turn(session: Session, *inputs: dict[str, Any]) -> tuple[list[int], dict[str, Any]]:
+        shown = erpnext_panel._TurnViews()
+        token = erpnext_panel._turn_views.set(shown)
+        try:
+            ids = []
+            for tool_input in inputs:
+                erp.replies.append(json.dumps(CHECKED_RESTOCK))
+                ids.append(_propose(session, tool_input)["decision_id"])
+        finally:
+            erpnext_panel._turn_views.reset(token)
+        return ids, shown.payload()
+
+    restock = {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK}
+    more = {**restock, "fields": {**RESTOCK, "items": [{**RESTOCK["items"][0], "qty": 41}]}}
+    # Each card left, in order; the same draft again is the card already waiting.
+    (first, second, again), payload = turn(_panel_turn(), restock, more, restock)
+    assert again == first and payload == {"cards": [first, second]}
+    # Found waiting on a later turn, it is named again.
+    assert turn(_panel_turn(), restock)[1] == {"cards": [first]}
+    # A card left anywhere but the panel names nothing.
+    assert turn(_owner_turn(roster), more)[1] == {}
+
+
 def test_the_panel_offers_nothing_to_anyone_not_on_the_team(
     erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

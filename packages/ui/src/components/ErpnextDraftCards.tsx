@@ -2,6 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 
+import { useEmbed } from "@/components/embed/EmbedProvider";
 import Button from "@/components/ui/Button";
 import {
   approveErpnextDraft,
@@ -10,6 +11,8 @@ import {
   type ErpnextDraftCard,
   type ErpnextDraftCreated,
 } from "@/lib/api";
+import { openMessage } from "@/lib/embed";
+import { erpnextLink } from "@/lib/erpnextLinks";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
 // Home and chat: ERPNext drafts the Executive prepared at your request (a
@@ -35,9 +38,11 @@ interface DraftCardsState {
   // Failed here and no longer waiting (closed after its last try, or handled
   // elsewhere): shown with its error until closed, without Approve.
   closed: Record<number, true>;
+  // The list has been asked for at least once (answered or not).
+  loaded: boolean;
 }
 
-const EMPTY: DraftCardsState = { cards: [], busy: {}, made: {}, errors: {}, closed: {} };
+const EMPTY: DraftCardsState = { cards: [], busy: {}, made: {}, errors: {}, closed: {}, loaded: false };
 let state: DraftCardsState = EMPTY;
 const listeners = new Set<() => void>();
 let loading: Promise<void> | null = null;
@@ -82,6 +87,7 @@ function load(): Promise<void> {
       .catch(() => { /* no card is better than a broken one */ })
       .finally(() => {
         loading = null;
+        if (!state.loaded) update((s) => ({ ...s, loaded: true }));
       });
   }
   return loading;
@@ -93,6 +99,7 @@ export const reloadErpnextDraftCards = load;
 
 function gone(id: number) {
   update((s) => ({
+    ...s,
     cards: s.cards.filter((c) => c.decision_id !== id),
     busy: without(s.busy, id),
     made: without(s.made, id),
@@ -134,7 +141,7 @@ export function useErpnextDraftCards() {
   useEffect(() => {
     void load();
   }, []);
-  return { cards: s.cards, gone };
+  return { cards: s.cards, loaded: s.loaded, gone };
 }
 
 // What the draft cards are, for the Needs you header's tip.
@@ -153,6 +160,7 @@ export function ErpnextDraftCardItem({
   onGone: (id: number) => void;
 }) {
   const s = useSyncExternalStore(subscribe, read, readOnServer);
+  const { hostOrigin } = useEmbed();
   const id = card.decision_id;
   const busy = s.busy[id] ?? null;
   const done = id in s.made;
@@ -162,6 +170,15 @@ export function ErpnextDraftCardItem({
   const when = formatRelativeTime(card.created_at);
 
   const link = created?.url && /^https?:\/\//.test(created.url) ? created.url : null;
+  // In a host's frame, a document on the host's own origin opens in its desk.
+  const opens = link ? erpnextLink(link, hostOrigin) : null;
+  const openInHost = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    if (opens?.kind !== "host" || !hostOrigin) return;
+    const message = openMessage({ kind: "host", route: opens.route });
+    if (!message) return;
+    event.preventDefault();
+    window.parent.postMessage(message, hostOrigin);
+  };
   // A Quotation's or Purchase Order's lines carry ERPNext's rates; a
   // Quotation's may name no warehouse.
   const priced = card.lines.some((line) => Boolean(line.rate || line.amount));
@@ -245,6 +262,7 @@ export function ErpnextDraftCardItem({
                 href={link}
                 target="_blank"
                 rel="noopener noreferrer"
+                onClick={openInHost}
                 className="text-sm font-medium text-accent underline"
               >
                 Open in ERPNext

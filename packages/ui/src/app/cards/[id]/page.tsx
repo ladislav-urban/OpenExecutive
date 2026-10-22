@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ChatActionCards } from "@/components/ActionCards";
+import { ErpnextDraftCardItem, useErpnextDraftCards } from "@/components/ErpnextDraftCards";
 import { ReplyCardItem, useReplyCards } from "@/components/RepliesWaiting";
 import { usePageCrumb } from "@/components/shell/PageCrumb";
 import { getDecision, type DecisionInstance } from "@/lib/api";
@@ -12,8 +13,9 @@ import { getDecision, type DecisionInstance } from "@/lib/api";
 // One card on a page of its own, by its decision id: what a host's frame
 // opens to have a card approved (in a frame its Yes is asked in a window of its own,
 // lib/cardActions.ts), and a link anyone can keep. It shows the card with
-// the same component Home and the chat use; the server answers only the
-// card's own person, so anyone else sees that it isn't there.
+// the same component Home and the chat use (an ERPNext draft card, such as
+// one ERPNext's panel links to, as Home shows it); the server answers only
+// the card's own person, so anyone else sees that it isn't there.
 export default function CardPage() {
   const params = useParams<{ id: string }>();
   const id = /^\d+$/.test(params?.id ?? "") ? Number(params.id) : null;
@@ -21,6 +23,8 @@ export default function CardPage() {
   const [instance, setInstance] = useState<DecisionInstance | null | undefined>(undefined);
   const replies = useReplyCards();
   const reply = replies.cards.find((c) => c.decision_id === id);
+  const drafts = useErpnextDraftCards();
+  const draft = drafts.cards.find((c) => c.decision_id === id);
 
   useEffect(() => {
     if (id === null) return;
@@ -32,15 +36,22 @@ export default function CardPage() {
   }, [id]);
 
   const waiting = instance?.status === "proposed" || instance?.status === "executing";
+  const isDraft = instance?.decision_class === "erpnext_draft";
   return (
     <main className="mx-auto w-full max-w-2xl px-4 sm:px-6 py-6 space-y-4">
       {id === null || instance === null ? (
         <p className="text-sm text-fg-muted">This card isn&rsquo;t here: it may be someone else&rsquo;s, or gone.</p>
       ) : instance === undefined ? (
         <p className="text-sm text-fg-muted">Loading the card…</p>
-      ) : !waiting ? (
+      ) : draft ? (
+        // Kept on screen once approved here, with what it made.
+        <ErpnextDraftCardItem card={draft} onGone={drafts.gone} emphasized />
+      ) : isDraft && !drafts.loaded ? (
+        <p className="text-sm text-fg-muted">Loading the card…</p>
+      ) : !waiting || isDraft ? (
         <p className="text-sm text-fg-muted">
-          This card is no longer waiting ({instance.status.replace(/_/g, " ")}).
+          {/* A draft card still proposed but no longer listed has expired. */}
+          This card is no longer waiting{waiting ? "" : ` (${instance.status.replace(/_/g, " ")})`}.
         </p>
       ) : reply ? (
         <ReplyCardItem

@@ -45,6 +45,14 @@ order, and ``call``: the turn's last ``list_records``, ``run_report`` or
 (``note_erpnext_call``) once a call succeeded. Both are data for oe_connector,
 which checks every view again as the signed-in ERPNext user and builds each
 route itself; nothing here is shown or followed.
+
+**Opening a card it left** (oe_connector's ``docs/erpnext-single-ui-plan.md``,
+step 4). The reply also carries ``cards``: the decision id of each ERPNext
+draft card ``propose_erpnext_draft`` left or found waiting on this turn, in
+order, at most ``MAX_CARDS`` (``note_panel_card``), never read from the
+model's text. oe_connector shows a chip for each that opens the card's page
+in its hosted view, where this app shows it only to its own person, signed
+in, and approving it stays there.
 """
 from __future__ import annotations
 
@@ -341,10 +349,10 @@ PANEL_DRAFTS_CONTEXT_BLOCK = (
     "and that is you. "
     "Here you can read ERPNext (its tools run as this person's own ERPNext "
     "user), consult your specialists, and, when they ask in their own words, "
-    "leave them an ERPNext draft card with propose_erpnext_draft. The panel "
-    "cannot show the card: tell them it is waiting on Today in the "
-    "OpenExecutive web app, where they approve it signed in, and that nothing "
-    "is in ERPNext until then. You cannot send, schedule or save anything, or "
+    "leave them an ERPNext draft card with propose_erpnext_draft. Tell them "
+    "the card waits for their approval in OpenExecutive, signed in, that the "
+    "panel may show a button under your reply to open it, and that nothing is "
+    "in ERPNext until they approve it. You cannot send, schedule or save anything, or "
     "reach any other system. Keep answers short enough for a side panel. If "
     "they ask for something you cannot do here, say so and suggest the "
     "OpenExecutive app. "
@@ -365,8 +373,10 @@ async def _read_capped(request: Request) -> bytes | None:
     return bytes(body)
 
 
-# What a panel turn showed: its show_in_erpnext views and its last read call.
+# What a panel turn showed: its show_in_erpnext views, its last read call and
+# the draft cards it left.
 MAX_VIEWS = 5
+MAX_CARDS = 5
 MAX_VIEW_JSON = 4000
 _READ_CALLS = {
     "erpnext__list_records": "list_records",
@@ -379,6 +389,7 @@ _READ_CALLS = {
 class _TurnViews:
     views: list[dict[str, Any]] = field(default_factory=list)
     call: dict[str, Any] | None = None
+    cards: list[int] = field(default_factory=list)
 
     def payload(self) -> dict[str, Any]:
         out: dict[str, Any] = {}
@@ -386,6 +397,8 @@ class _TurnViews:
             out["views"] = self.views
         if self.call is not None:
             out["call"] = self.call
+        if self.cards:
+            out["cards"] = self.cards
         return out
 
 
@@ -416,6 +429,15 @@ def note_erpnext_call(normalized: str, arguments: Any, *, failed: bool) -> None:
             turn.views.append(view)
     elif normalized in _READ_CALLS and _small(plain):
         turn.call = {"tool": _READ_CALLS[normalized], "arguments": plain}
+
+
+def note_panel_card(decision_id: int) -> None:
+    """Called by ``erpnext_drafts`` once a card is stored or found waiting: on
+    a panel turn, keep its id, in the order left. Nothing outside the panel."""
+    turn = _turn_views.get()
+    if turn is None or decision_id in turn.cards or len(turn.cards) >= MAX_CARDS:
+        return
+    turn.cards.append(decision_id)
 
 
 def context_block(session: Any) -> str:
