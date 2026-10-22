@@ -4981,6 +4981,79 @@ export interface ProposalItem {
   // format) and, for "link" artifacts, the URL in the connected app.
   artifact_format?: ArtifactFormat | null;
   artifact_url?: string | null;
+  // Home's rules for this card, worked out for the caller by GET /today
+  // (briefing/home_rules.py): whose queue it sits in, which card shows it,
+  // and what it offers: the `primary` one, then Discuss, then the ⋯ menu in
+  // order. Empty `actions` on a card of another kind, which its own card
+  // answers. Optional for older API builds and test mocks.
+  lane?: HomeLane;
+  card_kind?: HomeCardKind;
+  actions?: HomeCardAction[];
+}
+
+export type HomeLane = "needs_you" | "team" | "monitoring";
+export type HomeCardKind = "proposal" | "roster_request" | "lead_training" | "held_action";
+
+// One thing a proposal card offers (GET /today, home_rules.CardAction).
+export interface HomeCardAction {
+  key:
+    | "approve"
+    | "approve_with_edits"
+    | "dismiss"
+    | "snooze"
+    | "run_again"
+    | "open_run"
+    | "nudge"
+    | "run_workflow"
+    | "open_document"
+    | "open_in_app"
+    | "open_person"
+    | "discuss";
+  label: string;
+  primary?: boolean;
+  // An app path, or an outside URL when `external`.
+  href?: string | null;
+  external?: boolean;
+  // snooze: when the card comes back, and the short form for the notice.
+  until?: string | null;
+  short?: string | null;
+  // discuss / nudge: the chat turn to start and the person's own memory line.
+  prompt?: string | null;
+  memory_text?: string | null;
+}
+
+// A snooze time in the caller's own zone.
+export interface SnoozeChoice {
+  label: string;
+  short: string;
+  until: string;
+}
+
+// A phrase of the summary under the greeting and what it opens.
+export interface SummaryPart {
+  text: string;
+  count: number;
+  target: {
+    kind: "needs_you" | "panel" | "href";
+    panel?: "handled" | "people" | "departments" | "inFlight" | "monitoring" | null;
+    href?: string | null;
+  };
+}
+
+// A count tile under Needs you; `key` names the panel it opens.
+export interface HomeTile {
+  key: "departments" | "people" | "team" | "inFlight" | "handled" | "monitoring" | "clients";
+  value: string;
+  label: string;
+  sub: string;
+  tone?: "amber" | "emerald" | "rose" | null;
+}
+
+// One handled row per alert, the other moves on it and the duplicates folded in.
+export interface HandledRow {
+  item: HandledItem;
+  also: HandledItem[];
+  folded_in: number;
 }
 
 // One autonomous alert-review move since the last delivered morning brief
@@ -5075,12 +5148,51 @@ export interface Today {
   handled_overnight?: HandledItem[];
   // Lines grounding left out of your briefs in the last day (principal only).
   held_back?: HeldBackItem[];
+  // Home's rules, for the caller (briefing/home_rules.py). Needs you's count
+  // (with the cards other endpoints list, such as Act as me's replies) and
+  // its "Dismiss N older than X days" offer; the summary line; the count
+  // tiles (solo's own lead them); the quiet day (nothing waiting anywhere)
+  // and its banner (also needs a department set up); the handled rows,
+  // one per alert; the snooze times in the caller's zone. Optional for older
+  // API builds and test mocks.
+  needs_you_count?: number;
+  dismiss_older?: { days: number; alert_ids: number[]; label: string } | null;
+  summary?: SummaryPart[];
+  tiles?: HomeTile[];
+  quiet?: boolean;
+  quiet_banner?: boolean;
+  handled_rows?: HandledRow[];
+  snooze_choices?: SnoozeChoice[];
+}
+
+// The zone this browser shows times in, for the snooze times /today offers.
+function zoneQuery(): string {
+  try {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    return tz ? `?tz=${encodeURIComponent(tz)}` : "";
+  } catch {
+    return "";
+  }
 }
 
 export async function getToday(): Promise<Today> {
   // Never a cached copy: the header is re-polled while it is being rewritten.
-  const res = await fetch(`${API_BASE}/today`, { cache: "no-store" });
+  const res = await fetch(`${API_BASE}/today${zoneQuery()}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`Failed to load today: ${res.statusText}`);
+  return res.json();
+}
+
+// One of the caller's Home cards on its own (GET /alerts/{id}/card), with
+// the person it is routed to. Null when it isn't theirs or isn't waiting.
+export interface AlertCard {
+  proposal: ProposalItem;
+  people: PersonBriefItem[];
+}
+
+export async function getAlertCard(alertId: number, signal?: AbortSignal): Promise<AlertCard | null> {
+  const res = await fetch(`${API_BASE}/alerts/${alertId}/card${zoneQuery()}`, { cache: "no-store", signal });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Failed to load the card: ${res.statusText}`);
   return res.json();
 }
 
@@ -5181,11 +5293,12 @@ export async function bulkAckAlerts(body: {
 
 // Hide a card from Home until `until`; it comes back on its own then.
 // `null` brings it back now (the Undo).
-export async function snoozeAlert(alertId: number, until: Date | null): Promise<void> {
+// `until` as an ISO-8601 time (a SnoozeChoice's) or a Date; null clears it.
+export async function snoozeAlert(alertId: number, until: string | Date | null): Promise<void> {
   const res = await fetch(`${API_BASE}/alerts/${alertId}/snooze`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ until: until ? until.toISOString() : null }),
+    body: JSON.stringify({ until: until == null ? null : typeof until === "string" ? until : until.toISOString() }),
   });
   if (!res.ok) throw new Error(`Failed to snooze alert ${alertId}: ${res.status} ${res.statusText}`);
 }

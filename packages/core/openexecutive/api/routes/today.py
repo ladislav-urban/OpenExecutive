@@ -17,6 +17,13 @@ fired scheduled_actions (DMs sent, follow-ups dispatched, cadences run),
 plus decisions and advice the system has logged. Powers the "Recent
 activity" rail on the briefing-first landing.
 
+GET /today also works out Home's rules for the caller
+(``briefing.home_rules``): each proposal's lane, kind and actions, the
+snooze times in their zone, the older-than offer, the summary line, the
+tiles, the quiet day and the handled rows grouped, so no client holds a copy.
+GET /alerts/{id}/card is one of those proposal cards on its own, for its own
+person (the principal, or whoever it is routed to).
+
 GET /today/top-three and GET /today/weekly-review feed two solo-only
 Briefing cards — today's top three (as the morning brief picks them) and the
 latest completed weekly review — for the principal alone; null in team mode
@@ -33,6 +40,15 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from openexecutive.briefing.home_rules import (
+    CardAction,
+    CardKind,
+    DismissOffer,
+    Lane,
+    SnoozeChoice,
+    SummaryPart,
+    Tile,
+)
 from openexecutive.briefing.value_summary import ValueSummary
 from openexecutive.clients.cockpit import ClientCockpitCard, format_practice_for_today
 
@@ -226,6 +242,12 @@ class ProposalItem(BaseModel):
     # `body` already carries a Markdown rendering for every format.
     artifact_format: str | None = None
     artifact_url: str | None = None
+    # Home's rules for this card, worked out for the caller of GET /today
+    # (briefing.home_rules): whose queue it sits in, which card shows it,
+    # and what it offers (primary first, then Discuss, then the menu).
+    lane: Lane = "needs_you"
+    card_kind: CardKind = "proposal"
+    actions: list[CardAction] = Field(default_factory=list)
 
 
 def _proposal_body(alert: Alert) -> str:
@@ -469,6 +491,15 @@ class HandledItem(BaseModel):
     status: str = ""
 
 
+class HandledRow(BaseModel):
+    """One handled row per alert: the move that shows, the other moves on
+    that alert under it, and how many duplicates were folded into it."""
+
+    item: HandledItem
+    also: list[HandledItem] = Field(default_factory=list)
+    folded_in: int = 0
+
+
 class FirstWeekFinding(BaseModel):
     title: str
     summary: str
@@ -534,6 +565,22 @@ class TodayResponse(BaseModel):
     # Home shows the first-week card instead of calling the day quiet.
     first_week: bool = False
     first_week_card: FirstWeekCardModel | None = None
+    # Home's rules, for the caller (briefing.home_rules). Needs you: its
+    # count (the caller's own proposals plus the cards other endpoints list
+    # for them, such as Act as me's replies) and the older-than offer. The
+    # summary line's phrases, the count tiles (solo's own tiles lead them in
+    # the UI), the quiet day (nothing waiting anywhere: Home says nothing under
+    # an empty Needs you) and its banner, the handled rows grouped one per alert
+    # (the summary and the Handled tile count these), and the snooze times
+    # every card's snooze actions use, in the caller's own time zone.
+    needs_you_count: int = 0
+    dismiss_older: DismissOffer | None = None
+    summary: list[SummaryPart] = Field(default_factory=list)
+    tiles: list[Tile] = Field(default_factory=list)
+    quiet: bool = False
+    quiet_banner: bool = False
+    handled_rows: list[HandledRow] = Field(default_factory=list)
+    snooze_choices: list[SnoozeChoice] = Field(default_factory=list)
 
 
 class ActivityItem(BaseModel):
@@ -1942,8 +1989,15 @@ def _is_principal(caller_person_id: int | None) -> bool:
         return False
 
 
+# The zone a client says it shows times in (IANA name, e.g. the browser's),
+# for the snooze times; one it can't load is ignored.
+_TZ_QUERY = Query(None, max_length=64, description="IANA time zone the client shows times in")
+
+
 @router.get("/today", response_model=TodayResponse, tags=["today"])
-async def get_today(request: Request, background_tasks: BackgroundTasks) -> TodayResponse:
+async def get_today(
+    request: Request, background_tasks: BackgroundTasks, tz: str | None = _TZ_QUERY,
+) -> TodayResponse:
     stale: list[StaleInsight] = []
     from openexecutive.api.routes.chat import _resolve_caller_person_id
     from openexecutive.orchestrator.artifact_records import viewer_for_person
@@ -1967,7 +2021,149 @@ async def get_today(request: Request, background_tasks: BackgroundTasks) -> Toda
         response.held_back = _held_back(datetime.now(UTC))
         response.first_week_card = _first_week_card()
         response.first_week = response.first_week_card is not None
+    _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)
     return response
+
+
+def _caller_zone(caller: int | None, tz: str | None = None) -> Any:
+    """The zone the caller sees times in: the one their client says it shows
+    (``tz``, the browser's own), else their notification settings', else the
+    workspace's."""
+    from openexecutive.memory.workspace_settings import get_user_timezone, load_zone
+    from openexecutive.people.notifications import get_notification_settings, zone_for
+
+    if tz and (zone := load_zone(tz.strip())) is not None:
+        return zone
+    if caller is None:
+        return get_user_timezone()
+    try:
+        return zone_for(get_notification_settings(caller))
+    except Exception:
+        logger.warning("today: reading the caller's time zone failed", exc_info=True)
+        return get_user_timezone()
+
+
+def _workspace_solo() -> bool:
+    from openexecutive.memory.workspace_settings import get_workspace
+
+    try:
+        return get_workspace().mode == "solo"
+    except Exception:
+        logger.warning("today: reading the workspace mode failed", exc_info=True)
+        return False
+
+
+def _waiting_cards(caller: int | None) -> int:
+    from openexecutive.briefing.home_rules import waiting_card_count
+    from openexecutive.people.store import get_person
+
+    if caller is None:
+        return 0
+    try:
+        person = get_person(caller)
+    except Exception:
+        logger.warning("today: reading the caller failed", exc_info=True)
+        return 0
+    if person is None or person.archived:
+        return 0
+    return waiting_card_count(person)
+
+
+def _attach_home_rules(
+    response: TodayResponse, *, caller: int | None, principal: bool, now: datetime, tz: str | None = None,
+) -> None:
+    """Fill Home's rules for ``caller`` (briefing.home_rules) on ``response``;
+    ``tz`` is the zone their client shows times in, when it says."""
+    from openexecutive.briefing import home_rules
+
+    solo = _workspace_solo()
+    response.snooze_choices = home_rules.snooze_choices(now, _caller_zone(caller, tz))
+    people_by_id = {p.id: p for p in response.people}
+    for p in response.proposals:
+        p.lane = home_rules.lane(p, caller_id=caller, caller_is_principal=principal, solo=solo)
+        p.card_kind = home_rules.card_kind(p)
+        p.actions = home_rules.card_actions(
+            p, lane_=p.lane, caller_is_principal=principal, people_by_id=people_by_id,
+            snoozes=response.snooze_choices,
+        )
+    mine = [p for p in response.proposals if p.lane == "needs_you"]
+    team = [p for p in response.proposals if p.lane == "team"]
+    monitoring = [p for p in response.proposals if p.lane == "monitoring"]
+    waiting = _waiting_cards(caller)
+    response.needs_you_count = len(mine) + waiting
+    response.dismiss_older = home_rules.dismiss_offer(mine, now)
+    response.handled_rows = [
+        HandledRow(item=item, also=also, folded_in=folded)
+        for item, also, folded in home_rules.group_handled(response.handled_overnight)
+    ]
+    departments, people = response.departments, response.people
+    at_risk = [
+        d for d in home_rules.departments_needing_attention(departments)
+        if d.at_risk_count > 0 or d.off_track_count > 0
+    ]
+    response.summary = home_rules.summary(
+        needs_you=response.needs_you_count,
+        handled=len(response.handled_rows),
+        people_overdue=0 if solo else sum(1 for p in people if p.overdue),
+        people_need_reply=0 if solo else sum(1 for p in people if p.status == "needs_reply"),
+        dept_at_risk=0 if solo else len(at_risk),
+        # Solo has no Departments tile, so its line counts goals instead.
+        goals_at_risk=sum(d.at_risk_count + d.off_track_count for d in departments) if solo else 0,
+        in_flight=len(response.in_flight),
+        monitoring=len(monitoring),
+    )
+    response.tiles = home_rules.tiles(
+        solo=solo,
+        departments=departments,
+        people=people,
+        team=len(team),
+        in_flight=response.in_flight,
+        handled=len(response.handled_rows),
+        monitoring=len(monitoring),
+        clients=len(response.practice_clients),
+        now=now,
+    )
+    response.quiet = home_rules.quiet(
+        proposals=len(response.proposals), waiting_cards=waiting, departments=departments, people=people,
+    )
+    response.quiet_banner = home_rules.quiet_banner(
+        quiet_day=response.quiet, departments=departments, first_week=response.first_week_card is not None,
+    )
+
+
+class AlertCard(BaseModel):
+    """One proposal card on its own (GET /alerts/{id}/card), with the person
+    it is routed to, for the name on it."""
+
+    proposal: ProposalItem
+    people: list[PersonBriefItem]
+
+
+@router.get("/alerts/{alert_id}/card", response_model=AlertCard, tags=["today"])
+async def get_alert_card(alert_id: int, request: Request, tz: str | None = _TZ_QUERY) -> AlertCard:
+    """A card from the caller's Home on a page of its own (the UI's
+    /cards/alert/<id>, which a host's frame opens to have it approved). Only
+    for its own person: the principal, or whoever it is routed to. Anyone
+    else, and a card that is no longer waiting, get 404, as for an id that
+    does not exist."""
+    from openexecutive.api.routes.chat import (
+        _caller_is_principal_or_unclaimed,
+        _resolve_caller_person_id,
+    )
+    from openexecutive.orchestrator.artifact_records import viewer_for_person
+
+    caller = _resolve_caller_person_id(request)
+    principal = _is_principal(caller)
+    response = _build_today(include_private=principal, viewer=viewer_for_person(caller))
+    proposal = next((p for p in response.proposals if p.alert_id == alert_id), None)
+    if proposal is None or not (
+        _caller_is_principal_or_unclaimed(request)
+        or (caller is not None and proposal.routed_to_person_id == caller)
+    ):
+        raise HTTPException(status_code=404, detail="This card isn't waiting for you.")
+    _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)
+    routed = proposal.routed_to_person_id
+    return AlertCard(proposal=proposal, people=[p for p in response.people if p.id == routed])
 
 
 def _first_week_card() -> FirstWeekCardModel | None:
@@ -2273,10 +2469,10 @@ def get_morning_brief(request: Request, response: Response) -> TodayResponse:
     from openexecutive.orchestrator.artifact_records import viewer_for_person
 
     caller = _resolve_caller_person_id(request)
-    payload = _build_today(
-        include_private=_is_principal(caller), viewer=viewer_for_person(caller)
-    )
+    principal = _is_principal(caller)
+    payload = _build_today(include_private=principal, viewer=viewer_for_person(caller))
     payload.caller_person_id = caller
+    _attach_home_rules(payload, caller=caller, principal=principal, now=datetime.now(UTC))
     # Serve the viewer's cached narrative (cache-only — this deprecated alias
     # has no BackgroundTasks to schedule a regen).
     _attach_narrative(

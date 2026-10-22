@@ -14,14 +14,15 @@ import {
   rerunWorkflowRun,
   reviewAlerts,
   snoozeAlert,
+  type HomeTile,
   type ProposalItem,
+  type SummaryPart,
   type Today,
 } from "@/lib/api";
 import type { AlertApproval } from "@/lib/approvals";
-import { briefingSummary, greeting, type SummaryPart } from "@/lib/briefingSummary";
+import { greeting } from "@/lib/briefingSummary";
 import { FIRST_RUN_LINKS } from "@/lib/firstRun";
 import { principalIdOf } from "@/lib/dueSoon";
-import { groupHandled } from "@/lib/handled";
 import {
   BRIEFING_REFRESH_INTERVAL_MS,
   narrativeRepollDelay,
@@ -29,7 +30,6 @@ import {
   shouldRefreshOnFocus,
 } from "@/lib/narrativeFreshness";
 import { reviewRanLabel } from "@/lib/rhythmCards";
-import type { SnoozeChoice } from "@/lib/snooze";
 import InfoTip from "./InfoTip";
 import HeldBack from "./briefing/HeldBack";
 import { ACTION_CARDS_TIP, ActionCardItem, useActionCards } from "./ActionCards";
@@ -41,20 +41,12 @@ import {
   InFlightPanelBody,
   MonitoringPanelBody,
   PracticeClientsPanelBody,
-  inFlightNext,
 } from "./briefing/AwarenessPanels";
 import ApprovedRow from "./briefing/ApprovedRow";
 import FirstWeekCard from "./briefing/FirstWeekCard";
 import NarrativeBody from "./briefing/Narrative";
-import { isHeldAction } from "./briefing/HeldActionCard";
-import { isLeadTraining } from "./briefing/LeadTrainingCard";
 import ProposalCard from "./briefing/ProposalCard";
-import {
-  NEEDS_YOU_DISMISS_OLDER_THAN_DAYS,
-  TONE_TEXT,
-  olderThan,
-  type ContinueHandler,
-} from "./briefing/shared";
+import { TONE_TEXT, type ContinueHandler } from "./briefing/shared";
 import {
   DueSoonPanelBody,
   ProjectsPanelBody,
@@ -64,7 +56,7 @@ import {
   useOpenLoops,
   useWeeklyReview,
 } from "./briefing/SoloPanels";
-import { DepartmentsPanelBody, PeoplePanelBody, peopleSummary } from "./briefing/TeamPanels";
+import { DepartmentsPanelBody, PeoplePanelBody } from "./briefing/TeamPanels";
 import { buttonClass } from "./ui/Button";
 import OverflowMenu from "./ui/OverflowMenu";
 import SidePanel from "./ui/SidePanel";
@@ -78,6 +70,12 @@ export { DeptCard } from "./briefing/TeamPanels";
 // "Needs you" queue as large cards, then a row of count tiles — one per
 // awareness section with something in it — each opening its full list in a
 // side panel. Today's written brief ("What's going on") opens in a panel too.
+//
+// GET /today works out Home's rules for the caller (briefing/home_rules.py):
+// each card's lane, kind and actions, Needs you's count and older-than
+// offer, the summary line, the tiles, the quiet day, the handled rows and
+// the snooze times. This page shows them and keeps only what is its own:
+// cards hidden at once on a click until the next fetch, panels, notices.
 
 // "Needs you" shows this many cards before a "Show N more" toggle.
 const NEEDS_YOU_VISIBLE = 3;
@@ -97,6 +95,8 @@ type PanelKey =
   | "dueSoon"
   | "weeklyReview";
 
+// A count tile: one of GET /today's, or solo's own (due soon, projects, the
+// weekly review), which come from their own endpoints.
 interface Tile {
   key: PanelKey;
   value: string;
@@ -104,6 +104,14 @@ interface Tile {
   sub: string;
   subTone?: keyof typeof TONE_TEXT;
 }
+
+const fromToday = (t: HomeTile): Tile => ({
+  key: t.key,
+  value: t.value,
+  label: t.label,
+  sub: t.sub,
+  subTone: t.tone ?? undefined,
+});
 
 interface ApprovalRow {
   approval: AlertApproval;
@@ -247,7 +255,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
       // A roster request, a Take the lead training card or a held chat
       // action was already answered on its own card (which also clears the
       // companion alert): only hide it and re-sync.
-      if (proposal.roster_request || isLeadTraining(proposal) || isHeldAction(proposal)) {
+      if ((proposal.card_kind ?? "proposal") !== "proposal") {
         refreshToday();
         return;
       }
@@ -259,6 +267,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
         return;
       }
       await ackAlert(proposal.alert_id, "dismissed");
+      refreshToday();  // re-sync the counts and the summary line
     } catch (e) {
       setActedAlertIds(prev);
       console.error("Dismiss failed", e);
@@ -267,17 +276,18 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
 
   // Snooze: the card leaves now and the server brings it back at `until`.
   // Undo clears the snooze and shows the card again.
-  const handleSnooze = useCallback(async (proposal: ProposalItem, choice: SnoozeChoice) => {
+  const handleSnooze = useCallback(async (proposal: ProposalItem, choice: { short: string; until: string }) => {
     const prev = actedAlertIds;
     setActedAlertIds(new Set(prev).add(proposal.alert_id));
     try {
       await snoozeAlert(proposal.alert_id, choice.until);
       setSnoozed({ alertId: proposal.alert_id, short: choice.short });
+      refreshToday();  // re-sync the counts and the summary line
     } catch (e) {
       setActedAlertIds(prev);
       console.error("Snooze failed", e);
     }
-  }, [actedAlertIds]);
+  }, [actedAlertIds, refreshToday]);
 
   const handleUnsnooze = useCallback(async () => {
     if (!snoozed) return;
@@ -433,84 +443,28 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
   const departments = today?.departments ?? [];
-  const activeDepts = departments.filter((d) => d.goal_count > 0 || d.awaiting_count > 0);
-  // Only the departments with a problem (at risk / off track / awaiting)
-  // count as needing attention; healthy ones fold into a quiet toggle in
-  // the panel.
-  const attentionDepts = activeDepts.filter(
-    (d) => d.at_risk_count > 0 || d.off_track_count > 0 || d.awaiting_count > 0,
-  );
 
-  const isQuiet =
-    today !== null &&
-    today.proposals.length === 0 &&
-    replies.cards.length === 0 &&
-    actionCards.cards.length === 0 &&
-    draftCards.cards.length === 0 &&
-    activeDepts.every((d) => d.at_risk_count === 0 && d.off_track_count === 0 && d.awaiting_count === 0) &&
-    today.people.every((p) => p.awaiting_count === 0);
-
-  const showPeople = !solo && (today?.people.length ?? 0) > 1;
-
-  // Bucket proposals once so the summary line, the queue and the tiles work
-  // off the same split. "Needs you" = action proposals routed to the caller,
-  // plus unrouted catch-all items when the caller is the principal. When the
-  // caller can't be resolved (caller_person_id null — e.g. a direct curl),
-  // fall back to the legacy single bucket so the queue still renders.
-  // Optimistically-acted alerts are dropped first so counts reflect the click.
-  const callerId = today?.caller_person_id ?? null;
-  const isPrincipalCaller =
-    callerId == null ? false : today?.people.find((p) => p.id === callerId)?.is_principal ?? false;
+  // Each card's lane comes from /today (`lane`): the caller's own, a
+  // teammate's, or monitoring. Cards acted on here leave at once, before
+  // the next fetch re-syncs the counts.
   const liveProposals = (today?.proposals ?? []).filter((p) => !actedAlertIds.has(p.alert_id));
-  const monitoringProposals = liveProposals.filter((p) => p.category === "monitoring");
-  const actionProposals = liveProposals.filter((p) => p.category !== "monitoring");
-  // Solo: everything is yours, so nothing goes to an "Across the team" lane.
-  const mineProposals =
-    callerId == null || solo
-      ? actionProposals
-      : actionProposals.filter(
-          (p) => p.routed_to_person_id === callerId || (p.routed_to_person_id == null && isPrincipalCaller),
-        );
-  const mineIds = new Set(mineProposals.map((p) => p.alert_id));
-  const otherProposals =
-    callerId == null || solo ? [] : actionProposals.filter((p) => !mineIds.has(p.alert_id));
-  // A roster request is answered on its card, never swept (the server skips
-  // it too), so it is not counted here.
-  const staleNeedsYouIds = olderThan(
-    mineProposals.filter((p) => !p.roster_request),
-    NEEDS_YOU_DISMISS_OLDER_THAN_DAYS,
-  );
-  const handledOvernight = today?.handled_overnight ?? [];
-  const handledRows = groupHandled(handledOvernight);
+  const monitoringProposals = liveProposals.filter((p) => p.lane === "monitoring");
+  const mineProposals = liveProposals.filter((p) => p.lane === "needs_you");
+  const otherProposals = liveProposals.filter((p) => p.lane === "team");
+  const dismissOlder = today?.dismiss_older ?? null;
+  const staleNeedsYouIds = (dismissOlder?.alert_ids ?? []).filter((id) => !actedAlertIds.has(id));
+  const handledRows = today?.handled_rows ?? [];
   const inFlight = today?.in_flight ?? [];
   const practiceClients = today?.practice_clients ?? [];
-
-  // Summary-line inputs. Solo has no Departments or People tiles, so it says
-  // how many goals need attention instead, linking to /goals.
-  const deptAtRiskCount = solo
-    ? 0
-    : attentionDepts.filter((d) => d.at_risk_count > 0 || d.off_track_count > 0).length;
-  const peopleNeedReply = solo ? 0 : (today?.people ?? []).filter((p) => p.status === "needs_reply").length;
-  const peopleOverdue = solo ? 0 : (today?.people ?? []).filter((p) => p.overdue).length;
-  const goalsAtRisk = solo ? departments.reduce((n, d) => n + d.at_risk_count + d.off_track_count, 0) : 0;
   // The top three words a commitment as the owner's ("you").
   const principalName =
     (principalId != null && today?.people.find((p) => p.id === principalId)?.full_name) || "";
-  const needsYouCount = mineProposals.length + replies.cards.length + actionCards.cards.length + draftCards.cards.length;
-  const summary: SummaryPart[] = today
-    ? briefingSummary({
-        needsYou: needsYouCount,
-        handledOvernight: handledRows.length,
-        peopleOverdue,
-        peopleNeedReply,
-        deptAtRisk: deptAtRiskCount,
-        goalsAtRisk,
-        inFlight: inFlight.length,
-        monitoring: monitoringProposals.length,
-      })
-    : [];
+  const needsYouCount = today?.needs_you_count ?? 0;
+  const summary: SummaryPart[] = today?.summary ?? [];
+  const isQuiet = today?.quiet ?? false;
 
-  // The count tiles — only those with something to show.
+  // The count tiles — only those with something to show: solo's own first,
+  // then /today's.
   const tiles: Tile[] = [];
   if (today) {
     if (solo) {
@@ -541,67 +495,8 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
           sub: reviewRanLabel(weeklyReview.completed_at) || weeklyReview.period || "",
         });
       }
-    } else {
-      const deptValue = attentionDepts.length > 0 ? attentionDepts.length : activeDepts.length || departments.length;
-      tiles.push({
-        key: "departments",
-        value: String(deptValue),
-        label: "Departments",
-        sub:
-          attentionDepts.length > 0
-            ? deptAtRiskCount > 0
-              ? "at risk"
-              : "need attention"
-            : activeDepts.length > 0
-              ? "on track"
-              : "not set up yet",
-        subTone: attentionDepts.length > 0 ? "amber" : activeDepts.length > 0 ? "emerald" : undefined,
-      });
-      if (showPeople && today) {
-        const people = today.people;
-        const busy = people.filter((p) => p.status === "needs_reply" || p.status === "awaiting").length;
-        const s = peopleSummary(people);
-        tiles.push({
-          key: "people",
-          value: String(busy > 0 ? busy : people.length),
-          label: "People",
-          sub: busy > 0 ? s.text : "all clear",
-          subTone: s.hasOverdue ? "rose" : busy > 0 ? "amber" : "emerald",
-        });
-      }
     }
-    if (otherProposals.length > 0)
-      tiles.push({ key: "team", value: String(otherProposals.length), label: "Across the team", sub: "with teammates" });
-    if (inFlight.length > 0)
-      tiles.push({
-        key: "inFlight",
-        value: String(inFlight.length),
-        label: "Under way",
-        sub: inFlightNext(inFlight),
-        subTone: inFlight.some((f) => f.overdue) ? "amber" : undefined,
-      });
-    if (handledRows.length > 0)
-      tiles.push({
-        key: "handled",
-        value: String(handledRows.length),
-        label: "Handled",
-        sub: "by the Executive",
-        subTone: "emerald",
-      });
-    if (monitoringProposals.length > 0)
-      tiles.push({
-        key: "monitoring",
-        value: String(monitoringProposals.length),
-        label: "Monitoring",
-        sub: monitoringProposals.length === 1 ? "signal" : "signals",
-      });
-    if (practiceClients.length > 0)
-      tiles.push({
-        key: "clients",
-        value: String(practiceClients.length),
-        label: "Across your clients",
-        sub: "parked clients",
-      });
+    tiles.push(...(today.tiles ?? []).map(fromToday));
   }
 
   // The Needs you queue: replies waiting first (they came in first, as their
@@ -654,10 +549,10 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   const hiddenCount = queue.length - visibleQueue.length;
 
   const needsYouMenu = [
-    ...(staleNeedsYouIds.length > 0
+    ...(dismissOlder && staleNeedsYouIds.length > 0
       ? [
           {
-            label: `Dismiss ${staleNeedsYouIds.length} older than ${NEEDS_YOU_DISMISS_OLDER_THAN_DAYS} days`,
+            label: dismissOlder.label,
             onSelect: () => void handleBulkDismiss(staleNeedsYouIds),
           },
         ]
@@ -681,10 +576,10 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
       : narrativeUpdatedLabel(today.narrative_generated_at, new Date())
     : null;
 
-  // In the first week the first-week card says what to start on, so the day
-  // isn't "quiet" even with nothing on the board yet.
+  // /today's `quiet_banner`: a quiet day, a department set up, and not the
+  // first week, whose card says what to start on instead.
   const quietBanner =
-    isQuiet && activeDepts.length > 0 && !firstWeekCard ? (
+    today?.quiet_banner ? (
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
         <span className={`text-[15px] ${TONE_TEXT.emerald}`}>Quiet day — nothing needs your attention.</span>
         {!solo && (
@@ -697,9 +592,9 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   const bannerSlot = banner ?? quietBanner;
 
   const onSummaryPart = (part: SummaryPart) => {
-    if (part.target.kind === "needsYou") {
+    if (part.target.kind === "needs_you") {
       document.getElementById(NEEDS_YOU_ID)?.scrollIntoView({ behavior: "smooth", block: "start" });
-    } else if (part.target.kind === "panel") {
+    } else if (part.target.kind === "panel" && part.target.panel) {
       setOpenPanel(part.target.panel);
     }
   };
@@ -728,7 +623,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                   : summary.map((part, i) => (
                       <span key={part.text}>
                         {part.target.kind === "href" ? (
-                          <Link href={part.target.href} className="hover:text-fg hover:underline underline-offset-4">
+                          <Link href={part.target.href ?? "/"} className="hover:text-fg hover:underline underline-offset-4">
                             {part.text}
                           </Link>
                         ) : (
@@ -965,13 +860,13 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                       proposal={p}
                       people={today.people}
                       onContinue={onContinue}
-                      // Someone else's card is theirs (or the principal's)
-                      // to approve; the server refuses anyone else.
-                      onApprove={isPrincipalCaller ? handleApprove : undefined}
+                      // Someone else's card offers Approve only to the
+                      // principal (its `actions`); the server refuses anyone else.
+                      onApprove={handleApprove}
                       onDismiss={handleDismiss}
                       onSnooze={handleSnooze}
                       onRerun={handleRerun}
-                      onApproveWithEdits={isPrincipalCaller ? handleApproveWithEdits : undefined}
+                      onApproveWithEdits={handleApproveWithEdits}
                     />
                   ))}
                   {otherProposals.length === 0 && (
@@ -987,7 +882,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
               </SidePanel>
               <SidePanel open={openPanel === "handled"} onClose={() => setOpenPanel(null)} title="Handled">
                 <HandledPanelBody
-                  items={handledOvernight}
+                  rows={handledRows}
                   onReopen={handleReopen}
                   undone={undoneRows}
                   onJumpToAlert={jumpToAlert}

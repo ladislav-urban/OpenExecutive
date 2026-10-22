@@ -123,6 +123,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from openexecutive.api import caller as api_caller
+from openexecutive.briefing.home_rules import register_waiting_cards
 from openexecutive.delegation.gmail import (
     BLOCKING_CODES,
     STATUS_MESSAGES,
@@ -157,6 +158,25 @@ from openexecutive.people.models import Person
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _waiting_replies(person: Person) -> int:
+    """Reply cards waiting for ``person``, for Home's Needs you count: what
+    GET /delegation/replies lists them, none for anyone it refuses."""
+    from openexecutive.delegation.inbox import open_cards
+
+    return len(open_cards(person.id)) if person.id is not None and can_delegate(person) else 0
+
+
+def _waiting_actions(person: Person) -> int:
+    """Action cards waiting for ``person``, as GET /delegation/actions lists them."""
+    from openexecutive.delegation.action_cards import open_cards
+
+    return len(open_cards(person.id)) if person.id is not None and can_delegate(person) else 0
+
+
+register_waiting_cards("delegation_replies", _waiting_replies)
+register_waiting_cards("delegation_actions", _waiting_actions)
 
 # Gmail status -> the 409 code a caller gets when it blocks turning it on.
 _BLOCKING_CODES = BLOCKING_CODES

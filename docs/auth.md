@@ -384,10 +384,12 @@ origin. Downloads keep the API's own sandbox policy.
 Each entry is a method and an API path. It holds: reading who is signed in (`GET /auth/me`,
 so the host can warn when that isn't its own user), the briefing, cards (with
 ERPNext's draft cards and the ERPNext alerts that suggest one, `GET /erpnext/drafts` and
-`GET /erpnext/alert-drafts`), conversations and the watch list; acknowledging, snoozing, reopening and reviewing
-alerts; chatting (send, stop, add a message, attach, dictate); and the watch list
+`GET /erpnext/alert-drafts`, and Act as me's drafted replies and suggested actions,
+`GET /delegation/replies` and `GET /delegation/actions`), conversations and the watch list;
+acknowledging, snoozing, reopening and reviewing alerts; chatting (send, stop, add a message, attach, dictate); and the watch list
 (describe, add, approve or decline a proposal, edit, delete). Never approving, rejecting
-or cancelling a card, preparing a draft, Act as me, delegation, settings or People.
+or cancelling a card, preparing a draft, Act as me's Send, edits or answers, and
+everything else under delegation, settings or People.
 `tests/unit/test_host_list.py` checks every entry against the API's routes and against
 that rule. The proxy enforces it:
 
@@ -464,8 +466,13 @@ app or holding its secrets: `embed-manifest.json` (the navigation and routes),
 everything installed in it, and whatever its administrators add. That code can do what
 the host list allows, as whoever has the host open and is signed in here: read their
 email, the briefing, alerts, cards (ERPNext's draft cards with their figures among them), conversations (whose replies can draw on the person's memory and
-mail) and the watch list; start a read-only chat turn, in a conversation it started, and
-read its reply; handle alerts and the watch list. It can't approve, send, change settings
+mail) and the watch list. With Act as me on, the cards include the replies drafted in the
+person's own mailbox: who wrote, what they wrote, and the drafted answer with its
+recipients and the open questions on it, and the actions suggested from their mail
+(a message as it would be sent, an invitation, a contact to add). So that code can read
+part of the person's mail, as the chat replies it may already read can draw on it. It
+can't send, edit or answer a reply card, approve an action card, or change Act as me.
+It can also start a read-only chat turn, in a conversation it started, and read its reply; handle alerts and the watch list. It can't approve, send, change settings
 or People, act through a chat turn (its lines make a conversation read-only everywhere,
 so a chat started from the host stays read-only in Open Executive too, and it can't
 write in the person's own conversations), or read or click inside the frame. A chat it

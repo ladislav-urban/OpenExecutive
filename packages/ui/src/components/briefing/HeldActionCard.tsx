@@ -18,13 +18,7 @@ import {
 
 import { Chip } from "./shared";
 
-// The tag such a card carries (department_gate.DECISION_CLASS).
-export const HELD_ACTION_TAG = "decision_class:department_action";
-
-export function isHeldAction(proposal: ProposalItem): boolean {
-  return proposal.decision_instance_id != null && (proposal.topic_tags ?? []).includes(HELD_ACTION_TAG);
-}
-
+// Shown for a card GET /today calls `card_kind: "held_action"`.
 export default function HeldActionCard({
   proposal,
   onResolved,

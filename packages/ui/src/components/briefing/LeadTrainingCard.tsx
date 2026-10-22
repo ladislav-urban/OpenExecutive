@@ -19,13 +19,7 @@ import {
 
 import { Chip } from "./shared";
 
-// The tag a training card carries (orchestrator.take_the_lead.TRAINING_TAG).
-export const LEAD_TRAINING_TAG = "take_the_lead:training";
-
-export function isLeadTraining(proposal: ProposalItem): boolean {
-  return proposal.decision_instance_id != null && (proposal.topic_tags ?? []).includes(LEAD_TRAINING_TAG);
-}
-
+// Shown for a card GET /today calls `card_kind: "lead_training"`.
 export default function LeadTrainingCard({
   proposal,
   onResolved,
