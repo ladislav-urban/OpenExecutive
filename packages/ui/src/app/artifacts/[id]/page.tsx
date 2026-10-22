@@ -12,6 +12,7 @@ import {
   getArtifact,
   restoreArtifact,
 } from "@/lib/api";
+import { newChatPath } from "@/lib/chatRoutes";
 import ArtifactViewer from "@/components/ArtifactViewer";
 import Button, { buttonClass } from "@/components/ui/Button";
 import OverflowMenu from "@/components/ui/OverflowMenu";
@@ -20,7 +21,7 @@ import OverflowMenu from "@/components/ui/OverflowMenu";
 // Executive can get_artifact → draft_artifact(supersedes=…).
 function reviseHref(art: ArtifactDetail): string {
   const draft = `Revise artifact ${art.id} ("${art.title}"): `;
-  return `/?new=1&draft=${encodeURIComponent(draft)}`;
+  return newChatPath(draft);
 }
 
 function formatTimestamp(iso: string): string {

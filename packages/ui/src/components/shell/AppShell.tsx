@@ -23,13 +23,14 @@ import {
 import { useFirstRunRedirect } from "@/components/onboard/useFirstRunRedirect";
 import HubTabs from "@/components/ui/HubTabs";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
+import { isChatHomePath } from "@/lib/chatRoutes";
 
 // Routes that own their full layout and should not be wrapped by the
 // shell — sign-in, the onboarding wizard (full-screen flow), and the
-// chat home (`/`), which keeps its own top bar and debug panel but
-// renders the same `AppSidebar` as every other route.
+// chat home (`/`, `/chats/new`, `/chats/<id>`; lib/chatRoutes.ts), which
+// keeps its own top bar and debug panel but renders the same `AppSidebar`
+// as every other route.
 const EXEMPT_PREFIXES = ["/signin", "/onboard", "/api", "/confirm"];
-const EXEMPT_EXACT = new Set(["/"]);
 
 // Human-readable labels for path segments shown in the breadcrumb.
 // Dynamic segments (slugs / ids) are rendered raw and truncated by CSS.
@@ -38,6 +39,7 @@ const EXEMPT_EXACT = new Set(["/"]);
 const SEGMENT_LABELS: Record<string, string> = {
   today: "Today",
   review: "Review",
+  briefing: "Home",
   proposals: "Proposals",
   people: "People",
   departments: "Departments",
@@ -81,7 +83,7 @@ function labelFor(segment: string): string {
 }
 
 function isExempt(pathname: string): boolean {
-  if (EXEMPT_EXACT.has(pathname)) return true;
+  if (isChatHomePath(pathname)) return true;
   return EXEMPT_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 }
 

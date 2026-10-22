@@ -14,6 +14,7 @@ import {
   type ReflectionState,
   type ReflectionWeek,
 } from "@/lib/api";
+import { chatPath } from "@/lib/chatRoutes";
 import { learningStats } from "@/lib/learning";
 
 import { EmptyState, formatDate, formatRunAt } from "./shared";
@@ -489,7 +490,7 @@ function MissRow({
           </div>
         )}
         <Link
-          href={`/?session=${encodeURIComponent(miss.session_id)}`}
+          href={chatPath(miss.session_id)}
           className="inline-flex min-h-[40px] items-center text-sm font-medium text-accent hover:underline"
         >
           See the conversation

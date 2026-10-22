@@ -15,6 +15,7 @@ import {
   type ChatTopic,
   type SessionSummary,
 } from "@/lib/api";
+import { NEW_CHAT_PATH, chatPath } from "@/lib/chatRoutes";
 import {
   CHANNEL_LABELS,
   CHANNEL_ORDER,
@@ -232,7 +233,7 @@ export default function ChatsPage() {
                 channels.
               </p>
             </div>
-            <Link href="/?new=1" className={buttonClass("primary", "md", "flex-shrink-0")}>
+            <Link href={NEW_CHAT_PATH} className={buttonClass("primary", "md", "flex-shrink-0")}>
               <Icon name="plus" size="w-4 h-4" />
               <span className="hidden sm:inline">New chat</span>
               <span className="sm:hidden">New</span>
@@ -342,8 +343,7 @@ export default function ChatsPage() {
               onSelect={(id) => {
                 // Opened from a message match: the chat steps through the matches.
                 const hit = shown?.find((s) => s.session_id === id);
-                const find = hit && hit.match_count ? `&find=${encodeURIComponent(trimmed)}` : "";
-                router.push(`/?session=${encodeURIComponent(id)}${find}`);
+                router.push(chatPath(id, hit && hit.match_count ? trimmed : undefined));
               }}
               onDelete={remove}
               onChanged={changed}

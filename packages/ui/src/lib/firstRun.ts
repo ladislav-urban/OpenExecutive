@@ -180,7 +180,8 @@ export function gettingStartedItems(input: ChecklistInput): ChecklistItem[] {
       detail: input.hasAsked ? "First conversation saved" : `Try “${ASK_SUGGESTION}”`,
       done: input.hasAsked,
       optional: false,
-      href: "/?new=1",
+      // A new chat (lib/chatRoutes.ts's NEW_CHAT_PATH).
+      href: "/chats/new",
       action: "Ask",
     },
     {

@@ -72,6 +72,7 @@ export const APP_ROUTES = [
   "architecture",
   "artifacts",
   "audit",
+  "briefing",
   "cards",
   "chats",
   "clients",

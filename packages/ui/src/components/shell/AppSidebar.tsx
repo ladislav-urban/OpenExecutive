@@ -16,12 +16,13 @@ import {
   SETTINGS_NAV_ITEM,
 } from "@/components/shell/navConfig";
 import { getReviewStats } from "@/lib/api";
+import { NEW_CHAT_PATH } from "@/lib/chatRoutes";
 
 /**
- * Wiring the chat home passes in. `/` keeps its state in memory (mode,
- * active session), so its entries are buttons that call back into the page;
- * everywhere else the same entries are links (`/?new=1`, `/?session=<id>`)
- * that the home page consumes on mount.
+ * Wiring the chat home passes in. The chat home (`/`, `/chats/new`,
+ * `/chats/<id>`) keeps its view in one mounted page, so its entries are
+ * buttons that call back into the page; everywhere else the same entries
+ * are links to those addresses (lib/chatRoutes.ts).
  */
 export interface SidebarHomeControls {
   mode: "briefing" | "chat";
@@ -111,7 +112,7 @@ export default function AppSidebar({
 
       <div className="px-3 pb-2 flex-shrink-0">
         <SidebarEntry
-          href={home ? undefined : "/?new=1"}
+          href={home ? undefined : NEW_CHAT_PATH}
           onClick={home ? home.onNewChat : onClose}
           title={NEW_CHAT_DESCRIPTION}
           ariaCurrent={newChatActive}

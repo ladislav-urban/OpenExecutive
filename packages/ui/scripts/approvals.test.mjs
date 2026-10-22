@@ -16,7 +16,7 @@ const base = {
 test("a running approval links to the chat doing the work", () => {
   const line = approvalLine({ ...base, status: "running", session_id: "abc 1" }, "Brief the board");
   assert.equal(line.text, "Working on it: Brief the board");
-  assert.equal(line.chatHref, "/?session=abc%201");
+  assert.equal(line.chatHref, "/chats/abc%201");
   assert.equal(line.chatLabel, "Watch it");
   assert.equal(line.canRetry, false);
 });

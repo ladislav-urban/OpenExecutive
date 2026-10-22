@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import Chat from "@/components/Chat";
 import { getSession, getSessionMessages, type ChatMessage, type SessionSummary } from "@/lib/api";
+import { chatPath } from "@/lib/chatRoutes";
 import { sessionTitle } from "@/lib/sessionChannel";
 
 type Loaded =
@@ -78,7 +79,7 @@ export default function SharedChatPage() {
         // The viewer's own chat: it opens where they can write in it.
         <p className="max-w-3xl mx-auto w-full px-4 sm:px-6 py-8 text-[15px] text-fg-muted">
           This is your own chat.{" "}
-          <Link href={`/?session=${encodeURIComponent(id)}`} className="font-medium text-accent hover:underline">
+          <Link href={chatPath(id)} className="font-medium text-accent hover:underline">
             Open it
           </Link>
         </p>
