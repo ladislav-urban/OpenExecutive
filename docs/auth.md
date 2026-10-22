@@ -381,7 +381,8 @@ the proxy without a policy of its own (JSON, its HTML docs, an error page) gets
 origin. Downloads keep the API's own sandbox policy.
 
 **What a host origin may call: the host list** (`packages/ui/src/lib/host-list.json`).
-Each entry is a method and an API path. It holds: reading the briefing, cards (with
+Each entry is a method and an API path. It holds: reading who is signed in (`GET /auth/me`,
+so the host can warn when that isn't its own user), the briefing, cards (with
 ERPNext's draft cards and the ERPNext alerts that suggest one, `GET /erpnext/drafts` and
 `GET /erpnext/alert-drafts`), conversations and the watch list; acknowledging, snoozing, reopening and reviewing
 alerts; chatting (send, stop, add a message, attach, dictate); and the watch list
@@ -461,8 +462,8 @@ app or holding its secrets: `embed-manifest.json` (the navigation and routes),
 
 **What remains.** A host origin runs code Open Executive doesn't control: the host app,
 everything installed in it, and whatever its administrators add. That code can do what
-the host list allows, as whoever has the host open and is signed in here: read the
-briefing, alerts, cards (ERPNext's draft cards with their figures among them), conversations (whose replies can draw on the person's memory and
+the host list allows, as whoever has the host open and is signed in here: read their
+email, the briefing, alerts, cards (ERPNext's draft cards with their figures among them), conversations (whose replies can draw on the person's memory and
 mail) and the watch list; start a read-only chat turn, in a conversation it started, and
 read its reply; handle alerts and the watch list. It can't approve, send, change settings
 or People, act through a chat turn (its lines make a conversation read-only everywhere,

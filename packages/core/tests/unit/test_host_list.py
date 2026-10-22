@@ -60,6 +60,9 @@ def test_nothing_that_acts_for_the_person_is_on_it(method: str, path: str) -> No
     assert not path.startswith(_FORBIDDEN_PREFIXES), path
     # ERPNext's draft cards are read from the host; preparing one (the alert's
     # tap) and the oversight export stay in Open Executive's own pages.
+    # Who is signed in, never the roster's emails.
+    if path.startswith("/auth/"):
+        assert (method, path) == ("GET", "/auth/me"), path
     if path.startswith("/erpnext/"):
         assert method == "GET" and path in {"/erpnext/drafts", "/erpnext/alert-drafts"}, path
     if path.startswith("/watchlist/{slug}/"):
