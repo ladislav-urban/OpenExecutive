@@ -2,7 +2,8 @@
 // origins"), so its checks never need this app running or its secrets:
 //
 //   embed-manifest.json  the navigation (navConfig.ts's destinations and
-//                        hubs, team and solo), the routes and the contract
+//                        hubs, team and solo), the routes, the contract and
+//                        the User Guide's section ids (/guide?section=<id>)
 //   host-list.json       the calls a host origin's page may make
 //
 // The third, openapi.json, comes from the API (scripts/export-openapi.py).
@@ -14,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDestinations, buildHubs } from "../src/components/shell/navConfig.ts";
 import { APP_ROUTES, EMBED_CONTRACT, EMBED_PROTOCOL, THEME_TOKENS } from "../src/lib/embed.ts";
+import { GUIDE_SECTION_IDS } from "../src/lib/guideSections.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
@@ -32,6 +34,7 @@ export function embedManifest() {
     themeTokens: [...THEME_TOKENS],
     routes: [...APP_ROUTES],
     navigation: { team: navigation("team"), solo: navigation("solo") },
+    guideSections: [...GUIDE_SECTION_IDS],
   };
 }
 
