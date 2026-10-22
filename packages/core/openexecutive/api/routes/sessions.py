@@ -29,7 +29,7 @@ from openexecutive.api.routes.chat import (
     chat_people,
     forget_session,
 )
-from openexecutive.api.zones import TZ_QUERY, caller_zone
+from openexecutive.api.zones import TzQuery, caller_zone
 from openexecutive.memory import chat_export, chat_topics
 from openexecutive.memory.session_store import (
     delete_session,
@@ -67,7 +67,7 @@ def _with_date_groups(rows: list[SessionSummary], caller: int | None, tz: str | 
 
 
 @router.get("/sessions", response_model=list[SessionSummary], response_model_exclude_none=True)
-def get_sessions(request: Request, q: str = "", tz: str | None = TZ_QUERY) -> list[SessionSummary]:
+def get_sessions(request: Request, q: str = "", tz: TzQuery = None) -> list[SessionSummary]:
     """The caller's chats, newest first, each with its date group in the
     zone the caller sees times in (``tz``). With ``q``, only those whose title
     or messages contain it, each with a snippet of the newest match."""
@@ -240,7 +240,7 @@ async def get_topics(request: Request) -> ChatTopics:
 
 @router.post("/sessions/topics/layout", response_model=chat_list.TopicLayout, response_model_exclude_none=True)
 def post_topic_layout(
-    request: Request, body: TopicLayoutRequest, tz: str | None = TZ_QUERY,
+    request: Request, body: TopicLayoutRequest, tz: TzQuery = None,
 ) -> chat_list.TopicLayout:
     """The Chats list's topic view for the chats the client shows
     (``utils.chat_list.layout_topics``): pinned chats, then each topic or
@@ -319,7 +319,7 @@ def ungroup_topic(topic_id: int, request: Request) -> Response:
     response_model=list[SessionSummary],
     response_model_exclude_none=True,
 )
-def get_shared_sessions(request: Request, tz: str | None = TZ_QUERY) -> list[SessionSummary]:
+def get_shared_sessions(request: Request, tz: TzQuery = None) -> list[SessionSummary]:
     """Chats other people shared with the caller, newest first, each with who
     shared it (``shared_by``) and when (``shared_at``)."""
     caller = _resolve_caller_person_id(request)

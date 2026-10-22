@@ -9,20 +9,23 @@ from __future__ import annotations
 
 import logging
 from datetime import tzinfo
+from typing import Annotated
 
 from fastapi import Query
 
 logger = logging.getLogger(__name__)
 
-# The ``tz`` query a route takes for this.
-TZ_QUERY = Query(None, max_length=64, description="IANA time zone the client shows times in")
+# The ``tz`` query a route takes for this: ``tz: TzQuery = None``. The default
+# stays a plain None, so a route function called directly from Python (the
+# app-control tools do) gets None, not FastAPI's marker.
+TzQuery = Annotated[str | None, Query(max_length=64, description="IANA time zone the client shows times in")]
 
 
 def caller_zone(caller: int | None, tz: str | None = None) -> tzinfo:
     from openexecutive.memory.workspace_settings import get_user_timezone, load_zone
     from openexecutive.people.notifications import get_notification_settings, zone_for
 
-    if tz and (zone := load_zone(tz.strip())) is not None:
+    if isinstance(tz, str) and tz and (zone := load_zone(tz.strip())) is not None:
         return zone
     if caller is None:
         return get_user_timezone()

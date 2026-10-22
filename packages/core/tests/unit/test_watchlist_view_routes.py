@@ -88,7 +88,8 @@ def test_a_malformed_trigger_never_breaks_the_list(client: TestClient) -> None: 
         ("stock", "MSFT", {"abs_change_pct_gte": 1e308}),
         ("stock", "IBM", {"abs_change_pct_gte": int("9" * 400)}),
         ("edgar", "320193", {"forms": 1}),
-        ("rss", "https://x.com/feed", {"keywords": "pricing"}),
+        # A page watch: an rss target is fetched to check it, which a unit test can't.
+        ("page_watch", "https://x.com/pricing", {"keywords": "pricing"}),
     ]
     for signal_type, target, trigger in bad:
         res = client.post("/watchlist", json={"signal_type": signal_type, "target": target, "trigger": trigger})

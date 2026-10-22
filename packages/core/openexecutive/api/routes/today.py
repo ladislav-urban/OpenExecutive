@@ -40,7 +40,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
-from openexecutive.api.zones import TZ_QUERY, caller_zone
+from openexecutive.api.zones import TzQuery, caller_zone
 from openexecutive.briefing.home_rules import (
     CardAction,
     CardKind,
@@ -1992,7 +1992,7 @@ def _is_principal(caller_person_id: int | None) -> bool:
 
 @router.get("/today", response_model=TodayResponse, tags=["today"])
 async def get_today(
-    request: Request, background_tasks: BackgroundTasks, tz: str | None = TZ_QUERY,
+    request: Request, background_tasks: BackgroundTasks, tz: TzQuery = None,
 ) -> TodayResponse:
     stale: list[StaleInsight] = []
     from openexecutive.api.routes.chat import _resolve_caller_person_id
@@ -2118,7 +2118,7 @@ class AlertCard(BaseModel):
 
 
 @router.get("/alerts/{alert_id}/card", response_model=AlertCard, tags=["today"])
-async def get_alert_card(alert_id: int, request: Request, tz: str | None = TZ_QUERY) -> AlertCard:
+async def get_alert_card(alert_id: int, request: Request, tz: TzQuery = None) -> AlertCard:
     """A card from the caller's Home on a page of its own (the UI's
     /cards/alert/<id>, which a host's frame opens to have it approved). Only
     for its own person: the principal, or whoever it is routed to. Anyone
