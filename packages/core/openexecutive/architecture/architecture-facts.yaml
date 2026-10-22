@@ -9531,7 +9531,11 @@ integrations:
     this fiscal year is above its budget; key company:dimension:account:FY)
     and weekly_margin_drop (weekly per company, Gross Profit: last week's
     margin more than margin_drop_points below the trailing weeks'; key
-    company:<week label>). erpnext_events.KINDS lists all five; oe_connector
+    company:<week label>). stalled_repost (daily per company, Repost Item
+    Valuation entries that failed, or sat queued or in progress past
+    repost_stalled_hours, which leave stock values and the stock ledger
+    wrong without telling anyone; key company:<oldest repost name>).
+    erpnext_events.KINDS lists all six; oe_connector
     holds a kind back until it is listed there, because a kind OpenExecutive
     does not know is skipped yet the request is still accepted, so the event
     would be marked sent and lost for the month.
