@@ -7722,6 +7722,16 @@ auth:
     doesn't control (its administrators' scripts, installed apps), so
     what its origin can do is fixed here, not by the host.
 
+    Step 7 (native Chats and Watch list) reads, also on it: GET /chat/limits,
+    POST /sessions/topics/layout and POST /watchlist/preview (reads sent as
+    POST for their body), GET /watchlist/form. The chats' rules
+    (utils/chat_list.py: date groups, topic layout, "last active") and the
+    watch list's (monitoring/presentation.py) are the API's; the web app's
+    pages read them too. SessionSummary.host_started is sessions.host_wrote;
+    GET /sessions/{id}/messages is typed (api.models.ChatMessage, from_host on
+    a host's line); the chat stream's events are api/chat_events.py's models,
+    in the description under text/event-stream (EventStreamResponse).
+
     The host list: GETs of /auth/me (the email the call is made as, so a
     host's native screens can warn when this session is someone else's,
     as EmbeddedShell's UserHintWarning does in the frame; never

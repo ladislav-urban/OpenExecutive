@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
 from openexecutive.memory.workspace_settings import RoleKind
+from openexecutive.utils.chat_list import DateGroup
 
 
 class PageFormField(BaseModel):
@@ -297,6 +298,63 @@ class SessionSummary(BaseModel):
     shared_with_you: bool | None = None
     shared_by: str | None = None
     shared_at: str | None = None
+    # A host origin's page started it (its lines are in it): a host may send
+    # into it, and every turn in it keeps to the host surface's rules, from
+    # any page. A host's call into any other conversation gets 409.
+    host_started: bool = False
+    # Its group in the Chats list's date view, in the zone the caller sees
+    # times in (``?tz=``; utils.chat_list): Pinned, Today, Yesterday, …
+    date_group: DateGroup | None = None
+
+
+class ActionTaken(BaseModel):
+    """A chip a reply's action left (orchestrator.action_chips): what the
+    Executive did, or the approval card it left (``decision_id``)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    tool: str
+    summary: str
+    target: str | None = None
+    link: str | None = None
+    iteration: int | None = None
+    decision_id: int | None = None
+
+
+class AnswerSource(BaseModel):
+    kind: str
+    title: str
+    url: str | None = None
+
+
+class AnswerSources(BaseModel):
+    """What a reply looked at, and the areas it had to leave out
+    (orchestrator.answer_sources)."""
+
+    sources: list[AnswerSource] = Field(default_factory=list)
+    unavailable: list[str] = Field(default_factory=list)
+
+
+class ChatMessage(BaseModel):
+    """One line of a conversation (``GET /sessions/{id}/messages``). Fields
+    are present only when they apply."""
+
+    role: Literal["user", "assistant"]
+    content: str
+    # A reply's row id, for 👍/👎 and for taking the turn back.
+    id: int | None = None
+    # The caller's own rating of a reply.
+    feedback: Literal["up", "down"] | None = None
+    # In a shared chat, who wrote a person's line.
+    sender_person_id: int | None = None
+    sender_name: str | None = None
+    # What the reply did, and what it looked at.
+    actions: list[ActionTaken] | None = None
+    sources: AnswerSources | None = None
+    # The reply was stopped before it finished.
+    stopped: bool | None = None
+    # A host origin's page wrote this line (a script there may have).
+    from_host: bool | None = None
 
 
 class TargetCustomerData(BaseModel):

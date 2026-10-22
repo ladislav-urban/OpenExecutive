@@ -385,7 +385,7 @@ Each entry is a method and an API path. It holds: reading who is signed in (`GET
 so the host can warn when that isn't its own user), the briefing, cards (with
 ERPNext's draft cards and the ERPNext alerts that suggest one, `GET /erpnext/drafts` and
 `GET /erpnext/alert-drafts`, and Act as me's drafted replies and suggested actions,
-`GET /delegation/replies` and `GET /delegation/actions`), conversations and the watch list;
+`GET /delegation/replies` and `GET /delegation/actions`), conversations (with how the Chats list groups them, `POST /sessions/topics/layout`, and the attachment limits, `GET /chat/limits`) and the watch list (with its form's choices and a preview of a new watch, `GET /watchlist/form` and `POST /watchlist/preview`, which save nothing);
 acknowledging, snoozing, reopening and reviewing alerts; chatting (send, stop, add a message, attach, dictate); and the watch list
 (describe, add, approve or decline a proposal, edit, delete). Never approving, rejecting
 or cancelling a card, preparing a draft, Act as me's Send, edits or answers, and

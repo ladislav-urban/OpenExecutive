@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import time
 from collections import deque
@@ -439,6 +440,29 @@ def _site(target: str) -> str:
     return host + path if path and len(host + path) <= 60 else host
 
 
+# A stored trigger is whatever JSON the watch was saved with, so what reads
+# it for words takes only well-formed values and falls back otherwise.
+_MAX_PCT = 1000.0
+
+
+def stock_pct(trigger: dict[str, Any]) -> float:
+    """A stock trigger's move threshold: a finite number above 0 and at most
+    ``_MAX_PCT``, else the adapter's default."""
+    v = trigger.get("abs_change_pct_gte")
+    if isinstance(v, bool) or not isinstance(v, int | float):
+        return STOCK_DEFAULT_PCT
+    try:
+        value = float(v)
+    except OverflowError:
+        return STOCK_DEFAULT_PCT
+    return value if math.isfinite(value) and 0 < value <= _MAX_PCT else STOCK_DEFAULT_PCT
+
+
+def _strings(value: Any) -> list[str]:
+    """A list's non-blank strings; nothing for anything but a list."""
+    return [str(v) for v in value if str(v).strip()] if isinstance(value, list) else []
+
+
 def _pct(value: float) -> str:
     return f"{int(value)}" if float(value).is_integer() else f"{value:g}"
 
@@ -460,15 +484,13 @@ def watching_line(signal_type: str, target: str, label: str = "") -> str:
 
 
 def trigger_line(signal_type: str, trigger: dict[str, Any]) -> str:
-    keywords = [str(k) for k in trigger.get("keywords") or [] if str(k).strip()]
+    keywords = _strings(trigger.get("keywords"))
     quoted = _join_or(["\u201c" + k + "\u201d" for k in keywords])
     mention = " that mentions " + quoted if keywords else ""
     if signal_type == "stock":
-        pct = trigger.get("abs_change_pct_gte")
-        value = pct if isinstance(pct, int | float) and not isinstance(pct, bool) and pct > 0 else STOCK_DEFAULT_PCT
-        return f"It moves {_pct(float(value))}% or more in a day, up or down"
+        return f"It moves {_pct(stock_pct(trigger))}% or more in a day, up or down"
     if signal_type == "edgar":
-        forms = [str(f).upper() for f in trigger.get("forms") or []] or list(EDGAR_DEFAULT_FORMS)
+        forms = [f.upper() for f in _strings(trigger.get("forms"))] or list(EDGAR_DEFAULT_FORMS)
         return f"They file a {_join_or([_FORM_NAMES.get(f, f) for f in forms])}"
     if signal_type == "vendor_status":
         return f"They post an incident or update{mention}"

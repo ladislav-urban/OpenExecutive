@@ -11,12 +11,14 @@ import InfoTip from "./InfoTip";
 import OverflowMenu from "./ui/OverflowMenu";
 import { SharePanel } from "./sessions/ChatHistory";
 import {
-  MAX_FILES_PER_TURN,
+  DEFAULT_ATTACHMENT_LIMITS,
   mergePickedFiles,
+  type AttachmentLimits,
 } from "@/lib/file-attachments";
 import {
   ActionTaken,
   addChatMessage,
+  getChatLimits,
   ChatMessage,
   CommitteePhase,
   DebugEvent,
@@ -151,6 +153,11 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // What a message may carry (GET /chat/limits).
+  const [limits, setLimits] = useState<AttachmentLimits>(DEFAULT_ATTACHMENT_LIMITS);
+  useEffect(() => {
+    getChatLimits().then(setLimits).catch(() => { /* the defaults stand */ });
+  }, []);
   const adoptedSessionIdRef = useRef<string | undefined>(initialSessionId);
   // Messages typed while a turn runs (see lib/queuedMessages). The ref is
   // what the turn reads when it ends; the state is what renders.
@@ -857,7 +864,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
     // Reset the input so re-picking the same file re-fires onChange.
     e.target.value = "";
     if (picked.length === 0) return;
-    const result = mergePickedFiles(pendingFiles, picked);
+    const result = mergePickedFiles(pendingFiles, picked, limits);
     setPendingFiles(result.files);
     setFileError(result.rejected.length > 0 ? result.rejected.join(" ") : null);
   }
@@ -1267,7 +1274,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
               ref={fileInputRef}
               type="file"
               multiple
-              accept="image/png,image/jpeg,image/gif,image/webp,.pdf,.docx,.doc,.xlsx,.xlsm,.txt,.md,.csv"
+              accept={limits.accept}
               onChange={handleFilesPicked}
               className="hidden"
               aria-hidden="true"
@@ -1281,12 +1288,12 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
               items={[
                 {
                   label:
-                    pendingFiles.length >= MAX_FILES_PER_TURN
-                      ? `Attach files (limit ${MAX_FILES_PER_TURN} per message)`
+                    pendingFiles.length >= limits.max_files
+                      ? `Attach files (limit ${limits.max_files} per message)`
                       : "Attach files or photos",
                   onSelect: () => fileInputRef.current?.click(),
                   // An edit replaces the words only.
-                  disabled: isLoading || editing || pendingFiles.length >= MAX_FILES_PER_TURN,
+                  disabled: isLoading || editing || pendingFiles.length >= limits.max_files,
                 },
                 {
                   label: committeeEnabled ? "Turn off committee review" : "Committee review (slower, reviewed)",

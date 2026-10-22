@@ -107,3 +107,15 @@ def test_erpnexts_draft_cards_are_read_but_never_prepared() -> None:
     ):
         assert (method, path) in _api_routes()
         assert (method, path) not in calls
+
+
+# Reads a host's Chats and Watch list screens make with POST (a body too long
+# for a query); each only reads and saves nothing.
+_POST_READS = {("POST", "/sessions/topics/layout"), ("POST", "/watchlist/preview")}
+
+
+def test_the_chats_and_watch_list_reads_are_on_it() -> None:
+    calls = {(m, p) for m, p in CALLS}
+    for call in (("GET", "/chat/limits"), ("GET", "/watchlist/form"), *_POST_READS):
+        assert call in calls, call
+        assert call in _api_routes(), call

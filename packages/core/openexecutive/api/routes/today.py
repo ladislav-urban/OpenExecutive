@@ -40,6 +40,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 
+from openexecutive.api.zones import TzQuery, caller_zone
 from openexecutive.briefing.home_rules import (
     CardAction,
     CardKind,
@@ -1989,14 +1990,9 @@ def _is_principal(caller_person_id: int | None) -> bool:
         return False
 
 
-# The zone a client says it shows times in (IANA name, e.g. the browser's),
-# for the snooze times; one it can't load is ignored.
-_TZ_QUERY = Query(None, max_length=64, description="IANA time zone the client shows times in")
-
-
 @router.get("/today", response_model=TodayResponse, tags=["today"])
 async def get_today(
-    request: Request, background_tasks: BackgroundTasks, tz: str | None = _TZ_QUERY,
+    request: Request, background_tasks: BackgroundTasks, tz: TzQuery = None,
 ) -> TodayResponse:
     stale: list[StaleInsight] = []
     from openexecutive.api.routes.chat import _resolve_caller_person_id
@@ -2023,24 +2019,6 @@ async def get_today(
         response.first_week = response.first_week_card is not None
     _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)
     return response
-
-
-def _caller_zone(caller: int | None, tz: str | None = None) -> Any:
-    """The zone the caller sees times in: the one their client says it shows
-    (``tz``, the browser's own), else their notification settings', else the
-    workspace's."""
-    from openexecutive.memory.workspace_settings import get_user_timezone, load_zone
-    from openexecutive.people.notifications import get_notification_settings, zone_for
-
-    if tz and (zone := load_zone(tz.strip())) is not None:
-        return zone
-    if caller is None:
-        return get_user_timezone()
-    try:
-        return zone_for(get_notification_settings(caller))
-    except Exception:
-        logger.warning("today: reading the caller's time zone failed", exc_info=True)
-        return get_user_timezone()
 
 
 def _workspace_solo() -> bool:
@@ -2077,7 +2055,7 @@ def _attach_home_rules(
     from openexecutive.briefing import home_rules
 
     solo = _workspace_solo()
-    response.snooze_choices = home_rules.snooze_choices(now, _caller_zone(caller, tz))
+    response.snooze_choices = home_rules.snooze_choices(now, caller_zone(caller, tz))
     people_by_id = {p.id: p for p in response.people}
     for p in response.proposals:
         p.lane = home_rules.lane(p, caller_id=caller, caller_is_principal=principal, solo=solo)
@@ -2140,7 +2118,7 @@ class AlertCard(BaseModel):
 
 
 @router.get("/alerts/{alert_id}/card", response_model=AlertCard, tags=["today"])
-async def get_alert_card(alert_id: int, request: Request, tz: str | None = _TZ_QUERY) -> AlertCard:
+async def get_alert_card(alert_id: int, request: Request, tz: TzQuery = None) -> AlertCard:
     """A card from the caller's Home on a page of its own (the UI's
     /cards/alert/<id>, which a host's frame opens to have it approved). Only
     for its own person: the principal, or whoever it is routed to. Anyone

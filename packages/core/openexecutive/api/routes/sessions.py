@@ -5,6 +5,7 @@ import contextlib
 import json
 import time
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -15,7 +16,7 @@ from openexecutive.api import (
     chat_live,
     path_ids,  # noqa: F401  (registers the {…:session} convertor)
 )
-from openexecutive.api.models import SessionSummary
+from openexecutive.api.models import ChatMessage, SessionSummary
 from openexecutive.api.routes import chat as chat_route
 from openexecutive.api.routes.chat import (
     _SSE_KEEPALIVE,
@@ -28,6 +29,7 @@ from openexecutive.api.routes.chat import (
     chat_people,
     forget_session,
 )
+from openexecutive.api.zones import TzQuery, caller_zone
 from openexecutive.memory import chat_export, chat_topics
 from openexecutive.memory.session_store import (
     delete_session,
@@ -47,6 +49,7 @@ from openexecutive.memory.session_store import (
     set_shares,
     shared_with,
 )
+from openexecutive.utils import chat_list
 
 router = APIRouter()
 
@@ -54,9 +57,19 @@ router = APIRouter()
 _MAX_QUERY_CHARS = 200
 
 
+def _with_date_groups(rows: list[SessionSummary], caller: int | None, tz: str | None) -> list[SessionSummary]:
+    """Each chat's group in the Chats list's date view, in the caller's zone."""
+    now = datetime.now(UTC)
+    zone = caller_zone(caller, tz)
+    for row in rows:
+        row.date_group = chat_list.date_group(row.updated_at, bool(row.pinned_at), now, zone)
+    return rows
+
+
 @router.get("/sessions", response_model=list[SessionSummary], response_model_exclude_none=True)
-def get_sessions(request: Request, q: str = "") -> list[SessionSummary]:
-    """The caller's chats, newest first. With ``q``, only those whose title
+def get_sessions(request: Request, q: str = "", tz: TzQuery = None) -> list[SessionSummary]:
+    """The caller's chats, newest first, each with its date group in the
+    zone the caller sees times in (``tz``). With ``q``, only those whose title
     or messages contain it, each with a snippet of the newest match."""
     caller_person_id = _resolve_caller_person_id(request)
     if caller_person_id is None:
@@ -67,8 +80,10 @@ def get_sessions(request: Request, q: str = "") -> list[SessionSummary]:
         return []
     query = q.strip()[:_MAX_QUERY_CHARS]
     if query:
-        return [SessionSummary(**s) for s in search_sessions(caller_person_id, query)]
-    return [SessionSummary(**s) for s in list_sessions(caller_person_id)]
+        rows = [SessionSummary(**s) for s in search_sessions(caller_person_id, query)]
+    else:
+        rows = [SessionSummary(**s) for s in list_sessions(caller_person_id)]
+    return _with_date_groups(rows, caller_person_id, tz)
 
 
 def _require_session_access(request: Request, session_id: str) -> int | None:
@@ -161,6 +176,13 @@ class ChatTopics(BaseModel):
     organizing: bool = False
 
 
+class TopicLayoutRequest(BaseModel):
+    """The chats to lay out: the ones the list shows (after its own filters),
+    each one of the caller's own; any other id is left out."""
+
+    session_ids: list[str] = Field(max_length=5000)
+
+
 class TopicUpdate(BaseModel):
     """Rename and / or pin a topic. A field left out is left as it is."""
 
@@ -214,6 +236,25 @@ async def get_topics(request: Request) -> ChatTopics:
         if waiting:
             organizing = topic_model.start_backfill(caller)
     return ChatTopics(topics=[ChatTopic(**t) for t in topics], organizing=organizing)
+
+
+@router.post("/sessions/topics/layout", response_model=chat_list.TopicLayout, response_model_exclude_none=True)
+def post_topic_layout(
+    request: Request, body: TopicLayoutRequest, tz: TzQuery = None,
+) -> chat_list.TopicLayout:
+    """The Chats list's topic view for the chats the client shows
+    (``utils.chat_list.layout_topics``): pinned chats, then each topic or
+    area in a band by how long since its last chat, then Other, with each
+    heading's "last active" in the caller's zone (``tz``). Reads only; the
+    client sends ids because its list may be filtered (a channel, a search)."""
+    caller = _resolve_caller_person_id(request)
+    if caller is None:
+        return chat_list.TopicLayout()
+    wanted = set(body.session_ids)
+    # The caller's own chats, in the list's order (pinned first, then newest).
+    sessions = [s for s in list_sessions(caller) if s["session_id"] in wanted]
+    topics = chat_topics.list_topics(caller)
+    return chat_list.layout_topics(sessions, topics, datetime.now(UTC), caller_zone(caller, tz))
 
 
 @router.patch("/sessions/topics/{topic_id}", response_model=ChatTopic, response_model_exclude_none=True)
@@ -278,7 +319,7 @@ def ungroup_topic(topic_id: int, request: Request) -> Response:
     response_model=list[SessionSummary],
     response_model_exclude_none=True,
 )
-def get_shared_sessions(request: Request) -> list[SessionSummary]:
+def get_shared_sessions(request: Request, tz: TzQuery = None) -> list[SessionSummary]:
     """Chats other people shared with the caller, newest first, each with who
     shared it (``shared_by``) and when (``shared_at``)."""
     caller = _resolve_caller_person_id(request)
@@ -295,8 +336,9 @@ def get_shared_sessions(request: Request) -> list[SessionSummary]:
             shared_by=_person_name(row["owner_person_id"]) or "Someone on your team",
             shared_at=row["shared_at"],
             shared_with_you=True,
+            host_started=bool(row["host_wrote"]),
         ))
-    return out
+    return _with_date_groups(out, caller, tz)
 
 
 @router.get("/sessions/{session_id:session}", response_model=SessionSummary, response_model_exclude_none=True)
@@ -316,10 +358,15 @@ def get_session(session_id: str, request: Request) -> SessionSummary:
     return summary
 
 
-@router.get("/sessions/{session_id:session}/messages")
+@router.get(
+    "/sessions/{session_id:session}/messages",
+    response_model=list[ChatMessage],
+    response_model_exclude_none=True,
+)
 def get_session_messages(session_id: str, request: Request) -> list[dict]:
-    """The chat's messages. In a shared chat each person's message also says
-    who wrote it (``sender_person_id``, ``sender_name``)."""
+    """The chat's messages, oldest first. In a shared chat each person's
+    message also says who wrote it (``sender_person_id``, ``sender_name``);
+    a line a host origin's page wrote says so (``from_host``)."""
     _, member = _require_chat_access(request, session_id)
     meta = get_session_metadata(session_id)
     if meta is None:
