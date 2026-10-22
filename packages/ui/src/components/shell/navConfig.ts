@@ -581,14 +581,14 @@ export function settingsHrefForHash(hash: string): string | null {
 
 // The phone's bottom bar: five, with New chat in the middle. Knowledge,
 // Pulse and Settings are in the menu the top bar's button opens.
-// `?new=1` signals the chat home to reset to a fresh chat and strip the
-// query — see the effect in app/page.tsx.
+// New chat opens /chats/new, the chat home's address for a fresh chat
+// (lib/chatRoutes.ts).
 export function buildMobilePrimary(opts: BuildOpts = {}): Destination[] {
   const all = buildDestinations(opts);
   const pick = (key: string) => all.find((d) => d.key === key)!;
   const newChat: Destination = {
     key: "new",
-    href: "/?new=1",
+    href: "/chats/new",
     label: "New chat",
     icon: "plus",
     description: NEW_CHAT_DESCRIPTION,

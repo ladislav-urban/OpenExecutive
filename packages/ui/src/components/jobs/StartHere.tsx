@@ -6,6 +6,7 @@ import Button from "@/components/ui/Button";
 import OverflowMenu from "@/components/ui/OverflowMenu";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import { stashWorkflowDescription, workflowStarterChipsFor } from "@/lib/workflowStarters";
+import { newChatPath } from "@/lib/chatRoutes";
 
 const CHAT_DRAFT = "Help me set up a workflow that ";
 
@@ -77,7 +78,7 @@ export default function StartHere({
               { label: "New workflow, step by step", href: "/jobs/new?mode=advanced" },
               {
                 label: "Talk it through in chat",
-                href: `/?new=1&draft=${encodeURIComponent(CHAT_DRAFT)}`,
+                href: newChatPath(CHAT_DRAFT),
               },
             ]}
           />

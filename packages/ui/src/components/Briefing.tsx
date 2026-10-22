@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
@@ -20,6 +21,7 @@ import {
   type Today,
 } from "@/lib/api";
 import type { AlertApproval } from "@/lib/approvals";
+import type { BriefingPanel } from "@/lib/chatRoutes";
 import { greeting } from "@/lib/briefingSummary";
 import { FIRST_RUN_LINKS } from "@/lib/firstRun";
 import { principalIdOf } from "@/lib/dueSoon";
@@ -77,6 +79,18 @@ export { DeptCard } from "./briefing/TeamPanels";
 // the snooze times. This page shows them and keeps only what is its own:
 // cards hidden at once on a click until the next fetch, panels, notices.
 
+// The panels Home builds from /today, in the order its side panels render.
+const HOME_PANEL_KEYS: readonly BriefingPanel[] = [
+  "brief",
+  "departments",
+  "people",
+  "team",
+  "inFlight",
+  "handled",
+  "monitoring",
+  "clients",
+];
+
 // "Needs you" shows this many cards before a "Show N more" toggle.
 const NEEDS_YOU_VISIBLE = 3;
 
@@ -133,9 +147,22 @@ interface BriefingProps {
   // no profile, a brief that wasn't sent). When empty, the quiet-day note
   // takes the slot.
   banner?: React.ReactNode;
+  // Show one of Home's panels as a page of its own (/briefing/<panel>)
+  // instead of Home: the same body and footer links its side panel has.
+  panel?: BriefingPanel;
 }
 
-export default function Briefing({ onContinue, showHeader = false, firstName, banner }: BriefingProps) {
+// A panel of Home: what its side panel, or its page, shows.
+interface PanelView {
+  title: string;
+  subtitle?: React.ReactNode;
+  width?: "lg";
+  footer?: React.ReactNode;
+  body: React.ReactNode;
+}
+
+export default function Briefing({ onContinue, showHeader = false, firstName, banner, panel }: BriefingProps) {
+  const router = useRouter();
   // Solo (one person, just for themselves): no departments, roster or
   // cross-team lanes — see the `solo` branches below.
   const { mode } = useWorkspace();
@@ -432,6 +459,11 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   // behind "Show more" open the queue first, and land on the queue when the
   // card isn't on the page at all.
   const jumpToAlert = (alertId: number) => {
+    // On a panel's own page there is no queue to scroll to: the card's page.
+    if (panel) {
+      router.push(`/cards/alert/${alertId}`);
+      return;
+    }
     setOpenPanel(null);
     setShowAllNeedsYou(true);
     setTimeout(() => {
@@ -604,6 +636,150 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
       {label}
     </Link>
   );
+
+  // Home's panels (the brief and the tiles'), each shown in a side panel on
+  // Home and as a page of its own at /briefing/<panel>.
+  const homePanels: Record<BriefingPanel, PanelView> | null = today
+    ? {
+        brief: {
+          title: "Today's brief",
+          subtitle: <span aria-live="polite">{briefFreshness ?? dateLabel}</span>,
+          width: "lg",
+          body: (
+            <NarrativeBody
+              narrative={today.narrative}
+              stale={today.narrative_stale ?? false}
+              solo={solo}
+              onContinue={onContinue}
+            />
+          ),
+        },
+        departments: {
+          title: "Departments",
+          width: "lg",
+          footer: panelFooterLink("/departments", "View all departments"),
+          body: <DepartmentsPanelBody departments={departments} onContinue={onContinue} />,
+        },
+        people: {
+          title: "People",
+          width: "lg",
+          footer: panelFooterLink("/people", "View all people"),
+          body: <PeoplePanelBody people={today.people} />,
+        },
+        team: {
+          title: "Across the team",
+          subtitle: "Waiting on someone else",
+          width: "lg",
+          body: (
+            <div className="space-y-4">
+              {otherProposals.map((p) => (
+                <ProposalCard
+                  key={p.alert_id}
+                  proposal={p}
+                  people={today.people}
+                  onContinue={onContinue}
+                  // Someone else's card offers Approve only to the
+                  // principal (its `actions`); the server refuses anyone else.
+                  onApprove={handleApprove}
+                  onDismiss={handleDismiss}
+                  onSnooze={handleSnooze}
+                  onRerun={handleRerun}
+                  onApproveWithEdits={handleApproveWithEdits}
+                />
+              ))}
+              {otherProposals.length === 0 && (
+                <p className="text-[15px] text-fg-muted">
+                  Nothing waiting on anyone else.
+                  {today.people.length <= 1 && " Add your team on People to see their work here."}
+                </p>
+              )}
+            </div>
+          ),
+        },
+        inFlight: { title: "Under way", body: <InFlightPanelBody inFlight={inFlight} /> },
+        handled: {
+          title: "Handled",
+          body: (
+            <HandledPanelBody rows={handledRows} onReopen={handleReopen} undone={undoneRows} onJumpToAlert={jumpToAlert} />
+          ),
+        },
+        monitoring: {
+          title: "Monitoring",
+          body: (
+            <MonitoringPanelBody
+              proposals={monitoringProposals}
+              onContinue={onContinue}
+              onDismiss={handleDismiss}
+              onBulkDismiss={handleBulkDismiss}
+            />
+          ),
+        },
+        clients: {
+          title: "Across your clients",
+          footer: panelFooterLink("/clients", "Manage clients"),
+          body: <PracticeClientsPanelBody clients={practiceClients} />,
+        },
+      }
+    : null;
+
+  if (panel) {
+    const view = homePanels?.[panel];
+    return (
+      <div className="flex flex-col h-full bg-surface">
+        <main className="flex-1 overflow-y-auto">
+          <div className="max-w-3xl mx-auto px-4 sm:px-6 py-6 sm:py-10">
+            {loading && <p className="text-fg-muted text-[15px]">Loading…</p>}
+            {error && (
+              <div className="mb-4 rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 text-[15px] text-rose-700 dark:text-rose-300">
+                {error}
+              </div>
+            )}
+            {view && (
+              <>
+                <header className="mb-4">
+                  <h1 className="text-2xl font-bold tracking-tight text-fg">{view.title}</h1>
+                  {view.subtitle && <p className="mt-1 text-sm text-fg-muted">{view.subtitle}</p>}
+                </header>
+                {snoozed && (
+                  <p className="mb-3 flex flex-wrap items-center gap-x-3 text-sm text-fg-muted" role="status">
+                    Snoozed until {snoozed.short}.
+                    <button type="button" onClick={handleUnsnooze} className="font-medium text-accent hover:underline">
+                      Undo
+                    </button>
+                  </p>
+                )}
+                {rerunNotice && (
+                  <p className="mb-3 text-sm text-fg-muted" role="status">
+                    {rerunNotice}
+                  </p>
+                )}
+                {approvalRows.length > 0 && (
+                  <div className="mb-4 space-y-2">
+                    {approvalRows.map((row) => (
+                      <ApprovedRow
+                        key={row.approval.id}
+                        approval={row.approval}
+                        headline={row.headline}
+                        onRetry={() => void handleRetryApproval(row)}
+                        onClose={() => setApprovalRows((rows) => rows.filter((r) => r.approval.id !== row.approval.id))}
+                      />
+                    ))}
+                  </div>
+                )}
+                {view.body}
+                {view.footer && <div className="mt-6">{view.footer}</div>}
+              </>
+            )}
+            <p className="mt-8 text-sm">
+              <Link href="/" className="text-accent hover:underline">
+                Back to Home
+              </Link>
+            </p>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full bg-surface">
@@ -814,96 +990,22 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                 </section>
               )}
 
-              <SidePanel
-                open={openPanel === "brief"}
-                onClose={() => setOpenPanel(null)}
-                title="Today's brief"
-                subtitle={<span aria-live="polite">{briefFreshness ?? dateLabel}</span>}
-                width="lg"
-              >
-                <NarrativeBody
-                  narrative={today.narrative}
-                  stale={today.narrative_stale ?? false}
-                  solo={solo}
-                  onContinue={onContinue}
-                />
-              </SidePanel>
-              <SidePanel
-                open={openPanel === "departments"}
-                onClose={() => setOpenPanel(null)}
-                title="Departments"
-                width="lg"
-                footer={panelFooterLink("/departments", "View all departments")}
-              >
-                <DepartmentsPanelBody departments={departments} onContinue={onContinue} />
-              </SidePanel>
-              <SidePanel
-                open={openPanel === "people"}
-                onClose={() => setOpenPanel(null)}
-                title="People"
-                width="lg"
-                footer={panelFooterLink("/people", "View all people")}
-              >
-                <PeoplePanelBody people={today.people} />
-              </SidePanel>
-              <SidePanel
-                open={openPanel === "team"}
-                onClose={() => setOpenPanel(null)}
-                title="Across the team"
-                subtitle="Waiting on someone else"
-                width="lg"
-              >
-                <div className="space-y-4">
-                  {otherProposals.map((p) => (
-                    <ProposalCard
-                      key={p.alert_id}
-                      proposal={p}
-                      people={today.people}
-                      onContinue={onContinue}
-                      // Someone else's card offers Approve only to the
-                      // principal (its `actions`); the server refuses anyone else.
-                      onApprove={handleApprove}
-                      onDismiss={handleDismiss}
-                      onSnooze={handleSnooze}
-                      onRerun={handleRerun}
-                      onApproveWithEdits={handleApproveWithEdits}
-                    />
-                  ))}
-                  {otherProposals.length === 0 && (
-                    <p className="text-[15px] text-fg-muted">
-                      Nothing waiting on anyone else.
-                      {today.people.length <= 1 && " Add your team on People to see their work here."}
-                    </p>
-                  )}
-                </div>
-              </SidePanel>
-              <SidePanel open={openPanel === "inFlight"} onClose={() => setOpenPanel(null)} title="Under way">
-                <InFlightPanelBody inFlight={inFlight} />
-              </SidePanel>
-              <SidePanel open={openPanel === "handled"} onClose={() => setOpenPanel(null)} title="Handled">
-                <HandledPanelBody
-                  rows={handledRows}
-                  onReopen={handleReopen}
-                  undone={undoneRows}
-                  onJumpToAlert={jumpToAlert}
-                />
-              </SidePanel>
-              <SidePanel open={openPanel === "monitoring"} onClose={() => setOpenPanel(null)} title="Monitoring">
-                <MonitoringPanelBody
-                  proposals={monitoringProposals}
-                  onContinue={onContinue}
-                  onDismiss={handleDismiss}
-                  onBulkDismiss={handleBulkDismiss}
-                />
-              </SidePanel>
-              <SidePanel
-                open={openPanel === "clients"}
-                onClose={() => setOpenPanel(null)}
-                title="Across your clients"
-                footer={panelFooterLink("/clients", "Manage clients")}
-              >
-                <PracticeClientsPanelBody clients={practiceClients} />
-              </SidePanel>
+              {HOME_PANEL_KEYS.map((key) => {
+                const view = homePanels?.[key];
+                return view ? (
+                  <SidePanel
+                    key={key}
+                    open={openPanel === key}
+                    onClose={() => setOpenPanel(null)}
+                    title={view.title}
+                    subtitle={view.subtitle}
+                    width={view.width}
+                    footer={view.footer}
+                  >
+                    {view.body}
+                  </SidePanel>
+                ) : null;
+              })}
               {solo && (
                 <>
                   <SidePanel

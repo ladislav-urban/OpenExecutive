@@ -31,8 +31,10 @@ export interface ApprovalLine {
   canRetry: boolean;
 }
 
+// The conversation's own address (lib/chatRoutes.ts's chatPath, inlined:
+// this module stays import-free for `npm test`).
 export function chatHref(sessionId: string | null): string | null {
-  return sessionId ? `/?session=${encodeURIComponent(sessionId)}` : null;
+  return sessionId ? `/chats/${encodeURIComponent(sessionId)}` : null;
 }
 
 export function approvalLine(approval: AlertApproval, headline: string): ApprovalLine {

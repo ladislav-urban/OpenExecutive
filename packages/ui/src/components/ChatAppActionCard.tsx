@@ -10,6 +10,7 @@ import {
   rejectDecision,
   type DecisionInstance,
 } from "@/lib/api";
+import { NEW_CHAT_PATH } from "@/lib/chatRoutes";
 
 // The chat: something you asked the Executive to do in the app that waits
 // for your OK (a delete, a share, turning on something that acts as you),
@@ -64,7 +65,7 @@ export default function ChatAppActionCard({ id }: { id: number }) {
       setInstance(updated);
       // Deleted the chat this card is in: there is nothing left to show here.
       if (payload.action === "delete_chat" && payload.id === instance.originating_session_id) {
-        router.push("/?new=1");
+        router.push(NEW_CHAT_PATH);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "That didn't go through.");
