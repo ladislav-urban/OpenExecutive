@@ -173,6 +173,8 @@ export function ErpnextDraftCardItem({
   // In a host's frame, a document on the host's own origin opens in its desk.
   const opens = link ? erpnextLink(link, hostOrigin) : null;
   const openInHost = (event: React.MouseEvent<HTMLAnchorElement>) => {
+    // A click asking for a new tab or window gets one.
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
     if (opens?.kind !== "host" || !hostOrigin) return;
     const message = openMessage({ kind: "host", route: opens.route });
     if (!message) return;
