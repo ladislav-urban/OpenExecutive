@@ -67,11 +67,13 @@ def test_parse_keeps_known_well_formed_events_only() -> None:
     })
     assert [e["key"] for e in events] == ["ACC-SINV-2026-00012", "SINV-2", "ITEM-1@Stores - R"]
     assert len(events[1]["text"]) == 1500
-    # oe_connector's phase 3c rules (budget variance, weekly margin).
+    # oe_connector's phase 3c rules (budget variance, weekly margin) and its
+    # stalled-repost rule, keyed company:oldest repost.
     assert [e["kind"] for e in parse_events({"events": [
         {**OVERDUE, "kind": "budget_exceeded", "key": "Acme:Marketing:2026"},
         {**OVERDUE, "kind": "weekly_margin_drop", "key": "Acme:2026-W41"},
-    ]})] == ["budget_exceeded", "weekly_margin_drop"]
+        {**OVERDUE, "kind": "stalled_repost", "key": "Acme Ltd:REPOST-ITEM-VAL-00012"},
+    ]})] == ["budget_exceeded", "weekly_margin_drop", "stalled_repost"]
     with pytest.raises(ValueError):
         parse_events({"events": [OVERDUE] * 21})
     with pytest.raises(ValueError):
