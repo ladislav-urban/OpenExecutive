@@ -58,6 +58,10 @@ def test_entries_are_well_formed_and_listed_once() -> None:
 @pytest.mark.parametrize(("method", "path"), [tuple(c) for c in CALLS], ids=lambda v: str(v))
 def test_nothing_that_acts_for_the_person_is_on_it(method: str, path: str) -> None:
     assert not path.startswith(_FORBIDDEN_PREFIXES), path
+    # ERPNext's draft cards are read from the host; preparing one (the alert's
+    # tap) and the oversight export stay in Open Executive's own pages.
+    if path.startswith("/erpnext/"):
+        assert method == "GET" and path in {"/erpnext/drafts", "/erpnext/alert-drafts"}, path
     if path.startswith("/watchlist/{slug}/"):
         return
     assert not _FORBIDDEN_VERBS.search(path), path
@@ -71,3 +75,14 @@ def test_the_card_actions_are_not_on_it() -> None:
     ):
         assert ("POST", path) in _api_routes()
         assert ("POST", path) not in calls
+
+
+def test_erpnexts_draft_cards_are_read_but_never_prepared() -> None:
+    calls = {(m, p) for m, p in CALLS}
+    assert ("GET", "/erpnext/drafts") in calls
+    assert ("GET", "/erpnext/alert-drafts") in calls
+    for method, path in (
+        ("POST", "/erpnext/alert-drafts/{alert_id}"), ("GET", "/erpnext/drafts/oversight"),
+    ):
+        assert (method, path) in _api_routes()
+        assert (method, path) not in calls

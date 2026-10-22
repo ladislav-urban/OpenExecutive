@@ -7722,7 +7722,10 @@ auth:
     what its origin can do is fixed here, not by the host.
 
     The host list: GETs of /today*, /decisions, /decisions/{id},
-    /alerts/approvals/{id}, /sessions*, /watchlist*, /chat/voice,
+    /alerts/approvals/{id}, /erpnext/drafts, /erpnext/alert-drafts (for
+    the host's native Home, oe_connector's single-UI step 6; never the
+    alert's tap POST /erpnext/alert-drafts/{id} or /erpnext/drafts/
+    oversight), /sessions*, /watchlist*, /chat/voice,
     /chat/suggested-prompts; alerts ack/snooze/reopen/bulk-ack/review;
     POST /chat, /chat/stop, /chat/add, /chat/upload, /chat/transcribe;
     the watch list's describe/add/edit/delete/approve/decline. Never a
