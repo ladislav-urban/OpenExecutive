@@ -993,6 +993,11 @@ async def _check_and_leave(
     except Exception:
         logger.warning("erpnext_drafts: couldn't store the card", exc_info=True)
         return _error("Couldn't leave the card just now. Try again in a moment."), False
+    if from_panel:
+        # The panel's reply names it, so ERPNext can offer to open it.
+        from openexecutive.integrations.erpnext_panel import note_panel_card
+
+        note_panel_card(decision_id)
     # Only a card actually left counts towards the turn's cards and the audit:
     # the same draft again is the card already waiting.
     if new:

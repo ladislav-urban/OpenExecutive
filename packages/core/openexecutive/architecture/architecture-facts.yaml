@@ -9858,8 +9858,9 @@ integrations:
     in (verified.caller_refusal), so ERPNext's word alone creates nothing.
     The channel block is PANEL_DRAFTS_CONTEXT_BLOCK on such a turn
     (erpnext_panel.context_block, which the eval runner's panel surface uses
-    too): the panel cannot show the card, so the reply points to Today in
-    the web app. erpnext_caller.caller_for signs its ERPNext calls as that same
+    too): the card waits for their approval in OpenExecutive, signed in,
+    and the panel may show a button to open it (never promised: ERPNext
+    may run without the hosted pages). erpnext_caller.caller_for signs its ERPNext calls as that same
     email. No person_id, episodic, briefing, standing-fact (standing_facts="")
     or Honcho context is passed; router._prefetch_department_for_call returns
     nothing on a panel turn; the session starts with read_erpnext set, so
@@ -9903,6 +9904,21 @@ integrations:
     turn read outside content (outside_content.outside_allows_mcp_call) and
     is not an acting tool for Take the lead (take_the_lead.mcp_tool_acts).
     Evals erpnext_014 to erpnext_016.
+    Cards (oe_connector's docs/erpnext-single-ui-plan.md, step 4): the same
+    holder keeps `cards`, the decision id of each ERPNext draft card
+    propose_erpnext_draft left or found waiting on the turn, in order, at
+    most five, unique (erpnext_panel.note_panel_card, called from
+    erpnext_drafts._check_and_leave on a panel turn; never from the model's
+    text). The response adds `cards` when there are any. oe_connector
+    (panel.reply_cards) shows a chip for each that opens
+    /desk/dynocortex/cards/<id> in its hosted frame; /cards/<id> renders an
+    erpnext_draft decision with ErpnextDraftCardItem, as Home does, for the
+    card's own person only (GET /erpnext/drafts), and approving there asks
+    in /confirm like any card action in a frame. A made draft's "Open in
+    ERPNext" (lib/erpnextLinks.ts) sends the host open {kind: "host",
+    route} in embedded mode when the document's origin is exactly the
+    host's (useEmbed().hostOrigin) and its path is a /desk/ or /app/ route
+    (the host's DESK_ROUTE_RE); otherwise it stays a new-tab link.
 
     Pinned tool definitions (design "Next", item 5;
     orchestrator/erpnext_tool_pin.py). oe_connector's tool descriptions and
