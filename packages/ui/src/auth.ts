@@ -326,7 +326,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         }
         return token;
       }
-      if (token.providerSession && (await providerSessionOver(token.providerSession))) return null;
+      if (token.providerSession && (await providerSessionOver(token.providerSession))) {
+        // Once per cookie in practice: the null clears it on this request.
+        const email = typeof token.email === "string" ? token.email.toLowerCase() : null;
+        auditAuth("auth_logout", `Session ended (signed out at the provider, or 24 hours old): ${email ?? "unknown"}`, email, {
+          revoked: true,
+          reason: "provider_session_over",
+        });
+        return null;
+      }
       return token;
     },
     session: ({ session, token }) => {

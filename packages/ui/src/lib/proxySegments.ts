@@ -18,7 +18,8 @@ export function upstreamSegment(segment: string): string {
 const SERVER_ONLY = ["auth/ended-sessions"];
 
 /** Whether the proxy must refuse these segments: a server-only API path,
- *  or any `.` / `..` segment (which would otherwise resolve to one). */
+ *  or any `.` / `..` segment (which would otherwise resolve to one). Judge
+ *  the path as the API will route it: resolved and percent-decoded. */
 export function serverOnlyPath(segments: readonly string[]): boolean {
   if (segments.some((s) => s === "." || s === "..")) return true;
   const joined = segments.join("/").replace(/\/+$/, "").toLowerCase();

@@ -100,9 +100,15 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   // An id holding a slash goes on as one segment (proxySegments.ts).
   const path = params.path.map(upstreamSegment).join("/");
   const url = new URL(`${BACKEND_BASE}/${path}`);
-  // A `.`/`..` segment (sent as %2E) is resolved by URL above: judge the path
-  // that will actually be requested.
-  if (serverOnlyPath(url.pathname.split("/").filter(Boolean))) {
+  // A `.`/`..` segment (sent as %2E) is resolved by URL above, and the API
+  // decodes the path it gets: judge the path that will be routed.
+  let routed = url.pathname;
+  try {
+    routed = decodeURIComponent(url.pathname);
+  } catch {
+    // A lone "%" stays as it is; the API reads it the same way.
+  }
+  if (serverOnlyPath(routed.split("/").filter(Boolean))) {
     return refuse(404, { error: "not found" });
   }
   // Preserve query string.

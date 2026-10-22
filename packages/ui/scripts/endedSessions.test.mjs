@@ -66,4 +66,7 @@ test("the proxy never forwards the store's own paths", () => {
   // A dot segment would resolve onto it upstream.
   assert.equal(serverOnlyPath(["x", "..", "auth", "ended-sessions"]), true);
   assert.equal(serverOnlyPath(["."]), true);
+  // What the proxy checks after building the URL: the decoded path the API routes.
+  const routed = decodeURIComponent(new URL("http://api/auth/ended%2Dsessions").pathname);
+  assert.equal(serverOnlyPath(routed.split("/").filter(Boolean)), true);
 });

@@ -18,12 +18,13 @@ export const dynamic = "force-dynamic";
 
 const COOKIE_NAMES: { secureCookie: boolean }[] = [{ secureCookie: true }, { secureCookie: false }];
 
-// The secrets Auth.js reads a session with: AUTH_SECRET and its rotation
-// slots AUTH_SECRET_1..3, newest first, as @auth/core does.
+// The secrets Auth.js reads a session with, in its order (@auth/core
+// lib/utils/env.js): the rotation slots AUTH_SECRET_3..1, then AUTH_SECRET.
 function authSecrets(): string[] {
   const env = process.env;
-  const list = [env.AUTH_SECRET_1, env.AUTH_SECRET_2, env.AUTH_SECRET_3].filter((s): s is string => Boolean(s));
-  return list.length ? list : env.AUTH_SECRET ? [env.AUTH_SECRET] : [];
+  return [env.AUTH_SECRET_3, env.AUTH_SECRET_2, env.AUTH_SECRET_1, env.AUTH_SECRET].filter(
+    (s): s is string => Boolean(s),
+  );
 }
 
 /** The ID token the session kept at sign-in (in the encrypted JWT only). */
