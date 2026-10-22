@@ -6,3 +6,20 @@
 //
 // No imports, so `npm test` can exercise it.
 export const SESSION_FREE_PATH = /^\/(?:api\/auth(?:\/|$)|signin\/?$)/;
+
+// The confirmation windows (/confirm and /confirm/alert/<id>): no page may
+// frame them, not even a host origin's, since what they confirm must never be
+// drawn under someone else's page.
+export const NEVER_FRAMED_PATH = /^\/confirm(?:\/|$)/;
+
+/** Whether the page at `pathname` may never be framed: judged on the path
+ *  as sent and as decoded (`/%63onfirm` is `/confirm`); one that can't be
+ *  decoded is refused too. */
+export function neverFramed(pathname: string): boolean {
+  if (NEVER_FRAMED_PATH.test(pathname)) return true;
+  try {
+    return NEVER_FRAMED_PATH.test(decodeURIComponent(pathname));
+  } catch {
+    return true;
+  }
+}

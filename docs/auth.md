@@ -516,6 +516,22 @@ parent window, and every `init` field is validated. In a frame:
   Yes goes ahead, and closing it is No. For a chat message it shows the message. No page can cover another window. The frame checks every request it sends
   (`lib/cardActions.ts`), so no button can skip it. Each approval card has its own page,
   `/cards/<id>`.
+- **A host's own screen approves through a window of this app.** The host list never
+  lets a host approve, so a host that shows Home's cards on its own screen opens
+  `/confirm/alert/<id>` as the person clicks its Approve. Any site can open a window, so
+  the window shows the card to whoever is signed in here but offers Approve only to a
+  host: it sends its opener `approve-ready` (`oe-embed/v1`, the card's id, addressed to
+  each host origin), and offers Approve only once that opener answers `approve-ask` for
+  the same card from a listed host origin. With no host origin listed it never does, and
+  links to the card's own page. It offers Approve only when the card offers it to that
+  person, and arms the button only after the window has been in front for a moment and
+  the pointer has then moved inside it (again after every time it loses focus); a click
+  pressed before it armed doesn't count. So a click lured on the opener's page can't land
+  on it. Its Approve approves the card as any page of this app does, then it sends that
+  host `card-done` (the card's id and `approved` or `not_now`) and closes, so the person
+  stays on the host's screen. `/confirm` and `/confirm/alert/<id>` (judged on the path as
+  sent and decoded) send `frame-ancestors 'none'`: no page, not even a host origin's, may
+  frame them.
 
 `make embed-outputs` writes what a host app checks itself against without running this
 app or holding its secrets: `embed-manifest.json` (the navigation and routes),

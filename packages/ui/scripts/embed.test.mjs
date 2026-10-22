@@ -8,6 +8,8 @@ import {
   EMBED_PROTOCOL,
   acceptsEvent,
   badgeMessage,
+  approveReadyMessage,
+  cardDoneMessage,
   embedRequested,
   isAppPath,
   isNativePath,
@@ -38,6 +40,8 @@ test("frame → host: every example is what the frame's builders send", () => {
   assert.deepEqual(openMessage({ kind: "native", path: "/chats/abc" }), byName["open a native screen"]);
   assert.deepEqual(badgeMessage({ "knowledge-review": 3 }), byName.badge);
   assert.deepEqual(signedInMessage(), byName["signed in"]);
+  assert.deepEqual(approveReadyMessage(28), byName["approve ready"]);
+  assert.deepEqual(cardDoneMessage(28, "approved"), byName["card done"]);
   for (const message of Object.values(byName)) assert.equal(message.protocol, EMBED_PROTOCOL);
 });
 
