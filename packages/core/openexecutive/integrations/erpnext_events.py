@@ -65,6 +65,7 @@ KINDS: dict[str, str] = {
     "large_purchase_invoice": "a purchase invoice far above the supplier's usual size",
     "budget_exceeded": "a budget line whose actual this fiscal year is above its budget",
     "weekly_margin_drop": "last week's gross margin well below the weeks before it",
+    "stalled_repost": "stock reposts that failed or stopped moving, so stock values are not up to date",
 }
 # The alerts pipeline triages 60 events a minute from every source together
 # (pipeline._rate_limited) and drops the rest. ERPNext gets a third of that,
