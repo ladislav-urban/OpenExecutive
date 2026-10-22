@@ -12,8 +12,8 @@ import type { ProposalItem } from "@/lib/api";
 // user's own ask.
 export type ContinueHandler = (prompt: string, memoryText?: string) => void;
 
-// Bulk-dismiss cutoffs (days): Needs you's ⋯ menu and the Monitoring panel.
-export const NEEDS_YOU_DISMISS_OLDER_THAN_DAYS = 7;
+// The Monitoring panel's bulk-dismiss cutoff (days). Needs you's comes from
+// GET /today (`dismiss_older`).
 export const MONITORING_DISMISS_OLDER_THAN_DAYS = 3;
 
 // Ids of proposals older than `days` — what a bulk "Dismiss older than"

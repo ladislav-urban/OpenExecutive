@@ -36,8 +36,24 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from openexecutive.briefing.home_rules import register_waiting_cards
+
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _waiting_drafts(person: Any) -> int:
+    """Draft cards waiting for ``person``, for Home's Needs you count: what
+    GET /erpnext/drafts lists them (a teammate's only under signed sign-ins)."""
+    from openexecutive.api.caller import signing_on
+    from openexecutive.integrations.erpnext_drafts import cards
+
+    if person.id is None or person.archived or (not person.is_principal and not signing_on()):
+        return 0
+    return len(cards(person))
+
+
+register_waiting_cards("erpnext_drafts", _waiting_drafts)
 
 
 class DraftFieldOut(BaseModel):

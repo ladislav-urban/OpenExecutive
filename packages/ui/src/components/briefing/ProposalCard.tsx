@@ -9,15 +9,12 @@ import ErpnextAlertDraftButton from "@/components/ErpnextAlertDraftButton";
 import RosterRequestCard from "@/components/RosterRequestCard";
 import Button, { buttonClass } from "@/components/ui/Button";
 import OverflowMenu, { type OverflowItem } from "@/components/ui/OverflowMenu";
-import type { PersonBriefItem, ProposalItem } from "@/lib/api";
-import { MEMORY_ACTIONS, briefingMemoryLine, nudgeAction } from "@/lib/briefing-memory";
+import type { HomeCardAction, PersonBriefItem, ProposalItem } from "@/lib/api";
 import { ageLabel, daysUntil, proposalStatusChip } from "@/lib/briefingSummary";
-import { type SnoozeChoice, snoozeChoices } from "@/lib/snooze";
-import { hostOf } from "@/lib/url";
 
-import HeldActionCard, { isHeldAction } from "./HeldActionCard";
-import LeadTrainingCard, { isLeadTraining } from "./LeadTrainingCard";
-import { Chip, TONE_TEXT, buildMonitoringSeed, type ContinueHandler } from "./shared";
+import HeldActionCard from "./HeldActionCard";
+import LeadTrainingCard from "./LeadTrainingCard";
+import { Chip, TONE_TEXT, type ContinueHandler } from "./shared";
 
 // A proposal body longer than about half this (chars) is clamped to two
 // lines under the headline while the card is closed, so the "Needs you"
@@ -98,71 +95,7 @@ function buildProposalLifecycle(proposal: ProposalItem): {
   return { reviewLine, lifecycleRow, reviewedFooter };
 }
 
-// The chat seed for Discuss: the FULL body plus the suggested_action, so the
-// Executive has the entire card's worth of context, and a mode primer (what
-// it may and may not do from chat) that depends on the kind of card.
-function buildHandoffPrompt(
-  proposal: ProposalItem,
-  kind: { isArtifact: boolean; isMonitoring: boolean; isDecision: boolean },
-): string {
-  if (kind.isArtifact) {
-    // Artifacts aren't approved/executed — they're read. Seed the chat
-    // with the full document + rationale so the Executive can discuss
-    // it, and let it clear the card via ack_alert when the user is done.
-    const rationale = proposal.suggested_action
-      ? `\n\nWhy you flagged it: ${proposal.suggested_action}`
-      : "";
-    return (
-      `Let's discuss this artifact you flagged for my review:\n\n` +
-      `# ${proposal.headline}\n\n${proposal.body || ""}${rationale}\n\n` +
-      `[Discuss mode — alert_id=${proposal.alert_id}, artifact id ` +
-      `alert:${proposal.alert_id}; to revise it, publish a new version with ` +
-      `draft_artifact(supersedes="alert:${proposal.alert_id}")] This is a document ` +
-      `for review, not an action to approve. Answer my questions about it ` +
-      `conversationally. When I say I'm done ("got it", "reviewed", "thanks"), ` +
-      `call ack_alert(alert_id=${proposal.alert_id}, status="ack") to clear ` +
-      `it from my queue. Take no other action.`
-    );
-  }
-  if (kind.isMonitoring) {
-    // Monitoring signals are passive — there's nothing to approve, so the
-    // Discuss handoff asks the Executive to interpret the signal.
-    return buildMonitoringSeed(proposal);
-  }
-  if (kind.isDecision) {
-    // Gated calendar booking. Approval/rejection happens via the card's
-    // Approve/Dismiss (the /decisions endpoints book or cancel the event
-    // server-side) — NOT via chat. So the Discuss handoff is read-only.
-    const body = proposal.body || proposal.headline;
-    return (
-      `Let's talk through this meeting I've proposed:\n\n${body}\n\n` +
-      `[Discuss mode] This booking is awaiting your approval on the ` +
-      `briefing. Help me decide whether the time, attendees, and purpose ` +
-      `make sense. Do NOT book, cancel, or ack anything from chat — I'll ` +
-      `approve or dismiss it from the card itself.`
-    );
-  }
-  // alert_id is carried so the exec can clear the card once approval lands.
-  const text = proposal.body || proposal.headline;
-  const suggested = proposal.suggested_action
-    ? `\n\nIf I approve, you will:\n${proposal.suggested_action}`
-    : "";
-  const primer =
-    `\n\n[Discuss mode — alert_id=${proposal.alert_id}] ` +
-    `This proposal is NOT YET approved. Answer my questions conversationally. ` +
-    `When I explicitly approve ("ok", "approve", "go ahead", "do it"), switch to ` +
-    `execute mode: actually attempt the work (use web_search and your other tools — ` +
-    `don't just promise), reply inline with the deliverable, schedule a fresh ` +
-    `follow-up via schedule_followup if it's time-bound, and call ` +
-    `ack_alert(alert_id=${proposal.alert_id}, status="ack"). ` +
-    `If I dismiss it ("never mind", "drop it"), call ` +
-    `ack_alert(alert_id=${proposal.alert_id}, status="dismissed") and stop. ` +
-    `Until explicit approval/dismissal, take no action and do not ack.`;
-  return `Tell me about this proposal:\n\n${text}${suggested}${primer}`;
-}
-
-// One action a card can offer; the card shows one as its primary button and
-// the rest in its ⋯ menu.
+// One action as the card shows it: its primary button or a ⋯ menu item.
 interface CardAction {
   label: string;
   onSelect?: () => void;
@@ -174,8 +107,11 @@ interface CardAction {
 // A card in "Needs you" (and in the Across-the-team panel). Closed, it shows
 // the proposal, one status chip and who it is routed to, with one primary
 // button (the recommended move, or Approve) beside Discuss; the rest sit in
-// ⋯. A click on the card opens it to show the review line, the lifecycle
-// chips, what approving does, the tags and when it was last reviewed.
+// ⋯. What it offers, and which is primary, comes from GET /today
+// (`actions`, briefing/home_rules.py); an action shows only when the page
+// passed the handler that carries it out. A click on the card opens it to
+// show the review line, the lifecycle chips, what approving does, the tags
+// and when it was last reviewed.
 export default function ProposalCard({
   proposal,
   people,
@@ -195,7 +131,7 @@ export default function ProposalCard({
   onApprove?: (p: ProposalItem) => void;
   onDismiss?: (p: ProposalItem) => void;
   // Hide the card until a later time; it comes back on its own.
-  onSnooze?: (p: ProposalItem, choice: SnoozeChoice) => void;
+  onSnooze?: (p: ProposalItem, choice: { short: string; until: string }) => void;
   // Queue a failed scheduled run again (cards with `failed_run_id`).
   onRerun?: (p: ProposalItem) => void;
   onApproveWithEdits?: (p: ProposalItem, editedBody: string) => void;
@@ -229,12 +165,12 @@ export default function ProposalCard({
   }
   // A Take the lead card from training is answered on its own card too:
   // Approve, Approve + allow, Edit and Decline (LeadTrainingCard).
-  if (isLeadTraining(proposal)) {
+  if (proposal.card_kind === "lead_training") {
     return <LeadTrainingCard proposal={proposal} emphasized={emphasized} onResolved={() => onDismiss?.(proposal)} />;
   }
   // A team member's chat send their department held: approved on its own
   // card once the whole call is on screen (HeldActionCard).
-  if (isHeldAction(proposal)) {
+  if (proposal.card_kind === "held_action") {
     return <HeldActionCard proposal={proposal} emphasized={emphasized} onResolved={() => onDismiss?.(proposal)} />;
   }
   function startEditing() {
@@ -262,11 +198,6 @@ export default function ProposalCard({
   // Monitoring items are passive external/watchlist signals — nothing to
   // approve, so the body reads as "why it's on your radar".
   const isMonitoring = proposal.category === "monitoring";
-  // Decision-backed proposals (gated calendar bookings) execute server-side
-  // via the /decisions endpoints. The verbatim-DM "Edit & approve" flow
-  // doesn't map to a calendar booking, so it's not offered for these.
-  const isDecision = proposal.decision_instance_id != null;
-  const isLikelyStale = (proposal.review_verdict ?? "") === "likely_stale";
   // The card's title is the headline; under it, the rest of the body — what
   // follows the headline when the body opens with it, else the whole body.
   // Monitoring signals show their body as "why it's on your radar" when
@@ -284,17 +215,6 @@ export default function ProposalCard({
   })();
   const isLongBody = description.length > LONG_BODY_CHARS / 2;
   const clamp = isLongBody && !expanded && !defaultBodyExpanded;
-  const handoffPrompt = buildHandoffPrompt(proposal, { isArtifact, isMonitoring, isDecision });
-  const handoffMemory = briefingMemoryLine(
-    isArtifact
-      ? MEMORY_ACTIONS.artifact
-      : isMonitoring
-        ? MEMORY_ACTIONS.monitoring
-        : isDecision
-          ? MEMORY_ACTIONS.meeting
-          : MEMORY_ACTIONS.proposal,
-    proposal.headline,
-  );
   // What approving commits the Executive to ("if I approve, the exec will
   // do THIS"); for an artifact, why it's worth reading. Never for monitoring.
   const suggestedActionBlock =
@@ -345,79 +265,44 @@ export default function ProposalCard({
     );
   }
 
-  // The actions this card offers, then the pick of one as the primary.
-  const firstName = assignee?.full_name?.split(" ")[0];
-  const move = proposal.recommended_move ?? "";
-  const nudge: CardAction | null =
-    move === "nudge" && onContinue && !isArtifact && !isMonitoring
-      ? {
-          label: `Nudge ${firstName ?? "owner"}`,
-          onSelect: () => {
-            const who = assignee?.full_name ?? "the owner";
-            onContinue(
-              `Nudge ${who} about this item — it has gone quiet: ${proposal.headline}\n\n` +
-                `Send a short, friendly check-in via message_person and tell me what you sent.`,
-              briefingMemoryLine(nudgeAction(who), proposal.headline),
-            );
-          },
-        }
-      : null;
-  const workflow: CardAction | null =
-    move === "suggest_workflow" && proposal.suggested_workflow && !isArtifact && !isMonitoring
-      ? {
-          label: `Run ${proposal.suggested_workflow.replace(/_/g, " ")}`,
-          href: `/jobs/${proposal.suggested_workflow}`,
-        }
-      : null;
-  // A scheduled run that failed: Run again leads, the run page is a click
-  // away, and there is nothing to approve.
-  const failedRun = proposal.failed_run_id ?? null;
-  const rerun: CardAction | null =
-    failedRun && onRerun ? { label: "Run again", onSelect: () => onRerun(proposal) } : null;
-  const openRun: CardAction | null = failedRun
-    ? { label: "Open the run", href: `/jobs/runs/${encodeURIComponent(failedRun)}` }
-    : null;
-  const approve: CardAction | null =
-    !isMonitoring && !isArtifact && !failedRun && onApprove
-      ? { label: "Approve", onSelect: () => onApprove(proposal) }
-      : null;
-  const editApprove: CardAction | null =
-    !isMonitoring && !isArtifact && !isDecision && !failedRun && onApproveWithEdits
-      ? { label: "Edit & approve", onSelect: startEditing }
-      : null;
-  const dismiss: CardAction | null = onDismiss
-    ? isArtifact
-      ? { label: "Mark reviewed", onSelect: () => onDismiss(proposal) }
-      : { label: isMonitoring ? "Dismiss signal" : "Dismiss", onSelect: () => onDismiss(proposal) }
-    : null;
-  const openDoc: CardAction | null = isArtifact
-    ? { label: "Open document", href: `/artifacts/${encodeURIComponent(`alert:${proposal.alert_id}`)}` }
-    : null;
-  const openInApp: CardAction | null =
-    isArtifact && proposal.artifact_format === "link" && proposal.artifact_url
-      ? { label: `Open in app (${hostOf(proposal.artifact_url)})`, href: proposal.artifact_url, external: true }
-      : null;
-  const personPage: CardAction | null = assignee
-    ? { label: `Open ${firstName ?? assignee.full_name}'s page`, href: `/people/${assignee.id}` }
-    : null;
-
-  // The primary: the review's recommended move when it is one the user
-  // completes (nudge, run a workflow); Dismiss when the review thinks the
-  // card is stale; Open for a document; otherwise Approve.
-  let primary: CardAction | null;
-  if (isArtifact) primary = openDoc;
-  else if (isMonitoring) primary = null; // Discuss leads
-  else if (isLikelyStale && dismiss) primary = dismiss;
-  else primary = rerun ?? nudge ?? workflow ?? approve;
-  // Snooze: one item per choice, just above Dismiss. Not offered on a
-  // drafted document, which lives in the gallery rather than the queue.
-  const snoozes: CardAction[] =
-    onSnooze && !isArtifact
-      ? snoozeChoices().map((c) => ({ label: c.label, onSelect: () => onSnooze(proposal, c) }))
-      : [];
-  const menu = [rerun, openRun, nudge, workflow, approve, editApprove, ...snoozes, dismiss, openInApp, personPage].filter(
-    (a): a is CardAction => a != null && a !== primary,
-  );
+  // What the card offers (GET /today's `actions`): the primary, Discuss,
+  // then the ⋯ menu in order. Each needs the handler that carries it out.
+  const offered = proposal.actions ?? [];
+  const asCardAction = (a: HomeCardAction): CardAction | null => {
+    switch (a.key) {
+      case "approve":
+        return onApprove ? { label: a.label, onSelect: () => onApprove(proposal) } : null;
+      case "approve_with_edits":
+        return onApproveWithEdits ? { label: a.label, onSelect: startEditing } : null;
+      case "dismiss":
+        return onDismiss ? { label: a.label, onSelect: () => onDismiss(proposal) } : null;
+      case "snooze": {
+        const until = a.until;
+        return onSnooze && until
+          ? { label: a.label, onSelect: () => onSnooze(proposal, { short: a.short ?? until, until }) }
+          : null;
+      }
+      case "run_again":
+        return onRerun ? { label: a.label, onSelect: () => onRerun(proposal) } : null;
+      case "nudge": {
+        const prompt = a.prompt;
+        return onContinue && prompt
+          ? { label: a.label, onSelect: () => onContinue(prompt, a.memory_text ?? undefined) }
+          : null;
+      }
+      case "discuss":
+        return null;
+      default:
+        return a.href ? { label: a.label, href: a.href, external: a.external } : null;
+    }
+  };
+  const primaryOffer = offered.find((a) => a.primary);
+  const primary = primaryOffer ? asCardAction(primaryOffer) : null;
+  const discuss = offered.find((a) => a.key === "discuss");
+  const menu = offered
+    .filter((a) => a !== primaryOffer && a.key !== "discuss")
+    .map(asCardAction)
+    .filter((a): a is CardAction => a != null);
   const showActions = Boolean(onApprove || onDismiss || onApproveWithEdits);
 
   const status = isMonitoring ? null : proposalStatusChip(proposal);
@@ -553,13 +438,13 @@ export default function ProposalCard({
                 {primary.label}
               </Button>
             ))}
-          {onContinue && (
+          {onContinue && discuss?.prompt && (
             <Button
               variant={primary ? "secondary" : "primary"}
-              onClick={() => onContinue(handoffPrompt, handoffMemory)}
+              onClick={() => onContinue(discuss.prompt ?? "", discuss.memory_text ?? undefined)}
               disabled={busy}
             >
-              Discuss
+              {discuss.label}
             </Button>
           )}
           <OverflowMenu

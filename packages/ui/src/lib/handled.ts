@@ -1,8 +1,11 @@
-// Pure logic behind the briefing's handled rail (HandledOvernightPanel in
-// components/Briefing.tsx): grouping audit rows per alert, the one-line
-// summary, and the trailer links. No React here so `npm test` can exercise
-// it directly (scripts/handled.test.mjs).
-import type { HandledItem } from "./api";
+// Pure logic behind the briefing's handled panel (HandledPanelBody in
+// components/briefing/AwarenessPanels.tsx): the one-line summary and the
+// trailer links. The rows come grouped one per alert from GET /today
+// (`handled_rows`, briefing/home_rules.py). No React here so `npm test` can
+// exercise it directly (scripts/handled.test.mjs).
+import type { HandledItem, HandledRow } from "./api";
+
+export type { HandledRow };
 
 // Handled since your last brief — what the Executive's alert review COMPLETED
 // on its own since the last delivered morning brief (routed, nudged,
@@ -20,22 +23,19 @@ import type { HandledItem } from "./api";
 // back. The heading counts three buckets and never interpolates names, so
 // it reads the same whether the roster lookup found "Dana Kim" or not.
 
-// One table per kind: reading order (what needs the principal first, then
-// what they can undo, then what went to others, then transparency) and the
-// short past-tense verb for the "also …" trailer.
-export const HANDLED_KINDS: Record<string, { order: number; verb: string }> = {
-  escalated: { order: 0, verb: "raised" },
-  closed: { order: 1, verb: "closed" },
-  merged: { order: 1, verb: "folded" },
-  routed: { order: 2, verb: "routed" },
-  nudged: { order: 2, verb: "chased" },
-  drafted: { order: 2, verb: "drafted" },
-  suggested_workflow: { order: 3, verb: "suggested a workflow" },
-  watching: { order: 3, verb: "started watching" },
-  stopped_watching: { order: 3, verb: "stopped watching" },
+// The short past-tense verb per kind, for the "also …" trailer.
+const HANDLED_VERBS: Record<string, string> = {
+  escalated: "raised",
+  closed: "closed",
+  merged: "folded",
+  routed: "routed",
+  nudged: "chased",
+  drafted: "drafted",
+  suggested_workflow: "suggested a workflow",
+  watching: "started watching",
+  stopped_watching: "stopped watching",
 };
-export const handledOrder = (kind: string) => HANDLED_KINDS[kind]?.order ?? 4;
-export const handledVerb = (kind: string) => HANDLED_KINDS[kind]?.verb ?? kind;
+export const handledVerb = (kind: string) => HANDLED_VERBS[kind] ?? kind;
 
 // Stable key for one handled row (an alert can appear twice in one pass —
 // e.g. routed then closed — so the alert id alone is not unique).
@@ -45,56 +45,6 @@ export function handledKey(h: HandledItem): string {
 
 export function isCloseKind(h: HandledItem): boolean {
   return h.kind === "closed" || h.kind === "merged";
-}
-
-// One visible row plus the other moves on the same alert folded under it.
-export interface HandledRow {
-  item: HandledItem;
-  also: HandledItem[];
-  foldedIn: number;
-}
-
-// Collapse the newest-first list to one row per alert. A merge whose survivor
-// is also listed becomes a "duplicate folded in" count on the survivor. The
-// newest move wins the visible slot, with two overrides: a close (terminal,
-// and the row that carries Undo) is never hidden behind an older move, and
-// otherwise an escalation beats routed / nudged / drafted — the boast must
-// never bury the row that needs the CEO.
-export function groupHandled(items: HandledItem[]): HandledRow[] {
-  const listed = new Set(items.map((h) => h.alert_id).filter((id): id is number => id != null));
-  const foldedInto = new Map<number, number>();
-  const rest: HandledItem[] = [];
-  for (const h of items) {
-    const into = h.superseded_by_alert_id;
-    if (h.kind === "merged" && into != null && listed.has(into)) {
-      foldedInto.set(into, (foldedInto.get(into) ?? 0) + 1);
-    } else {
-      rest.push(h);
-    }
-  }
-  const byKey = new Map<string, HandledRow>();
-  const rows: HandledRow[] = [];
-  for (const h of rest) {
-    const key = h.alert_id != null ? `alert-${h.alert_id}` : handledKey(h);
-    const row = byKey.get(key);
-    if (!row) {
-      const fresh: HandledRow = {
-        item: h,
-        also: [],
-        foldedIn: h.alert_id != null ? foldedInto.get(h.alert_id) ?? 0 : 0,
-      };
-      byKey.set(key, fresh);
-      rows.push(fresh);
-    } else if (h.kind === "escalated" && !isCloseKind(row.item) && row.item.kind !== "escalated") {
-      row.also.push(row.item);
-      row.item = h;
-    } else {
-      row.also.push(h);
-    }
-  }
-  // Stable sort keeps newest-first inside each bucket.
-  rows.sort((a, b) => handledOrder(a.item.kind) - handledOrder(b.item.kind));
-  return rows;
 }
 
 export function joinClauses(parts: string[]): string {
@@ -149,7 +99,7 @@ export function handledProofHref(h: HandledItem): string | null {
 // Muted trailer under a collapsed row: duplicates folded in, other moves.
 export function handledAlsoLine(row: HandledRow): string {
   const parts: string[] = [];
-  if (row.foldedIn > 0) parts.push(`${row.foldedIn} duplicate${row.foldedIn === 1 ? "" : "s"} folded in`);
+  if (row.folded_in > 0) parts.push(`${row.folded_in} duplicate${row.folded_in === 1 ? "" : "s"} folded in`);
   if (row.also.length > 0) parts.push(`also ${row.also.map((a) => handledVerb(a.kind)).join(", ")}`);
   return parts.join(" · ");
 }

@@ -403,10 +403,9 @@ def test_non_markdown_artifact_body_is_rendered_for_the_card(
 def test_proposals_include_unrouted_alerts_for_principal_inbox(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Unrouted alerts must come back from /today so the UI can place
-    them in the principal's 'Needs you' bucket. The backend doesn't do
-    the principal-owns-unrouted routing itself — it just surfaces the
-    full set so the client can split it correctly.
+    """Unrouted alerts must come back from /today: they are the principal's
+    (each card's ``lane`` says so for the caller; test_today_home_rules_route
+    covers that), so the full set is listed for every caller to place.
     """
     db = tmp_path / "unrouted.db"
     _setup_isolated_db(db, monkeypatch)

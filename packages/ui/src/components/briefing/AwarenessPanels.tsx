@@ -9,7 +9,6 @@ import { MEMORY_ACTIONS, briefingMemoryLine } from "@/lib/briefing-memory";
 import { ageLabel } from "@/lib/briefingSummary";
 import {
   HANDLED_REOPENABLE,
-  groupHandled,
   handledAlsoLine,
   handledHeadline,
   handledKey,
@@ -65,17 +64,6 @@ export function InFlightPanelBody({ inFlight }: { inFlight: InFlightItem[] }) {
       </div>
     </>
   );
-}
-
-// The In flight tile's sub-line: overdue first, else when the next one runs.
-export function inFlightNext(inFlight: InFlightItem[]): string {
-  const overdue = inFlight.filter((f) => f.overdue).length;
-  if (overdue > 0) return `${overdue} overdue`;
-  const next = inFlight
-    .map((f) => Date.parse(f.run_at))
-    .filter((t) => !Number.isNaN(t))
-    .sort((a, b) => a - b)[0];
-  return next == null ? "scheduled" : `next ${formatFuture(new Date(next).toISOString())}`;
 }
 
 // Multi-client practice mode only: rollup rows for PARKED client slots so
@@ -322,20 +310,19 @@ export function handledReverted(undone: Set<string>) {
 }
 
 export function HandledPanelBody({
-  items,
+  rows,
   onReopen,
   undone,
   onJumpToAlert,
 }: {
-  items: HandledItem[];
+  // GET /today's handled rows, one per alert: a merge folded into a listed
+  // survivor leaves no row of its own.
+  rows: HandledRow[];
   onReopen?: (rowKey: string, alertId: number) => void;
   undone: Set<string>;
   onJumpToAlert: (alertId: number) => void;
 }) {
   const reverted = handledReverted(undone);
-  // Grouped rows, not raw items: a merge folded into a listed survivor
-  // leaves no row of its own.
-  const rows = groupHandled(items);
   return (
     <>
       <p className="mb-1 text-[15px] font-medium text-fg">{handledHeadline(rows, reverted)}</p>

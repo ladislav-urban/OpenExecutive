@@ -28,6 +28,12 @@ _FORBIDDEN_PREFIXES = (
 )
 
 
+# Act as me's cards, read only: Needs you shows the replies drafted in the
+# person's mailbox and the actions suggested from it. Approving, editing and
+# sending them, and everything else under /delegation, stay off the list.
+_DELEGATION_READS = {("GET", "/delegation/replies"), ("GET", "/delegation/actions")}
+
+
 def _api_routes() -> set[tuple[str, str]]:
     from openexecutive.api.main import create_app
 
@@ -57,6 +63,8 @@ def test_entries_are_well_formed_and_listed_once() -> None:
 
 @pytest.mark.parametrize(("method", "path"), [tuple(c) for c in CALLS], ids=lambda v: str(v))
 def test_nothing_that_acts_for_the_person_is_on_it(method: str, path: str) -> None:
+    if (method, path) in _DELEGATION_READS:
+        return
     assert not path.startswith(_FORBIDDEN_PREFIXES), path
     # ERPNext's draft cards are read from the host; preparing one (the alert's
     # tap) and the oversight export stay in Open Executive's own pages.
@@ -78,6 +86,16 @@ def test_the_card_actions_are_not_on_it() -> None:
     ):
         assert ("POST", path) in _api_routes()
         assert ("POST", path) not in calls
+
+
+def test_act_as_mes_cards_are_read_and_nothing_under_delegation_writes() -> None:
+    calls = {(m, p) for m, p in CALLS}
+    assert calls >= _DELEGATION_READS
+    routes = _api_routes()
+    assert routes >= _DELEGATION_READS
+    delegation = {(m, p) for m, p in routes if p.startswith("/delegation")}
+    assert any(m != "GET" for m, _ in delegation)
+    assert calls & delegation == _DELEGATION_READS
 
 
 def test_erpnexts_draft_cards_are_read_but_never_prepared() -> None:
