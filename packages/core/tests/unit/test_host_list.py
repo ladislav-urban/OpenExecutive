@@ -119,3 +119,9 @@ def test_the_chats_and_watch_list_reads_are_on_it() -> None:
     for call in (("GET", "/chat/limits"), ("GET", "/watchlist/form"), *_POST_READS):
         assert call in calls, call
         assert call in _api_routes(), call
+
+
+def test_the_badge_counts_are_on_it() -> None:
+    # A host's navigation shows them next to its own menu entries.
+    assert ("GET", "/badges") in {(m, p) for m, p in CALLS}
+    assert ("GET", "/badges") in _api_routes()

@@ -15,7 +15,8 @@ import {
   NEW_CHAT_DESCRIPTION,
   SETTINGS_NAV_ITEM,
 } from "@/components/shell/navConfig";
-import { getReviewStats } from "@/lib/api";
+import { getBadges } from "@/lib/api";
+import { reviewBadgeFrom } from "@/lib/badges";
 import { NEW_CHAT_PATH } from "@/lib/chatRoutes";
 
 /**
@@ -61,12 +62,12 @@ export default function AppSidebar({
   const { mode, role } = useWorkspace();
   const [reviewBadge, setReviewBadge] = useState(0);
 
-  // Knowledge base badge: items waiting in its review queue. Refetched on
-  // navigation so approving items clears the badge once you move on, rather
-  // than only on a full reload.
+  // Knowledge base badge: items waiting in its review queue (GET /badges).
+  // Refetched on navigation so approving items clears the badge once you
+  // move on, rather than only on a full reload.
   useEffect(() => {
-    getReviewStats()
-      .then((s) => setReviewBadge(s.pending + s.needs_revision))
+    getBadges()
+      .then((b) => setReviewBadge((previous) => reviewBadgeFrom(b.counts, previous)))
       .catch(() => {});
   }, [pathname]);
 

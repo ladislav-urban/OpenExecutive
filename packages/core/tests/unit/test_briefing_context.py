@@ -473,7 +473,8 @@ def test_board_limit_is_shared_with_the_today_route() -> None:
     from openexecutive.alerts.lifecycle import BOARD_LIMIT
     from openexecutive.api.routes import today as today_route
 
-    src = inspect.getsource(today_route._build_today)
+    # _build_today and GET /badges both read the board through _board_alerts.
+    src = inspect.getsource(today_route._board_alerts)
     assert "BOARD_LIMIT" in src, "today.py must use the shared constant, not a literal"
     assert "list_live_alerts(limit=100" not in src
     assert BOARD_LIMIT == 100
