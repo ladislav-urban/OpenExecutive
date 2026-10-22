@@ -467,8 +467,8 @@ everything installed in it, and whatever its administrators add. That code can d
 the host list allows, as whoever has the host open and is signed in here: read their
 email, the briefing, alerts, cards (ERPNext's draft cards with their figures among them), conversations (whose replies can draw on the person's memory and
 mail) and the watch list. With Act as me on, the cards include the replies drafted in the
-person's own mailbox: who wrote, what they wrote, and the drafted answer with its
-recipients and the open questions on it, and the actions suggested from their mail
+person's own mailbox: who wrote, what they wrote, the drafted answer with its
+recipients and the open questions on it, and a link to the thread in their mailbox, and the actions suggested from their mail
 (a message as it would be sent, an invitation, a contact to add). So that code can read
 part of the person's mail, as the chat replies it may already read can draw on it. It
 can't send, edit or answer a reply card, approve an action card, or change Act as me.

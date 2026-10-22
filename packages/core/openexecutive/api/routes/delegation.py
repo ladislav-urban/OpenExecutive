@@ -161,8 +161,9 @@ logger = logging.getLogger(__name__)
 
 
 def _waiting_replies(person: Person) -> int:
-    """Reply cards waiting for ``person``, for Home's Needs you count: what
-    GET /delegation/replies lists them, none for anyone it refuses."""
+    """Reply cards waiting for ``person``, for Home's Needs you count: the
+    cards GET /delegation/replies lists them, none for someone who can't
+    have Act as me. /today has resolved the caller already."""
     from openexecutive.delegation.inbox import open_cards
 
     return len(open_cards(person.id)) if person.id is not None and can_delegate(person) else 0
