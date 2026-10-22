@@ -197,7 +197,8 @@ function TopicHistory({
   // The server lays out the chats this list shows (POST /sessions/topics/layout);
   // the previous layout stays while a new one loads.
   const ids = useMemo(() => sessions.map((s) => s.session_id), [sessions]);
-  const idsKey = ids.join("\n");
+  // A pin, a move or new activity changes the layout too, not just which chats show.
+  const idsKey = sessions.map((s) => `${s.session_id}|${s.pinned_at ?? ""}|${s.topic_id ?? ""}|${s.updated_at}`).join("\n");
   const [raw, setRaw] = useState<{ layout: Parameters<typeof hydrateTopicLayout>[0]; key: string } | null>(null);
   useEffect(() => {
     const controller = new AbortController();
