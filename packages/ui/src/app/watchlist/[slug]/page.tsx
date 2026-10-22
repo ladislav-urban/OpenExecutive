@@ -16,7 +16,6 @@ import {
   type WatchlistItem,
   type WatchlistSignal,
 } from "@/lib/api";
-import { raiseTheBar, triggerInWords } from "@/lib/watchWords";
 
 /** Relative time for display, e.g. "3h ago", "just now", "never". */
 function formatRelTime(iso: string | null): string {
@@ -59,11 +58,6 @@ function outcomeStyle(outcome: string | null): string {
   return "bg-zinc-500/20 text-zinc-400 border-zinc-500/30";
 }
 
-function outcomeLabel(outcome: string | null): string {
-  if (outcome === null) return "pending";
-  return outcome.replace(/^suppressed_/, "suppressed: ");
-}
-
 /**
  * "You dismissed 6 of the last 8 alerts from this." Offers a quieter watch,
  * stopping, or keeping it; any answer stops the question until a fresh run
@@ -82,7 +76,8 @@ function NoisyNudge({
   const [err, setErr] = useState<string | null>(null);
   const noise = item.noise;
   if (!noise?.noisy) return null;
-  const raise = raiseTheBar(item);
+  // The quieter version this watch offers (GET /watchlist/{slug}'s `raise_the_bar`).
+  const raise = item.raise_the_bar ?? null;
 
   async function answer(patch: Parameters<typeof patchWatchlistItem>[1], said: string) {
     setBusy(true);
@@ -139,7 +134,7 @@ function SignalRow({ signal }: { signal: WatchlistSignal }) {
         <span
           className={`inline-block px-1.5 py-0.5 rounded border text-[10px] font-medium ${outcomeStyle(signal.processed_outcome)}`}
         >
-          {outcomeLabel(signal.processed_outcome)}
+          {signal.outcome_label ?? signal.processed_outcome ?? "pending"}
         </span>
       </div>
       <div className="flex items-center gap-3 text-sm">
@@ -440,7 +435,7 @@ export default function WatchDetailPage() {
             </dl>
             <div className="mt-3">
               <div className="text-sm text-fg-muted mb-1">Tells you when</div>
-              <p className="text-[15px] text-fg">{triggerInWords(item.signal_type, item.trigger_json)}</p>
+              <p className="text-[15px] text-fg">{item.trigger_words}</p>
               <details className="mt-1.5">
                 <summary className="inline-flex min-h-10 cursor-pointer items-center text-sm text-fg-subtle">
                   Exact trigger

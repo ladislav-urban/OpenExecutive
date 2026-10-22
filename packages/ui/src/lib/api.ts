@@ -1042,6 +1042,69 @@ export interface SessionSummary {
   shared_at?: string;
   /** The owner's topic this chat is filed under; absent when none. */
   topic_id?: number;
+  /** A host origin's page started it: a host may send into it (any other
+   * conversation is read-only from a host). */
+  host_started?: boolean;
+  /** Its group in the date view, in this browser's zone (`?tz=`). */
+  date_group?: { key: SessionDateGroupKey; label: string; order: number };
+}
+
+export type SessionDateGroupKey = "pinned" | "today" | "yesterday" | "prev7" | "prev30" | "older";
+
+/** A group of the topic view: Pinned, one topic or Other (utils/chat_list.py). */
+export interface TopicLayoutGroup {
+  key: string;
+  label: string;
+  topic_id?: number;
+  session_ids: string[];
+  active_label?: string;
+}
+
+/** A heading in a band: one topic, or an area over two or more related ones. */
+export interface TopicLayoutEntry {
+  key: string;
+  label: string;
+  topic_id?: number;
+  area?: string;
+  children?: TopicLayoutGroup[];
+  session_ids: string[];
+  last_active: string;
+  active_label?: string;
+}
+
+export interface TopicLayout {
+  pinned?: TopicLayoutGroup;
+  bands: { key: "active" | "week" | "twoWeeks" | "month"; label: string; entries: TopicLayoutEntry[] }[];
+  other?: TopicLayoutGroup;
+}
+
+/** The topic view for these chats (the ones the list shows), in this
+ * browser's zone. Only the caller's own chats are laid out. */
+export async function getTopicLayout(sessionIds: string[], signal?: AbortSignal): Promise<TopicLayout> {
+  const res = await fetch(`${API_BASE}/sessions/topics/layout${zoneQuery()}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_ids: sessionIds }),
+    signal,
+  });
+  if (!res.ok) throw new Error("Failed to lay out topics");
+  return res.json();
+}
+
+/** What a message may carry (GET /chat/limits). */
+export interface ChatLimits {
+  max_files: number;
+  max_bytes_per_file: number;
+  image_types: string[];
+  document_suffixes: string[];
+  /** For a file input's `accept`. */
+  accept: string;
+}
+
+export async function getChatLimits(): Promise<ChatLimits> {
+  const res = await fetch(`${API_BASE}/chat/limits`);
+  if (!res.ok) throw new Error("Failed to load the attachment limits");
+  return res.json();
 }
 
 /** One of the caller's chat topics (the Topic view on Chats). */
@@ -1116,14 +1179,15 @@ export async function ungroupTopicArea(area: string): Promise<void> {
 }
 
 export async function listSessions(): Promise<SessionSummary[]> {
-  const res = await fetch(`${API_BASE}/sessions`);
+  const res = await fetch(`${API_BASE}/sessions${zoneQuery()}`);
   if (!res.ok) throw new Error("Failed to list sessions");
   return res.json();
 }
 
 /** The caller's own chats whose title or messages contain `query`. */
 export async function searchSessions(query: string, signal?: AbortSignal): Promise<SessionSummary[]> {
-  const res = await fetch(`${API_BASE}/sessions?q=${encodeURIComponent(query)}`, { signal });
+  const zone = zoneQuery().replace(/^\?/, "&");
+  const res = await fetch(`${API_BASE}/sessions?q=${encodeURIComponent(query)}${zone}`, { signal });
   if (!res.ok) throw new Error("Failed to search sessions");
   return res.json();
 }
@@ -1159,7 +1223,7 @@ export async function getSession(sessionId: string): Promise<SessionSummary> {
 
 /** Chats other people shared with the caller. */
 export async function listSharedSessions(): Promise<SessionSummary[]> {
-  const res = await fetch(`${API_BASE}/sessions/shared-with-me`);
+  const res = await fetch(`${API_BASE}/sessions/shared-with-me${zoneQuery()}`);
   if (!res.ok) throw new Error("Failed to list shared chats");
   return res.json();
 }
@@ -1377,6 +1441,8 @@ export interface ChatMessage {
   // User rows of a shared chat only: who wrote it.
   sender_person_id?: number;
   sender_name?: string;
+  // User rows a host origin's page wrote (a script there may have).
+  from_host?: boolean;
 }
 
 export interface Decision {
@@ -5470,6 +5536,74 @@ export interface WatchlistItem {
   origin: WatchlistOrigin | string;
   /** Detail route only: how many of its recent alerts were dismissed. */
   noise?: WatchNoise;
+  // How the list and the page show it (monitoring/presentation.py).
+  /** A research suggestion waiting for a yes. */
+  is_suggestion?: boolean;
+  /** The Executive added it on its own. */
+  added_by_executive?: boolean;
+  trigger_words?: string;
+  cadence_words?: string;
+  loudness_words?: string;
+  group?: { key: string; label: string; order: number };
+  /** The quieter version a noisy watch offers, with the PATCH that makes it. */
+  raise_the_bar?: { label: string; done: string; patch: WatchlistPatch } | null;
+  /** How it is turned down: "Decline" a suggestion, "Stop watching" one it added. */
+  decline?: {
+    verb: string;
+    // `patch`: stopping keeps the watch, changed so (too noisy: quieter); null deletes it.
+    reasons: { value: WatchDeclineReason; label: string; hint: string; menu_label: string; patch?: WatchlistPatch | null }[];
+  } | null;
+}
+
+/** The add form's choices and defaults (GET /watchlist/form). */
+export interface WatchForm {
+  signal_types: { value: WatchlistSignalType; label: string; hint: string; billed: boolean; trigger_example: string }[];
+  cadences: { value: WatchlistCadence; label: string }[];
+  severities: { value: WatchlistSeverity; label: string }[];
+  decline_reasons: { value: WatchDeclineReason; label: string; hint: string }[];
+  defaults: {
+    signal_type: WatchlistSignalType;
+    cadence: WatchlistCadence;
+    severity_floor: WatchlistSeverity;
+    severity_ceiling: WatchlistSeverity;
+    mode: WatchlistMode;
+  };
+}
+
+export async function getWatchForm(): Promise<WatchForm> {
+  const res = await fetch(`${API_BASE}/watchlist/form`);
+  if (!res.ok) throw new Error("Failed to load the watch form");
+  return res.json();
+}
+
+/** What the add form's values come to (POST /watchlist/preview). */
+export interface WatchPreview {
+  /** The slug an empty slug field gets. */
+  slug: string;
+  trigger_words: string;
+  cadence_words: string;
+  loudness_words: string;
+}
+
+export async function previewWatch(
+  body: {
+    signal_type: string;
+    target: string;
+    trigger: Record<string, unknown>;
+    cadence: string;
+    severity_floor: string;
+    severity_ceiling: string;
+  },
+  signal?: AbortSignal,
+): Promise<WatchPreview> {
+  const res = await fetch(`${API_BASE}/watchlist/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok) throw new Error("Failed to preview the watch");
+  return res.json();
 }
 
 /** A watch's last alerts (up to 8) since its noise question was last answered. */
@@ -5496,6 +5630,19 @@ export interface WatchDraft {
   tell_you_when: string;
   how_often: string;
   how_loud: string;
+  /** The add form's starting values for "Change something". */
+  form_initial?: {
+    slug: string;
+    signal_type: WatchlistSignalType;
+    target: string;
+    display_label: string;
+    trigger: Record<string, unknown>;
+    cadence: WatchlistCadence;
+    severity_floor: WatchlistSeverity;
+    severity_ceiling: WatchlistSeverity;
+    mode: WatchlistMode;
+    notes: string;
+  };
 }
 
 export interface WatchlistSignal {
@@ -5514,9 +5661,12 @@ export interface WatchlistSignal {
   processed_outcome: string | null;
   promoted_alert_id: number | null;
   raw_payload: Record<string, unknown>;
+  /** The outcome in words: pending, alerted, failed, "suppressed: …". */
+  outcome_label?: string;
 }
 
 export interface WatchlistCreate {
+  /** Left empty, the API makes it from the type and target. */
   slug: string;
   signal_type: WatchlistSignalType | string;
   target: string;

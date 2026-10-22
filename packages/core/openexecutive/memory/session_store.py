@@ -185,8 +185,8 @@ def load_messages(
         return []
     with _get_conn(db_path) as conn:
         rows = conn.execute(
-            "SELECT id, role, content, action_chips, stopped, feedback, sources, sender_person_id "
-            "FROM chat_messages "
+            "SELECT id, role, content, action_chips, stopped, feedback, sources, sender_person_id, "
+            "sender_surface FROM chat_messages "
             "WHERE session_id = ? ORDER BY id",
             (session_id,),
         ).fetchall()
@@ -219,6 +219,9 @@ def load_messages(
         # Anthropic payload.
         if row["stopped"]:
             msg["stopped"] = True
+        # A line a host origin's page wrote (``host_wrote``), so a page can mark it.
+        if row["role"] == "user" and row["sender_surface"] == "host":
+            msg["from_host"] = True
         # What the reply looked at, for the web chat to show under it. Same
         # attach-only-when-present rule as `actions`.
         if row["role"] == "assistant" and row["sources"]:
@@ -252,7 +255,7 @@ def list_sessions(
         rows = conn.execute(
             """
             SELECT s.session_id, s.title, s.created_at, s.updated_at, s.pinned_at,
-                   s.topic_id, COUNT(m.id) AS message_count, MAX(m.id) AS last_id
+                   s.topic_id, s.host_wrote, COUNT(m.id) AS message_count, MAX(m.id) AS last_id
             FROM sessions s
             LEFT JOIN chat_messages m ON m.session_id = s.session_id
             WHERE s.caller_person_id = ?
@@ -288,6 +291,7 @@ def list_sessions(
             item["pinned_at"] = row["pinned_at"]
         if row["topic_id"] is not None:
             item["topic_id"] = row["topic_id"]
+        item["host_started"] = bool(row["host_wrote"])
         msg = last.get(row["last_id"]) if row["last_id"] is not None else None
         # In a shared chat the last message may be a teammate's: no "You: ".
         mine = msg is not None and msg["sender_person_id"] in (None, caller_person_id)
@@ -372,7 +376,7 @@ def search_sessions(
     with _get_conn(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT s.session_id, s.title, s.created_at, s.updated_at, s.topic_id,
+            SELECT s.session_id, s.title, s.created_at, s.updated_at, s.topic_id, s.host_wrote,
                    (SELECT COUNT(*) FROM chat_messages m
                      WHERE m.session_id = s.session_id) AS message_count,
                    (SELECT COUNT(*) FROM chat_messages m
@@ -398,6 +402,7 @@ def search_sessions(
             }
             if row["topic_id"] is not None:
                 item["topic_id"] = row["topic_id"]
+            item["host_started"] = bool(row["host_wrote"])
             item["snippet"] = None
             if row["match_count"]:
                 hit = conn.execute(
@@ -437,7 +442,7 @@ def get_session_metadata(session_id: str, db_path: Path = DB_PATH) -> dict[str, 
         row = conn.execute(
             """
             SELECT s.session_id, s.title, s.created_at, s.updated_at, s.pinned_at,
-                   s.topic_id, COUNT(m.id) AS message_count
+                   s.topic_id, s.host_wrote, COUNT(m.id) AS message_count
             FROM sessions s
             LEFT JOIN chat_messages m ON m.session_id = s.session_id
             WHERE s.session_id = ?
@@ -448,6 +453,7 @@ def get_session_metadata(session_id: str, db_path: Path = DB_PATH) -> dict[str, 
     if row is None:
         return None
     meta = dict(row)
+    meta["host_started"] = bool(meta.pop("host_wrote", 0))
     if not meta.get("pinned_at"):
         meta.pop("pinned_at", None)
     if meta.get("topic_id") is None:
@@ -762,7 +768,7 @@ def list_shared_with_person(person_id: int, db_path: Path = DB_PATH) -> list[dic
     with _get_conn(db_path) as conn:
         rows = conn.execute(
             """
-            SELECT s.session_id, s.title, s.created_at, s.updated_at,
+            SELECT s.session_id, s.title, s.created_at, s.updated_at, s.host_wrote,
                    s.caller_person_id AS owner_person_id, sh.created_at AS shared_at,
                    (SELECT COUNT(*) FROM chat_messages m
                      WHERE m.session_id = s.session_id) AS message_count

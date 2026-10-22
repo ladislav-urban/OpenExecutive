@@ -20,8 +20,16 @@ from pydantic import BaseModel, ConfigDict, Field
 from openexecutive.alerts.models import AlertSeverity
 from openexecutive.api import caller as api_caller
 from openexecutive.audit import log_event as audit_log
+from openexecutive.monitoring import presentation
 from openexecutive.monitoring import store as ms
-from openexecutive.monitoring.describe import DescribeError, WatchDraft, describe_watch
+from openexecutive.monitoring.describe import (
+    DescribeError,
+    WatchDraft,
+    cadence_line,
+    describe_watch,
+    loudness_line,
+    trigger_line,
+)
 from openexecutive.monitoring.models import (
     DECLINE_KIND_EXPLICIT,
     DECLINE_REASON_NOT_RELEVANT,
@@ -29,6 +37,7 @@ from openexecutive.monitoring.models import (
     EXPLICIT_DECLINE_REASONS,
     MODE_ACTIVE,
     MODE_DRY_RUN,
+    ORIGIN_RESEARCH,
     ORIGIN_RESEARCH_PROPOSED,
     RESEARCH_ORIGINS,
     WatchlistItem,
@@ -74,7 +83,9 @@ def _audit(event: str, ok: bool, summary: str, details: dict[str, Any]) -> None:
 class WatchlistCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    slug: str = Field(min_length=1, max_length=64)
+    # Left empty, it is made from the type and target
+    # (``presentation.suggest_slug``, what ``POST /watchlist/preview`` shows).
+    slug: str = Field(default="", max_length=64)
     signal_type: str = Field(min_length=1, max_length=64)
     target: str = Field(min_length=1, max_length=500)
     trigger: dict[str, Any] = Field(default_factory=dict)
@@ -110,7 +121,60 @@ class WatchlistDescribe(BaseModel):
     text: str = ""
 
 
-class WatchlistDetail(WatchlistItem):
+class WatchlistPreviewBody(BaseModel):
+    """The add form's values, to say what they come to."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    signal_type: str = Field(default="stock", max_length=64)
+    target: str = Field(default="", max_length=500)
+    trigger: dict[str, Any] = Field(default_factory=dict)
+    cadence: str = Field(default="15min", max_length=32)
+    severity_floor: str = Field(default="low", max_length=16)
+    severity_ceiling: str = Field(default="urgent", max_length=16)
+
+
+class WatchlistView(WatchlistItem):
+    """A watch as a list or page shows it (``monitoring.presentation``): its
+    settings in words, its group, whether it waits for a yes, how it is
+    turned down, and the quieter version it offers."""
+
+    is_suggestion: bool = False
+    # The Executive added it on its own (research), so it can be stopped
+    # with a reason.
+    added_by_executive: bool = False
+    trigger_words: str = ""
+    cadence_words: str = ""
+    loudness_words: str = ""
+    group: presentation.WatchGroup | None = None
+    raise_the_bar: presentation.RaiseTheBar | None = None
+    decline: presentation.DeclineMenu | None = None
+
+
+def _view(item: WatchlistItem) -> WatchlistView:
+    floor = getattr(item.severity_floor, "value", item.severity_floor)
+    ceiling = getattr(item.severity_ceiling, "value", item.severity_ceiling)
+    return WatchlistView(
+        **item.model_dump(),
+        is_suggestion=presentation.is_suggestion(item.origin, item.mode),
+        added_by_executive=item.origin == ORIGIN_RESEARCH,
+        trigger_words=trigger_line(item.signal_type, item.trigger_json or {}),
+        cadence_words=cadence_line(item.cadence),
+        loudness_words=loudness_line(str(floor), str(ceiling)),
+        group=presentation.group_of(item.signal_type),
+        raise_the_bar=presentation.raise_the_bar(item.signal_type, item.trigger_json, str(floor)),
+        decline=presentation.decline_menu(item.origin, item.mode),
+    )
+
+
+class DraftView(WatchDraft):
+    """A drafted watch, with the add form's starting values for "Change
+    something" (``presentation.form_initial``)."""
+
+    form_initial: presentation.FormInitial | None = None
+
+
+class WatchlistDetail(WatchlistView):
     """One watch plus how noisy its recent alerts were (the detail page's
     "only tell you about bigger changes?" line)."""
 
@@ -161,6 +225,8 @@ class SignalRow(BaseModel):
     processed_outcome: str | None = None
     promoted_alert_id: int | None = None
     raw_payload: dict[str, Any] = Field(default_factory=dict)
+    # The outcome in words: pending, alerted, failed, "suppressed: …".
+    outcome_label: str = ""
 
 
 # --------------------------------------------------------------------------- #
@@ -168,12 +234,28 @@ class SignalRow(BaseModel):
 # --------------------------------------------------------------------------- #
 
 
-@router.get("/watchlist", response_model=list[WatchlistItem])
+@router.get("/watchlist", response_model=list[WatchlistView])
 def list_watchlist(
     enabled_only: bool = False,
     signal_type: str | None = None,
-) -> list[WatchlistItem]:
-    return ms.list_watchlist(enabled_only=enabled_only, signal_type=signal_type)
+) -> list[WatchlistView]:
+    return [_view(i) for i in ms.list_watchlist(enabled_only=enabled_only, signal_type=signal_type)]
+
+
+@router.get("/watchlist/form", response_model=presentation.WatchForm)
+def get_watchlist_form() -> presentation.WatchForm:
+    """The add form's choices (signal types with their hints, cadences and
+    loudness in words), the decline reasons, and the defaults."""
+    return presentation.watch_form()
+
+
+@router.post("/watchlist/preview", response_model=presentation.WatchPreview)
+def preview_watchlist_entry(body: WatchlistPreviewBody) -> presentation.WatchPreview:
+    """What the add form's values come to: the slug an empty slug field
+    gets, and the trigger, cadence and loudness in words. Saves nothing."""
+    return presentation.preview(
+        body.signal_type.strip(), body.target, body.trigger, body.cadence, body.severity_floor, body.severity_ceiling,
+    )
 
 
 @router.get("/watchlist/{slug}", response_model=WatchlistDetail)
@@ -181,7 +263,7 @@ def get_watchlist_entry(slug: str) -> WatchlistDetail:
     item = ms.get_watchlist_item_by_slug(slug)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Watchlist entry {slug!r} not found")
-    return WatchlistDetail(**item.model_dump(), noise=watch_noise(item))
+    return WatchlistDetail(**_view(item).model_dump(), noise=watch_noise(item))
 
 
 @router.get("/watchlist/{slug}/signals", response_model=list[SignalRow])
@@ -192,7 +274,7 @@ def get_watchlist_signals(slug: str, limit: int = _SIGNALS_DEFAULT_LIMIT) -> lis
     assert item.id is not None
     bounded = max(1, min(limit, _SIGNALS_MAX_LIMIT))
     rows = ms.list_signals_for_watchlist(item.id, limit=bounded)
-    return [SignalRow(**row) for row in rows]
+    return [SignalRow(**row, outcome_label=presentation.outcome_label(row.get("processed_outcome"))) for row in rows]
 
 
 # --------------------------------------------------------------------------- #
@@ -203,27 +285,28 @@ def get_watchlist_signals(slug: str, limit: int = _SIGNALS_DEFAULT_LIMIT) -> lis
 _DESCRIBE_STATUS = {"too_many": 429, "timeout": 504, "unavailable": 502}
 
 
-@router.post("/watchlist/describe", response_model=WatchDraft)
-async def describe_watchlist_entry(body: WatchlistDescribe, request: Request) -> WatchDraft:
+@router.post("/watchlist/describe", response_model=DraftView)
+async def describe_watchlist_entry(body: WatchlistDescribe, request: Request) -> DraftView:
     """Draft a watch from a sentence ("tell me if Initech's stock moves more
     than 8%"). Nothing is saved: the UI shows the draft in plain words and
     POSTs it to ``/watchlist`` once the person says Start watching. A
     request that can't become a watch is a 422 with a plain reason."""
     try:
-        return await describe_watch(body.text, caller_key=api_caller.caller(request).email)
+        draft = await describe_watch(body.text, caller_key=api_caller.caller(request).email)
     except DescribeError as exc:
         raise HTTPException(status_code=_DESCRIBE_STATUS.get(exc.code, 422), detail=exc.message) from exc
+    return DraftView(**draft.model_dump(), form_initial=presentation.form_initial(draft))
 
 
 @router.post(
     "/watchlist",
-    response_model=WatchlistItem,
+    response_model=WatchlistView,
     status_code=status.HTTP_201_CREATED,
 )
-async def create_watchlist_entry(body: WatchlistCreate) -> WatchlistItem:
-    slug = body.slug.strip()
+async def create_watchlist_entry(body: WatchlistCreate) -> WatchlistView:
     signal_type = body.signal_type.strip()
     target = body.target.strip()
+    slug = body.slug.strip() or presentation.suggest_slug(signal_type, target)
 
     if not is_valid_watchlist_slug(slug):
         raise HTTPException(
@@ -327,11 +410,11 @@ async def create_watchlist_entry(body: WatchlistCreate) -> WatchlistItem:
     created = ms.get_watchlist_item(new_id)
     if created is None:
         raise HTTPException(status_code=500, detail="watchlist entry vanished after insert")
-    return created
+    return _view(created)
 
 
-@router.patch("/watchlist/{slug}", response_model=WatchlistItem)
-def patch_watchlist_entry(slug: str, body: WatchlistPatch) -> WatchlistItem:
+@router.patch("/watchlist/{slug}", response_model=WatchlistView)
+def patch_watchlist_entry(slug: str, body: WatchlistPatch) -> WatchlistView:
     item = ms.get_watchlist_item_by_slug(slug)
     if item is None:
         raise HTTPException(status_code=404, detail=f"Watchlist entry {slug!r} not found")
@@ -411,7 +494,7 @@ def patch_watchlist_entry(slug: str, body: WatchlistPatch) -> WatchlistItem:
     updated = ms.get_watchlist_item(item.id)
     if updated is None:
         raise HTTPException(status_code=500, detail="watchlist entry vanished after update")
-    return updated
+    return _view(updated)
 
 
 def _record_decline(item: WatchlistItem, reason: str) -> None:
@@ -481,8 +564,8 @@ def _pending_suggestion_or_409(slug: str) -> WatchlistItem:
     return item
 
 
-@router.post("/watchlist/{slug}/approve", response_model=WatchlistItem)
-def approve_watchlist_suggestion(slug: str) -> WatchlistItem:
+@router.post("/watchlist/{slug}/approve", response_model=WatchlistView)
+def approve_watchlist_suggestion(slug: str) -> WatchlistView:
     """Turn a research suggestion into a live watch (origin=research)."""
     from openexecutive.monitoring.research import watch_policy
 
@@ -501,7 +584,7 @@ def approve_watchlist_suggestion(slug: str) -> WatchlistItem:
     updated = ms.get_watchlist_item(item.id)
     if updated is None:
         raise HTTPException(status_code=500, detail="watchlist entry vanished after approve")
-    return updated
+    return _view(updated)
 
 
 @router.post("/watchlist/{slug}/decline", response_model=DeclineResponse)

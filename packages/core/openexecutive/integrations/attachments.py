@@ -47,6 +47,9 @@ _EXTRACTABLE_SUFFIXES = frozenset(
     {".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".txt", ".md", ".rst", ".csv"}
 )
 _SUPPORTED_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/gif", "image/webp"})
+# Public names for what a client offers (``GET /chat/limits``).
+EXTRACTABLE_SUFFIXES = _EXTRACTABLE_SUFFIXES
+SUPPORTED_IMAGE_TYPES = _SUPPORTED_IMAGE_TYPES
 
 # Strong refs so background ingest tasks aren't GC'd before they complete.
 _ingest_tasks: set[asyncio.Task[Any]] = set()

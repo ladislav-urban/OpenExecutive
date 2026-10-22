@@ -7,6 +7,7 @@ import OverflowMenu from "@/components/ui/OverflowMenu";
 import {
   getPeopleViewer,
   getSessionShares,
+  getTopicLayout,
   leaveSharedChat,
   listPeople,
   mergeChatTopic,
@@ -26,10 +27,10 @@ import { highlightParts, matchLabel } from "@/lib/chatSearch";
 import { sessionChannel, sessionTitle } from "@/lib/sessionChannel";
 import { ChannelLogo } from "@/components/sessions/ChannelLogo";
 import {
-  activeLabel,
-  groupSessionsByDate,
-  layoutTopics,
+  groupByDate,
+  hydrateTopicLayout,
   type GroupKey,
+  type HydratedLayout,
   type TopicEntry,
   type TopicGroup,
 } from "@/lib/sessionGroups";
@@ -83,7 +84,8 @@ export default function ChatHistory({
   const [collapsedOverride, setCollapsedOverride] = useState<Record<string, boolean>>({});
   const [showAll, setShowAll] = useState<Set<string>>(new Set());
 
-  const groups: ListGroup[] = useMemo(() => (view === "topic" ? [] : groupSessionsByDate(sessions)), [view, sessions]);
+  // Each chat carries its date group (GET /sessions?tz=).
+  const groups: ListGroup[] = useMemo(() => (view === "topic" ? [] : groupByDate(sessions)), [view, sessions]);
 
   if (view === "topic") {
     return (
@@ -192,7 +194,29 @@ function TopicHistory({
   onDelete: (sessionId: string) => Promise<boolean>;
   onChanged: () => void;
 }) {
-  const layout = useMemo(() => layoutTopics(sessions, topics), [sessions, topics]);
+  // The server lays out the chats this list shows (POST /sessions/topics/layout);
+  // the previous layout stays while a new one loads.
+  const ids = useMemo(() => sessions.map((s) => s.session_id), [sessions]);
+  const idsKey = ids.join("\n");
+  const [raw, setRaw] = useState<{ layout: Parameters<typeof hydrateTopicLayout>[0]; key: string } | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      getTopicLayout(ids, controller.signal)
+        .then((layout) => setRaw({ layout, key: idsKey }))
+        .catch(() => { /* keep what is shown */ });
+    }, 150);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // Re-fetched when the shown chats or their topics change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey, topics]);
+  const layout: HydratedLayout = useMemo(
+    () => (raw ? hydrateTopicLayout(raw.layout, sessions, topics) : { bands: [] }),
+    [raw, sessions, topics],
+  );
   const [opened, setOpened] = useState<Record<string, boolean>>({});
   const [showAll, setShowAll] = useState<Set<string>>(new Set());
 
@@ -204,6 +228,9 @@ function TopicHistory({
   const isOpen = (key: string) => searching || (key in opened ? opened[key] : openByDefault.has(key));
   const toggle = (key: string) => setOpened((prev) => ({ ...prev, [key]: !isOpen(key) }));
 
+  if (raw === null && sessions.length > 0) {
+    return <p className="px-1 py-6 text-[15px] text-fg-muted">Loading…</p>;
+  }
   if (!layout.pinned && !layout.other && layout.bands.length === 0) {
     return <p className="px-1 py-6 text-[15px] text-fg-muted">No conversations match.</p>;
   }
@@ -289,7 +316,7 @@ function TopicHistory({
         key: g.key,
         label: g.label,
         count: g.items.length,
-        when: activeLabel(g.items[0]?.updated_at ?? ""),
+        when: g.activeLabel,
         menu: g.topic ? <TopicMenu topic={g.topic} topics={topics} onChanged={onChanged} /> : undefined,
         indent,
       })}
@@ -305,14 +332,14 @@ function TopicHistory({
           label: e.label,
           count: e.items.length,
           preview: e.children.map((g) => g.label).join(" · "),
-          when: activeLabel(e.lastActive),
+          when: e.activeLabel,
           menu: <AreaMenu area={e.area} onChanged={onChanged} />,
           strong: true,
         })}
         {isOpen(e.key) && e.children.map((g) => topicBlock(g, "ml-6"))}
       </section>
     ) : (
-      topicBlock({ key: e.key, label: e.label, topic: e.topic, items: e.items }, "")
+      topicBlock({ key: e.key, label: e.label, topic: e.topic, items: e.items, activeLabel: e.activeLabel }, "")
     );
 
   const entries = (key: string, list: TopicEntry[]) => {

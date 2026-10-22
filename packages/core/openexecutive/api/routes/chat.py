@@ -17,6 +17,7 @@ from pydantic import BaseModel
 
 from openexecutive.api import caller as api_caller
 from openexecutive.api import chat_live
+from openexecutive.api.chat_events import STREAM_RESPONSES, EventStreamResponse
 from openexecutive.api.models import (
     AddChatMessageRequest,
     BackgroundChatRequest,
@@ -1931,7 +1932,7 @@ async def _run_chat_turn(
     )
 
 
-@router.post("/chat")
+@router.post("/chat", response_class=EventStreamResponse, responses=STREAM_RESPONSES)
 async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
     return await _run_chat_turn(
         message=body.message,
@@ -2130,7 +2131,7 @@ async def chat_add(body: AddChatMessageRequest, request: Request) -> dict[str, s
     return {"status": "added", "turn_id": turn_id}
 
 
-@router.post("/chat/upload")
+@router.post("/chat/upload", response_class=EventStreamResponse, responses=STREAM_RESPONSES)
 async def chat_upload(
     request: Request,
     message: str = Form(..., min_length=1, max_length=32000),
@@ -2235,6 +2236,36 @@ async def chat_voice() -> VoiceStatus:
     from openexecutive.providers import transcription
 
     return VoiceStatus(available=transcription.available(), max_seconds=transcription.max_seconds())
+
+
+class ChatLimits(BaseModel):
+    """What a message may carry (``POST /chat/upload``), so a client checks
+    files before sending them and its file picker offers only these."""
+
+    max_files: int
+    max_bytes_per_file: int
+    # Content types of the images it reads, and the file names it reads text
+    # from (by their ending).
+    image_types: list[str]
+    document_suffixes: list[str]
+    # Both, as a file input's ``accept`` value.
+    accept: str
+
+
+@router.get("/chat/limits", response_model=ChatLimits)
+async def chat_limits() -> ChatLimits:
+    """The attachment limits and accepted types (``integrations.attachments``)."""
+    from openexecutive.integrations.attachments import EXTRACTABLE_SUFFIXES, SUPPORTED_IMAGE_TYPES
+
+    images = sorted(SUPPORTED_IMAGE_TYPES)
+    suffixes = sorted(EXTRACTABLE_SUFFIXES)
+    return ChatLimits(
+        max_files=_MAX_FILES_PER_TURN,
+        max_bytes_per_file=_MAX_BYTES_PER_FILE,
+        image_types=images,
+        document_suffixes=suffixes,
+        accept=",".join([*images, *suffixes]),
+    )
 
 
 @router.post("/chat/transcribe", response_model=TranscribeResponse)

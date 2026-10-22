@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  MAX_BYTES_PER_FILE,
-  MAX_FILES_PER_TURN,
-  mergePickedFiles,
-} from "../src/lib/file-attachments.ts";
+import { DEFAULT_ATTACHMENT_LIMITS, mergePickedFiles } from "../src/lib/file-attachments.ts";
+
+// The limits come from GET /chat/limits; these are the API's.
+const MAX_BYTES_PER_FILE = DEFAULT_ATTACHMENT_LIMITS.max_bytes_per_file;
+const MAX_FILES_PER_TURN = DEFAULT_ATTACHMENT_LIMITS.max_files;
 
 test("rejects oversized files with an actionable message", () => {
   const oversized = { name: "quarterly-report.pdf", size: MAX_BYTES_PER_FILE + 1 };
@@ -35,4 +35,11 @@ test("preserves the existing file-count cap and de-duplicates files", () => {
 
   assert.deepEqual(result.files, current);
   assert.deepEqual(result.rejected, []);
+});
+
+test("follows the limits the API gives", () => {
+  const limits = { max_files: 1, max_bytes_per_file: 1024 * 1024 };
+  const result = mergePickedFiles([], [{ name: "big.pdf", size: 2 * 1024 * 1024 }, { name: "a.txt", size: 10 }, { name: "b.txt", size: 10 }], limits);
+  assert.deepEqual(result.files.map((f) => f.name), ["a.txt"]);
+  assert.deepEqual(result.rejected, ["big.pdf is too large (max 1 MB)"]);
 });

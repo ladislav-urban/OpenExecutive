@@ -14,73 +14,37 @@ import {
   deleteWatchlistItem,
   describeWatch,
   draftToCreate,
+  getWatchForm,
   listDepartments,
   listWatchlist,
   patchWatchlistItem,
+  previewWatch,
   type WatchDeclineReason,
   type WatchDraft,
+  type WatchForm as WatchFormChoices,
+  type WatchPreview,
   type WatchlistCadence,
   type WatchlistItem,
+  type WatchlistPatch,
   type WatchlistSeverity,
   type WatchlistSignalType,
 } from "@/lib/api";
-import { suggestWatchSlug } from "@/lib/watchSlug";
-import { triggerInWords } from "@/lib/watchWords";
+
+// How a watch shows, and what the form offers, come from the API
+// (monitoring/presentation.py): each watch's words, group and menus
+// (GET /watchlist), the form's choices (GET /watchlist/form), and what the
+// form's values come to (POST /watchlist/preview). This page holds none of
+// those rules.
 
 const fieldCls =
   "w-full px-3.5 py-2.5 text-[15px] rounded-xl bg-surface border border-line text-fg placeholder:text-fg-subtle focus:outline-none focus:ring-2 focus:ring-accent/40";
 const labelCls = "block text-sm font-medium text-fg-muted mb-1.5";
-
-// A research suggestion: the Executive wanted to watch this but was not sure
-// enough to add it on its own. Sits in dry_run (polls, never alerts) until
-// approved or declined here.
-function isSuggestion(item: WatchlistItem): boolean {
-  return item.origin === "research_proposed" && item.mode === "dry_run";
-}
-
-const DECLINE_REASONS: { value: WatchDeclineReason; label: string; hint: string }[] = [
-  { value: "not_relevant", label: "Not relevant", hint: "Never suggest this company/topic again" },
-  { value: "too_noisy", label: "Too noisy", hint: "Keep it, but only high-severity signals" },
-  { value: "wrong_source", label: "Wrong source", hint: "Right topic, drop only this feed/page" },
-];
 
 // Rationale + provenance stamp the research policy left on the row.
 function policyStamp(item: WatchlistItem): { entity?: string; score?: number; source_url?: string } {
   const raw = (item.config_json as Record<string, unknown> | undefined)?._policy;
   return raw && typeof raw === "object" ? (raw as { entity?: string; score?: number; source_url?: string }) : {};
 }
-
-const CADENCES: WatchlistCadence[] = ["real_time", "15min", "hourly", "daily", "weekly"];
-const SEVERITIES: WatchlistSeverity[] = ["low", "medium", "high", "urgent"];
-const SIGNAL_TYPES: { value: WatchlistSignalType; label: string; hint: string }[] = [
-  { value: "stock", label: "Stock", hint: "Yahoo Finance ticker — e.g. AAPL" },
-  { value: "rss", label: "RSS / Atom", hint: "Feed URL — e.g. competitor changelog" },
-  { value: "vendor_status", label: "Vendor status", hint: "Statuspage atom/RSS feed URL" },
-  { value: "edgar", label: "SEC EDGAR", hint: "Ticker or CIK — e.g. AAPL or 320193" },
-  {
-    value: "page_watch",
-    label: "Page change",
-    hint: "Public page URL to watch for content changes — e.g. a pricing or careers page",
-  },
-  {
-    value: "query",
-    label: "Web search (billed)",
-    hint: "Standing search query — e.g. Acme Corp layoffs OR restructuring OR funding",
-  },
-];
-
-// query runs an LLM web search every poll, so it bills per tick — unlike the
-// keyless feed/EDGAR/page adapters. Surfaced as a warning in the add modal.
-const BILLED_SIGNAL_TYPES: ReadonlySet<string> = new Set(["query"]);
-
-// Pretty group-header label per signal type, derived from the add-modal's
-// SIGNAL_TYPES so the two never drift. Unknown types fall back to the raw value.
-const SIGNAL_TYPE_LABELS: Record<string, string> = Object.fromEntries(
-  SIGNAL_TYPES.map((s) => [s.value, s.label]),
-);
-
-// Group display order: known types in SIGNAL_TYPES order; unknown types sort last.
-const SIGNAL_TYPE_ORDER: string[] = SIGNAL_TYPES.map((s) => s.value);
 
 // Turn a kebab-case slug into a readable title: "stock-aapl" → "stock aapl".
 // The full slug stays the identity (used for routing + shown on hover).
@@ -104,17 +68,16 @@ function formatRelTime(iso: string | null): string {
   }
 }
 
-/** The decline reasons as ⋯ items, each saying what it does. */
+/** A watch's decline reasons as ⋯ items, each saying what it does. */
 function declineItems(
-  verb: string,
-  slug: string,
+  item: WatchlistItem,
   busy: boolean,
-  onPick: (slug: string, reason: WatchDeclineReason) => void,
+  onPick: (slug: string, reason: WatchDeclineReason, patch: WatchlistPatch | null) => void,
 ): OverflowItem[] {
-  return DECLINE_REASONS.map((r) => ({
-    label: `${verb}: ${r.label.toLowerCase()} (${r.hint.charAt(0).toLowerCase()}${r.hint.slice(1)})`,
+  return (item.decline?.reasons ?? []).map((r) => ({
+    label: r.menu_label,
     disabled: busy,
-    onSelect: () => onPick(slug, r.value),
+    onSelect: () => onPick(item.slug, r.value, r.patch ?? null),
   }));
 }
 
@@ -128,7 +91,7 @@ function SuggestionCard({
   item: WatchlistItem;
   busy: boolean;
   onApprove: (slug: string) => void;
-  onDecline: (slug: string, reason: WatchDeclineReason) => void;
+  onDecline: (slug: string, reason: WatchDeclineReason, patch: WatchlistPatch | null) => void;
   departmentTitle?: string;
 }) {
   const stamp = policyStamp(item);
@@ -140,7 +103,7 @@ function SuggestionCard({
             {humanizeSlug(item.slug)}
           </div>
           <div className="text-sm text-fg-muted truncate" title={item.target}>
-            {SIGNAL_TYPE_LABELS[item.signal_type] ?? item.signal_type} · {item.target}
+            {item.group?.label ?? item.signal_type} · {item.target}
           </div>
         </div>
         <span className="flex-shrink-0 rounded-full bg-amber-500/15 px-2.5 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-300">
@@ -169,7 +132,7 @@ function SuggestionCard({
         </Button>
         <OverflowMenu
           label={`Decline ${humanizeSlug(item.slug)}`}
-          items={declineItems("Decline", item.slug, busy, onDecline)}
+          items={declineItems(item, busy, onDecline)}
         />
       </div>
     </div>
@@ -185,10 +148,10 @@ function WatchCard({
   item: WatchlistItem;
   onToggle: (slug: string, enabled: boolean) => void;
   toggleBusy: boolean;
-  onStopWatching?: (slug: string, reason: WatchDeclineReason) => void;
+  onStopWatching?: (slug: string, reason: WatchDeclineReason, patch: WatchlistPatch | null) => void;
 }) {
   // Mode, severity, cadence and counts live on the monitor's own page.
-  const isResearch = item.origin === "research";
+  const isResearch = Boolean(item.added_by_executive);
   const labelId = useId();
   const href = `/watchlist/${encodeURIComponent(item.slug)}`;
   return (
@@ -226,9 +189,7 @@ function WatchCard({
           label={`More for ${humanizeSlug(item.slug)}`}
           items={[
             { label: "Open details", href },
-            ...(isResearch && onStopWatching
-              ? declineItems("Stop watching", item.slug, toggleBusy, onStopWatching)
-              : []),
+            ...(isResearch && onStopWatching ? declineItems(item, toggleBusy, onStopWatching) : []),
           ]}
         />
       </div>
@@ -250,22 +211,6 @@ interface FormInitial {
   notes?: string;
 }
 
-function draftToInitial(draft: WatchDraft): FormInitial {
-  const known = SIGNAL_TYPES.some((s) => s.value === draft.signal_type);
-  return {
-    slug: draft.slug,
-    signalType: known ? (draft.signal_type as WatchlistSignalType) : "stock",
-    target: draft.target,
-    displayLabel: draft.display_label,
-    trigger: draft.trigger,
-    cadence: (CADENCES as string[]).includes(draft.cadence) ? (draft.cadence as WatchlistCadence) : "15min",
-    severityFloor: draft.severity_floor,
-    severityCeiling: draft.severity_ceiling,
-    mode: draft.mode === "dry_run" ? "dry_run" : "active",
-    notes: draft.notes,
-  };
-}
-
 /** The trigger box's text as an object, or null while it isn't valid JSON. */
 function parseTrigger(text: string): Record<string, unknown> | null {
   if (!text.trim()) return {};
@@ -280,24 +225,46 @@ function parseTrigger(text: string): Record<string, unknown> | null {
 }
 
 interface WatchFormProps {
+  choices: WatchFormChoices;
   initial?: FormInitial;
   onCreated: (w: WatchlistItem) => void;
 }
 
-function WatchForm({ initial, onCreated }: WatchFormProps) {
+/** What the form's values come to, asked again a moment after they change. */
+function useWatchPreview(values: Parameters<typeof previewWatch>[0] | null): WatchPreview | null {
+  const [preview, setPreview] = useState<WatchPreview | null>(null);
+  const key = JSON.stringify(values);
+  useEffect(() => {
+    if (values === null) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      previewWatch(values, controller.signal).then(setPreview).catch(() => { /* keep the last */ });
+    }, 250);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+    // Keyed on the values themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return preview;
+}
+
+function WatchForm({ choices, initial, onCreated }: WatchFormProps) {
+  const defaults = choices.defaults;
   const [slug, setSlug] = useState(initial?.slug ?? "");
-  const [signalType, setSignalType] = useState<WatchlistSignalType>(initial?.signalType ?? "stock");
+  const [signalType, setSignalType] = useState<WatchlistSignalType>(initial?.signalType ?? defaults.signal_type);
   const [target, setTarget] = useState(initial?.target ?? "");
   const [displayLabel, setDisplayLabel] = useState(initial?.displayLabel ?? "");
   const [trigger, setTrigger] = useState(
     initial?.trigger && Object.keys(initial.trigger).length ? JSON.stringify(initial.trigger) : "",
   );
-  const [cadence, setCadence] = useState<WatchlistCadence>(initial?.cadence ?? "15min");
-  const [severityFloor, setSeverityFloor] = useState<WatchlistSeverity>(initial?.severityFloor ?? "low");
+  const [cadence, setCadence] = useState<WatchlistCadence>(initial?.cadence ?? defaults.cadence);
+  const [severityFloor, setSeverityFloor] = useState<WatchlistSeverity>(initial?.severityFloor ?? defaults.severity_floor);
   const [severityCeiling, setSeverityCeiling] = useState<WatchlistSeverity>(
-    initial?.severityCeiling ?? "urgent",
+    initial?.severityCeiling ?? defaults.severity_ceiling,
   );
-  const [mode, setMode] = useState<"active" | "dry_run">(initial?.mode ?? "active");
+  const [mode, setMode] = useState<"active" | "dry_run">(initial?.mode ?? defaults.mode);
   const [notes, setNotes] = useState(initial?.notes ?? "");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -306,9 +273,23 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
   // when a draft brought a trigger with it.
   const [moreOpen, setMoreOpen] = useState(Boolean(initial?.trigger && Object.keys(initial.trigger).length));
 
-  const targetHint = SIGNAL_TYPES.find((s) => s.value === signalType)?.hint ?? "";
-  const slugSuggestion = suggestWatchSlug(signalType, target);
+  const option = choices.signal_types.find((s) => s.value === signalType);
+  const targetHint = option?.hint ?? "";
   const parsedTrigger = parseTrigger(trigger);
+  const preview = useWatchPreview(
+    parsedTrigger === null
+      ? null
+      : {
+          signal_type: signalType,
+          target,
+          trigger: parsedTrigger,
+          cadence,
+          severity_floor: severityFloor,
+          severity_ceiling: severityCeiling,
+        },
+  );
+  // The slug an empty slug field gets (the API makes the same one).
+  const slugSuggestion = target.trim() ? preview?.slug ?? "" : "";
 
   async function submit() {
     setSaving(true);
@@ -321,7 +302,7 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
     }
     try {
       const created = await createWatchlistItem({
-        slug: slug.trim() || slugSuggestion,
+        slug: slug.trim(),
         signal_type: signalType,
         target: target.trim(),
         display_label: displayLabel.trim(),
@@ -352,7 +333,7 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
           onChange={(e) => setSignalType(e.target.value as WatchlistSignalType)}
           className={fieldCls}
         >
-          {SIGNAL_TYPES.map((s) => (
+          {choices.signal_types.map((s) => (
             <option key={s.value} value={s.value}>
               {s.label}
             </option>
@@ -369,7 +350,7 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
           className={fieldCls}
         />
         <p className="text-sm text-fg-subtle mt-1.5">{targetHint}</p>
-        {BILLED_SIGNAL_TYPES.has(signalType) && (
+        {option?.billed && (
           <p className="text-sm text-amber-600 dark:text-amber-300 mt-1.5">
             ⚠ Billed: runs an LLM web search on every poll. Prefer a slower
             cadence (daily / weekly) and a tight query.
@@ -430,24 +411,16 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
               id="watch-trigger"
               value={trigger}
               onChange={(e) => setTrigger(e.target.value)}
-              placeholder={
-                signalType === "stock"
-                  ? '{"abs_change_pct_gte": 5}'
-                  : signalType === "edgar"
-                    ? '{"forms": ["8-K", "10-K"]}'
-                    : signalType === "rss" ||
-                        signalType === "query" ||
-                        signalType === "page_watch"
-                      ? '{"keywords": ["layoffs", "downtime"]}'
-                      : "{}"
-              }
+              placeholder={option?.trigger_example ?? "{}"}
               rows={3}
               className={`${fieldCls} font-mono text-sm`}
             />
             <p className="text-sm text-fg-subtle mt-1.5">
               {parsedTrigger === null
                 ? "Not valid JSON yet."
-                : `Tells you when: ${triggerInWords(signalType, parsedTrigger)}.`}
+                : preview
+                  ? `Tells you when: ${preview.trigger_words}.`
+                  : " "}
             </p>
           </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -459,9 +432,9 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
                 onChange={(e) => setCadence(e.target.value as WatchlistCadence)}
                 className={fieldCls}
               >
-                {CADENCES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
+                {choices.cadences.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.value}
                   </option>
                 ))}
               </select>
@@ -486,9 +459,9 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
                 onChange={(e) => setSeverityFloor(e.target.value as WatchlistSeverity)}
                 className={fieldCls}
               >
-                {SEVERITIES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
+                {choices.severities.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.value}
                   </option>
                 ))}
               </select>
@@ -501,9 +474,9 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
                 onChange={(e) => setSeverityCeiling(e.target.value as WatchlistSeverity)}
                 className={fieldCls}
               >
-                {SEVERITIES.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
+                {choices.severities.map((s) => (
+                  <option key={s.value} value={s.value}>
+                    {s.value}
                   </option>
                 ))}
               </select>
@@ -521,7 +494,7 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
       <div className="flex justify-end">
         <Button
           variant="primary"
-          disabled={saving || !(slug.trim() || slugSuggestion) || !target.trim()}
+          disabled={saving || !target.trim()}
           onClick={submit}
         >
           {saving ? "Adding…" : "Add monitor"}
@@ -534,11 +507,14 @@ function WatchForm({ initial, onCreated }: WatchFormProps) {
 /** "Here's what I'll watch": a draft in plain words, not saved yet. */
 function DraftCard({
   draft,
+  billed,
   busy,
   onStart,
   onChange,
 }: {
   draft: WatchDraft;
+  // Its signal type is billed on every poll (GET /watchlist/form).
+  billed: boolean;
   busy: boolean;
   onStart: () => void;
   onChange: () => void;
@@ -560,7 +536,7 @@ function DraftCard({
           </div>
         ))}
       </dl>
-      {BILLED_SIGNAL_TYPES.has(draft.signal_type) && (
+      {billed && (
         <p className="text-sm text-amber-600 dark:text-amber-300 mt-3">
           This one runs a web search each time it looks, which costs a little each time.
         </p>
@@ -578,7 +554,7 @@ function DraftCard({
 }
 
 /** "What should I watch?" — a sentence in, a draft out, then the by-hand form. */
-function SetUpWatch({ onCreated }: { onCreated: (w: WatchlistItem) => void }) {
+function SetUpWatch({ choices, onCreated }: { choices: WatchFormChoices | null; onCreated: (w: WatchlistItem) => void }) {
   const [text, setText] = useState("");
   const [asking, setAsking] = useState(false);
   const [starting, setStarting] = useState(false);
@@ -621,7 +597,24 @@ function SetUpWatch({ onCreated }: { onCreated: (w: WatchlistItem) => void }) {
 
   function changeSomething() {
     if (!draft) return;
-    setFormSeed((s) => ({ key: s.key + 1, initial: draftToInitial(draft) }));
+    const i = draft.form_initial;
+    setFormSeed((s) => ({
+      key: s.key + 1,
+      initial: i
+        ? {
+            slug: i.slug,
+            signalType: i.signal_type,
+            target: i.target,
+            displayLabel: i.display_label,
+            trigger: i.trigger,
+            cadence: i.cadence,
+            severityFloor: i.severity_floor,
+            severityCeiling: i.severity_ceiling,
+            mode: i.mode,
+            notes: i.notes,
+          }
+        : undefined,
+    }));
     setDraft(null);
     setByHandOpen(true);
     requestAnimationFrame(() => byHandRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
@@ -658,7 +651,15 @@ function SetUpWatch({ onCreated }: { onCreated: (w: WatchlistItem) => void }) {
           {err}
         </div>
       )}
-      {draft && <DraftCard draft={draft} busy={starting} onStart={() => void start()} onChange={changeSomething} />}
+      {draft && (
+        <DraftCard
+          draft={draft}
+          billed={Boolean(choices?.signal_types.find((s) => s.value === draft.signal_type)?.billed)}
+          busy={starting}
+          onStart={() => void start()}
+          onChange={changeSomething}
+        />
+      )}
       <details
         ref={byHandRef}
         className="mt-4 rounded-xl border border-line px-4 py-2"
@@ -668,8 +669,10 @@ function SetUpWatch({ onCreated }: { onCreated: (w: WatchlistItem) => void }) {
         <summary className="flex min-h-10 cursor-pointer items-center text-[15px] font-medium text-fg">
           Set it up by hand
         </summary>
+        {choices ? (
         <WatchForm
           key={formSeed.key}
+          choices={choices}
           initial={formSeed.initial}
           onCreated={(w) => {
             setByHandOpen(false);
@@ -677,6 +680,9 @@ function SetUpWatch({ onCreated }: { onCreated: (w: WatchlistItem) => void }) {
             onCreated(w);
           }}
         />
+        ) : (
+          <p className="py-3 text-[15px] text-fg-muted">Loading…</p>
+        )}
       </details>
     </section>
   );
@@ -694,33 +700,23 @@ export default function WatchlistPage() {
   const toggleCollapsed = (key: string) =>
     setCollapsed((c) => ({ ...c, [key]: !c[key] }));
 
-  // Group monitors by signal type, mirroring the artifacts/runs collapsible
-  // groups. Known types render in SIGNAL_TYPES order; any unknown type sorts
-  // last (alphabetically) so a new backend adapter never silently vanishes.
-  const suggestions = useMemo(() => items.filter(isSuggestion), [items]);
+  // Monitors under the group each one names (`group`, by signal type), in
+  // the groups' order; suggestions wait above them on their own.
+  const suggestions = useMemo(() => items.filter((it) => it.is_suggestion), [items]);
 
   const groups = useMemo(() => {
-    const map = new Map<string, WatchlistItem[]>();
+    const map = new Map<string, { key: string; label: string; order: number; items: WatchlistItem[] }>();
     for (const it of items) {
-      if (isSuggestion(it)) continue;
-      const bucket = map.get(it.signal_type);
-      if (bucket) bucket.push(it);
-      else map.set(it.signal_type, [it]);
+      if (it.is_suggestion) continue;
+      const g = it.group ?? { key: it.signal_type, label: it.signal_type, order: Number.MAX_SAFE_INTEGER };
+      const bucket = map.get(g.key) ?? { ...g, items: [] };
+      bucket.items.push(it);
+      map.set(g.key, bucket);
     }
-    const keys = Array.from(map.keys()).sort((a, b) => {
-      const ia = SIGNAL_TYPE_ORDER.indexOf(a);
-      const ib = SIGNAL_TYPE_ORDER.indexOf(b);
-      if (ia !== -1 && ib !== -1) return ia - ib;
-      if (ia !== -1) return -1;
-      if (ib !== -1) return 1;
-      return a.localeCompare(b);
-    });
-    return keys.map((k) => ({
-      key: k,
-      label: SIGNAL_TYPE_LABELS[k] ?? k,
-      items: map.get(k)!,
-    }));
+    return Array.from(map.values()).sort((a, b) => a.order - b.order || a.key.localeCompare(b.key));
   }, [items]);
+  // The add form's choices (GET /watchlist/form).
+  const [choices, setChoices] = useState<WatchFormChoices | null>(null);
 
   function refresh() {
     setLoading(true);
@@ -732,6 +728,7 @@ export default function WatchlistPage() {
 
   useEffect(() => {
     refresh();
+    getWatchForm().then(setChoices).catch(() => { /* the form waits */ });
     listDepartments()
       .then((states) =>
         setDepartmentTitles(Object.fromEntries(states.map((d) => [d.config.slug, d.config.title]))),
@@ -777,13 +774,12 @@ export default function WatchlistPage() {
     }
   }
 
-  async function stopWatching(slug: string, reason: WatchDeclineReason) {
+  async function stopWatching(slug: string, reason: WatchDeclineReason, patch: WatchlistPatch | null) {
     markBusy(slug, true);
     try {
-      if (reason === "too_noisy") {
-        // Same remedy the decline route applies: keep the source, only
-        // high-severity signals surface.
-        const updated = await patchWatchlistItem(slug, { severity_floor: "high" });
+      if (patch) {
+        // The reason keeps the watch, changed (too noisy: quieter).
+        const updated = await patchWatchlistItem(slug, patch);
         setItems((prev) => prev.map((it) => (it.slug === slug ? updated : it)));
       } else {
         await deleteWatchlistItem(slug, reason);
@@ -837,7 +833,7 @@ export default function WatchlistPage() {
             </div>
           </div>
 
-          <SetUpWatch onCreated={(w) => setItems((prev) => [...prev, w])} />
+          <SetUpWatch choices={choices} onCreated={(w) => setItems((prev) => [...prev, w])} />
 
           {loading && <p className="text-fg-muted text-[15px]">Loading…</p>}
           {error && (
