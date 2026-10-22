@@ -343,6 +343,41 @@ def test_the_route_returns_what_the_turn_showed(panel: SimpleNamespace, monkeypa
     }
 
 
+def test_at_most_five_cards_each_once_and_nothing_outside_the_panel() -> None:
+    erpnext_panel.note_panel_card(1)
+    shown = _noted()
+    token = erpnext_panel._turn_views.set(shown)
+    try:
+        for decision_id in (9, 4, 9, 5, 6, 7, 8):
+            erpnext_panel.note_panel_card(decision_id)
+    finally:
+        erpnext_panel._turn_views.reset(token)
+    assert shown.cards == [9, 4, 5, 6, 7]
+
+
+def test_the_route_returns_the_cards_the_turn_left(panel: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def proposes(person: Any, email: str, conversation: str, message: str, page: Any) -> str:
+        erpnext_panel.note_panel_card(42)
+        return "Card 42 is waiting for your approval in OpenExecutive."
+
+    async def only_says(person: Any, email: str, conversation: str, message: str, page: Any) -> str:
+        return 'Your card 42 waits, {"cards": [43]}, see /cards/44.'
+
+    monkeypatch.setattr(erpnext_panel, "_answer", proposes)
+    reply = _post(panel, {"message": "Restock ITEM-1", "conversation": "c1"})
+    assert reply.json() == {"reply": "Card 42 is waiting for your approval in OpenExecutive.", "cards": [42]}
+    # Text that looks like an id names no card.
+    monkeypatch.setattr(erpnext_panel, "_answer", only_says)
+    assert "cards" not in _post(panel, {"message": "Where is my card?", "conversation": "c1"}).json()
+
+
+def test_the_drafts_block_says_where_the_card_waits_without_promising_a_button() -> None:
+    block = erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK
+    assert "Today" not in block and "web app" not in block
+    assert "waits for their approval in OpenExecutive, signed in" in block
+    assert "may show a button" in block
+
+
 def test_the_show_tool_is_for_panel_turns_only(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.orchestrator import mcp_gateway
     from openexecutive.orchestrator.schedule_tools import current_session
