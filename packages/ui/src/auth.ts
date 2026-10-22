@@ -161,8 +161,9 @@ async function judgeSession(session: Session | null, host: string | null): Promi
   }
   const email = session?.user?.email?.toLowerCase();
   if (!email) return { kind: "deny" };
-  // Signed out at the provider (back-channel logout, lib/endedSessions.ts).
-  if (session?.providerSession && (await endedSessions.isEnded(session.providerSession))) {
+  // Signed out at the provider (back-channel logout, lib/endedSessions.ts),
+  // or past its absolute lifetime.
+  if (session?.providerSession && (await providerSessionOver(session.providerSession))) {
     return { kind: "ended", email };
   }
   const decision = await checkEmailAllowed(email);
@@ -175,6 +176,18 @@ async function judgeSession(session: Session | null, host: string | null): Promi
     case "revoke":
       return { kind: "revoke", email, decision };
   }
+}
+
+// How long an SSO session may last from its sign-in, however often it is
+// used (Auth.js slides the cookie's own expiry on every request). Under the
+// two days the ended-session store keeps a record (memory/ended_sessions.py),
+// so a session the provider ended can't outlive its record.
+const SSO_MAX_AGE_S = 24 * 60 * 60;
+
+/** Whether an SSO session is over: ended at the provider, or too old. */
+async function providerSessionOver(session: ProviderSession): Promise<boolean> {
+  if (Math.floor(Date.now() / 1000) - session.signedInAt > SSO_MAX_AGE_S) return true;
+  return endedSessions.isEnded(session);
 }
 
 /** The provider session an SSO sign-in's ID token stands on. The token was
@@ -299,14 +312,21 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // set once and then rides the JWT. An SSO sign-in also keeps the provider
     // session it stands on (the ID token's `iss`, `sid`, `sub`, checked against
     // back-channel logouts) and the ID token, for signing out at the provider.
-    jwt: ({ token, account }) => {
+    //
+    // Auth.js re-issues the JWT with a fresh expiry on every read, so an SSO
+    // session that the provider ended, or that is older than SSO_MAX_AGE_S
+    // from its sign-in, returns null here: Auth.js then clears the cookie
+    // rather than keep extending it.
+    jwt: async ({ token, account }) => {
       if (account) {
         token.localLogin = account.provider === LOCAL_LOGIN_PROVIDER_ID;
         if (account.provider === OIDC_PROVIDER_ID && OIDC && account.id_token) {
           token.providerSession = providerSessionOf(account.id_token, OIDC.issuer);
           token.idToken = account.id_token;
         }
+        return token;
       }
+      if (token.providerSession && (await providerSessionOver(token.providerSession))) return null;
       return token;
     },
     session: ({ session, token }) => {

@@ -24,6 +24,8 @@ export async function discover(issuer: string): Promise<Discovery> {
   const meta = (await res.json()) as { jwks_uri?: unknown; end_session_endpoint?: unknown };
   const usable = (value: unknown) => (typeof value === "string" && issuerAllowed(value) ? value : null);
   const discovery = { jwksUri: usable(meta.jwks_uri), endSessionEndpoint: usable(meta.end_session_endpoint) };
-  cached = { issuer, discovery };
+  // Kept only when it has the keys: a provider that fixes its document is
+  // read again on the next call.
+  if (discovery.jwksUri) cached = { issuer, discovery };
   return discovery;
 }

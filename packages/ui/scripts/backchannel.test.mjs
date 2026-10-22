@@ -117,3 +117,11 @@ test("a shared-secret or unsigned token is never taken", async () => {
   const none = `${Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url")}.${payload}.`;
   assert.equal((await verifyLogoutToken(none, check())).ok, false);
 });
+
+test("a jti given back (its logout wasn't recorded) is taken on the retry", async () => {
+  const seen = createJtiGuard(() => NOW);
+  const t = await token({ jti: "retry" });
+  assert.equal((await verifyLogoutToken(t, check({ seen }))).ok, true);
+  seen.release("retry");
+  assert.equal((await verifyLogoutToken(t, check({ seen }))).ok, true);
+});

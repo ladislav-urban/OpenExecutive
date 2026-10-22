@@ -18,9 +18,18 @@ export const dynamic = "force-dynamic";
 
 const COOKIE_NAMES: { secureCookie: boolean }[] = [{ secureCookie: true }, { secureCookie: false }];
 
+// The secrets Auth.js reads a session with: AUTH_SECRET and its rotation
+// slots AUTH_SECRET_1..3, newest first, as @auth/core does.
+function authSecrets(): string[] {
+  const env = process.env;
+  const list = [env.AUTH_SECRET_1, env.AUTH_SECRET_2, env.AUTH_SECRET_3].filter((s): s is string => Boolean(s));
+  return list.length ? list : env.AUTH_SECRET ? [env.AUTH_SECRET] : [];
+}
+
 /** The ID token the session kept at sign-in (in the encrypted JWT only). */
 async function idTokenOf(req: Request): Promise<string | null> {
-  const secret = process.env.AUTH_SECRET;
+  const secrets = authSecrets();
+  const secret = secrets.length > 1 ? secrets : secrets[0];
   if (!secret) return null;
   for (const { secureCookie } of COOKIE_NAMES) {
     const token = await getToken({ req, secret, secureCookie }).catch(() => null);
@@ -37,7 +46,9 @@ export async function POST(req: Request): Promise<Response> {
       headers: { "content-type": "application/json" },
     });
   }
-  const back = new URL("/signin", req.url);
+  // Back to this app's own origin as registered at the provider: AUTH_URL's
+  // when set (behind TLS termination the request's own may differ).
+  const back = new URL("/signin", process.env.AUTH_URL?.trim() || req.url);
   const idToken = await idTokenOf(req);
   let endSession: string | null = null;
   if (OIDC && idToken) {

@@ -64,7 +64,8 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     return refuse(403, { error: "not available from this page", code: verdict.reason });
   }
   const fromHost = verdict.kind === "host";
-  // What only this app's server may call never goes through here.
+  // What only this app's server may call never goes through here (checked
+  // again below on the path as it will be sent).
   if (serverOnlyPath(params.path)) {
     return refuse(404, { error: "not found" });
   }
@@ -99,6 +100,11 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   // An id holding a slash goes on as one segment (proxySegments.ts).
   const path = params.path.map(upstreamSegment).join("/");
   const url = new URL(`${BACKEND_BASE}/${path}`);
+  // A `.`/`..` segment (sent as %2E) is resolved by URL above: judge the path
+  // that will actually be requested.
+  if (serverOnlyPath(url.pathname.split("/").filter(Boolean))) {
+    return refuse(404, { error: "not found" });
+  }
   // Preserve query string.
   req.nextUrl.searchParams.forEach((v, k) => url.searchParams.append(k, v));
 

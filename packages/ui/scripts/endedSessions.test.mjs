@@ -63,4 +63,7 @@ test("the proxy never forwards the store's own paths", () => {
   assert.equal(serverOnlyPath(["Auth", "Ended-Sessions"]), true);
   assert.equal(serverOnlyPath(["auth", "me"]), false);
   assert.equal(serverOnlyPath(["sessions"]), false);
+  // A dot segment would resolve onto it upstream.
+  assert.equal(serverOnlyPath(["x", "..", "auth", "ended-sessions"]), true);
+  assert.equal(serverOnlyPath(["."]), true);
 });

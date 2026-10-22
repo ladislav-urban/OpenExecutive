@@ -55,3 +55,12 @@ def test_a_call_made_as_someone_is_refused(client: TestClient) -> None:
     assert client.post("/auth/ended-sessions", json={"iss": ISS, "sub": "u", "ended_at": 1, "jti": "x"}, headers=me).status_code == 404
     assert client.get("/auth/ended-sessions", headers=me).status_code == 404
     assert client.get("/auth/ended-sessions").json() == []
+
+
+def test_a_time_ahead_or_not_finite_is_refused(client: TestClient) -> None:
+    far = time.time() + 3600
+    assert client.post("/auth/ended-sessions", json={"iss": ISS, "sub": "u", "ended_at": far, "jti": "f"}).status_code == 422
+    bad = '{"iss": "' + ISS + '", "sub": "u", "ended_at": 1e999, "jti": "i"}'
+    res = client.post("/auth/ended-sessions", content=bad, headers={"content-type": "application/json"})
+    assert res.status_code == 422
+    assert client.get("/auth/ended-sessions").status_code == 200

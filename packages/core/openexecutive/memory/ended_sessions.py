@@ -13,13 +13,15 @@ Kept for ``KEEP_SECONDS``, longer than any web session lasts.
 """
 from __future__ import annotations
 
+import math
 import sqlite3
 import time
 from pathlib import Path
 from typing import Any
 
 TABLE = "ended_sessions"
-# Longer than the web app's 24-hour session.
+# Longer than an SSO session can last from its sign-in (24 hours, however
+# often it is used: packages/ui/src/auth.ts SSO_MAX_AGE_S).
 KEEP_SECONDS = 2 * 24 * 60 * 60
 
 _CREATE_SQL = f"""
@@ -84,4 +86,6 @@ def recent(db_path: Path | None = None) -> list[dict[str, Any]]:
         ).fetchall()
     finally:
         conn.close()
-    return [dict(r) for r in rows]
+    # A row that isn't a finite time (it never should be) would break every
+    # reader's JSON: leave it out.
+    return [dict(r) for r in rows if isinstance(r["ended_at"], int | float) and math.isfinite(r["ended_at"])]

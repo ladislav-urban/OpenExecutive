@@ -18,8 +18,10 @@ import { discover } from "@/lib/oidcDiscovery";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-// A logout token is a few hundred bytes; anything far larger is refused.
+// A logout token is a few hundred bytes; a body far larger is refused before
+// it is read.
 const MAX_TOKEN_CHARS = 16_384;
+const MAX_BODY_BYTES = 64 * 1024;
 
 const seen = createJtiGuard();
 let keys: JWTVerifyGetKey | null = null;
@@ -42,6 +44,11 @@ const answer = (status: number, body?: Record<string, string>) =>
 
 export async function POST(req: Request): Promise<Response> {
   if (!OIDC) return answer(404, { error: "not_found" });
+  const length = Number(req.headers.get("content-length") ?? "");
+  const type = (req.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();
+  if (!Number.isFinite(length) || length <= 0 || length > MAX_BODY_BYTES || type !== "application/x-www-form-urlencoded") {
+    return answer(400, { error: "invalid_request" });
+  }
   let token: unknown = null;
   try {
     token = (await req.formData()).get("logout_token");
@@ -74,9 +81,11 @@ export async function POST(req: Request): Promise<Response> {
   const stored = await recordEndedSession({ ...record, jti });
   if (stored === "replayed") return answer(400, { error: "invalid_request" });
   if (stored === "failed") {
-    // Only this server knows: tell the provider it didn't take.
+    // Only this server knows: tell the provider it didn't take (the spec's
+    // 501), and give the jti back so its retry is taken.
     console.error("[backchannel-logout] the ended session couldn't be stored");
-    return answer(400, { error: "temporarily_unavailable" });
+    seen.release(jti);
+    return answer(501, { error: "logout_failed" });
   }
   return answer(200);
 }

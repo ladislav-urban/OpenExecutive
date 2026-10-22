@@ -27,6 +27,9 @@ the framed pages do with the session they hold.
 """
 from __future__ import annotations
 
+import math
+import time
+
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
@@ -77,6 +80,11 @@ def signed_in_as(request: Request) -> SignedInAs:
     return SignedInAs(email=caller(request).email)
 
 
+# How far ahead of this clock a logout's time may be (the web app allows the
+# provider's clock a minute; a little more here).
+_ENDED_AT_SKEW_S = 300
+
+
 class EndedSessionIn(BaseModel):
     """A provider session that ended: by ``sid``, or every session of
     ``sub`` before ``ended_at`` (seconds since the epoch). ``jti`` is the
@@ -85,6 +93,9 @@ class EndedSessionIn(BaseModel):
     iss: str = Field(min_length=1, max_length=500)
     sid: str | None = Field(default=None, max_length=500)
     sub: str | None = Field(default=None, max_length=500)
+    # A logout token's iat, which the web app takes within two minutes of
+    # now: a time far ahead would end that person's future sign-ins too.
+    # Checked in the route, so a refusal never echoes a non-finite number.
     ended_at: float
     jti: str = Field(min_length=1, max_length=500)
 
@@ -114,6 +125,8 @@ def record_ended_session(body: EndedSessionIn, request: Request) -> Response:
     _server_only(request)
     if not body.sid and not body.sub:
         raise HTTPException(status_code=422, detail="A sid or a sub is needed")
+    if not math.isfinite(body.ended_at) or not 0 <= body.ended_at <= time.time() + _ENDED_AT_SKEW_S:
+        raise HTTPException(status_code=422, detail="ended_at must be a time, not ahead of now")
     if not ended_sessions.record(
         iss=body.iss, sid=body.sid, sub=body.sub, ended_at=body.ended_at, jti=body.jti,
     ):

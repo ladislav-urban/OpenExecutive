@@ -83,14 +83,20 @@ export async function verifyLogoutToken(token: string, check: LogoutCheck): Prom
 }
 
 /** A replay guard for `jti`s, each kept as long as its token could still be
- * accepted. Per server; the backend's store refuses a repeat across servers. */
+ * accepted. Per server; the backend's store refuses a repeat across servers.
+ * `release` gives one back (its logout couldn't be recorded, so a retry must
+ * be taken). */
 export function createJtiGuard(nowS: () => number = () => Math.floor(Date.now() / 1000)) {
   const seen = new Map<string, number>();
-  return (jti: string): boolean => {
+  const guard = (jti: string): boolean => {
     const now = nowS();
     for (const [key, at] of seen) if (at < now - MAX_TOKEN_AGE_S - CLOCK_SKEW_S) seen.delete(key);
     if (seen.has(jti)) return true;
     seen.set(jti, now);
     return false;
   };
+  guard.release = (jti: string): void => {
+    seen.delete(jti);
+  };
+  return guard;
 }

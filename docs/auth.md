@@ -229,9 +229,17 @@ Keycloak names them exactly so, under the client's **Logout settings**. The
 provider must be able to reach the web app's origin for the back-channel post.
 
 **When the provider can't reach Open Executive** (a network gap, the web app
-restarting), its session there lasts until its own expiry, 24 hours at most;
-signing out here still ends it. A Google or local-login session is untouched
-by all of this.
+restarting), its session there lasts until it runs out: an SSO session ends
+24 hours after its sign-in however often it is used, and the cookie of one
+that ended (or ran out) is cleared on its next request. Signing out here
+still ends it. **When a web server can't read the store** (the API down), it
+keeps the list it last read, so a session ended meanwhile works on that
+server until the next successful read; a web server just started with the
+API down knows of no ended session until its first read. The list is read
+every 5 seconds, so a back-channel logout reaches every web server within
+that. A Google or local-login session is untouched by all of this. Sessions
+signed in before this version have no provider session to check: rotate
+`AUTH_SECRET` when you deploy it to sign everyone in again.
 
 Keep these as they are, at both apps signed in through the provider: an
 email is trusted only when the provider says it is verified (above, and
