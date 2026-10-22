@@ -190,6 +190,62 @@ and an SSO sign-in with the same address are one user. Your provider decides
 which addresses it hands out, so only connect one you trust as much as the
 allow-list itself.
 
+#### Signing out (SSO)
+
+Signing out at the provider signs the person out here too, and signing out
+here signs them out at the provider, so the next person at a shared computer
+never lands in Open Executive as the last one. This also covers another app
+signed in through the same provider (an app that shows Open Executive in a
+frame, see **Host origins**): when it signs someone out at the provider,
+Open Executive's own tab, its frame and that app's calls ask for sign-in
+again.
+
+- **The provider signs someone out → so does Open Executive** (OpenID Connect
+  Back-Channel Logout). The provider posts a signed `logout_token` to
+  `<your UI origin>/api/auth/backchannel-logout`. The web app checks it
+  (the provider's signature from its published keys, `iss`, `aud` = your
+  client id, issued within the last two minutes, the back-channel logout
+  event, a `sid` or `sub`, no `nonce`, a `jti` it hasn't taken before) and
+  records that session as ended in the API's store (`/auth/ended-sessions`,
+  which the proxy never forwards). Every request then checks it, from a copy
+  each web server refreshes every few seconds: a page goes to the sign-in
+  page, an `/api/backend/*` call gets 401 (with CORS for a host origin's
+  page, so it can offer sign-in). A `sid` ends that one session; a `sub` alone
+  ends every session of that person begun before it.
+- **Sign out here → also at the provider** (RP-Initiated Logout). The
+  account menu's Sign out ends this session, then sends the browser to the
+  provider's end-session endpoint with the ID token as the hint, and back to
+  `/signin`.
+
+At the provider, on the same client:
+
+| Setting | Value |
+|---|---|
+| Back-Channel Logout URL | `<your UI origin>/api/auth/backchannel-logout` |
+| Back-channel logout session required | On (the token then carries `sid`) |
+| Valid post-logout redirect URIs | `<your UI origin>/signin` |
+
+Keycloak names them exactly so, under the client's **Logout settings**. The
+provider must be able to reach the web app's origin for the back-channel post.
+
+**When the provider can't reach Open Executive** (a network gap, the web app
+restarting), its session there lasts until it runs out: an SSO session ends
+24 hours after its sign-in however often it is used, and the cookie of one
+that ended (or ran out) is cleared on its next request. Signing out here
+still ends it. **When a web server can't read the store** (the API down), it
+keeps the list it last read, so a session ended meanwhile works on that
+server until the next successful read; a web server just started with the
+API down knows of no ended session until its first read. The list is read
+every 5 seconds, so a back-channel logout reaches every web server within
+that. A Google or local-login session is untouched by all of this. Sessions
+signed in before this version have no provider session to check: rotate
+`AUTH_SECRET` when you deploy it to sign everyone in again.
+
+Keep these as they are, at both apps signed in through the provider: an
+email is trusted only when the provider says it is verified (above, and
+for ERPNext: its Social Login Key keeps sign-ups denied and doesn't trust an
+email without a verified claim).
+
 ### Local dev (repo-root `.env`, gitignored)
 
 Put everything in the repo-root `.env` (the file the README quickstart has you

@@ -7732,6 +7732,20 @@ auth:
     a host's line); the chat stream's events are api/chat_events.py's models,
     in the description under text/event-stream (EventStreamResponse).
 
+    Signing out (oe_connector's single-UI step 9). An SSO sign-in keeps the
+    ID token's sid and sub (and the ID token, in the encrypted JWT only).
+    POST /api/auth/backchannel-logout (UI, Node) verifies the provider's
+    logout_token with jose (JWKS from discovery, iss, aud = client id, iat
+    within 120 s, the back-channel event, sid or sub, no nonce, jti once)
+    and records it through the API's /auth/ended-sessions (memory.
+    ended_sessions; the proxy refuses the path, and a call made as someone
+    gets 404). judgeSession and the proxy check each request against a
+    per-server copy refreshed every 5 s (lib/endedSessions.ts); an
+    unreachable store keeps the copy. The account menu's Sign out posts to
+    /api/auth/end-session, which ends the session here and redirects to the
+    provider's end_session_endpoint with id_token_hint and
+    post_logout_redirect_uri <origin>/signin.
+
     The host list: GETs of /auth/me (the email the call is made as, so a
     host's native screens can warn when this session is someone else's,
     as EmbeddedShell's UserHintWarning does in the frame; never

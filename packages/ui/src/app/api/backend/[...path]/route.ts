@@ -10,7 +10,8 @@ import { isCrossSiteWrite } from "@/lib/crossSite";
 import { HOST_CALLS, HOST_ORIGINS } from "@/lib/hostConfig";
 import { corsHeaders, isBrowserOriginHeader, judgeHostRequest } from "@/lib/hostOrigins";
 import { localLoginSessionAllowed } from "@/lib/localLogin";
-import { upstreamSegment } from "@/lib/proxySegments";
+import { endedSessions } from "@/lib/endedSessionsServer";
+import { serverOnlyPath, upstreamSegment } from "@/lib/proxySegments";
 
 // Streaming-aware proxy to the FastAPI backend. Replaces the `rewrites()` rule
 // in next.config.ts, which buffers SSE responses in dev so the chat stream
@@ -63,6 +64,11 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
     return refuse(403, { error: "not available from this page", code: verdict.reason });
   }
   const fromHost = verdict.kind === "host";
+  // What only this app's server may call never goes through here (checked
+  // again below on the path as it will be sent).
+  if (serverOnlyPath(params.path)) {
+    return refuse(404, { error: "not found" });
+  }
   // Another page on this site (any localhost port counts) must not be able to
   // make the browser post here with the user's cookie — see lib/crossSite.ts.
   // A host call is a same-site write the host list allows, and only that.
@@ -78,9 +84,12 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   // So it is re-checked here, where it reaches the API, and every OTHER
   // session must carry an email — without one it would be read the same way.
   const callerEmail = session?.user?.email?.toLowerCase();
+  // An SSO session the provider ended (back-channel logout) is refused here
+  // too, with CORS for a host's page, so its screens can offer sign-in.
   const allowed = session?.localLogin
     ? localLoginSessionAllowed(LOCAL_LOGIN, req.headers.get("host"))
-    : Boolean(callerEmail);
+    : Boolean(callerEmail) &&
+      !(session?.providerSession && (await endedSessions.isEnded(session.providerSession)));
   if (!allowed) {
     return refuse(401, { error: "unauthorized" });
   }
@@ -91,6 +100,17 @@ async function proxy(req: NextRequest, params: { path: string[] }): Promise<Resp
   // An id holding a slash goes on as one segment (proxySegments.ts).
   const path = params.path.map(upstreamSegment).join("/");
   const url = new URL(`${BACKEND_BASE}/${path}`);
+  // A `.`/`..` segment (sent as %2E) is resolved by URL above, and the API
+  // decodes the path it gets: judge the path that will be routed.
+  let routed = url.pathname;
+  try {
+    routed = decodeURIComponent(url.pathname);
+  } catch {
+    // A lone "%" stays as it is; the API reads it the same way.
+  }
+  if (serverOnlyPath(routed.split("/").filter(Boolean))) {
+    return refuse(404, { error: "not found" });
+  }
   // Preserve query string.
   req.nextUrl.searchParams.forEach((v, k) => url.searchParams.append(k, v));
 
