@@ -7,12 +7,13 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useHostOrigins } from "@/components/embed/EmbedProvider";
 import Button, { buttonClass } from "@/components/ui/Button";
 import { approveAlert, approveDecision, getAlertCard, type AlertCard } from "@/lib/api";
-import { cardDoneMessage, type CardOutcome } from "@/lib/embed";
-import { ARM_DELAY_MS, alertIdFrom, approvedLine, offersApprove } from "@/lib/hostApprove";
+import { acceptsEvent, approveReadyMessage, cardDoneMessage, isApproveAsk, type CardOutcome } from "@/lib/embed";
+import { ARM_DELAY_MS, alertIdFrom, approvedLine, clickCounts, offersApprove } from "@/lib/hostApprove";
 
 // The window a host's own screen opens to have one of Home's cards approved
 // (lib/hostApprove.ts): this app's page, never in a frame, showing the card
-// to whoever is signed in here. Only its Approve approves; then it tells the
+// to whoever is signed in here. It offers Approve only when a listed host
+// that opened it asks, and only its own Approve approves; then it tells the
 // host which card is done and closes.
 
 const CLOSE_AFTER_MS = 2500;
@@ -26,15 +27,14 @@ export default function ApproveAlertWindow() {
   // undefined while loading, null when it isn't the caller's or isn't waiting.
   const [card, setCard] = useState<AlertCard | null | undefined>(undefined);
   const framed = useSyncExternalStore(noSubscribe, () => window.top !== window.self, () => false);
+  // The host origin that asked for this card, once one has.
+  const [host, setHost] = useState<string | null>(null);
   const [armed, setArmed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
-  const fromHost = useRef(false);
-
-  useEffect(() => {
-    fromHost.current = window.opener !== null;
-  }, []);
+  const armedAt = useRef<number | null>(null);
+  const pressedAt = useRef<number | null>(null);
 
   useEffect(() => {
     if (id === null) return;
@@ -45,49 +45,69 @@ export default function ApproveAlertWindow() {
     return () => controller.abort();
   }, [id]);
 
-  // Armed only after the window has been in front for a moment, and again
-  // after every time it lost focus: a click meant for the page that opened it
-  // must not land here.
+  // The handshake: `approve-ready` to the opener at each listed host origin
+  // (the browser delivers it only to the one the opener is), then
+  // `approve-ask` for this card from that opener and origin alone.
   useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const arm = () => {
-      clearTimeout(timer);
-      setArmed(false);
-      if (document.visibilityState === "visible" && document.hasFocus()) {
-        timer = setTimeout(() => setArmed(true), ARM_DELAY_MS);
-      }
+    const opener = window.opener as Window | null;
+    if (id === null || !opener || hostOrigins.length === 0) return;
+    const onMessage = (event: MessageEvent) => {
+      if (!acceptsEvent(event, hostOrigins, opener) || !isApproveAsk(event.data, id)) return;
+      setHost((current) => current ?? event.origin);
     };
+    window.addEventListener("message", onMessage);
+    for (const origin of hostOrigins) opener.postMessage(approveReadyMessage(id), origin);
+    return () => window.removeEventListener("message", onMessage);
+  }, [id, hostOrigins]);
+
+  // Armed only after the window has been in front for a moment and the
+  // pointer has then moved inside it, and again after every time it lost
+  // focus: a click meant for the page that opened it must not land here.
+  useEffect(() => {
+    if (host === null) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let waited = false;
     const disarm = () => {
       clearTimeout(timer);
+      waited = false;
+      armedAt.current = null;
       setArmed(false);
     };
-    arm();
-    window.addEventListener("focus", arm);
+    const wait = () => {
+      disarm();
+      if (document.visibilityState === "visible" && document.hasFocus()) {
+        timer = setTimeout(() => {
+          waited = true;
+        }, ARM_DELAY_MS);
+      }
+    };
+    const onMove = (event: PointerEvent) => {
+      if (!event.isTrusted || !waited || armedAt.current !== null) return;
+      armedAt.current = Date.now();
+      setArmed(true);
+    };
+    wait();
+    window.addEventListener("focus", wait);
     window.addEventListener("blur", disarm);
-    document.addEventListener("visibilitychange", arm);
+    document.addEventListener("visibilitychange", wait);
+    window.addEventListener("pointermove", onMove);
     return () => {
       clearTimeout(timer);
-      window.removeEventListener("focus", arm);
+      window.removeEventListener("focus", wait);
       window.removeEventListener("blur", disarm);
-      document.removeEventListener("visibilitychange", arm);
+      document.removeEventListener("visibilitychange", wait);
+      window.removeEventListener("pointermove", onMove);
     };
-  }, []);
+  }, [host]);
 
-  // The host that opened this window learns which card is done, addressed
-  // to each listed host origin (the browser delivers it only to the one the
-  // opener is). Nothing else crosses.
+  // The host that asked learns which card is done. Nothing else crosses.
   const tellHost = (outcome: CardOutcome) => {
     const opener = window.opener as Window | null;
-    if (!opener || id === null) return;
-    for (const origin of hostOrigins) opener.postMessage(cardDoneMessage(id, outcome), origin);
-  };
-
-  const close = () => {
-    if (fromHost.current) window.close();
+    if (opener && host && id !== null) opener.postMessage(cardDoneMessage(id, outcome), host);
   };
 
   const approve = async () => {
-    if (!card || !armed || busy) return;
+    if (!card || busy || !clickCounts(armedAt.current, pressedAt.current)) return;
     const p = card.proposal;
     setBusy(true);
     setFailed(null);
@@ -102,7 +122,7 @@ export default function ApproveAlertWindow() {
       }
       setDone(line);
       tellHost("approved");
-      setTimeout(close, CLOSE_AFTER_MS);
+      setTimeout(() => window.close(), CLOSE_AFTER_MS);
     } catch (e) {
       setFailed(e instanceof Error ? e.message : "That didn't work. Try again.");
     } finally {
@@ -112,11 +132,11 @@ export default function ApproveAlertWindow() {
 
   const notNow = () => {
     tellHost("not_now");
-    close();
+    window.close();
   };
 
   const proposal = card?.proposal;
-  const canApprove = proposal ? offersApprove(proposal.actions) : false;
+  const canApprove = proposal ? host !== null && offersApprove(proposal.actions) : false;
 
   return (
     <main className="min-h-screen bg-surface px-5 py-6 text-fg">
@@ -144,25 +164,33 @@ export default function ApproveAlertWindow() {
             {canApprove ? (
               <>
                 {proposal.decision_instance_id == null && (
-                  <p className="text-xs text-fg-subtle">
-                    The Executive then does it as you, in a new chat.
-                  </p>
+                  <p className="text-xs text-fg-subtle">The Executive then does it as you, in a new chat.</p>
                 )}
                 <div className="flex justify-end gap-2 pt-2">
                   <button type="button" className={buttonClass("secondary")} onClick={notNow} disabled={busy}>
                     Not now
                   </button>
-                  <Button variant="primary" onClick={() => void approve()} disabled={!armed || busy}>
+                  <Button
+                    variant="primary"
+                    onPointerDown={() => {
+                      pressedAt.current = Date.now();
+                    }}
+                    onKeyDown={() => {
+                      pressedAt.current = Date.now();
+                    }}
+                    onClick={() => void approve()}
+                    disabled={!armed || busy}
+                  >
                     {busy ? "Approving…" : "Approve"}
                   </Button>
                 </div>
               </>
             ) : (
               <p className="text-sm text-fg-muted">
-                This card can&rsquo;t be approved here.{" "}
                 <Link href={`/cards/alert/${proposal.alert_id}`} className="text-accent hover:underline">
-                  Open the card
-                </Link>
+                  Open this card in Open Executive
+                </Link>{" "}
+                to answer it.
               </p>
             )}
           </>

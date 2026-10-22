@@ -6,14 +6,26 @@
 // tells the host which card is done (`card-done`) and closes, so the person
 // stays on the host's screen.
 //
+// Any site can open a window, so the window offers Approve only to a host:
+// it announces itself to its opener (`approve-ready`, addressed to each
+// listed host origin) and offers Approve only once that opener answers
+// `approve-ask` for this card from a listed host origin. With no host origin
+// listed it never does, and links to the card's own page instead.
+//
 // A host opens the window as the person clicks, so it could open it right
-// under their cursor and catch a second click. The Approve button arms only
-// after the window has been in front for ARM_DELAY_MS, and disarms whenever
-// it loses focus.
+// under their cursor, or time when it comes to the front, and catch a later
+// click. Approve arms only after the window has been in front for
+// ARM_DELAY_MS and the pointer has then moved inside it, disarms whenever it
+// loses focus, and a click whose press began before it armed doesn't count.
 //
 // No imports, so `npm test` can exercise this.
 
 export const ARM_DELAY_MS = 700;
+
+/** Whether a click on Approve counts: armed, and pressed after it armed. */
+export function clickCounts(armedAt: number | null, pressedAt: number | null): boolean {
+  return armedAt !== null && pressedAt !== null && pressedAt >= armedAt;
+}
 
 /** The alert id from the window's address, or null for anything else. */
 export function alertIdFrom(param: string | undefined | null): number | null {

@@ -11,6 +11,8 @@
 //   frame → host  open       { kind: "host", route } | { kind: "native", path }
 //   frame → host  badge      { counts }
 //   popup → opener signed-in {}                         the popup sign-in is done
+//   popup → opener approve-ready { alertId }            the approve window is open
+//   opener → popup approve-ask { alertId }              the host asks it to offer Approve
 //   popup → opener card-done { alertId, outcome }       a card answered in its own
 //                                                       window (/confirm/alert/<id>,
 //                                                       lib/hostApprove.ts)
@@ -275,6 +277,22 @@ export type CardOutcome = "approved" | "not_now";
 
 export function cardDoneMessage(alertId: number, outcome: CardOutcome) {
   return { protocol: EMBED_PROTOCOL, type: "card-done", alertId, outcome };
+}
+
+export function approveReadyMessage(alertId: number) {
+  return { protocol: EMBED_PROTOCOL, type: "approve-ready", alertId };
+}
+
+/** Whether `data` is the host's `approve-ask` for this card. The caller
+ *  checks the sender first (acceptsEvent: the opener, a listed host origin). */
+export function isApproveAsk(data: unknown, alertId: number): boolean {
+  return (
+    isRecord(data) &&
+    data.protocol === EMBED_PROTOCOL &&
+    data.type === "approve-ask" &&
+    data.alertId === alertId &&
+    Object.keys(data).length === 3
+  );
 }
 
 export function signedInMessage() {

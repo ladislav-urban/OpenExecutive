@@ -146,6 +146,7 @@
     { "name": "open a native screen", "message": { "protocol": "oe-embed/v1", "type": "open", "kind": "native", "path": "/chats/abc" } },
     { "name": "badge", "message": { "protocol": "oe-embed/v1", "type": "badge", "counts": { "knowledge-review": 3 } } },
     { "name": "signed in", "message": { "protocol": "oe-embed/v1", "type": "signed-in" } },
+    { "name": "approve ready", "message": { "protocol": "oe-embed/v1", "type": "approve-ready", "alertId": 28 } },
     { "name": "card done", "message": { "protocol": "oe-embed/v1", "type": "card-done", "alertId": 28, "outcome": "approved" } }
   ]
 }
