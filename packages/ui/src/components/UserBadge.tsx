@@ -1,10 +1,11 @@
 "use client";
 
-import { signOut, useSession } from "next-auth/react";
+import { useSession } from "next-auth/react";
 
 import { GUIDE_NAV_ITEM } from "@/components/shell/navConfig";
 import OverflowMenu, { type OverflowItem } from "@/components/ui/OverflowMenu";
 import { initials } from "@/lib/initials";
+import { signOutOf } from "@/lib/signOutClient";
 
 // The account menu at the foot of the sidebar: help, the Executive's
 // pause switch (on Settings → Your Executive) and signing out, kept off
@@ -85,7 +86,7 @@ export default function UserBadge({ variant = "compact" }: UserBadgeProps) {
         <OverflowMenu
           items={[
             ...ACCOUNT_ITEMS,
-            { label: "Sign out", onSelect: () => void signOut({ callbackUrl: "/signin" }) },
+            { label: "Sign out", onSelect: () => signOutOf(session) },
           ]}
           label="Account menu"
           size="sm"
@@ -102,7 +103,7 @@ export default function UserBadge({ variant = "compact" }: UserBadgeProps) {
       <span className="hidden sm:inline truncate max-w-[160px]">{name}</span>
       <button
         type="button"
-        onClick={() => signOut({ callbackUrl: "/signin" })}
+        onClick={() => signOutOf(session)}
         className="text-[10px] text-fg-muted hover:text-fg transition-colors cursor-pointer whitespace-nowrap"
         title={`Sign out ${user.email}`}
       >

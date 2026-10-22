@@ -1,3 +1,4 @@
+import { decodeJwt } from "jose";
 import NextAuth, { type Session } from "next-auth";
 import Credentials from "next-auth/providers/credentials";
 import Google from "next-auth/providers/google";
@@ -17,6 +18,8 @@ import {
   localLoginSessionAllowed,
 } from "@/lib/localLogin";
 import { OIDC_PROVIDER_ID, emailVerified, oidcConfig } from "@/lib/oidc";
+import { endedSessions } from "@/lib/endedSessionsServer";
+import type { ProviderSession } from "@/lib/endedSessions";
 
 // Operator-controlled allowlist, read once at startup (docs/auth.md promises a
 // restart is what makes an edit live). ALWAYS honored: the backend People
@@ -137,6 +140,7 @@ function auditAuth(
 type SessionVerdict =
   | { kind: "allow" }
   | { kind: "deny" }
+  | { kind: "ended"; email: string }
   | { kind: "revoke"; email: string; decision: AllowDecision };
 
 /**
@@ -157,6 +161,10 @@ async function judgeSession(session: Session | null, host: string | null): Promi
   }
   const email = session?.user?.email?.toLowerCase();
   if (!email) return { kind: "deny" };
+  // Signed out at the provider (back-channel logout, lib/endedSessions.ts).
+  if (session?.providerSession && (await endedSessions.isEnded(session.providerSession))) {
+    return { kind: "ended", email };
+  }
   const decision = await checkEmailAllowed(email);
   // Exhaustive on purpose: a `!== "revoke"` test would admit any future
   // SessionAction, i.e. fail open. This way adding one is a build error.
@@ -167,6 +175,20 @@ async function judgeSession(session: Session | null, host: string | null): Promi
     case "revoke":
       return { kind: "revoke", email, decision };
   }
+}
+
+/** The provider session an SSO sign-in's ID token stands on. The token was
+ * verified by Auth.js on the sign-in itself (its `iss` is the configured
+ * issuer, which a logout token is checked against too); only its claims are
+ * read here. */
+function providerSessionOf(idToken: string, issuer: string): ProviderSession {
+  const claims = decodeJwt(idToken);
+  return {
+    iss: issuer,
+    sid: typeof claims.sid === "string" ? claims.sid : null,
+    sub: typeof claims.sub === "string" ? claims.sub : null,
+    signedInAt: Math.floor(Date.now() / 1000),
+  };
 }
 
 export async function sessionStillAllowed(session: Session | null, host: string | null): Promise<boolean> {
@@ -274,13 +296,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       return true;
     },
     // `account` is present only on the sign-in request itself, so the flag is
-    // set once and then rides the JWT.
+    // set once and then rides the JWT. An SSO sign-in also keeps the provider
+    // session it stands on (the ID token's `iss`, `sid`, `sub`, checked against
+    // back-channel logouts) and the ID token, for signing out at the provider.
     jwt: ({ token, account }) => {
-      if (account) token.localLogin = account.provider === LOCAL_LOGIN_PROVIDER_ID;
+      if (account) {
+        token.localLogin = account.provider === LOCAL_LOGIN_PROVIDER_ID;
+        if (account.provider === OIDC_PROVIDER_ID && OIDC && account.id_token) {
+          token.providerSession = providerSessionOf(account.id_token, OIDC.issuer);
+          token.idToken = account.id_token;
+        }
+      }
       return token;
     },
     session: ({ session, token }) => {
       session.localLogin = token.localLogin === true;
+      if (token.providerSession) session.providerSession = token.providerSession;
       return session;
     },
     // Re-runs on every request gated by the middleware (see middleware.ts),
@@ -292,6 +323,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     authorized: async ({ auth, request }) => {
       const verdict = await judgeSession(auth, request.headers.get("host"));
       if (verdict.kind === "allow") return true;
+      if (verdict.kind === "ended") {
+        auditAuth("auth_logout", `Session ended at the provider: ${verdict.email}`, verdict.email, {
+          revoked: true,
+          reason: "provider_signed_out",
+        });
+      }
       if (verdict.kind === "revoke") {
         // Fire-and-forget audit so a mid-session eviction leaves a
         // trail even if the user never re-attempts sign-in.
