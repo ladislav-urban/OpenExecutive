@@ -9,12 +9,14 @@ import PausedBanner from "@/components/executive/PausedBanner";
 import type { Hub } from "@/components/shell/navConfig";
 import { usePageCrumbLabel } from "@/components/shell/PageCrumb";
 import HubTabs from "@/components/ui/HubTabs";
-import { embedRequested, isNativePath, openMessage, queryWithoutEmbed, routeMessage } from "@/lib/embed";
+import { getBadges } from "@/lib/api";
+import { badgeMessage, embedRequested, isNativePath, openMessage, queryWithoutEmbed, routeMessage } from "@/lib/embed";
 
 // The page in a host's frame (embedded mode, lib/embed.ts): no sidebar, top
 // bar, bottom bar or Ask OE panel (the host has its own), but the hub's tabs,
 // the paused banner and the page itself. It tells the host where it is on
-// every navigation, keeps ?embed=1 in the address so a reload stays
+// every navigation, and its badge counts (GET /badges) for the host's own
+// menu, keeps ?embed=1 in the address so a reload stays
 // embedded, and hands a place the host shows natively to the host.
 
 function postToHost(message: unknown, origin: string | null): void {
@@ -59,6 +61,19 @@ export default function EmbeddedShell({
     lastSent.current = key;
     postToHost(message, hostOrigin);
   }, [native, pathname, query, crumb, title, hostOrigin]);
+
+  useEffect(() => {
+    if (bare || !hostOrigin) return;
+    let current = true;
+    getBadges()
+      .then((b) => {
+        if (current) postToHost(badgeMessage(b.counts), hostOrigin);
+      })
+      .catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [bare, pathname, hostOrigin]);
 
   if (native) {
     return (

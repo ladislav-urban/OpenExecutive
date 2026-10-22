@@ -3548,6 +3548,13 @@ export async function getReviewStats(): Promise<ReviewStats> {
   return res.json();
 }
 
+/** The navigation's counts for the caller (lib/badges.ts). */
+export async function getBadges(): Promise<{ counts: Record<string, number> }> {
+  const res = await fetch(`${API_BASE}/badges`);
+  if (!res.ok) throw new Error("Failed to get badge counts");
+  return res.json();
+}
+
 export async function patchReviewItem(itemId: string, patch: ReviewItemPatch): Promise<ReviewItem> {
   const res = await fetch(`${API_BASE}/review/items/${encodeURIComponent(itemId)}`, {
     method: "PATCH",

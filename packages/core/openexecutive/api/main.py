@@ -23,6 +23,7 @@ from openexecutive.api.routes import (
     architecture,
     artifacts,
     audit,
+    badges,
     chat,
     chat_directory,
     clients,
@@ -1028,6 +1029,7 @@ def create_app() -> FastAPI:
     app.include_router(people.router, tags=["people"])
     app.include_router(chat_directory.router, tags=["people"])
     app.include_router(today.router, tags=["today"])
+    app.include_router(badges.router, tags=["today"])
     app.include_router(scheduled.router, tags=["scheduled"])
     app.include_router(executive.router, tags=["executive"])
     app.include_router(workspace.router, tags=["workspace"])

@@ -371,6 +371,32 @@ def _handled_overnight(now: datetime, *, include_private: bool = False) -> list[
         return []
 
 
+def _board_alerts(now: datetime, *, include_private: bool, viewer: Any) -> list[Any]:
+    """The alerts Home's cards are made from.
+
+    Live = unread AND inside its TTL AND not snoozed — the read-side twin of
+    the scheduler's expiry sweep, so the page is right before the sweep runs.
+    A drafted artifact's card only for its owner (`viewer`, the caller of
+    GET /today); every other build (the brief, the digest, the reflection,
+    a cached narrative) leaves them all out.
+    """
+    from openexecutive.alerts import lifecycle as lifecycle_module
+    from openexecutive.alerts.lifecycle import list_live_alerts
+
+    raw_alerts = list_live_alerts(
+        limit=lifecycle_module.BOARD_LIMIT, now=now, viewer=viewer
+    )
+    if not include_private:
+        # Alerts private to the principal (mail from one of their contacts,
+        # a meeting with one) appear only on the principal's own /today —
+        # never for a teammate, and never in the morning brief, the
+        # end-of-day digest or the reflection, which all read this default.
+        from openexecutive.alerts.models import is_private_alert
+
+        raw_alerts = [a for a in raw_alerts if not is_private_alert(a)]
+    return raw_alerts
+
+
 def _watch_trust_by_slug(alerts: list[Any]) -> dict[str, float]:
     """``{watch slug: trust_score}`` for every watch referenced by ``alerts``.
 
@@ -877,29 +903,12 @@ def _build_today(
     # Attention-worthy people first; stable name order within a priority band.
     person_items.sort(key=lambda p: (-p.priority, p.full_name))
 
-    from openexecutive.alerts import lifecycle as lifecycle_module
-    from openexecutive.alerts.lifecycle import list_live_alerts
     from openexecutive.alerts.store import count_superseded_by
     from openexecutive.briefing.ranking import score_and_categorize
     from openexecutive.workflows.failure_alerts import SOURCE as FAILED_RUN_SOURCE
     from openexecutive.workflows.failure_alerts import failed_run_id
 
-    # Live = unread AND inside its TTL AND not snoozed — the read-side twin of
-    # the scheduler's expiry sweep, so the page is right before the sweep runs.
-    # A drafted artifact's card only for its owner (`viewer`, the caller of
-    # GET /today); every other build (the brief, the digest, the reflection,
-    # a cached narrative) leaves them all out.
-    raw_alerts = list_live_alerts(
-        limit=lifecycle_module.BOARD_LIMIT, now=now, viewer=viewer
-    )
-    if not include_private:
-        # Alerts private to the principal (mail from one of their contacts,
-        # a meeting with one) appear only on the principal's own /today —
-        # never for a teammate, and never in the morning brief, the
-        # end-of-day digest or the reflection, which all read this default.
-        from openexecutive.alerts.models import is_private_alert
-
-        raw_alerts = [a for a in raw_alerts if not is_private_alert(a)]
+    raw_alerts = _board_alerts(now, include_private=include_private, viewer=viewer)
     superseded_counts = count_superseded_by()
     trust_by_slug = _watch_trust_by_slug(raw_alerts)
     proposal_items = []
@@ -2045,6 +2054,28 @@ def _waiting_cards(caller: int | None) -> int:
     if person is None or person.archived:
         return 0
     return waiting_card_count(person)
+
+
+def needs_you_count(caller: int | None, *, principal: bool, now: datetime) -> int:
+    """Home's "Needs you" count for ``caller`` without building the page
+    (GET /badges): the same cards, lanes and waiting cards as
+    ``_attach_home_rules`` counts, read from the board alone."""
+    from types import SimpleNamespace
+
+    from openexecutive.briefing import home_rules
+    from openexecutive.briefing.ranking import score_and_categorize
+    from openexecutive.orchestrator.artifact_records import viewer_for_person
+
+    solo = _workspace_solo()
+    alerts = _board_alerts(now, include_private=principal, viewer=viewer_for_person(caller))
+    trust_by_slug = _watch_trust_by_slug(alerts)
+    mine = 0
+    for alert in alerts:
+        _, category, _ = score_and_categorize(alert, trust_by_slug=trust_by_slug, now=now)
+        card = SimpleNamespace(category=category, routed_to_person_id=alert.routed_to_person_id)
+        if home_rules.lane(card, caller_id=caller, caller_is_principal=principal, solo=solo) == "needs_you":
+            mine += 1
+    return mine + _waiting_cards(caller)
 
 
 def _attach_home_rules(
