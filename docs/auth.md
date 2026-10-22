@@ -409,7 +409,9 @@ OE_HOST_ORIGINS=https://erp.example.com            # comma- or space-separated
 
 Unset (the default), nothing changes apart from the policies under **Every page** below.
 A malformed entry refuses the whole setting (logged at startup), so a typo never widens
-what is trusted.
+what is trusted. How to host it, and with ERPNext's desk as the host, is in
+[deployment.md](deployment.md#showing-open-executive-inside-another-app-oe_host_origins)
+(["Inside ERPNext's desk"](deployment.md#inside-erpnexts-desk-the-single-ui)).
 
 **Same site, two origins.** Serve the UI on a sibling host of the host app, under one
 registrable domain (`exec.example.com` beside `erp.example.com`; locally two names under

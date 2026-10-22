@@ -209,7 +209,8 @@ Never list the UI's own origin: its pages' writes would then be judged as a host
 refused.
 
 Removing an origin from `OE_HOST_ORIGINS` (and restarting the UI) stops that host's
-framing and every call from its pages at once. `make embed-outputs` writes the files a
+framing and every call from its pages at once (for ERPNext, see
+[Inside ERPNext's desk](#inside-erpnexts-desk-the-single-ui)). `make embed-outputs` writes the files a
 host app checks itself against (`embed-manifest.json`, `host-list.json`,
 `openapi.json`).
 
@@ -909,6 +910,86 @@ user sees several. Every `erpnext__*` call is in the audit log as a
 write some of ERPNext's text. The design, including later phases (the
 morning brief's ERP block), is in the app's `docs/erpnext-integration.md`.
 
+### Inside ERPNext's desk (the single UI)
+
+With oe_connector's single UI, ERPNext's desk shows Open Executive's pages in a
+frame and its own screens (Home, Chats, Watch list) through a short list of
+calls. This is the general [host app setup](#showing-open-executive-inside-another-app-oe_host_origins)
+with ERPNext as the host. The design is oe_connector's
+`docs/erpnext-single-ui-plan.md`, "Hosting".
+
+**The sibling host.**
+
+- Serve the UI at the root of its own host under ERPNext's registrable domain:
+  `exec.example.com` beside `erp.example.com`. It gets its own server block (or
+  its own proxy), never a location inside bench's nginx, with its own TLS,
+  buffering off for `/api/backend/` (streamed chat), and a body limit of 55 MB
+  (the largest upload the API takes, with room).
+- Leave `erp.example.com` as bench's nginx generates it, with nothing in front
+  of it. Frappe takes a request's address from the first `X-Forwarded-For`
+  entry, which bench's nginx overwrites with the address it received the
+  request from. A load balancer or CDN in front would make every request come
+  from that one address, which then passes the "OE Reader" key's address pin
+  (oe_connector's `docs/stop-runbook.md`, "What the address pin trusts").
+- The internal ports (the API's, the UI server's and ERPNext's web port) are
+  reachable only from the two proxies and the gateway, never from outside.
+
+**Settings.** On the UI:
+
+```bash
+OE_HOST_ORIGINS=https://erp.example.com   # exactly ERPNext's origin, no trailing slash
+AUTH_URL=https://exec.example.com         # and AUTH_TRUST_HOST unset
+AUTH_OIDC_ISSUER=...                      # AUTH_OIDC_*: the provider ERPNext's
+                                          # Social Login Key signs in with
+```
+
+`AUTH_URL` without `AUTH_TRUST_HOST` keeps a request's `Host` header from
+steering where sign-in returns. Signing in through the same provider as ERPNext
+is what makes one sign-in serve both, and one sign-out end both.
+
+**The provider.** On Open Executive's client at the provider, set the
+back-channel logout URL (`https://exec.example.com/api/auth/backchannel-logout`)
+with the session required, and `https://exec.example.com/signin` as a valid
+post-logout redirect. The provider must be able to reach the UI's origin for the
+back-channel post. When someone signs out of ERPNext at the provider, the desk's
+frame and its calls then ask for sign-in again
+([auth.md, "Signing out (SSO)"](auth.md#signing-out-sso)).
+
+**What ERPNext's origin may do.** Its pages may frame Open Executive's and make
+the calls on the host list (`packages/ui/src/lib/host-list.json`): reads, alert
+handling, chatting and the watch list, never approving a card, sending,
+settings or People. A chat turn sent from the desk is on the `host` surface,
+which only reads and advises. A change made inside the frame asks first in a
+small window of Open Executive's own (`/confirm`), so the desk's page can't
+click it unseen. Every change to the host list, the `host` surface's tools or
+the CSP headers is read with `security-reviewer`
+([auth.md, "Host origins"](auth.md#host-origins-showing-open-executive-inside-another-app)).
+
+**Stopping it.** Remove ERPNext's origin from `OE_HOST_ORIGINS` and restart the
+UI, which reads it at start. Nothing in ERPNext needs restarting. From then on:
+
+- no page of Open Executive can be framed by the desk (CSP `frame-ancestors`);
+- every write from the desk's pages gets 403, and their reads come back without
+  CORS headers, so those pages can't read them.
+
+Each app keeps working on its own: Open Executive at `exec.example.com`, ERPNext
+without the Dynocortex screens. oe_connector's half of the stop is in its
+[`docs/stop-runbook.md`](https://github.com/ladislav-urban/oe_connector/blob/main/docs/stop-runbook.md):
+`bench --site <site> set-config oe_connector_openexecutive_ui_url None` removes
+every Dynocortex screen from the desk.
+
+**After an upgrade.** Before releasing a new Open Executive version to the desk,
+write the files a host checks itself against and check oe_connector against
+them:
+
+```bash
+make embed-outputs EMBED_OUT=dist/embed          # embed-manifest.json, host-list.json, openapi.json
+bench --site <site> oe-connector-check-ui --outputs <path to dist/embed>
+```
+
+Fix what the check names first: a changed contract, a navigation entry the
+desk lacks, or an endpoint a native screen reads that changed.
+
 ### Stopping ERPNext access
 
 OpenExecutive's half of the stop runbook. ERPNext's half, its own switches
@@ -924,6 +1005,9 @@ Each setting below is read at start, so restart the API after changing it.
   `/data/company/tokens`, or the `erpnext` entry from `mcp_servers.json`.
   The gateway can no longer reach ERPNext. What was already done there
   stays.
+- **No Open Executive in the desk:** remove ERPNext's origin from
+  `OE_HOST_ORIGINS` and restart the UI ([Inside ERPNext's desk](#inside-erpnexts-desk-the-single-ui),
+  "Stopping it"). Both apps go on working on their own.
 - **No unattended ERP calls:** leave `ERPNEXT_BRIEF_COMPANY` unset. The
   brief drops its ERP block and scheduled metrics send nothing, so neither
   calls ERPNext. Conversations still can.
