@@ -7,9 +7,11 @@ each section is rendered from a static, version-controlled JSON file
 under ``guide/prebuilt/<id>.json``; nothing on the serving path calls an
 LLM.
 
-The section IDs must match the ``GUIDE_SECTIONS`` const in
-``packages/ui/src/app/guide/page.tsx`` so deep links keep working and the
-sidebar renders instantly without waiting for the backend.
+The section IDs must match ``GUIDE_SECTIONS`` in
+``packages/ui/src/lib/guideSections.ts`` (checked by the UI's
+``scripts/guideSections.test.mjs``) so ``/guide?section=<id>`` links keep
+working, the sidebar renders instantly without waiting for the backend, and
+``make embed-outputs`` lists the same ids for a host app's drift check.
 """
 from __future__ import annotations
 

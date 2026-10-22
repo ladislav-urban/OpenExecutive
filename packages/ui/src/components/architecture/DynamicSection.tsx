@@ -43,11 +43,14 @@ interface Props {
    * `/{basePath}/sections/{id}` shape.
    */
   basePath?: string;
+  /** Called once the section has loaded, or failed to: its place on the
+   *  page won't move for its own content after that. */
+  onSettled?: (id: string) => void;
 }
 
 type Status = 'idle' | 'loading' | 'ready' | 'error';
 
-export default function DynamicSection({ id, title, sub, basePath = 'architecture' }: Props) {
+export default function DynamicSection({ id, title, sub, basePath = 'architecture', onSettled }: Props) {
   const [content, setContent] = useState<SectionContent | null>(null);
   const [status, setStatus] = useState<Status>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -80,6 +83,10 @@ export default function DynamicSection({ id, title, sub, basePath = 'architectur
     loadedKeyRef.current = key;
     load();
   }, [load, basePath, id]);
+
+  useEffect(() => {
+    if (status === 'ready' || status === 'error') onSettled?.(id);
+  }, [status, id, onSettled]);
 
   return (
     <section className="space-y-4">
