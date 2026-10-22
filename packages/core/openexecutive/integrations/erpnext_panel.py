@@ -326,8 +326,15 @@ SHOW_RULE = (
     "When your answer is about something in ERPNext (the list you ranked, the "
     "report you ran, the document you described), also call "
     "erpnext__show_in_erpnext with it, with the same filters and sort, once per "
-    "place and the main one first, so ERPNext opens it beside the panel. Never "
-    "write routes or links."
+    "place and the main one first, so ERPNext opens it beside the panel. Pass "
+    "{'view': {'kind': ..., ...}}. Show the place that fits the question, not "
+    "the nearest report: for \"my largest orders\", the list sorted as you "
+    "ranked it ({'kind': 'list', 'doctype': 'Sales Order', 'filters': "
+    "{'company': ..., 'docstatus': 1}, 'sort': {'field': 'base_grand_total', "
+    "'order': 'desc'}}); for the chart of accounts, the tree ({'kind': 'tree', "
+    "'doctype': 'Account'}); for \"where do I find the stock reports\", the "
+    "workspace ({'kind': 'workspace', 'workspace': 'Stock'}). Never write "
+    "routes or links."
 )
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "

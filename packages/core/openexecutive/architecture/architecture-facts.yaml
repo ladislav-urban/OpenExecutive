@@ -9329,8 +9329,17 @@ integrations:
     so /health and the Setup page are unchanged). The first call to each
     pinned ERPNext tool is refused by extensible-mcp's DiscoveredToolsFilter
     and call_tool's undiscovered retry (_is_undiscovered_refusal covers
-    PINNED_ERPNEXT_TOOLS) searches the exact name and calls once more — only
+    PINNED_ERPNEXT_TOOLS) searches for it and calls once more — only
     when `erpnext` is in MCPGateway.server_names, i.e. the config named it.
+    The search is "<name>: <words of its definition>"
+    (connected_systems.ERPNEXT_DISCOVERY_QUERIES, for the six reads and
+    show_in_erpnext), then the bare name: extensible-mcp ranks by embedding
+    over "<name>: <description>" and _discover reads the top 10, and the
+    name alone ranked list_records 12th of oe_connector's 16 tools, so every
+    list_records call on a turn that had not searched (every panel turn,
+    which may not) was dropped as "not found by search" (live check, Oct 21,
+    2026). The hint text tracks the pinned definition: a release that
+    rewrites a description changes its digest too.
 
     Who may call (security review, phase 1): the service user sees more than
     most people do in ERPNext, so without ERPNEXT_CALLER_PRIVATE_KEY
@@ -9844,7 +9853,13 @@ integrations:
     (consult_specialist, call_tool) is an allow-list applied to the offered
     list and again at dispatch (executive._stream_agent_loop, before every
     other guard), call_tool only for erpnext__*, and no server-side web
-    search. Phase 4b, decided with the owner: the panel may propose drafts,
+    search. The panel's prompt names the tools and the turn is offered only
+    call_tool, so the model sometimes calls an ERPNext read (or the show
+    tool) by its bare name: schedule_tools.erpnext_panel_call makes that the
+    call_tool it stands for (same id) before the allow-list, so it runs
+    through every guard instead of being refused as "ERPNext's panel only
+    reads"; any other bare name (a draft, supplier or audit tool,
+    search_tools) is refused as before. Phase 4b, decided with the owner: the panel may propose drafts,
     approved only in the app. On a turn erpnext_drafts.offered (drafts on,
     and _proposer finds the team member whose People email is the signed
     ERPNext user: the principal, or a teammate only with
@@ -9897,7 +9912,11 @@ integrations:
     successful erpnext__* call the gateway calls
     erpnext_panel.note_erpnext_call, which keeps each show call's `view`
     (at most five, 4000 bytes each) and the last list_records, run_report or
-    get_record call's arguments, without the caller assertion. The response
+    get_record call's arguments, without the caller assertion. SHOW_RULE
+    gives the view's shape and the three examples of the tool's own
+    description (a list sorted as ranked for "largest", the Account tree,
+    the Stock workspace for "where do I find"), since the panel turn may not
+    search and so never reads that description. The response
     adds `views` and `call` when there are any. They are data: oe_connector's
     panel.ask checks each view again as the signed-in ERPNext user and builds
     every desk route itself. Off the panel, the gateway refuses
@@ -9907,7 +9926,7 @@ integrations:
     sends nothing, so like ERPNext's pinned reads it stays open after the
     turn read outside content (outside_content.outside_allows_mcp_call) and
     is not an acting tool for Take the lead (take_the_lead.mcp_tool_acts).
-    Evals erpnext_014 to erpnext_016.
+    Evals erpnext_014 to erpnext_016 and erpnext_019.
     Cards (oe_connector's docs/erpnext-single-ui-plan.md, step 4): the same
     holder keeps `cards`, the decision id of each ERPNext draft card
     propose_erpnext_draft left or found waiting on the turn, in order, at

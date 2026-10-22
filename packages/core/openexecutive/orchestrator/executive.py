@@ -167,6 +167,7 @@ from openexecutive.orchestrator.schedule_tools import (
     SHARED_CHAT_WITHHELD_TOOLS,
     UNATTENDED_WITHHELD_TOOLS,
     current_session,
+    erpnext_panel_call,
     erpnext_panel_turn,
     erpnext_panel_withheld_error,
     erpnext_panel_withholds,
@@ -2630,6 +2631,9 @@ class Executive:
                         group_results[tu["id"]] = error or ""
                     else:
                         tool_uses[i] = call
+                elif panel_turn:
+                    # An ERPNext read called by its bare name runs as call_tool.
+                    tool_uses[i] = erpnext_panel_call(tu)
             # The turn's one full re-read of a result the reading budget cut
             # is answered from that result, never by running the tool again
             # (it may have been a write).

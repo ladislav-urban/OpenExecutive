@@ -121,6 +121,24 @@ ERPNEXT_TOOLS: tuple[str, ...] = (
 
 PINNED_ERPNEXT_TOOLS: frozenset[str] = frozenset(ERPNEXT_TOOLS)
 
+# What the gateway searches for to discover each of these (and the panel's
+# show tool, below) on first use. extensible-mcp's search is by embedding,
+# over "<name>: <description>", so the name alone can miss: list_records'
+# long description ranked it 12th of oe_connector's 16 tools for "erpnext
+# list records", outside the top 10 that discovery reads. Words from each
+# definition (pinned in orchestrator/erpnext_tool_pin.py) rank it first.
+ERPNEXT_DISCOVERY_QUERIES: dict[str, str] = {
+    "erpnext__describe_doctype": "Fields, child tables and status meaning of an ERPNext DocType",
+    "erpnext__describe_report": "The filters an ERPNext report takes",
+    "erpnext__get_record": "One ERPNext document with its child tables",
+    "erpnext__list_records": "Filtered rows of one DocType, or totals with group_by and aggregates",
+    "erpnext__run_report": "Run an ERPNext report and get its rows",
+    "erpnext__search_catalog": "Map a business question to the ERPNext reports and DocTypes that answer it",
+    "erpnext__show_in_erpnext": (
+        "Kinds: list, report_view, report, form, tree, calendar, gantt, kanban, dashboard, workspace, page"
+    ),
+}
+
 # oe_connector's draft tools that phase 4 uses, as the gateway names them.
 # Never listed to the model: the gateway refuses every `erpnext__draft*` call
 # but the approval-card path's own (integrations.erpnext_drafts).

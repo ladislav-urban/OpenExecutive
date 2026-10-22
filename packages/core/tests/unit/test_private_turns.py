@@ -1996,6 +1996,37 @@ def test_a_panel_turn_refuses_anything_else_the_model_emits() -> None:
     assert "untrusted_content" in results["tu-0"]
 
 
+def test_a_panel_turn_runs_an_erpnext_read_called_by_its_bare_name() -> None:
+    # The live check: erpnext__search_catalog, called as named in the prompt
+    # rather than through call_tool, was refused as if it were not a read.
+    gateway = _gateway()
+    gateway.call_tool = AsyncMock(return_value=json.dumps({"matches": []}))
+    tool_uses = [
+        SimpleNamespace(type="tool_use", id="tu-0", name="erpnext__search_catalog",
+                        input={"query": "largest orders"}),
+        SimpleNamespace(type="tool_use", id="tu-1", name="erpnext__show_in_erpnext",
+                        input={"view": {"kind": "tree", "doctype": "Account"}}),
+        SimpleNamespace(type="tool_use", id="tu-2", name="erpnext__draft_todo", input={}),
+        SimpleNamespace(type="tool_use", id="tu-3", name="search_tools", input={"query": "x"}),
+    ]
+    provider = _run_loop(_panel_session(), tool_uses, gateway=gateway)
+    results = {
+        block["tool_use_id"]: str(block["content"])
+        for message in provider.calls[1]["messages"]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    }
+    assert [c.args[0] for c in gateway.call_tool.await_args_list] == [
+        {"name": "erpnext__search_catalog", "arguments": {"query": "largest orders"}},
+        {"name": "erpnext__show_in_erpnext", "arguments": {"view": {"kind": "tree", "doctype": "Account"}}},
+    ]
+    assert "untrusted_content" in results["tu-0"]
+    # The panel's other refusals stand.
+    for refused in ("tu-2", "tu-3"):
+        assert "panel you can only read ERPNext" in results[refused]
+
+
 def test_sent_by_principal_on_an_adapter_verified_channel(roster: SimpleNamespace) -> None:
     from openexecutive.orchestrator.people_tools import sent_by_principal
 

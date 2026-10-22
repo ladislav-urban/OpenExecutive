@@ -338,7 +338,8 @@ def test_an_erpnext_tool_refused_as_undiscovered_is_discovered_and_retried_once(
     assert out == '{"rows": []}'
     calls = [c.args for c in forwarded.await_args_list]
     assert [c[0] for c in calls] == ["call_tool", "search_tools", "call_tool"]
-    assert calls[1][1] == {"query": "erpnext run report", "top_k": 10}
+    # Searched by the words of its definition, which rank it first.
+    assert calls[1][1] == {"query": "erpnext__run_report: Run an ERPNext report and get its rows", "top_k": 10}
     assert calls[0] == calls[2]
 
 
