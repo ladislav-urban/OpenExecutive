@@ -438,7 +438,8 @@ origin. Downloads keep the API's own sandbox policy.
 
 **What a host origin may call: the host list** (`packages/ui/src/lib/host-list.json`).
 Each entry is a method and an API path. It holds: reading who is signed in (`GET /auth/me`,
-so the host can warn when that isn't its own user), the briefing, cards (with
+so the host can warn when that isn't its own user), the navigation's badge counts
+(`GET /badges`, for the host's own menu), the briefing, cards (with
 ERPNext's draft cards and the ERPNext alerts that suggest one, `GET /erpnext/drafts` and
 `GET /erpnext/alert-drafts`, and Act as me's drafted replies and suggested actions,
 `GET /delegation/replies` and `GET /delegation/actions`), conversations (with how the Chats list groups them, `POST /sessions/topics/layout`, and the attachment limits, `GET /chat/limits`) and the watch list (with its form's choices and a preview of a new watch, `GET /watchlist/form` and `POST /watchlist/preview`, which save nothing);
