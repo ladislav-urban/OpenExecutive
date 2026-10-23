@@ -128,30 +128,36 @@ def parse_events(data: Any) -> list[dict[str, Any]]:
 def _schedule(event: dict[str, Any]) -> None:
     from openexecutive.alerts.models import AlertEvent
     from openexecutive.alerts.pipeline import schedule_evaluation
+    from openexecutive.audit.context import get_active_session_id, set_turn
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
     ref = f"erpnext:{event['kind']}:{event['key']}"
+    # One a month per rule and document (oe_connector resends at most
+    # monthly), so a document can raise again after its alert is dismissed;
+    # dedup_hint still keeps one open alert per document.
+    external_id = f"{ref}:{time.strftime('%Y-%m')}"
     # The text names customers and suppliers in their own words (a web-form
     # sign-up names itself), so it reaches triage as untrusted content.
     details = wrap_untrusted(event["text"] or event["title"], source="erpnext", author="erpnext_alert")
-    schedule_evaluation(
-        AlertEvent(
-            source="erpnext",
-            # One a month per rule and document (oe_connector resends at most
-            # monthly), so a document can raise again after its alert is
-            # dismissed; dedup_hint still keeps one open alert per document.
-            external_id=f"{ref}:{time.strftime('%Y-%m')}",
-            subject=event["title"],
-            body=(
-                f"ERPNext's rule for {KINDS[event['kind']]} matched. These are ERPNext's own "
-                f"figures, checked by its read-only service user.\n\n{details}"
-            ),
-            user="ERPNext",
-            dedup_hint=ref,
-            # Computed as the service user: the principal's alone.
-            private=True,
+    # Its own turn id, so the triage's model calls can be told apart as an
+    # ERPNext alert's (`AuditLogger.erpnext_usage`); schedule_evaluation
+    # carries it into the task that runs them.
+    with set_turn(session_id=get_active_session_id(), turn_id=f"erpnext-alert:{external_id}"):
+        schedule_evaluation(
+            AlertEvent(
+                source="erpnext",
+                external_id=external_id,
+                subject=event["title"],
+                body=(
+                    f"ERPNext's rule for {KINDS[event['kind']]} matched. These are ERPNext's own "
+                    f"figures, checked by its read-only service user.\n\n{details}"
+                ),
+                user="ERPNext",
+                dedup_hint=ref,
+                # Computed as the service user: the principal's alone.
+                private=True,
+            )
         )
-    )
 
 
 def _error(status: int, code: str, message: str) -> JSONResponse:

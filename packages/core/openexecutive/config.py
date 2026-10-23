@@ -129,6 +129,10 @@ class Settings(BaseSettings):
     # off) instead of Opus is the dominant cost lever for the workflow.
     # Set RESEARCH_MODEL=claude-opus-5-5 to restore the prior behavior.
     research_model: str = Field("claude-sonnet-5-5", alias="RESEARCH_MODEL")
+    # The model price table (USD per million tokens) the audit log prices
+    # Anthropic calls from, which report no cost (audit/pricing.py). Empty:
+    # the dated one shipped as openexecutive/audit/model_prices.json.
+    model_prices_path: str = Field("", alias="MODEL_PRICES_PATH")
 
     vector_store_path: Path = Field(_ROOT / "chroma_db", alias="VECTOR_STORE_PATH")
     company_profile_path: Path = Field(

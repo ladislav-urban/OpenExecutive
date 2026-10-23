@@ -990,6 +990,44 @@ bench --site <site> oe-connector-check-ui --outputs <path to dist/embed>
 Fix what the check names first: a changed contract, a navigation entry the
 desk lacks, or an endpoint a native screen reads that changed.
 
+### What ERPNext work costs (the pilot report)
+
+`GET /audit/usage?erpnext=1` adds `erpnext`: what each kind of ERPNext work
+cost in model calls over the window (`since`, `until`), for the pilot report:
+
+| Kind | One unit is |
+|---|---|
+| `question` | a chat turn that called an `erpnext__*` tool |
+| `panel_question` | a turn of ERPNext's "Ask the Dynocortex" panel |
+| `draft` | a turn that left an ERPNext draft card |
+| `morning_brief` | one morning brief (its narrative and grounding) |
+| `alert_triage` | the triage of one ERPNext alert |
+
+Each kind gives its count, its token and cost totals, and the median and 90th
+percentile of one unit's tokens and cost. A turn counts once, with every call
+it made, specialists included. The figures carry no question, answer or
+ERPNext data.
+
+Anthropic's API reports no cost, so a call to it is priced from its tokens at
+the model price table, a config file: by default the dated
+`packages/core/openexecutive/audit/model_prices.json`, copied from Anthropic's
+pricing page (`prices_as_of` in the answer). OpenRouter's own reported cost is kept as it
+is. Rows written before calls recorded their cost are priced on read and
+counted in `estimated_calls`; calls to a model the table doesn't price are in
+`unpriced_calls`. Rows already written keep the cost they recorded.
+
+To use other prices (a negotiated rate, or a price change before the next
+release), copy that file, edit it and its `prices_as_of`, and point
+`MODEL_PRICES_PATH` at it, for example `/data/company/model_prices.json` on
+the volume. It is read again when it changes, so no restart is needed. A model
+it leaves out is unpriced. If the file is missing or malformed, the API logs
+`model prices: … can't be used` and uses the shipped table.
+
+```bash
+curl -s -H "x-api-key: $BACKEND_SHARED_SECRET" \
+  "http://127.0.0.1:8000/audit/usage?erpnext=1&since=2026-11-01T00:00:00"
+```
+
 ### Stopping ERPNext access
 
 OpenExecutive's half of the stop runbook. ERPNext's half, its own switches

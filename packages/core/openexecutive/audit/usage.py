@@ -6,7 +6,8 @@ and watchlist passes, triage, alert review, the brief and its grounding
 repair, the digest, reflection and weekly-review workflows, the committee
 reviewers, the chat memory extractor, the Council test boxes and the small
 utility calls) records one ``cache_event`` audit row through
-:func:`log_model_usage` — tokens, cache hits, provider-reported cost, and the
+:func:`log_model_usage` — tokens, cache hits, cost (the provider's, or the
+tokens at the dated model price file, ``audit.pricing``, when it reports none), and the
 server-side web searches the call made. ``GET /audit/usage`` and the
 per-session cost view sum those rows, so a run's weight can be read from the
 audit log instead of guessed. Each call site logs for itself, right after
@@ -29,11 +30,15 @@ workflow then rolls those rows up into the ``usage`` block on its result.
 from __future__ import annotations
 
 import contextlib
+import logging
+import math
 from collections.abc import Iterator
 from contextvars import ContextVar
 from typing import Any
 
 from openexecutive.audit.logger import log_event
+
+logger = logging.getLogger(__name__)
 
 EVENT_TYPE = "cache_event"
 
@@ -86,14 +91,23 @@ def usage_counts(message: Any) -> dict[str, Any] | None:
     raw_cost = getattr(usage, "cost", None)
     try:
         cost_usd = float(raw_cost) if raw_cost is not None else None
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         cost_usd = None
+    if cost_usd is not None and not math.isfinite(cost_usd):
+        cost_usd = None  # "nan" / "inf" is no cost; the price table fills it
+
     server = getattr(usage, "server_tool_use", None)
+    # The 1-hour share of the cache writes, which bill at 2x input against
+    # the 5-minute writes' 1.25x (audit/pricing.py).
+    creation = getattr(usage, "cache_creation", None)
     return {
         "input_tokens": _as_int(getattr(usage, "input_tokens", 0)),
         "output_tokens": _as_int(getattr(usage, "output_tokens", 0)),
         "cache_creation_input_tokens": _as_int(
             getattr(usage, "cache_creation_input_tokens", 0)
+        ),
+        "cache_creation_1h_input_tokens": _as_int(
+            getattr(creation, "ephemeral_1h_input_tokens", 0)
         ),
         "cache_read_input_tokens": _as_int(getattr(usage, "cache_read_input_tokens", 0)),
         "cost_usd": cost_usd,
@@ -119,6 +133,11 @@ def log_model_usage(
     honest even when a provider omits usage). ``session_id`` / ``turn_id``
     fall back to the audit ContextVars when omitted, as every other audit
     row does.
+
+    The row's ``cost_source`` says where its ``cost_usd`` came from:
+    ``provider`` (OpenRouter's reported cost), ``price_table`` (worked out
+    from the tokens by ``audit.pricing``, with the table's ``prices_as_of``)
+    or ``unpriced`` (neither, so no cost).
     """
     try:
         counts = usage_counts(message)
@@ -129,11 +148,19 @@ def log_model_usage(
         return None
     if counts is None:
         return None
+    # Its own try: a pricing fault costs the row its price, never the row.
+    try:
+        priced = _priced(counts, model)
+    except Exception:  # noqa: BLE001
+        logger.warning("model usage: couldn't price a %s call", model, exc_info=True)
+        counts["cost_usd"] = None
+        priced = {"cost_source": "unpriced"}
     stop_reason = getattr(message, "stop_reason", None)
     details: dict[str, Any] = {
         "model": model,
         "iteration": iteration,
         **counts,
+        **priced,
         "stop_reason": stop_reason,
     }
     run_id = get_research_run_id()
@@ -194,6 +221,21 @@ class UsageRollup:
             **self.totals,
             "by_source": {k: dict(v) for k, v in sorted(self.by_actor.items())},
         }
+
+
+def _priced(counts: dict[str, Any], model: str) -> dict[str, Any]:
+    """Fill ``counts['cost_usd']`` from the price table when the provider
+    sent no cost, and say where the figure came from."""
+    if counts.get("cost_usd") is not None:
+        return {"cost_source": "provider"}
+    from openexecutive.audit.pricing import cost_from_tokens, price_table
+
+    table = price_table()
+    cost = cost_from_tokens(model, counts, table=table)
+    if cost is None:
+        return {"cost_source": "unpriced"}
+    counts["cost_usd"] = cost
+    return {"cost_source": "price_table", "prices_as_of": table.prices_as_of}
 
 
 def _as_int(value: Any) -> int:

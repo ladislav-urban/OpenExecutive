@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import sqlite3
 from collections.abc import Generator
@@ -298,6 +299,94 @@ _PYTHON_JOB_FIELDS = (
 
 def _zero_python_jobs() -> dict[str, float | int]:
     return {**{k: 0 for k in _PYTHON_JOB_FIELDS}, "cost_usd": 0.0}
+
+
+# The ERPNext work `erpnext_usage()` counts, in the order a turn is claimed:
+# a turn that left a draft card is a draft, a turn of ERPNext's panel
+# (session `erpnext:<person>:<conversation>`) a panel question, any other
+# turn that called an `erpnext__*` tool a question. The morning brief and
+# the triage of ERPNext's alerts run unattended, each under a turn id of its
+# own (`brief-…`, `erpnext-alert:…`).
+ERPNEXT_USAGE_KINDS: tuple[str, ...] = (
+    "draft", "panel_question", "question", "morning_brief", "alert_triage",
+)
+
+# `{scope}` is the window and, for a caller who may not read rows private to
+# the principal, that filter too: a private row (an `erpnext_draft_proposed`
+# row always is) must not say what a turn was.
+_ERPNEXT_TURNS = """
+    SELECT turn_id, 0 AS rank FROM audit_log
+     WHERE event_type = 'erpnext_draft_proposed' AND turn_id IS NOT NULL {scope}
+    UNION ALL
+    SELECT turn_id, 1 FROM audit_log
+     WHERE event_type = 'cache_event' AND session_id LIKE 'erpnext:%' AND turn_id IS NOT NULL {scope}
+    UNION ALL
+    SELECT turn_id, 2 FROM audit_log
+     WHERE event_type = 'tool_invocation' AND turn_id IS NOT NULL
+       AND json_extract(details_json,'$.kind') = 'mcp'
+       AND json_extract(details_json,'$.tool') LIKE 'erpnext\\_\\_%' ESCAPE '\\' {scope}
+    UNION ALL
+    SELECT turn_id, 3 FROM audit_log
+     WHERE event_type = 'cache_event' AND turn_id LIKE 'brief-%' {scope}
+    UNION ALL
+    SELECT turn_id, 4 FROM audit_log
+     WHERE event_type = 'cache_event' AND turn_id LIKE 'erpnext-alert:%' {scope}
+"""
+
+_TOKEN_FIELDS = (
+    "input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "output_tokens",
+)
+
+
+def _nearest_rank(values: list[float], share: float) -> float:
+    """The nearest-rank percentile of ``values`` (non-empty, sorted)."""
+    index = max(int(-(-share * len(values) // 1)) - 1, 0)
+    return values[min(index, len(values) - 1)]
+
+
+def _row_cost(details: dict[str, Any], table: Any) -> tuple[float | None, bool]:
+    """A ``cache_event`` row's cost and whether it was estimated on read: a
+    row written before rows recorded their cost is priced from its tokens
+    now, at today's table."""
+    cost = details.get("cost_usd")
+    if cost is not None:
+        try:
+            value = float(cost)
+        except (TypeError, ValueError, OverflowError):
+            return None, False
+        # "nan" or "inf" would turn the kind's every figure into NaN.
+        return (value, False) if math.isfinite(value) else (None, False)
+    if details.get("cost_source"):
+        return None, False  # recorded as unpriced
+    from openexecutive.audit.pricing import cost_from_tokens
+
+    estimate = cost_from_tokens(str(details.get("model") or ""), details, table=table)
+    return estimate, estimate is not None
+
+
+def _kind_summary(kind: str, turns: list[dict[str, Any]]) -> dict[str, Any]:
+    totals: dict[str, Any] = {
+        "kind": kind, "count": len(turns), "calls": 0,
+        **dict.fromkeys(_TOKEN_FIELDS, 0), "web_search_requests": 0,
+        "cost_usd": 0.0, "estimated_calls": 0, "unpriced_calls": 0,
+    }
+    for turn in turns:
+        for key in ("calls", *_TOKEN_FIELDS, "web_search_requests",
+                    "estimated_calls", "unpriced_calls"):
+            totals[key] += turn[key]
+        totals["cost_usd"] += turn["cost_usd"]
+    totals["cost_usd"] = round(totals["cost_usd"], 6)
+    tokens = sorted(float(t["tokens"]) for t in turns)
+    costs = sorted(float(t["cost_usd"]) for t in turns)
+    totals["tokens"] = {
+        "median": _nearest_rank(tokens, 0.5) if tokens else 0,
+        "p90": _nearest_rank(tokens, 0.9) if tokens else 0,
+    }
+    totals["cost_per"] = {
+        "median": round(_nearest_rank(costs, 0.5), 6) if costs else 0.0,
+        "p90": round(_nearest_rank(costs, 0.9), 6) if costs else 0.0,
+    }
+    return totals
 
 
 def _zero_usage() -> dict[str, float | int]:
@@ -709,7 +798,8 @@ class AuditLogger:
         research_synthesis, triage, …; rows without one group as `unknown`).
 
         Each `cache_event` row carries the per-call token breakdown and (for
-        OpenRouter calls) the actual `cost_usd`; missing/garbled fields coalesce
+        OpenRouter calls) the actual `cost_usd`, or for Anthropic calls their
+        tokens at the dated model price file (`audit.pricing`); missing/garbled fields coalesce
         to 0, and rows that predate cost capture contribute 0 cost. `since`/
         `until` bound the ISO `ts` column with the same string comparison used by
         `query()`/`count()`, and ``include_private`` False leaves out the rows
@@ -767,6 +857,100 @@ class AuditLogger:
             "by_source": [
                 {"source": r["source"], **_row_to_usage(r)} for r in by_source_rows
             ],
+        }
+
+    def erpnext_usage(
+        self,
+        *,
+        since: str | None = None,
+        until: str | None = None,
+        include_private: bool = True,
+    ) -> dict[str, Any]:
+        """What ERPNext work cost, per unit of work, over an optional window.
+
+        Each turn counts once, under the first of ``ERPNEXT_USAGE_KINDS`` it
+        belongs to, with every model call it made (the Executive's
+        iterations, the specialists it consulted, its post-turn passes).
+        Per kind: how many, their total tokens and cost, and the median and
+        90th percentile of one unit's tokens and cost. Figures only: no
+        question, answer or ERPNext data. The window bounds the rows that
+        mark a turn as ERPNext's; ``include_private`` False leaves out the
+        model calls private to the principal, as ``usage_summary`` does.
+        """
+        from openexecutive.audit.pricing import MAX_TOKENS, price_table
+
+        table = price_table()
+
+        empty = {
+            "prices_as_of": table.prices_as_of,
+            "kinds": [_kind_summary(kind, []) for kind in ERPNEXT_USAGE_KINDS],
+        }
+        if not self._db_path.exists():
+            return empty
+
+        bounds = ""
+        bound_params: list[Any] = []
+        if since:
+            bounds += " AND ts >= ?"
+            bound_params.append(since)
+        if until:
+            bounds += " AND ts <= ?"
+            bound_params.append(until)
+        private = "" if include_private else " AND private_to_principal = 0"
+        tagged = _ERPNEXT_TURNS.format(scope=bounds + private)
+        tag_params = bound_params * 5
+
+        with _get_conn(self._db_path) as conn:
+            tag_rows = conn.execute(tagged, tag_params).fetchall()
+            call_rows = conn.execute(
+                f"WITH tagged AS ({tagged}) "
+                "SELECT turn_id, details_json FROM audit_log "
+                "WHERE event_type = 'cache_event' "
+                f"AND turn_id IN (SELECT turn_id FROM tagged){private}",
+                tag_params,
+            ).fetchall()
+
+        kind_of: dict[str, int] = {}
+        for row in tag_rows:
+            tagged_turn, rank = str(row["turn_id"]), int(row["rank"])
+            kind_of[tagged_turn] = min(rank, kind_of.get(tagged_turn, rank))
+
+        turns: dict[str, dict[str, Any]] = {}
+        for row in call_rows:
+            turn_id = str(row["turn_id"])
+            try:
+                details = json.loads(row["details_json"] or "{}")
+            except (TypeError, ValueError):
+                details = {}
+            if not isinstance(details, dict):
+                details = {}
+            turn = turns.setdefault(turn_id, {
+                "calls": 0, **dict.fromkeys(_TOKEN_FIELDS, 0), "web_search_requests": 0,
+                "tokens": 0, "cost_usd": 0.0, "estimated_calls": 0, "unpriced_calls": 0,
+            })
+            turn["calls"] += 1
+            for key in (*_TOKEN_FIELDS, "web_search_requests"):
+                try:
+                    value = min(max(int(details.get(key) or 0), 0), MAX_TOKENS)
+                except (TypeError, ValueError, OverflowError):
+                    value = 0
+                turn[key] += value
+                if key in _TOKEN_FIELDS:
+                    turn["tokens"] += value
+            cost, estimated = _row_cost(details, table)
+            if cost is None:
+                turn["unpriced_calls"] += 1
+            else:
+                turn["cost_usd"] += cost
+                turn["estimated_calls"] += int(estimated)
+
+        by_kind: dict[str, list[dict[str, Any]]] = {kind: [] for kind in ERPNEXT_USAGE_KINDS}
+        for turn_id, turn in turns.items():
+            if turn_id in kind_of:
+                by_kind[ERPNEXT_USAGE_KINDS[kind_of[turn_id]]].append(turn)
+        return {
+            "prices_as_of": table.prices_as_of,
+            "kinds": [_kind_summary(kind, by_kind[kind]) for kind in ERPNEXT_USAGE_KINDS],
         }
 
 

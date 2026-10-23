@@ -134,9 +134,10 @@ class CostSummary(TokenCounts):
 class UsageTotals(TokenCounts):
     """Token + cost totals over a window, summed across all `cache_event` rows.
 
-    `cost_usd` is the actual OpenRouter-charged amount captured per call; rows
-    that predate cost capture (or non-OpenRouter calls) contribute 0, so the
-    figure accrues from go-live rather than being a back-estimated guess."""
+    `cost_usd` is each call's recorded cost: the amount OpenRouter charged, or
+    for a call whose provider reports none (Anthropic's API) its tokens at the
+    dated model price file (`audit/model_prices.json`, or `MODEL_PRICES_PATH`). Rows that predate cost capture, and
+    models the table doesn't price, contribute 0."""
     cost_usd: float
 
 
@@ -191,11 +192,39 @@ class PythonJobUsage(BaseModel):
     cost_usd: float = 0.0
 
 
+class UnitSpread(BaseModel):
+    """The median and 90th percentile (nearest rank) of one unit of work."""
+    median: float = 0
+    p90: float = 0
+
+
+class ErpnextKindUsage(TokenCounts):
+    """One kind of ERPNext work (`audit.logger.ERPNEXT_USAGE_KINDS`): how many
+    units (turns, briefs or triaged alerts), their totals, and what one unit
+    takes. `tokens` counts all four token classes. `estimated_calls` were
+    priced on read from rows written before calls recorded their cost;
+    `unpriced_calls` have no cost (a model the price table lacks)."""
+    kind: str
+    count: int
+    cost_usd: float
+    estimated_calls: int = 0
+    unpriced_calls: int = 0
+    tokens: UnitSpread = UnitSpread()
+    cost_per: UnitSpread = UnitSpread()
+
+
+class ErpnextUsage(BaseModel):
+    """What ERPNext work cost, per unit, for the pilot report: counts and
+    figures only, never a question, an answer or ERPNext data."""
+    prices_as_of: str
+    kinds: list[ErpnextKindUsage]
+
+
 class UsageSummary(BaseModel):
     """Aggregate token usage + cost across ALL sessions over an optional time
     window, with by-day, by-model and by-source breakdowns. Derived from
     `cache_event` rows — the same source as the per-session `CostSummary`,
-    but unscoped."""
+    but unscoped. `erpnext` is filled only when asked for (`?erpnext=1`)."""
     since: str | None = None
     until: str | None = None
     totals: UsageTotals
@@ -204,6 +233,7 @@ class UsageSummary(BaseModel):
     by_source: list[UsageBySource] = []
     scripts: ScriptUsage = ScriptUsage()
     python_jobs: PythonJobUsage = PythonJobUsage()
+    erpnext: ErpnextUsage | None = None
 
 
 class Degradation(BaseModel):
@@ -768,16 +798,25 @@ def get_audit_usage(
     request: Request,
     since: str | None = Query(default=None, description="ISO8601 inclusive lower bound"),
     until: str | None = Query(default=None, description="ISO8601 inclusive upper bound"),
+    erpnext: bool = Query(
+        default=False,
+        description="Add what ERPNext questions, drafts, briefs and alert triage cost per unit",
+    ),
 ) -> UsageSummary:
     """Aggregate token usage + cost across all sessions, optionally time-bounded.
 
     Totals plus per-day and per-model breakdowns, summed from `cache_event`
     rows. Unlike `/audit/sessions/{id}` (one session), this spans the whole log
-    so an operator can see overall token spend and where it goes.
+    so an operator can see overall token spend and where it goes. With
+    `erpnext`, also the cost of each kind of ERPNext work (`ErpnextUsage`).
     """
     audit = _resolve_logger(request)
-    data = audit.usage_summary(
-        since=since, until=until, include_private=_sees_private_rows(request)
+    include_private = _sees_private_rows(request)
+    data = audit.usage_summary(since=since, until=until, include_private=include_private)
+    erp = (
+        audit.erpnext_usage(since=since, until=until, include_private=include_private)
+        if erpnext
+        else None
     )
     return UsageSummary(
         since=since,
@@ -788,6 +827,14 @@ def get_audit_usage(
         by_source=[UsageBySource(**s) for s in data.get("by_source", [])],
         scripts=ScriptUsage(**data.get("scripts", {})),
         python_jobs=PythonJobUsage(**data.get("python_jobs", {})),
+        erpnext=(
+            ErpnextUsage(
+                prices_as_of=erp["prices_as_of"],
+                kinds=[ErpnextKindUsage(**k) for k in erp["kinds"]],
+            )
+            if erp is not None
+            else None
+        ),
     )
 
 
