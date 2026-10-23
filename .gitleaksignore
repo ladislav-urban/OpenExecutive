@@ -1,0 +1,16 @@
+# Known gitleaks false positives in history, one fingerprint each (commit:file:rule:line).
+# A new false positive: end its line with a gitleaks:allow comment instead of adding it here.
+01f24f2d065809044c675feff7f7a946d58a965e:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:102
+01f24f2d065809044c675feff7f7a946d58a965e:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:135
+01f24f2d065809044c675feff7f7a946d58a965e:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:174
+01f24f2d065809044c675feff7f7a946d58a965e:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:306
+01f24f2d065809044c675feff7f7a946d58a965e:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:316
+01f24f2d065809044c675feff7f7a946d58a965e:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:319
+01f24f2d065809044c675feff7f7a946d58a965e:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:75
+058e576af0e71d659e1ec81310bda3f391d188f1:packages/core/tests/unit/test_erpnext_a2a.py:generic-api-key:332
+058e576af0e71d659e1ec81310bda3f391d188f1:packages/core/tests/unit/test_erpnext_a2a.py:generic-api-key:333
+1c3fdf6ed320f79767d75fad76c2713aad6bfae0:packages/core/tests/unit/test_erpnext_a2a.py:generic-api-key:319
+1c3fdf6ed320f79767d75fad76c2713aad6bfae0:packages/core/tests/unit/test_erpnext_a2a.py:generic-api-key:321
+29d3037b328b969e833428bb9f6ac3269d5f7d95:packages/core/openexecutive/architecture/architecture-facts.yaml:generic-api-key:7178
+345a91a65f36c713280878337dee04a0e62f6867:packages/core/tests/unit/test_workspace_settings.py:generic-api-key:132
+56e47f1f814efe4a263d3b6dcf2fd4404551d991:packages/core/tests/unit/test_lookup_person_and_discord_dm.py:discord-client-id:324

@@ -1,0 +1,7 @@
+# Optional locally (`pre-commit install`); CI runs the same scan over every
+# commit (.github/workflows/secret-scan.yml).
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
