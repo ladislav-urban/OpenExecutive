@@ -114,6 +114,14 @@ def test_the_shipped_price_file_is_valid_and_dated() -> None:
     assert table.web_search_usd == pytest.approx(0.01)
 
 
+def _record_errors(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    """The pricing logger's error lines, read off the logger itself: another
+    module's logging setup can stop them reaching caplog in a full run."""
+    errors: list[str] = []
+    monkeypatch.setattr(pricing.logger, "error", lambda msg, *a, **_k: errors.append(msg % a))
+    return errors
+
+
 def _write_prices(path: Path, as_of: str, opus_input: float) -> None:
     import json
 
@@ -146,17 +154,17 @@ def test_an_operator_price_file_replaces_the_shipped_one_and_is_reread(
 @pytest.mark.parametrize("content", ["not json", '{"prices_as_of": "soon", "models": {}}',
                                      '{"prices_as_of": "2027-01-01", "models": {"gpt-6": {}}}'])
 def test_a_bad_operator_file_falls_back_to_the_shipped_table(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, content: str,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, content: str,
 ) -> None:
     import json
 
+    errors = _record_errors(monkeypatch)
     path = tmp_path / "prices.json"
     path.write_text(content, encoding="utf-8")
     monkeypatch.setenv("MODEL_PRICES_PATH", str(path))
     shipped = json.loads(pricing.SHIPPED_PRICES.read_text(encoding="utf-8"))["prices_as_of"]
-    with caplog.at_level("ERROR", logger="openexecutive.audit.pricing"):
-        assert pricing.prices_as_of() == shipped
-    assert "can't be used" in caplog.text
+    assert pricing.prices_as_of() == shipped
+    assert len(errors) == 1 and "can't be used" in errors[0]
 
 
 def test_a_broken_shipped_file_leaves_calls_unpriced_but_still_recorded(
@@ -194,15 +202,15 @@ def test_prices_out_of_range_are_refused(price: float) -> None:
 
 
 def test_a_bad_operator_file_is_logged_once_per_change(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    errors = _record_errors(monkeypatch)
     path = tmp_path / "prices.json"
     path.write_text("not json", encoding="utf-8")
     monkeypatch.setenv("MODEL_PRICES_PATH", str(path))
-    with caplog.at_level("ERROR", logger="openexecutive.audit.pricing"):
-        for _ in range(3):
-            pricing.price_table()
-    assert caplog.text.count("can't be used") == 1
+    for _ in range(3):
+        pricing.price_table()
+    assert len(errors) == 1
 
 
 def test_a_missing_operator_file_falls_back_to_the_shipped_table(
