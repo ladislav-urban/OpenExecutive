@@ -393,22 +393,44 @@ def test_empty_log_reports_every_kind_at_zero(audit: AuditLogger) -> None:
     assert all(k["cost_per"] == {"median": 0.0, "p90": 0.0} for k in data["kinds"])
 
 
-def test_usage_endpoint_adds_erpnext_only_when_asked(tmp_path: Path) -> None:
+def _usage_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, principal: bool) -> TestClient:
     app = FastAPI()
     audit = AuditLogger(tmp_path / "audit.db")
     app.state.audit = audit
     set_audit_logger(audit)
+    monkeypatch.setattr(audit_route, "_sees_private_rows", lambda _request: principal)
     app.include_router(audit_route.router)
-    client = TestClient(app)
+    _erp_tool(audit, "t1")
+    _call(audit, "t1", cost=0.02)
+    return TestClient(app)
+
+
+def test_usage_endpoint_adds_erpnext_only_when_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _usage_client(tmp_path, monkeypatch, principal=True)
     try:
-        _erp_tool(audit, "t1")
-        _call(audit, "t1", cost=0.02)
         assert client.get("/audit/usage").json()["erpnext"] is None
         data = client.get("/audit/usage", params={"erpnext": 1}).json()["erpnext"]
         assert data["prices_as_of"] == pricing.prices_as_of()
         question = {k["kind"]: k for k in data["kinds"]}["question"]
         assert question["count"] == 1 and question["cost_usd"] == pytest.approx(0.02)
         assert question["cost_per"]["median"] == pytest.approx(0.02)
+    finally:
+        set_audit_logger(None)
+
+
+def test_only_the_principal_sees_what_erpnext_work_cost(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _usage_client(tmp_path, monkeypatch, principal=False)
+    try:
+        refused = client.get("/audit/usage", params={"erpnext": 1})
+        assert refused.status_code == 403
+        assert refused.json() == {"detail": "Only the owner sees what ERPNext work cost"}
+        # The plain usage totals are unchanged for them.
+        plain = client.get("/audit/usage")
+        assert plain.status_code == 200 and plain.json()["erpnext"] is None
     finally:
         set_audit_logger(None)
 

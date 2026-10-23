@@ -993,7 +993,8 @@ desk lacks, or an endpoint a native screen reads that changed.
 ### What ERPNext work costs (the pilot report)
 
 `GET /audit/usage?erpnext=1` adds `erpnext`: what each kind of ERPNext work
-cost in model calls over the window (`since`, `until`), for the pilot report:
+cost in model calls over the window (`since`, `until`), for the pilot report.
+Only the owner sees it; anyone else gets 403. The kinds:
 
 | Kind | One unit is |
 |---|---|

@@ -808,10 +808,15 @@ def get_audit_usage(
     Totals plus per-day and per-model breakdowns, summed from `cache_event`
     rows. Unlike `/audit/sessions/{id}` (one session), this spans the whole log
     so an operator can see overall token spend and where it goes. With
-    `erpnext`, also the cost of each kind of ERPNext work (`ErpnextUsage`).
+    `erpnext`, also the cost of each kind of ERPNext work (`ErpnextUsage`),
+    for the principal only: it is the pilot report's figure, and its counts
+    say how often ERPNext was asked, drafted from and alerted on, which a
+    teammate's own view has no need of (403 for anyone else).
     """
     audit = _resolve_logger(request)
     include_private = _sees_private_rows(request)
+    if erpnext and not include_private:
+        raise HTTPException(status_code=403, detail="Only the owner sees what ERPNext work cost")
     data = audit.usage_summary(since=since, until=until, include_private=include_private)
     erp = (
         audit.erpnext_usage(since=since, until=until, include_private=include_private)
