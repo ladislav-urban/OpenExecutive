@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from collections.abc import AsyncIterator
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -415,6 +416,7 @@ class MorningBriefWorkflow(Workflow):
             step_title="Synthesize the brief",
         )
 
+        from openexecutive.audit.context import get_active_ids, set_turn
         from openexecutive.briefing.grounding import ground_brief
         from openexecutive.briefing.narrative import (
             QUIET_PRINCIPAL,
@@ -423,6 +425,13 @@ class MorningBriefWorkflow(Workflow):
             render_briefing_context,
             synthesize_briefing_narrative,
         )
+
+        # One turn id for this brief's model calls (the narrative and its
+        # grounding), so the audit log can say what one brief cost
+        # (`AuditLogger.erpnext_usage`). A run already inside a turn keeps it.
+        # Bound around each await, never across a yield (see bind_research_run).
+        audit_session, audit_turn = get_active_ids()
+        brief_turn = audit_turn or f"brief-{uuid.uuid4().hex[:12]}"
 
         try:
             # Rendered here (not inside the synthesizer) so the grounding pass
@@ -442,14 +451,15 @@ class MorningBriefWorkflow(Workflow):
             )
             # standalone=True → the enumerated DM brief (no cards beside it),
             # not the /today header synthesis.
-            artifact_text = await synthesize_briefing_narrative(
-                today_data=today_data, activity=activity, period_label=period,
-                standalone=True, since=since, handled=handled,
-                pending_watch_suggestions=pending_suggestions, mode=mode,
-                live=live, live_window="since the last brief",
-                reflection_flags=reflection_flags, rendered_context=rendered,
-                reader=reader,
-            )
+            with set_turn(session_id=audit_session, turn_id=brief_turn):
+                artifact_text = await synthesize_briefing_narrative(
+                    today_data=today_data, activity=activity, period_label=period,
+                    standalone=True, since=since, handled=handled,
+                    pending_watch_suggestions=pending_suggestions, mode=mode,
+                    live=live, live_window="since the last brief",
+                    reflection_flags=reflection_flags, rendered_context=rendered,
+                    reader=reader,
+                )
         except Exception as exc:
             logger.exception("morning_brief: synthesis failed")
             yield WorkflowEvent(type="error", message=f"Synthesis failed: {exc}")
@@ -462,11 +472,12 @@ class MorningBriefWorkflow(Workflow):
 
         # Nobody reads this before it ships: hold back any line naming a
         # person or figure the context doesn't hold, and cite the figures.
-        artifact_text, grounding = await ground_brief(
-            artifact_text, context=rendered, kind=BRIEF_KIND, private=private_used,
-            system=STANDALONE_BRIEF_SOLO_SYSTEM if mode == "solo" else STANDALONE_BRIEF_SYSTEM,
-            surface="morning brief",
-        )
+        with set_turn(session_id=audit_session, turn_id=brief_turn):
+            artifact_text, grounding = await ground_brief(
+                artifact_text, context=rendered, kind=BRIEF_KIND, private=private_used,
+                system=STANDALONE_BRIEF_SOLO_SYSTEM if mode == "solo" else STANDALONE_BRIEF_SYSTEM,
+                surface="morning brief",
+            )
         held = len(grounding.held) if grounding and grounding.mode == "enforce" else 0
 
         yield WorkflowEvent(

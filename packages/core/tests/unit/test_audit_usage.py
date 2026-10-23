@@ -31,8 +31,8 @@ def test_usage_counts_reads_tokens_cost_and_server_searches() -> None:
     counts = au.usage_counts(msg)
     assert counts == {
         "input_tokens": 120, "output_tokens": 30,
-        "cache_creation_input_tokens": 10, "cache_read_input_tokens": 900,
-        "cost_usd": 0.04, "web_search_requests": 3,
+        "cache_creation_input_tokens": 10, "cache_creation_1h_input_tokens": 0,
+        "cache_read_input_tokens": 900, "cost_usd": 0.04, "web_search_requests": 3,
     }
 
 

@@ -665,3 +665,32 @@ async def test_eod_digest_is_written_to_its_reader(
         assert not sent.startswith("THE READER")
         assert "Pat Owner (pat@x.com) asked to renew" in sent
         assert "- Pat Owner emailed the Executive about the Acme lease." in artifact
+
+
+@pytest.mark.asyncio
+async def test_the_briefs_model_calls_share_a_turn_of_their_own(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The narrative and its grounding run under one `brief-…` turn id, so the
+    audit log can say what one brief cost (AuditLogger.erpnext_usage)."""
+    from openexecutive.audit.context import get_active_ids
+    from openexecutive.briefing import grounding
+
+    seen: list[tuple[str | None, str | None]] = []
+
+    async def _synth(**_kw: object) -> str:
+        seen.append(get_active_ids())
+        return "BRIEF"
+
+    async def _ground(text: str, **_kw: object) -> tuple[str, None]:
+        seen.append(get_active_ids())
+        return text, None
+
+    monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _synth)
+    monkeypatch.setattr(grounding, "ground_brief", _ground)
+    _stub_aggregators(monkeypatch)
+
+    [e async for e in MorningBriefWorkflow().run(MorningBriefInput(), MagicMock())]
+    assert len(seen) == 2 and seen[0] == seen[1]
+    assert (seen[0][1] or "").startswith("brief-")
+    assert get_active_ids() == (None, None)
