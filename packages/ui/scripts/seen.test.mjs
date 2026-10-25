@@ -72,6 +72,22 @@ test("a break starts the run again, and the pointer must move again after it", (
   gate.pointerInside(true, 600, true);
   assert.equal(pressAndClick(gate, 500 + SEEN_MS - 1), false, "the run counts from the break");
   assert.equal(pressAndClick(gate, 500 + SEEN_MS + 1), true);
+
+  // A break also puts the pointer outside: it must come in again.
+  const off = pointedGate();
+  off.observe(seen(400, { isVisible: false }));
+  off.observe(seen(500));
+  // Without a break the pointer would have been in since 0; now it counts from 1000.
+  off.pointerInside(true, 1000, true);
+  assert.equal(pressAndClick(off, 500 + SEEN_MS + 1), false, "in for under DWELL_MS since the break");
+  assert.equal(pressAndClick(off, 1000 + DWELL_MS), true);
+});
+
+test("a press counts for one click only", () => {
+  const gate = pointedGate();
+  assert.equal(pressAndClick(gate, T), true);
+  gate.pressUsed();
+  assert.equal(gate.clickCounts(real(T + 200)), false, "Enter afterwards, no new press");
 });
 
 test("a Yes is refused without pointer movement, or with an untrusted one", () => {
@@ -223,6 +239,14 @@ test("with v2 the panel and the pointer are watched, and a click is judged again
   await world.runTimers(T + 1000 + SETTLE_MS);
   assert.equal(await second, false);
 
+  // The press is used up: a second click with no new press doesn't count.
+  assert.equal(await watch.judge({ isTrusted: true, target: world.yes }), false);
+  // A press released off Yes counts for nothing.
+  world.clock = T + 3000;
+  world.fire("pointerdown");
+  world.fire("pointerup", { target: {} });
+  assert.equal(await watch.judge({ isTrusted: true, target: world.yes }), false);
+
   watch.stop();
   assert.equal(world.observer.stopped, true);
   assert.deepEqual(Object.keys(world.listeners), []);
@@ -255,7 +279,8 @@ test("the host's colours and font never reach a Yes asked in a frame", () => {
   // The app's own tokens are declared again on .consent, for light and dark.
   assert.match(css, /:root\[data-theme="dark"\],\s*\[data-theme="dark"\] \.consent \{/);
   assert.match(css, /:root\[data-theme="light"\],\s*\[data-theme="light"\] \.consent \{/);
-  assert.match(css, /\.consent \{\s*font-family: system-ui/);
+  // On every element inside too, so a heading never takes the host's display face.
+  assert.match(css, /\.consent,\s*\.consent \* \{\s*font-family: system-ui/);
   // Every token a host may set is among them.
   const embed = read("../src/lib/embed.ts");
   const tokens = [...embed.match(/THEME_TOKENS = \[([^\]]*)\]/)[1].matchAll(/"([a-z-]+)"/g)].map((m) => m[1]);

@@ -78,6 +78,7 @@ export class SeenGate {
       if (this.visibleSince === null) this.visibleSince = entry.time;
     } else {
       this.visibleSince = null;
+      this.insideSince = null;
       this.moved = false;
       this.pressedAt = null;
     }
@@ -122,6 +123,12 @@ export class SeenGate {
   /** After SETTLE_MS: the same run of "seen" as at the press, and the pointer still in. */
   stillSeen(now: number): boolean {
     return this.pressRun !== null && this.visibleSince === this.pressRun && this.armed(now);
+  }
+
+  /** A press counts for one click at most; one released off Yes counts for none. */
+  pressUsed(): void {
+    this.pressedAt = null;
+    this.pressRun = null;
   }
 }
 
@@ -183,12 +190,16 @@ export function watchPanel(
     flush();
     gate.pressed({ isTrusted: e.isTrusted, onYes: isYes(e.target), now: now() });
   };
+  const onUp = (e: PointerLike) => {
+    if (!isYes(e.target)) gate.pressUsed();
+  };
   const panelEvents: [string, Listener][] = [
     ["pointerenter", onEnter],
     ["pointermove", onMove],
     ["pointerleave", onGone],
     ["pointercancel", onGone],
     ["pointerdown", onDown],
+    ["pointerup", onUp],
   ];
   for (const [type, fn] of panelEvents) panel.addEventListener(type, fn);
   w.addEventListener("blur", onGone);
@@ -200,7 +211,9 @@ export function watchPanel(
       if (!gate.clickCounts({ isTrusted: click.isTrusted, onYes: isYes(click.target), now: now() })) return false;
       await new Promise<void>((resolve) => w.setTimeout(resolve, SETTLE_MS));
       flush();
-      return gate.stillSeen(now());
+      const still = gate.stillSeen(now());
+      gate.pressUsed();
+      return still;
     },
     stop: () => {
       observer.disconnect();

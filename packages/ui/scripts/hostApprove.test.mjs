@@ -106,7 +106,7 @@ test("only the inline Approve lets a request past the frame's gate, and only aft
   };
   walk(root);
   assert.deepEqual(
-    users.map((p) => decodeURIComponent(p).replace(/^.*\/src\//, "")),
+    users.map((p) => decodeURIComponent(p).replace(/^.*\/src\//, "")).sort(),
     ["app/embed/approve/[id]/page.tsx", "components/embed/EmbedProvider.tsx"].sort(),
   );
   // passOnce is called only after judge said yes.

@@ -75,7 +75,8 @@
  * host's colours and font never reach it: a host could otherwise draw the
  * question white on white, or in a symbol font, while the browser still
  * reports it seen (lib/seen.ts). The host's light or dark stays. */
-.consent {
+.consent,
+.consent * {
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
