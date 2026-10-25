@@ -8006,12 +8006,18 @@ integrations:
     subgroups after the main group; Member.demo = in both; config_problem
     also refuses a demo group equal to DIRECTORY_SYNC_GROUP or an ancestor
     of it. people column directory_demo (Person.demo), written only by
-    set_directory_demo from the sync: on create, and "no longer demo" when a
-    demo person leaves the demo group. An existing non-demo team member in
-    the demo group is never made demo (a "warning" change): security review
-    Oct 25, 2026 found that otherwise whoever controls the demo group could
-    strip the team of approvals and mail, and move their later suspensions
-    from the team's brake to the demo one. Cleared by unlink_directory. Create sets
+    set_directory_demo: by the sync on create only, by link() for a member
+    of the demo group, and by hand (`openexecutive directory-demo --email
+    [--off]`, directory_sync.set_demo, audited, never the principal). The
+    run never flips it either way, only warns: security review Oct 25, 2026
+    found that team→demo let whoever controls the demo group strip the team
+    of approvals and mail and move their later suspensions onto the demo
+    brake, and demo→team let one membership change (or a short answer) hand
+    a stranger the team's tools, uncapped. Cleared by unlink_directory.
+    Executive.chat reads the speaker from person_id or, for Google Chat,
+    gate_sender_person_id (off the event loop). POST /chat answers 503 when
+    the roster can't be read (people.demo.demo_state None) rather than the
+    demo cap's 429. Create sets
     DIRECTORY_SYNC_DEMO_ROLE ("Demo user") on create only; no departments,
     scopes or manager. Brake: demo suspensions against
     DIRECTORY_SYNC_DEMO_MAX_SUSPEND (50), the team's count and share

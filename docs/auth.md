@@ -317,9 +317,12 @@ of `DIRECTORY_SYNC_GROUP` who is also in `DIRECTORY_SYNC_DEMO_GROUP` (or a
 group under it) is a **demo person** (`people/demo.py`). Only a new person is
 made demo: someone already on the team who is put in the demo group stays a
 team member (the run reports a warning), so whoever controls that group can't
-take the team's approvals and mail away. A demo person who leaves the demo
-group becomes a team member. The mark goes when the row is unlinked. The demo
-group can't be the team's group or hold it.
+take the team's approvals and mail away. Nor does a demo person who leaves
+the demo group become a team member by themselves: the run reports a warning,
+and `openexecutive directory-demo --email <address> --off` makes them one
+(without `--off`, it marks a managed team member demo). Linking someone with
+`directory-link` who is in the demo group makes them demo. The mark goes when
+the row is unlinked. The demo group can't be the team's group or hold it.
 
 - **Created with the demo role and nothing else:** no departments, approval
   scopes or manager. The role is set on create only, so you can change it.

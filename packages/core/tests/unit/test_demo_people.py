@@ -79,6 +79,20 @@ def test_a_count_that_cant_be_written_refuses(monkeypatch: pytest.MonkeyPatch) -
     assert not people_demo.take_question(1, 50)
 
 
+def test_a_roster_that_cant_be_read_is_said_so_in_the_chat(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from openexecutive.api.routes import chat
+
+    monkeypatch.setattr(people_demo, "demo_state", lambda _pid: None)
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(chat._take_demo_questions(7, 1))
+    assert refused.value.status_code == 503 and "can't be read" in refused.value.detail
+    assert 'raise HTTPException(status_code=503, detail="People can\'t be read just now.' in inspect.getsource(chat)
+
+
 def test_who_is_demo_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     pid = _demo()
     other = people_store.upsert_person(full_name="Tom Team", email="tom@example.com")
@@ -122,10 +136,12 @@ def test_a_demo_persons_mail_gets_no_turn_and_no_reply() -> None:
 
 def test_every_surface_holds_a_demo_speaker_to_the_narrow_tools() -> None:
     source = inspect.getsource(executive)
-    marked = "session.demo_caller = session.demo_caller or is_demo_person(person_id)"
-    # Both chat paths (the stream and committee review) mark it after binding the speaker.
+    marked = "session.demo_caller = session.demo_caller or await asyncio.to_thread(is_demo_person, speaker)"
+    # Both chat paths (the stream and committee review) mark it after binding
+    # the speaker, Google Chat's gate sender included.
     assert source.count("session.caller_person_id = person_id\n" + " " * 8 + "# A demo person's turn") == 2
     assert source.count(marked) == 2
+    assert source.count('getattr(session, "gate_sender_person_id", None)') == 2
 
 
 def test_a_demo_person_approves_none_of_anyone_elses_cards(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -191,7 +207,7 @@ def test_the_web_chat_marks_the_turn_and_refuses_past_the_cap() -> None:
     from openexecutive.api.routes import chat
 
     source = inspect.getsource(chat)
-    assert "demo_caller = await asyncio.to_thread(people_demo.is_demo_person, caller_person_id)" in source
+    assert "demo_known = await asyncio.to_thread(people_demo.demo_state, caller_person_id)" in source
     assert "raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))" in source
     assert "session.demo_caller = demo_caller" in source
 

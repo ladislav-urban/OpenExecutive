@@ -33,9 +33,9 @@ LIMIT_REACHED = (
 )
 
 
-def is_demo_person(person_id: int | None) -> bool:
-    """Whether ``person_id`` is a demo person. Fails closed: a roster that
-    can't be read answers yes, so a demo turn is never given more."""
+def demo_state(person_id: int | None) -> bool | None:
+    """Whether ``person_id`` is a demo person; None when the roster can't be
+    read (the caller decides how to fail closed)."""
     if person_id is None:
         return False
     try:
@@ -43,9 +43,15 @@ def is_demo_person(person_id: int | None) -> bool:
 
         person = get_person(person_id)
     except Exception:
-        logger.warning("demo: roster read failed for person %s; treating as demo", person_id, exc_info=True)
-        return True
+        logger.warning("demo: roster read failed for person %s", person_id, exc_info=True)
+        return None
     return person is not None and person.demo
+
+
+def is_demo_person(person_id: int | None) -> bool:
+    """Whether ``person_id`` is a demo person. Fails closed: a roster that
+    can't be read answers yes, so a demo turn is never given more."""
+    return demo_state(person_id) is not False
 
 
 def demo_turn(session: Any) -> bool:

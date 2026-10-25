@@ -517,15 +517,41 @@ def test_a_demo_person_is_created_with_the_demo_role_and_nothing_else(
     assert by_email("dir-demo@example.com").role == "Prospect, Acme"
 
 
-def test_leaving_the_demo_group_makes_a_demo_person_a_team_member(
+def test_leaving_the_demo_group_never_makes_a_demo_person_a_team_member(
     kc: Keycloak, principal: int, demo_on: None
 ) -> None:
+    # One membership change (or a short answer) must not hand a stranger the
+    # team's tools, uncapped: only an operator does that.
     add_demo_group(kc)
     run(kc)
     kc.user("demo")["groups"] = ["/dynocortex"]
     report = run(kc)
-    assert ("updated", "dir-demo@example.com", "no longer demo") in report.changes
+    assert (
+        "warning", "dir-demo@example.com", "left the demo group; still a demo person (openexecutive directory-demo --off)"
+    ) in report.changes
+    assert by_email("dir-demo@example.com").demo
+    assert directory_sync.set_demo("dir-demo@example.com", False) == "Tara Demo (dir-demo@example.com) is now a team member."
     assert not by_email("dir-demo@example.com").demo
+    assert directory_sync.set_demo("dir-demo@example.com", True).endswith("is now a demo person.")
+
+
+def test_marking_by_hand_is_only_for_managed_team_members(kc: Keycloak, principal: int, demo_on: None) -> None:
+    run(kc)
+    people_store.upsert_person(full_name="Hand Made", email="hand@example.com")
+    for email in ("hand@example.com", "nobody@example.com"):
+        with pytest.raises(directory_sync.DirectoryError):
+            directory_sync.set_demo(email, True)
+    with pytest.raises(directory_sync.DirectoryError, match="principal"):
+        directory_sync.set_demo("dir-owner@example.com", True)
+
+
+def test_linking_a_demo_group_member_makes_them_demo(kc: Keycloak, principal: int, demo_on: None) -> None:
+    add_demo_group(kc)
+    pid = people_store.upsert_person(full_name="Dana Demo", email="dir-demo@example.com")
+    reader = directory_sync.KeycloakReader(get_settings(), transport=httpx.MockTransport(kc.handle))
+    said = directory_sync.link("dir-demo@example.com", reader=reader)
+    assert "demo person" in said
+    assert people_store.get_person(pid).demo  # type: ignore[union-attr]
 
 
 def test_an_existing_team_member_is_never_made_demo(kc: Keycloak, principal: int, demo_on: None) -> None:

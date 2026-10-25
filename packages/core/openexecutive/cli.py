@@ -459,6 +459,21 @@ def directory_link_command(email: str, relink: bool) -> None:
         raise SystemExit(1) from None
 
 
+@cli.command("directory-demo")
+@click.option("--email", required=True, help="The address of the Person the directory manages.")
+@click.option("--off", is_flag=True, help="Make a demo person a team member instead.")
+def directory_demo_command(email: str, off: bool) -> None:
+    """Mark a directory-managed Person a demo person (or, with --off, not).
+    The directory sync sets it only when it creates someone."""
+    from openexecutive.integrations.directory_sync import DirectoryError, set_demo
+
+    try:
+        console.print(set_demo(email, not off), markup=False)
+    except DirectoryError as error:
+        console.print(f"Not changed: {error}", markup=False)
+        raise SystemExit(1) from None
+
+
 @cli.command("directory-unlink")
 @click.option("--email", required=True, help="The address of the Person the directory manages.")
 def directory_unlink_command(email: str) -> None:

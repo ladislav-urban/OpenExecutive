@@ -968,7 +968,10 @@ def _seed_seen_channel_refs(session: Any, person_id: int | None) -> None:
 async def _take_demo_questions(person_id: int | None, n: int) -> None:
     """Count ``n`` questions for a demo person, or 429 once their day's are
     used (people.demo). Nothing for anyone else."""
-    if not await asyncio.to_thread(people_demo.is_demo_person, person_id):
+    demo = await asyncio.to_thread(people_demo.demo_state, person_id)
+    if demo is None:
+        raise HTTPException(status_code=503, detail="People can't be read just now. Try again in a moment.")
+    if not demo:
         return
     from openexecutive.config import get_settings
 
@@ -1068,7 +1071,10 @@ async def _run_chat_turn(
     caller_person_id = _resolve_caller_person_id(request)
     # A demo person (people.demo) may ask DEMO_DAILY_QUESTIONS a day: the
     # question past that is refused here, before it costs anything.
-    demo_caller = await asyncio.to_thread(people_demo.is_demo_person, caller_person_id)
+    demo_known = await asyncio.to_thread(people_demo.demo_state, caller_person_id)
+    if demo_known is None:
+        raise HTTPException(status_code=503, detail="People can't be read just now. Try again in a moment.")
+    demo_caller = demo_known
     if demo_caller:
         limit = get_settings().demo_daily_questions
         if not await asyncio.to_thread(people_demo.take_question, caller_person_id, limit):  # type: ignore[arg-type]

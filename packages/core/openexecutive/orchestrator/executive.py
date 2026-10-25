@@ -1364,9 +1364,11 @@ class Executive:
         # lets the principal or the loop's owner close a loop.
         session.caller_person_id = person_id
         # A demo person's turn is held to the panel's narrow tools on every
-        # surface, not only where the route said so (people.demo).
-        if person_id is not None:
-            session.demo_caller = session.demo_caller or is_demo_person(person_id)
+        # surface, not only where the route said so (people.demo). Google
+        # Chat names its sender only as the gate's.
+        speaker = person_id if person_id is not None else getattr(session, "gate_sender_person_id", None)
+        if isinstance(speaker, int) and not isinstance(speaker, bool):
+            session.demo_caller = session.demo_caller or await asyncio.to_thread(is_demo_person, speaker)
         # Persona and model can be overridden via the Agent Council admin UI.
         # Override is admin-set (not per-request dynamic), so placing it in the
         # cached block is fine — cache misses once on change, then hits normally.
@@ -1747,9 +1749,11 @@ class Executive:
         # lets the principal or the loop's owner close a loop.
         session.caller_person_id = person_id
         # A demo person's turn is held to the panel's narrow tools on every
-        # surface, not only where the route said so (people.demo).
-        if person_id is not None:
-            session.demo_caller = session.demo_caller or is_demo_person(person_id)
+        # surface, not only where the route said so (people.demo). Google
+        # Chat names its sender only as the gate's.
+        speaker = person_id if person_id is not None else getattr(session, "gate_sender_person_id", None)
+        if isinstance(speaker, int) and not isinstance(speaker, bool):
+            session.demo_caller = session.demo_caller or await asyncio.to_thread(is_demo_person, speaker)
 
         persona_override: str | None = None
         persona_instructions: str | None = None

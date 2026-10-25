@@ -561,17 +561,14 @@ def _update(person: Person, member: Member, report: Report) -> None:
             store.update_person(person.id, **fields)  # type: ignore[arg-type]
             _audit("directory_person_updated", f"person #{person.id} updated from the directory",
                    {"person_id": person.id, "fields": sorted(fields)})
-    # A demo person who leaves the demo group stays on as a team member. The
-    # other way round is never automatic: marking an existing team member
-    # demo takes their approvals and mail away, and would move their later
-    # suspension from the team's brake to the demo one, so whoever controls
-    # the demo group could strip or remove the team past the brake.
+    # The demo mark is set when someone is created and changes only by hand
+    # (`openexecutive directory-demo`), never by the run: marking an existing
+    # team member demo would take their approvals and mail away and move
+    # their later suspension onto the demo brake, and unmarking a demo person
+    # would hand a stranger the team's tools, uncapped. Either way one change
+    # to a group's members (or a short answer for it) would do it.
     if person.demo and not member.demo:
-        report.add("updated", member.email, "no longer demo")
-        if not report.dry_run:
-            store.set_directory_demo(person.id, False)
-            _audit("directory_person_updated", f"person #{person.id} updated from the directory",
-                   {"person_id": person.id, "fields": ["demo"], "demo": False})
+        report.add("warning", member.email, "left the demo group; still a demo person (openexecutive directory-demo --off)")
     elif member.demo and not person.demo:
         report.add("warning", member.email, "in the demo group but already on the team; kept as a team member")
     if person.suspended:
@@ -663,15 +660,40 @@ def link(email: str, *, relink: bool = False, reader: DirectoryReader | None = N
         store.link_directory(person.id, matches[0].id)
     except store.DirectoryLinkError as error:
         raise DirectoryError(str(error)) from None
+    # A member of the demo group is linked as what they are: a demo person.
+    demo = matches[0].demo
+    if demo:
+        store.set_directory_demo(person.id, True)
     if person.suspended and person.suspended_by == "directory":
         store.restore_person(person.id, only_by="directory")
     registry.invalidate()
     _audit(
         "directory_person_linked",
         f"person #{person.id} linked to the directory",
-        {"person_id": person.id, "relinked": person.directory_managed},
+        {"person_id": person.id, "relinked": person.directory_managed, "demo": demo},
     )
-    return f"Linked {person.full_name} ({norm}). The next run keeps their name and email in step."
+    tail = " They are in the demo group, so they are a demo person." if demo else ""
+    return f"Linked {person.full_name} ({norm}). The next run keeps their name and email in step.{tail}"
+
+
+def set_demo(email: str, demo: bool) -> str:
+    """Mark the person the directory manages at ``email`` a demo person, or
+    a team member (``demo`` False). The run never changes it, so this is the
+    one way, besides creation. Raises ``DirectoryError``."""
+    from openexecutive.people import registry, store
+
+    norm = store.normalize_email(email)
+    person = _holder(norm)
+    if person is None or person.id is None or not person.directory_managed or person.kind != "team":
+        raise DirectoryError(f"no team member the directory manages has the address {norm}")
+    if person.is_principal:
+        raise DirectoryError("the principal is never a demo person")
+    if not store.set_directory_demo(person.id, demo):
+        return f"{person.full_name} ({norm}) is already {'a demo person' if demo else 'a team member'}."
+    registry.invalidate()
+    _audit("directory_person_updated", f"person #{person.id} marked {'demo' if demo else 'team'} by hand",
+           {"person_id": person.id, "fields": ["demo"], "demo": demo, "by": "operator"})
+    return f"{person.full_name} ({norm}) is now {'a demo person' if demo else 'a team member'}."
 
 
 def unlink(email: str) -> str:
