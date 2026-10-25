@@ -8,6 +8,8 @@ import asyncio
 import base64
 import json
 import os
+import subprocess
+import sys
 import threading
 import time
 from pathlib import Path
@@ -92,6 +94,14 @@ def test_unavailable_without_the_sandbox(tmp_path: Path, monkeypatch: pytest.Mon
     monkeypatch.setenv("PYTHON_SANDBOX_DIR", str(tmp_path / "nothing"))
     assert python_job.available() is False
     assert "aren't available" in _run({"code": "1"})["error"]
+
+
+def test_the_module_imports_without_resource() -> None:
+    """Windows has no resource module; importing this one there must still
+    work, or api.main (which imports it via routes/chat.py) can't start."""
+    code = "import sys; sys.modules['resource'] = None; import openexecutive.workflows.python_job"
+    done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
 
 
 def test_result_files_need_a_real_id_and_name(company: Path) -> None:
