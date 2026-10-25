@@ -246,6 +246,73 @@ email is trusted only when the provider says it is verified (above, and
 for ERPNext: its Social Login Key keeps sign-ups denied and doesn't trust an
 email without a verified claim).
 
+#### Following your identity provider's directory
+
+With SSO through Keycloak, the realm can be the one place people are added,
+given access and removed. The API then follows one group of it
+(`integrations/directory_sync.py`): every 5 minutes it reads the group's
+members and keeps People in step. It never writes to the provider.
+
+- **An active member nobody has yet** becomes a team Person with their name
+  and email and nothing else. You fill in their role, departments and
+  scope in People. *Active* means enabled, with a verified email.
+- **Their name and email follow the provider**, and are read-only in People
+  ("Managed in your identity provider"). Everything else stays yours: role,
+  departments, reporting line, approvals, chat ids, aliases, working style.
+- **Someone no longer an active member** (out of the group, disabled, or
+  deleted) is *suspended* within one run: out of sign-in, chat, approvals and
+  mail, with nothing of theirs deleted, and **every web session of theirs
+  ends** within seconds. Disabling or removing someone in Keycloak signs them
+  out of nothing by itself; the sync does it. They come back with everything
+  when they are an active member again. Someone you suspended yourself stays
+  suspended.
+- **Never touched:** you (the principal; your row is only linked, by your
+  verified email, and a warning shows if you're inactive there), a contact,
+  and anyone it didn't create or link. A Person who is already on People
+  with a member's email is a *link candidate*:
+  `openexecutive directory-link --email <address>` links them.
+- **The brake.** A run that would suspend more than `DIRECTORY_SYNC_MAX_SUSPEND`
+  (3) people, or more than `DIRECTORY_SYNC_MAX_SHARE` (20%) of those it
+  manages from two up, or everyone, stops and changes nothing; so does a
+  failed read. Check the realm and the group, then run
+  `openexecutive directory-sync --allow-mass-suspend`. `--dry-run` prints what
+  a run would do.
+- **Sign-in follows it too.** While the sync is on, a managed Person signs in
+  only through SSO, and only as their own identity there: a Google sign-in
+  with their email is refused (audit reason `directory_managed`), and so is an
+  SSO sign-in from another account the provider gave their email to
+  (`directory_subject_mismatch`). Not you: the principal is never from the
+  directory, so your Google or `ALLOWED_EMAILS` sign-in keeps working when the
+  provider is wrong.
+- **When an identity is re-created** (the user deleted and added again, or
+  the whole realm rebuilt), the old link points at an id that's gone: the
+  person is suspended and their new identity shows as a conflict, and a
+  rebuilt realm stops the run ("none came back"). Re-point each one with
+  `openexecutive directory-link --email <address> --relink`, which also
+  restores them. `openexecutive directory-unlink --email <address>` hands a
+  row back to People instead.
+
+Set it on the API (all off until `DIRECTORY_SYNC_ENABLED=true`, and the API
+refuses to start with settings it can't trust):
+
+| Variable | Value |
+|---|---|
+| `DIRECTORY_SYNC_ENABLED` | `true` |
+| `DIRECTORY_SYNC_ISSUER` | The realm's issuer, exactly as `AUTH_OIDC_ISSUER` (no trailing slash on either), so the sync follows the provider people sign in with |
+| `DIRECTORY_SYNC_ADMIN_URL` | Where Keycloak's admin API answers, e.g. `http://keycloak:8180` on the compose network (the public host serves no `/admin/`). Plain http only to this machine, a private address or a compose service |
+| `DIRECTORY_SYNC_CLIENT_ID` / `_SECRET` | A confidential client with only a service account and the `realm-management` roles `view-users` and `query-groups` (default id `openexecutive-directory`). Write the secret into `.env` with an editor, never on a command line |
+| `DIRECTORY_SYNC_GROUP` | The group, default `/dynocortex` (its subgroups count too) |
+| `DIRECTORY_SYNC_MAX_SUSPEND` / `_MAX_SHARE` | The brake, default 3 and 0.2 |
+| `DIRECTORY_SYNC_INTERVAL_MINUTES` | Default 5 |
+
+**`ALLOWED_EMAILS` still lets people in by itself**, so a removed member
+listed there keeps access. With the directory on, keep it to one
+break-glass address that the directory doesn't manage (it can still sign in
+with Google).
+
+What the client can read, and the stop and rotation steps, are in
+oe_connector's `docs/directory-sync-plan.md` and its runbooks.
+
 ### Local dev (repo-root `.env`, gitignored)
 
 Put everything in the repo-root `.env` (the file the README quickstart has you
@@ -587,6 +654,11 @@ Recommended for your own operator/break-glass account: nothing that writes the r
 a fixture load, an onboarding run, someone editing People — can take it away.
 
 Rules: comma-separated, case-insensitive, whitespace around entries is stripped, trailing commas are harmless.
+
+**With the directory on** (see "Following your identity provider's
+directory"), add and remove people **in your identity provider first**: a
+member of the group gets a Person within 5 minutes, and taking them out
+suspends theirs and signs them out within one run.
 
 **Remove a user.** Archive or delete their Person **and** drop them from
 `ALLOWED_EMAILS`. Removing only one leaves the other still granting access. The roster

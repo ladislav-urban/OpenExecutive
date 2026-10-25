@@ -46,9 +46,15 @@ class SignedInAs(BaseModel):
 class AllowedEmail(BaseModel):
     email: str
     person_id: int
+    # While the directory sync is on, the provider's id for a Person it
+    # manages: the UI then signs them in only through that provider, as
+    # that identity (packages/ui/src/lib/directory.ts). None otherwise.
+    directory_subject: str | None = None
 
 
-@router.get("/auth/allowed-emails", response_model=list[AllowedEmail])
+@router.get(
+    "/auth/allowed-emails", response_model=list[AllowedEmail], response_model_exclude_none=True
+)
 def allowed_emails() -> list[AllowedEmail]:
     """Return ``[{email, person_id}]`` for every active (not archived, not
     suspended) team member with an email.
@@ -63,8 +69,20 @@ def allowed_emails() -> list[AllowedEmail]:
     therefore does not revoke access on its own if their email is also in
     that env var.
     """
+    from openexecutive.config import get_settings
+
+    directory_on = get_settings().directory_sync_enabled
     return [
-        AllowedEmail(email=p.email.lower(), person_id=p.id)  # type: ignore[arg-type]
+        AllowedEmail(
+            email=p.email.lower(),
+            person_id=p.id,  # type: ignore[arg-type]
+            # Never the principal's: the principal is never from the
+            # directory, so their sign-in (Google, ALLOWED_EMAILS) stays the
+            # way in when the provider is wrong or the realm was re-created.
+            directory_subject=(
+                p.directory_subject if directory_on and p.directory_managed and not p.is_principal else None
+            ),
+        )
         for p in people_store.list_people()
         if p.email and p.id is not None
     ]

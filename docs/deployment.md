@@ -216,6 +216,17 @@ host app checks itself against (`embed-manifest.json`, `host-list.json`,
 
 ---
 
+### Following the identity provider's directory (optional)
+
+With SSO through Keycloak, the API can keep People in step with one group of
+the realm and suspend people who leave it (`DIRECTORY_SYNC_*`, docs/auth.md,
+"Following your identity provider's directory"). On the compose network the
+admin API is `http://keycloak:8180`; the API container reads the same
+repo-root `.env` as everything else, which is also how it checks
+`DIRECTORY_SYNC_ISSUER` against `AUTH_OIDC_ISSUER`. Turn it on after a dry
+run (`docker compose exec api openexecutive directory-sync --dry-run`) lists
+what you expect: on a fresh install, only you, as "linked".
+
 ## Health checks
 
 `GET /health` is exempt from the shared-secret gate so a platform health checker

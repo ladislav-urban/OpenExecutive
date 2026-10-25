@@ -17,6 +17,7 @@ import {
   localLoginEnabled,
   localLoginSessionAllowed,
 } from "@/lib/localLogin";
+import { directoryRefusal, directorySubjects } from "@/lib/directory";
 import { OIDC_PROVIDER_ID, emailVerified, oidcConfig } from "@/lib/oidc";
 import { endedSessions } from "@/lib/endedSessionsServer";
 import type { ProviderSession } from "@/lib/endedSessions";
@@ -117,6 +118,26 @@ const loadRoster = createRosterLoader({
  */
 const checkEmailAllowed = (email: string) =>
   resolveAllowed(email, ENV_ALLOWED, loadRoster);
+
+/**
+ * The People the identity provider's directory manages, `email → subject`,
+ * read fresh at sign-in (not from the roster cache: a sign-in is rare, and
+ * it must see a reassigned email at once). Null when it can't be read.
+ */
+async function loadDirectorySubjects(): Promise<ReadonlyMap<string, string> | null> {
+  try {
+    const headers: Record<string, string> = {};
+    if (BACKEND_SHARED_SECRET) headers["x-api-key"] = BACKEND_SHARED_SECRET;
+    const res = await fetch(`${BACKEND_BASE}/auth/allowed-emails`, {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(ROSTER_FETCH_TIMEOUT_MS),
+    });
+    return res.ok ? directorySubjects(await res.json()) : null;
+  } catch {
+    return null;
+  }
+}
 
 // Fire-and-forget audit call to the backend. Never awaited — auth must never
 // block or expose errors due to audit failures.
@@ -304,6 +325,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             provider,
           },
         );
+        return false;
+      }
+      // A Person the directory manages signs in only through its provider,
+      // as their own identity (lib/directory.ts). If that can't be read, only
+      // the break-glass ALLOWED_EMAILS address goes ahead.
+      const subjects = await loadDirectorySubjects();
+      const refusal = subjects
+        ? directoryRefusal({ provider, email, sub: profile?.sub }, subjects, OIDC_PROVIDER_ID)
+        : source === "env"
+          ? null
+          : "directory_unavailable";
+      if (refusal) {
+        auditAuth("auth_login", `Login denied: ${email} (${refusal.replaceAll("_", " ")})`, email, {
+          denied: true,
+          reason: refusal,
+          provider,
+        });
         return false;
       }
       return true;

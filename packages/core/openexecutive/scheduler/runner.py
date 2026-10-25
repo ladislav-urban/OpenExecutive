@@ -991,6 +991,33 @@ async def _execute_action(
         return
 
     # ------------------------------------------------------------------
+    # Directory sync — People follow the identity provider's group
+    # (integrations/directory_sync.py). Same heartbeat shape as the syncs
+    # below; a stop changes nothing and is logged.
+    # ------------------------------------------------------------------
+    if action.kind == "directory_sync_scan":
+        from openexecutive.integrations.directory_sync import (
+            enqueue_next_directory_sync_scan,
+            run_scheduled,
+        )
+        try:
+            await run_scheduled()
+        except Exception:
+            logger.exception("scheduler: directory_sync_scan (action %d) crashed", action.id)
+        try:
+            mark_action_done(action.id)
+        except Exception:
+            logger.exception("scheduler: directory_sync_scan (action %d) — mark_done failed", action.id)
+        try:
+            enqueue_next_directory_sync_scan(after=datetime.now(UTC))
+        except Exception:
+            logger.exception(
+                "scheduler: failed to chain next directory_sync_scan "
+                "heartbeat — sync will stall until next bootstrap"
+            )
+        return
+
+    # ------------------------------------------------------------------
     # Confluence space sync — same shape as the Drive sync above: pages in
     # the configured spaces go into the isolated CONFLUENCE collection.
     # ------------------------------------------------------------------

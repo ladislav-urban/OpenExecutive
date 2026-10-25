@@ -7911,6 +7911,71 @@ auth:
     read/click into the frame.
 
 integrations:
+  directory_sync: |
+    integrations.directory_sync: People follow one group of the identity
+    provider's realm (Keycloak first, behind the DirectoryReader protocol so
+    Entra ID / Google Workspace can follow). The other half of oe_connector's
+    docs/directory-sync-plan.md (step 7); ERPNext pulls the same realm with
+    its own client (oe_connector/directory.py), and the two share the
+    contract and its test vector tests/fixtures/directory/realm.json (copied
+    verbatim from oe_connector's; change both together). WHY TWO PULLERS: a
+    People row is the sign-in allow-list, the outbound-mail allow-list and
+    approval routing, so only the provider (never ERPNext) may write it.
+
+    Settings (DIRECTORY_SYNC_*, off until DIRECTORY_SYNC_ENABLED): the
+    validator runs config_problem at load, so a bad value stops the API:
+    the issuer is https (http only to loopback), has /realms/<realm>, and
+    equals AUTH_OIDC_ISSUER (the API reads the same .env as the UI); the
+    admin URL is https or plain http to loopback, a private IP or a
+    one-label host (a compose service), with no userinfo; client id and
+    secret are set; the group is a path. The token's iss must equal the
+    issuer (another realm or address stops the run).
+
+    The run (sync(reader=..., dry_run, allow_mass_suspend) -> Report; the
+    heartbeat directory_sync_scan via asyncio.to_thread; the CLI
+    `openexecutive directory-sync` / `directory-link --email`):
+    reads every member of the group and its subgroups, paged; a failed page,
+    a non-list or a missing key stops it. Active = enabled is True,
+    emailVerified is True, an email. New active member → team Person
+    (full_name, email) + link_directory(sub). Linked → name/email follow
+    (address_holder conflict is reported, kept); suspended_by directory →
+    restore_person(only_by="directory"); suspended by the principal → kept.
+    A managed team non-principal not active and not suspended →
+    suspend_person(by="directory") + ended_sessions.record(iss=
+    AUTH_OIDC_ISSUER verbatim, the UI compares it exactly; sub; a fresh
+    jti). Principal: linked by verified primary email, never edited,
+    suspended or archived; warning when inactive. Contacts and unmanaged
+    rows are never managed; one holding a member's address is a candidate.
+    Brake before any write: none of the managed came back active, more
+    than DIRECTORY_SYNC_MAX_SUSPEND, or more than DIRECTORY_SYNC_MAX_SHARE
+    from two up; --allow-mass-suspend skips it. One person's exception is
+    "failed" and rolled out of the report. A threading lock: one run per
+    process. Writes invalidate the registry and call after_roster_write.
+
+    Records: directory_sync_status (one row: last_run_at, last_ok_at set
+    only by a run not stopped, stopped, counts) for Setup status; audit
+    directory_sync (only a run that wrote or stopped, so a quiet run every
+    5 minutes leaves no row) and directory_person_* per change, private.
+
+    Sign-in: GET /auth/allowed-emails carries directory_subject for managed
+    rows only while the sync is on (response_model_exclude_none, so the
+    shape is unchanged otherwise). The UI's signIn reads it fresh and
+    refuses Google for a managed email (directory_managed, decided Oct 23,
+    2026) and SSO with another sub (directory_subject_mismatch); when it
+    can't be read, only an ALLOWED_EMAILS hit goes ahead
+    (directory_unavailable). Never the principal's subject (security review
+    Oct 25, 2026: a re-created realm or a disabled principal must not lock
+    the only roster owner out), and /auth/allowed-emails is server-only in
+    the UI proxy (proxySegments SERVER_ONLY). Person.directory_subject is
+    never serialised elsewhere.
+
+    Recovery: link(email, relink=True) re-points a managed row only when its
+    current subject is absent from the group read, and restores a directory
+    suspension; unlink(email) drops the link. Hardening from the same
+    review: a member id that isn't a non-blank string stops the run; a row
+    whose link fails is archived (no unmanaged row admitting the email);
+    neither issuer may end with "/" (ended_sessions iss is compared
+    verbatim); off, the heartbeat stops chaining and nothing is recorded.
   chat_directory: |
     No raw chat ids: the person page, Add person and a department's
     Channels settings pick Slack, Discord and Telegram people and rooms by

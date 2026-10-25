@@ -109,6 +109,14 @@ EVENT_TYPES: tuple[str, ...] = (
     # People (people/store.py) — private to the principal.
     "person_suspended",  # someone was taken out of every access decision, reversibly (details.by: principal | directory)
     "person_restored",   # a suspended person was brought back with everything they had
+    # The directory sync (integrations/directory_sync.py) — private, never the token.
+    "directory_sync",              # a run that changed something or stopped: counts, and why it stopped
+    "directory_person_created",    # a team Person made for a new member of the group
+    "directory_person_updated",    # a managed Person's name or email followed the directory (field names only)
+    "directory_person_linked",     # an existing Person linked to their directory identity (details.relinked: re-pointed)
+    "directory_person_unlinked",   # the directory no longer manages a Person (openexecutive directory-unlink)
+    "directory_person_suspended",  # a managed Person no longer an active member: suspended, web sessions ended
+    "directory_person_restored",   # back in the group: restored with everything they had
     "grounding",  # unattended prose held back / refused / rewritten for naming people or figures not in its inputs
     # ERPNext drafts (integrations/erpnext_drafts.py) — written private to the card's person.
     "erpnext_draft_proposed",   # propose_erpnext_draft left a card; details name the DocType and card, never its fields

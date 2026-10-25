@@ -27,6 +27,7 @@ async function token(claims = {}, { key = provider.privateKey, alg = "RS256", om
     iss: ISSUER,
     aud: CLIENT,
     iat: NOW,
+    exp: NOW + 120,
     jti: `jti-${++counter}`,
     sid: "session-1",
     sub: "user-1",
@@ -105,6 +106,11 @@ test("a token naming no session, or with no jti, is refused", async () => {
     reason: "no_session",
   });
   assert.deepEqual(await verifyLogoutToken(await token({}, { omit: ["jti"] }), check()), { ok: false, reason: "no_jti" });
+});
+
+test("a token without exp is refused, as the spec requires one", async () => {
+  const verdict = await verifyLogoutToken(await token({}, { omit: ["exp"] }), check());
+  assert.deepEqual(verdict, { ok: false, reason: "invalid_token" });
 });
 
 test("a shared-secret or unsigned token is never taken", async () => {

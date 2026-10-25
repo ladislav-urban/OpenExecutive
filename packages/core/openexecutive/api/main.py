@@ -513,6 +513,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from openexecutive.knowledge.confluence_sync import bootstrap_confluence_sync_scan
 
         bootstrap_confluence_sync_scan()
+    if settings.directory_sync_enabled:
+        from openexecutive.integrations.directory_sync import bootstrap_directory_sync_scan
+
+        bootstrap_directory_sync_scan()
 
     audit_logger = AuditLogger()
     app.state.audit = audit_logger
