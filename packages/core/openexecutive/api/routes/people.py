@@ -107,10 +107,13 @@ def caller_is_principal(request: Request) -> bool:
 
 
 def _visible_person(person_id: int, request: Request) -> Person:
-    """The person, or 404 — also for a contact when the caller is not the
-    principal, exactly as for an id that does not exist."""
+    """The person, or 404 — also for a contact or a suspended person when
+    the caller is not the principal, exactly as for an id that does not
+    exist: who is suspended is the principal's business alone."""
     person = people_store.get_person(person_id)
-    if person is None or (person.kind != "team" and not caller_is_principal(request)):
+    if person is None or (
+        (person.kind != "team" or person.suspended) and not caller_is_principal(request)
+    ):
         raise HTTPException(status_code=404, detail="Person not found")
     return person
 
@@ -131,14 +134,15 @@ def list_people(
     include_contacts: bool = False,
     include_suspended: bool = False,
 ) -> list[Person]:
-    # Anyone but the principal gets the active team, as if no contact or
-    # suspended person existed.
-    principal = (include_contacts or include_suspended) and caller_is_principal(request)
-    return people_store.list_people(
+    # Anyone but the principal gets the team as if no contact or suspended
+    # person existed — ``include_archived`` included.
+    principal = (include_contacts or include_suspended or include_archived) and caller_is_principal(request)
+    people = people_store.list_people(
         include_archived=include_archived,
         include_contacts=include_contacts and principal,
         include_suspended=include_suspended and principal,
     )
+    return people if principal else [p for p in people if not p.suspended]
 
 
 @router.get("/people/me", response_model=PeopleViewer)
@@ -360,7 +364,9 @@ def create_person(body: PersonCreate, request: Request) -> Person:
         # a contact is private to a principal there is not yet.
         raise HTTPException(status_code=403, detail=_CONTACTS_ARE_PRIVATE)
     aliases = _checked_aliases(body.email_aliases, primary=body.email, person_id=None)
-    if body.email and people_store.alias_holder(body.email) is not None:
+    if body.email and (
+        people_store.alias_holder(body.email) is not None or _held_by_suspended(body.email, None)
+    ):
         raise HTTPException(status_code=409, detail=_ADDRESS_IN_USE)
     pid = people_store.upsert_person(
         full_name=body.full_name,
@@ -393,6 +399,17 @@ def create_person(body: PersonCreate, request: Request) -> Person:
 
 _ADDRESS_IN_USE = "That address is already on another person."
 _MANAGED_IN_DIRECTORY = "Their name and email are managed in your identity provider."
+
+
+def _held_by_suspended(email: str, person_id: int | None) -> bool:
+    """Whether a suspended person (other than ``person_id``) holds
+    ``email``: they keep their address while suspended, and a second row
+    with it would sign in as them (``find_person_by_email`` skips them)."""
+    holder = people_store.address_holder(email, exclude_person_id=person_id)
+    if holder is None:
+        return False
+    person = people_store.get_person(holder)
+    return bool(person is not None and person.suspended)
 
 
 def _checked_aliases(
@@ -448,7 +465,10 @@ def patch_person(person_id: int, body: PersonPatch, request: Request) -> Person:
         aliases = _checked_aliases(
             body.email_aliases, primary=new_primary, person_id=person_id
         )
-    if body.email and people_store.alias_holder(body.email, exclude_person_id=person_id) is not None:
+    if body.email and (
+        people_store.alias_holder(body.email, exclude_person_id=person_id) is not None
+        or _held_by_suspended(body.email, person_id)
+    ):
         raise HTTPException(status_code=409, detail=_ADDRESS_IN_USE)
     if raw:
         people_store.update_person(

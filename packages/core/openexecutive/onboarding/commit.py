@@ -61,6 +61,7 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
         from openexecutive.people.store import (
             get_person,
             list_people,
+            restore_person,
             set_authority_scope,
             upsert_person,
         )
@@ -86,6 +87,11 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
                     is_principal=draft.is_principal,
                 )
             else:
+                if draft.is_principal and prior.suspended and prior.id is not None:
+                    # The owner named them as the principal, who is never
+                    # suspended: bring them back first (the store refuses
+                    # a suspended principal, which would leave none).
+                    restore_person(prior.id)
                 pid = upsert_person(
                     person_id=prior.id,
                     full_name=name,

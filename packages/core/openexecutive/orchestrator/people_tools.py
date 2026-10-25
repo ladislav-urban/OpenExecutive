@@ -847,6 +847,9 @@ async def handle_list_people(tool_input: dict[str, Any]) -> str:
         logger.exception("list_people: failed")
         _audit("list_people", "read", False, f"list_people failed: {exc}", {"error": str(exc)[:300]})
         return json.dumps({"error": str(exc)})
+    if not include_contacts:
+        # Who is suspended is the principal's alone, like a contact.
+        people = [p for p in people if not p.suspended]
 
     out = [
         {

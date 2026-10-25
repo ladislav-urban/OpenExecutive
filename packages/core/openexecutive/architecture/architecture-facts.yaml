@@ -4373,15 +4373,22 @@ people:
     intake like a stranger), channel resolution (so the nudge engine
     never chases them), shared chats, card approvals, Act as me, open-loop
     assignment (`owner_suspended`). "Ever existed" reads keep `archived`
-    alone: `address_holder` / `alias_holder` (a suspended person keeps
-    their addresses, so nobody takes them meanwhile), memory replay,
+    alone: `address_holder` / `alias_holder` / `chat_id_holder` (a
+    suspended person keeps their addresses and chat ids, so neither a new
+    row, a roster request nor PATCH takes them meanwhile), memory replay,
     history names, a suspended person's working style route.
     `tests/unit/test_people_active_predicate.py` scans every module for
     `.archived` / `archived = 0` and fails on one not allow-listed with a
     reason. `store.list_people` returns active people unless
     `include_suspended` (the People page, onboarding's name dedupe) or
-    `include_archived`; `GET /people?include_suspended=true` is honoured
-    for the principal only.
+    `include_archived`. PRIVATE TO THE PRINCIPAL, like a contact: for
+    anyone else a suspended row is filtered out of `GET /people` (even with
+    `include_archived`), a 404 on `GET /people/{id}`, and dropped from the
+    `list_people` tool off the principal's verified turn;
+    `directory_subject` is never serialised. A suspended row can't be made
+    the principal (`upsert_person` raises `PrincipalSuspendError`, so there
+    is always an active principal and `_require_roster_owner` never opens
+    up); onboarding naming one the owner restores them first.
 
     PAUSED, NOT CLOSED: `attunement.open_loops.expire_open_loops` skips
     loops whose owner is suspended or was restored after the TTL cutoff

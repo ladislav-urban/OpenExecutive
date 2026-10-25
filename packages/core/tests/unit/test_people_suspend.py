@@ -14,8 +14,7 @@ from fastapi.testclient import TestClient
 
 from openexecutive.api.routes import auth as auth_route
 from openexecutive.api.routes import people as people_route
-from openexecutive.attunement import open_loops
-from openexecutive.attunement import style
+from openexecutive.attunement import open_loops, style
 from openexecutive.memory import episodic
 from openexecutive.people import registry as people_registry
 from openexecutive.people import store as people_store
@@ -257,4 +256,65 @@ def test_a_directory_managed_name_and_email_are_read_only(team: SimpleNamespace,
         f"/people/{team.sara}", json={"role": "CFO", "full_name": "Sara Kim"}
     )
     assert resp.status_code == 200 and resp.json()["role"] == "CFO"
-    assert resp.json()["directory_managed"] is True and resp.json()["directory_subject"] == "kc-1"
+    assert resp.json()["directory_managed"] is True
+    # The provider's id never leaves the server.
+    assert "directory_subject" not in resp.json()
+
+
+# --------------------------------------------------------------------------- #
+# Security review (Oct 25, 2026)
+# --------------------------------------------------------------------------- #
+
+def test_a_teammate_never_learns_who_is_suspended(team: SimpleNamespace, client: TestClient) -> None:
+    import asyncio
+    import json
+
+    from openexecutive.orchestrator.people_tools import handle_list_people
+
+    ben = people_store.upsert_person(full_name="Ben Ortiz", email="ben@co.example")
+    people_store.suspend_person(team.sara, by="principal")
+    as_ben = {"x-caller-email": "ben@co.example"}
+    listed = client.get("/people", params={"include_archived": "true"}, headers=as_ben).json()
+    assert {p["id"] for p in listed} == {team.principal, ben}
+    assert client.get(f"/people/{team.sara}", headers=as_ben).status_code == 404
+    # The principal sees them, archived listing included.
+    assert client.get(f"/people/{team.sara}").json()["suspended"] is True
+    assert team.sara in {p["id"] for p in client.get("/people", params={"include_archived": "true"}).json()}
+    # Off the principal's own verified turn, the chat tool doesn't show them either.
+    out = json.loads(asyncio.run(handle_list_people({"include_archived": True})))
+    assert team.sara not in {p["person_id"] for p in out["people"]}
+
+
+def test_a_suspended_persons_chat_ids_stay_theirs(team: SimpleNamespace) -> None:
+    from openexecutive.people import roster_requests
+
+    people_store.suspend_person(team.sara, by="principal")
+    assert people_store.chat_id_holder("telegram_chat_id", "555") == team.sara
+    # A roster request from their account can't hand it to a new row.
+    assert roster_requests._chat_holder("telegram", "555") == team.sara
+    assert roster_requests._chat_holder("slack", "U_SARA") == team.sara
+    with pytest.raises(ValueError):
+        people_store.chat_id_holder("email", "x")
+
+
+def test_a_suspended_person_is_never_made_the_principal(team: SimpleNamespace) -> None:
+    from openexecutive.onboarding.commit import save_onboarding_people
+    from openexecutive.onboarding.interview import PersonDraft
+
+    people_store.suspend_person(team.sara, by="principal")
+    with pytest.raises(people_store.PrincipalSuspendError):
+        people_store.upsert_person(person_id=team.sara, full_name="Sara Kim", is_principal=True)
+    # Onboarding naming them the owner brings them back first, so there is
+    # always an active principal.
+    save_onboarding_people([PersonDraft(full_name="Sara Kim", is_principal=True)])
+    principal = people_store.find_principal_person()
+    assert principal is not None and principal.id == team.sara and principal.active
+
+
+def test_a_suspended_persons_address_cant_be_given_to_someone_else(
+    team: SimpleNamespace, client: TestClient
+) -> None:
+    people_store.suspend_person(team.sara, by="principal")
+    assert client.post("/people", json={"full_name": "Sara 2", "email": "sara@co.example"}).status_code == 409
+    ben = people_store.upsert_person(full_name="Ben Ortiz", email="ben@co.example")
+    assert client.patch(f"/people/{ben}", json={"email": "sara@co.example"}).status_code == 409

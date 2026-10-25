@@ -384,8 +384,13 @@ def upsert_person(
     with _get_conn(db_path) as conn:
         if person_id is not None and person_id > 0:
             row = conn.execute(
-                "SELECT kind FROM people WHERE id = ?", (person_id,)
+                "SELECT * FROM people WHERE id = ?", (person_id,)
             ).fetchone()
+            # The principal is never suspended: making a suspended row the
+            # principal would leave no active principal, which opens the
+            # roster to anyone (``_require_roster_owner``). Restore first.
+            if is_principal and row is not None and _optional(row, "suspended") is not None:
+                raise PrincipalSuspendError("restore this person before making them the principal")
             # Same reading as _row_to_person: an unknown stored kind is a contact.
             stored_kind = (
                 (row["kind"] if row["kind"] in PERSON_KINDS else "contact")
@@ -627,6 +632,26 @@ def find_person_by_address(
         if row is None:
             return None
         return _row_to_person(row, conn)
+
+
+_CHAT_ID_COLUMNS = ("slack_user_id", "telegram_chat_id", "discord_user_id")
+
+
+def chat_id_holder(column: str, ref: str, db_path: Path | None = None) -> int | None:
+    """The id of the non-archived person (any kind, a suspended one
+    included) whose ``column`` is ``ref``; else None. As ``address_holder``
+    is for addresses: a suspended person keeps their chat ids, so a roster
+    request can't hand one to a new row meanwhile."""
+    if column not in _CHAT_ID_COLUMNS:
+        raise ValueError(f"not a chat id column: {column!r}")
+    if not ref or not _resolve_db_path(db_path).exists():
+        return None
+    with _get_conn(db_path) as conn:
+        row = conn.execute(
+            f"SELECT id FROM people WHERE {column} = ? AND archived = 0 ORDER BY id LIMIT 1",  # noqa: S608 — column from a fixed list
+            (ref,),
+        ).fetchone()
+    return int(row["id"]) if row is not None else None
 
 
 class AddressInUseError(ValueError):

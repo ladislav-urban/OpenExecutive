@@ -843,15 +843,12 @@ def _finish(
 
 
 def _chat_holder(channel: str, ref: str) -> int | None:
+    """Who holds this chat id, a suspended person included: approving a
+    request from a suspended person's account must not give it to a new
+    row (``people.store.chat_id_holder``)."""
     from openexecutive.people import store
 
-    finder = {
-        "slack": store.find_person_by_slack_id,
-        "discord": store.find_person_by_discord_id,
-        "telegram": store.find_person_by_telegram_chat_id,
-    }[channel]
-    holder = finder(ref, include_contacts=True)
-    return holder.id if holder is not None else None
+    return store.chat_id_holder(CHANNEL_FIELD[channel], ref)
 
 
 def _channel_kwargs(channel: str, ref: str) -> dict[str, Any]:

@@ -128,7 +128,8 @@ class Person(BaseModel):
     suspended_at: str | None = None
     # The identity provider's id for this person (an OIDC ``sub``), and
     # whether its directory manages the row (name and email follow it).
-    directory_subject: str | None = None
+    # Not serialised: the provider's id is nobody's business on the wire.
+    directory_subject: str | None = Field(default=None, exclude=True)
     directory_managed: bool = False
     created_at: str = ""
     updated_at: str = ""

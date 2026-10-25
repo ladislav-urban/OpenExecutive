@@ -4634,7 +4634,6 @@ export interface Person {
   // Their name and email follow the identity provider's directory and are
   // read-only here.
   directory_managed?: boolean;
-  directory_subject?: string | null;
 }
 
 // Team members only by default — the pickers (department head, workflow
