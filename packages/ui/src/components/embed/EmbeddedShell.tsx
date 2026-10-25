@@ -53,6 +53,9 @@ export default function EmbeddedShell({
   }, [pathname, search]);
 
   useEffect(() => {
+    // A piece placed on the host's own screen (app/embed/*) is no place of
+    // its own to report.
+    if (pathname.startsWith("/embed/")) return;
     const message = native
       ? openMessage({ kind: "native", path: `${pathname}${query}` })
       : routeMessage(pathname, query, crumb ?? title);

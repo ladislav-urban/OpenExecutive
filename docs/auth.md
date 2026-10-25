@@ -559,8 +559,8 @@ is offered; `tests/integration/test_chat_host_surface.py` checks the conversatio
 origin sends that parent `ready`; once the parent answers with a valid `init`, the page
 leaves out its own sidebar, top bar, bottom bar and Ask OE panel and takes the host's
 colours, font and name. Until then it renders as it would anywhere. The messages
-(`oe-embed/v1`: `ready`, `init`, `theme`, `route`, `open`, `badge`, and the popup's
-`signed-in`) are in `src/lib/embed.ts`, with a fixed set of examples in
+(`oe-embed/v1`: `ready`, `init`, `theme`, `route`, `open`, `badge`, the popup's
+`signed-in`, and the inline Approve's `approve-ready`, `approve-ask`, `size` and `card-done`) are in `src/lib/embed.ts`, with a fixed set of examples in
 `src/lib/embed-examples.json` that a host's own tests check too. They carry no secret,
 token or identity anyone acts on; every message is checked for the exact origin and the
 parent window, and every `init` field is validated. In a frame:
@@ -570,38 +570,64 @@ parent window, and every `init` field is validated. In a frame:
   a host origin, addressed exactly) and closes.
 - **The host's user hint** (an email, display only) shows a warning with Sign out when it
   isn't who is signed in here.
-- **Changes ask in a window of their own, in any frame** (embedded or not, since a host
-  page can frame these pages without saying so). The page around a frame can make it
-  invisible and lay its own buttons over it, so a confirmation drawn inside the frame
-  can be beaten with two lured clicks. Instead, approving, rejecting or cancelling a
-  card, a proposal, a workflow sign-off or a roster request, every
-  chat message sent from the frame (the host's are read-only, but one sent from this
-  app's page is the person's own turn), and any other change the host list doesn't
-  already allow with the same effect (a setting, Handle it for me, People, an upload)
-  made within 10 seconds of a click, key, drop or paste in the frame, or of a Yes, opens
-  a small window of Open Executive's own (`/confirm`) naming what will happen; only its
-  Yes goes ahead, and closing it is No. For a chat message it shows the message. No page can cover another window. The frame checks every request it sends
-  (`lib/cardActions.ts`), so no button can skip it. Each approval card has its own page,
-  `/cards/<id>`.
-- **A host's own screen approves through a window of this app.** The host list never
-  lets a host approve, so a host that shows Home's cards on its own screen opens
-  `/confirm/alert/<id>` as the person clicks its Approve. Any site can open a window, so
-  the window shows the card to whoever is signed in here but offers Approve only to a
-  host: it sends its opener `approve-ready` (`oe-embed/v1`, the card's id, addressed to
-  each host origin), and offers Approve only once that opener answers `approve-ask` for
-  the same card from a listed host origin. With no host origin listed it never does, and
-  links to the card's own page. It offers Approve only when the card offers it to that
-  person, and arms the button only after the window has been in front for a moment and
-  the pointer has then moved inside it (again after every time it loses focus); a click
-  pressed before it armed doesn't count. So a click lured on the opener's page can't land
-  on it. Its Approve approves the card as any page of this app does, then it sends that
-  host `card-done` (the card's id and `approved` or `not_now`) and closes, so the person
-  stays on the host's screen. `/confirm` and `/confirm/alert/<id>` (judged on the path as
-  sent and decoded) send `frame-ancestors 'none'`: no page, not even a host origin's, may
-  frame them.
+- **Changes ask inside the frame, and the browser must have seen the question, in any
+  frame** (embedded or not, since a host page can frame these pages without saying so).
+  Approving, rejecting or cancelling a card, a proposal, a workflow sign-off or a roster
+  request, every chat message sent from the frame (the host's are read-only, but one sent
+  from this app's page is the person's own turn), and any other change the host list
+  doesn't already allow with the same effect (a setting, Handle it for me, People, an
+  upload) made within 10 seconds of a click, key, drop or paste in the frame, or of a Yes,
+  first asks in a panel inside the frame naming what will happen (for a chat message, the
+  message). The frame checks every request it sends (`lib/cardActions.ts`), so no button
+  can skip it. The page around a frame can make it invisible, cover it and lure clicks,
+  so the panel's Yes counts only when all of these hold (`lib/seen.ts`):
+  - IntersectionObserver v2 (`trackVisibility: true`) has reported the panel whole on
+    screen, uncovered, untransformed, unfiltered and at full opacity, without a break, for
+    at least 700 ms. The browser computes that answer; the page around can't fake it. A
+    cover that lets clicks through (`pointer-events: none`) and a frame cropped to show the
+    Yes without the words above it fail it too. The browser reports at most every 100 ms;
+    reports it hasn't delivered yet are read at each look (`takeRecords`);
+  - the real pointer has been inside the panel, without leaving, for at least 500 ms, and
+    has moved there (a cursor drawn by the page around doesn't move it). A frame slid under
+    the pointer between the two clicks of a lured double-click fails this. Leaving the
+    panel, or the frame losing focus, starts it again;
+  - the press began on Yes after all of that held, and the click that follows is trusted
+    and on Yes too. A key press on a focused Yes has no pointer press, so it never counts;
+  - 250 ms after the click, the panel is still in the same unbroken run of "seen" and the
+    pointer still inside, so a cover laid on just before the click shows up first.
+
+  The panel and the inline Approve below keep Open Executive's own colours and face
+  (`.consent` in `globals.css`), whatever the host's theme: otherwise a host could draw the
+  question white on white, or in a symbol font, while the browser still reports it seen.
+  Anyone who can't point (a keyboard, a touch screen) answers on this app's own page, which
+  the panel links to.
+
+  A browser without v2 (Firefox, Safari) can't tell, so the panel offers no Yes there: it
+  links to this app's own page for it, top level in the same tab (the card's page,
+  `/cards/<id>` or `/cards/alert/<id>`, or else the page that asked), where nothing can
+  frame it; Back returns to the host. It never fails open. The answer stays in the
+  browser, as the window's did: what it guards against is code on the host's origin,
+  which can't run in this app's origin, and the approval itself is still this app's
+  same-origin request with its usual checks.
+- **A host's own screen approves through an inline frame of this app.** The host list
+  never lets a host approve, so a host that shows Home's cards on its own screen places a
+  small frame of Open Executive's own where its Approve would be,
+  `/embed/approve/<alertId>?embed=1`. The frame shows the card's own words, from this app,
+  to whoever is signed in here, but offers Approve only to the host that placed it: it
+  sends its parent `approve-ready` (`oe-embed/v1`, the card's id, addressed to each host
+  origin), and offers Approve only once that parent answers `approve-ask` for the same card
+  from a listed host origin. With no host origin listed it never does, and links to the
+  card's own page. It offers Approve only when the card offers it to that person, and its
+  Approve counts only under the rule above; without v2 it links to the card's own page,
+  top level. It tells the host its height (`size`, at most 480 px) and, once answered,
+  `card-done` (the card's id and `approved` or `not_now`). Nothing else crosses.
+- **The old windows** (`/confirm`, `/confirm/alert/<id>`) stay for one release for hosts
+  that still open them, then go. They send `frame-ancestors 'none'` (judged on the path as
+  sent and decoded).
 
 `make embed-outputs` writes what a host app checks itself against without running this
-app or holding its secrets: `embed-manifest.json` (the navigation and routes),
+app or holding its secrets: `embed-manifest.json` (the navigation, the routes and the
+pieces a host places on its own screens, such as the inline Approve),
 `host-list.json` and `openapi.json`.
 
 **What remains.** A host origin runs code Open Executive doesn't control: the host app,
@@ -739,7 +765,7 @@ curl -sv -H "x-api-key: $SHARED" https://api.example.com/sessions           # 20
 - Missing-secret deploys silently exposing the API (the `OE_PUBLIC_DEPLOYMENT` fail-closed guard)
 - Other pages on the same site — to a browser, every `localhost` port is one site — posting to the UI proxy with your cookie (it refuses writes whose `Sec-Fetch-Site` isn't `same-origin`)
 - Other sites framing the UI's buttons (clickjacking) and injected scripts running in its pages (the pages' `Content-Security-Policy`: `frame-ancestors` and a nonce per response)
-- A host origin's scripts (`OE_HOST_ORIGINS`) approving cards, sending mail, changing settings or People, or acting through a chat turn (the host list; the `host` surface's read-only chat, which a conversation keeps once a host's page wrote in it; changes in a frame confirmed in a separate window)
+- A host origin's scripts (`OE_HOST_ORIGINS`) approving cards, sending mail, changing settings or People, or acting through a chat turn (the host list; the `host` surface's read-only chat, which a conversation keeps once a host's page wrote in it; changes in a frame confirmed inside it only once the browser reports the question seen, or on this app's own page where it can't)
 
 **Does not mitigate:**
 - A compromised `BACKEND_SHARED_SECRET` — anyone who learns it can hit the API as if they were the UI. Rotate if leaked. With signed callers on, they can use it only as a service, never as a signed-in user or the owner.

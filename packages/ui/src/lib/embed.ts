@@ -11,11 +11,15 @@
 //   frame → host  open       { kind: "host", route } | { kind: "native", path }
 //   frame → host  badge      { counts }
 //   popup → opener signed-in {}                         the popup sign-in is done
-//   popup → opener approve-ready { alertId }            the approve window is open
-//   opener → popup approve-ask { alertId }              the host asks it to offer Approve
-//   popup → opener card-done { alertId, outcome }       a card answered in its own
-//                                                       window (/confirm/alert/<id>,
+//   frame → host   approve-ready { alertId }            the inline Approve is shown
+//   host → frame   approve-ask { alertId }              the host asks it to offer Approve
+//   frame → host   size     { height }                  the inline Approve's height, in px
+//   frame → host   card-done { alertId, outcome }       a card answered in it
+//                                                       (/embed/approve/<id>,
 //                                                       lib/hostApprove.ts)
+//
+// The approve messages also pass between a host and the old approve window
+// (/confirm/alert/<id>, popup ↔ opener), kept for one release.
 //
 // Each carries `protocol: "oe-embed/v1"` and `type`. None carries a secret, a
 // token or an identity anyone acts on: `userHint` is shown, never trusted.
@@ -87,6 +91,7 @@ export const APP_ROUTES = [
   "delegate",
   "demo",
   "departments",
+  "embed",
   "goals",
   "guide",
   "jobs",
@@ -104,7 +109,7 @@ export const APP_ROUTES = [
 
 // Pages that stay in the frame even if the host shows the same place
 // natively: a card's own page is where it is approved, in this app's origin.
-const NEVER_NATIVE = ["/cards", "/confirm", "/signin"];
+const NEVER_NATIVE = ["/cards", "/confirm", "/embed", "/signin"];
 
 const MAX_PRODUCT_NAME = 40;
 const MAX_NATIVE_PATHS = 20;
@@ -279,12 +284,22 @@ export function cardDoneMessage(alertId: number, outcome: CardOutcome) {
   return { protocol: EMBED_PROTOCOL, type: "card-done", alertId, outcome };
 }
 
+// The inline Approve's height is bounded, so a host can't be told to give
+// it the whole screen.
+export const MAX_APPROVE_HEIGHT = 480;
+
+export function sizeMessage(height: number) {
+  const px = Math.min(MAX_APPROVE_HEIGHT, Math.max(0, Math.ceil(Number.isFinite(height) ? height : 0)));
+  return { protocol: EMBED_PROTOCOL, type: "size", height: px };
+}
+
 export function approveReadyMessage(alertId: number) {
   return { protocol: EMBED_PROTOCOL, type: "approve-ready", alertId };
 }
 
 /** Whether `data` is the host's `approve-ask` for this card. The caller
- *  checks the sender first (acceptsEvent: the opener, a listed host origin). */
+ *  checks the sender first (acceptsEvent: the parent or opener, a listed
+ *  host origin). */
 export function isApproveAsk(data: unknown, alertId: number): boolean {
   return (
     isRecord(data) &&

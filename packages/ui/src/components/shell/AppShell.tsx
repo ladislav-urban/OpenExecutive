@@ -30,7 +30,7 @@ import { isChatHomePath } from "@/lib/chatRoutes";
 // chat home (`/`, `/chats/new`, `/chats/<id>`; lib/chatRoutes.ts), which
 // keeps its own top bar and debug panel but renders the same `AppSidebar`
 // as every other route.
-const EXEMPT_PREFIXES = ["/signin", "/onboard", "/api", "/confirm"];
+const EXEMPT_PREFIXES = ["/signin", "/onboard", "/api", "/confirm", "/embed"];
 
 // Human-readable labels for path segments shown in the breadcrumb.
 // Dynamic segments (slugs / ids) are rendered raw and truncated by CSS.

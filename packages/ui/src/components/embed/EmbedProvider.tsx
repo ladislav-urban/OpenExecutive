@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 import FrameConfirm from "@/components/embed/FrameConfirm";
 import { CardActionNotConfirmed, frameActionFor, type CardAction } from "@/lib/cardActions";
@@ -21,10 +21,12 @@ import {
 // frame. AppShell reads `embedded` to leave out its own chrome.
 //
 // Apart from that, in ANY frame (embedded or not, since a page on a host
-// origin can frame these pages without saying so), a card action, and any
-// other change off the host list that follows a click, waits for a Yes in a
-// window of this app's own that no page can cover (lib/cardActions.ts,
-// FrameConfirm, app/confirm).
+// origin can frame these pages without saying so), a card action, a chat
+// message, and any other change off the host list that follows a click,
+// waits for a Yes asked inside the frame that counts only once the browser
+// reports it seen (lib/cardActions.ts, lib/seen.ts, FrameConfirm). A page
+// that asks under the same rule itself (app/embed/approve) lets its one
+// request through with `passOnce`.
 
 const HOST_CALLS = HOST_LIST.calls.map(([method, pattern]) => [method, pattern] as const);
 // A change made this soon after a click or a key in the frame may have been
@@ -48,12 +50,18 @@ export function useEmbed(): EmbedState {
   return useContext(EmbedContext);
 }
 
-// The listed host origins (OE_HOST_ORIGINS), for a window a host opened that
-// answers it (app/confirm/alert): empty when none is listed.
+// The listed host origins (OE_HOST_ORIGINS), for a page a host opened or
+// placed that answers it (app/embed/approve, app/confirm/alert): empty when
+// none is listed.
 const HostOriginsContext = createContext<readonly string[]>([]);
 
 export function useHostOrigins(): readonly string[] {
   return useContext(HostOriginsContext);
+}
+
+/** Whether a request is the very one passed: same method, same address. */
+function isPassed(pass: { method: string; url: string }, method: string, url: string): boolean {
+  return pass.method === method.toUpperCase() && new URL(pass.url, location.href).href === new URL(url, location.href).href;
 }
 
 function applyTheme(theme: EmbedTheme, font: string | null): void {
@@ -69,6 +77,19 @@ function applyTheme(theme: EmbedTheme, font: string | null): void {
 
 type Pending = { action: CardAction; resolve: (ok: boolean) => void };
 
+// How long a request let through with passOnce waits to be sent.
+const PASS_ONCE_MS = 2_000;
+
+// For a page whose own Yes was judged under lib/seen.ts's rule: the next
+// request for exactly this card action goes through without asking again.
+// Outside a frame there is nothing to pass, so it does nothing.
+type PassOnce = (method: string, url: string) => void;
+const PassOnceContext = createContext<PassOnce>(() => {});
+
+export function usePassOnce(): PassOnce {
+  return useContext(PassOnceContext);
+}
+
 export default function EmbedProvider({
   hostOrigins,
   version,
@@ -82,6 +103,7 @@ export default function EmbedProvider({
   const [pending, setPending] = useState<Pending | null>(null);
   const pendingRef = useRef<Pending | null>(null);
   const lastInput = useRef(0);
+  const passing = useRef<{ method: string; url: string; until: number } | null>(null);
 
   // The handshake: `ready` to the parent, addressed to each listed host
   // origin (the browser delivers it only to the one the parent is), then
@@ -112,7 +134,7 @@ export default function EmbedProvider({
   }, [hostOrigins, version]);
 
   // In any frame: every card action, and any change off the host list that
-  // follows a click, waits for the confirmation window.
+  // follows a click, waits for a Yes in FrameConfirm.
   useEffect(() => {
     if (window.top === window.self) return;
     const onInput = (event: Event) => {
@@ -132,6 +154,10 @@ export default function EmbedProvider({
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       const action = frameActionFor(method, url, init?.body, HOST_CALLS);
+      // A pass is used up by the next change, whichever it is; reads leave it.
+      const pass = action ? passing.current : null;
+      if (action) passing.current = null;
+      if (action && pass && Date.now() <= pass.until && isPassed(pass, method, url)) return original(input, init);
       const asks = action !== null && (action.card || Date.now() - lastInput.current < AFTER_INPUT_MS);
       if (asks && !(await confirm(action))) throw new CardActionNotConfirmed();
       return original(input, init);
@@ -140,6 +166,10 @@ export default function EmbedProvider({
       window.fetch = original;
       for (const type of INPUT_EVENTS) window.removeEventListener(type, onInput, true);
     };
+  }, []);
+
+  const passOnce = useCallback<PassOnce>((method, url) => {
+    passing.current = { method: method.toUpperCase(), url, until: Date.now() + PASS_ONCE_MS };
   }, []);
 
   const answer = (ok: boolean) => {
@@ -153,12 +183,12 @@ export default function EmbedProvider({
 
   return (
     <HostOriginsContext.Provider value={hostOrigins}>
-      <EmbedContext.Provider value={state}>
-        {children}
-        {pending && (
-          <FrameConfirm action={pending.action} onAnswer={answer} />
-        )}
-      </EmbedContext.Provider>
+      <PassOnceContext.Provider value={passOnce}>
+        <EmbedContext.Provider value={state}>
+          {children}
+          {pending && <FrameConfirm action={pending.action} onAnswer={answer} />}
+        </EmbedContext.Provider>
+      </PassOnceContext.Provider>
     </HostOriginsContext.Provider>
   );
 }

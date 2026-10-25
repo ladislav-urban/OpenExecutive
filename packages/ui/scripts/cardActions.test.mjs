@@ -1,6 +1,7 @@
 // In a frame, a card action, and any other change off the host list that
-// follows a click, asks in a window of its own (lib/cardActions.ts,
-// components/embed/EmbedProvider.tsx, FrameConfirm.tsx, app/confirm).
+// follows a click, asks inside the frame under lib/seen.ts's rule
+// (lib/cardActions.ts, components/embed/EmbedProvider.tsx, FrameConfirm.tsx;
+// the old window, app/confirm, stays for one release).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
@@ -11,6 +12,7 @@ import {
   describeDecision,
   frameActionFor,
   isConfirmMessage,
+  ownPageFor,
   parseAction,
 } from "../src/lib/cardActions.ts";
 
@@ -40,6 +42,7 @@ test("what each card action says will happen", () => {
     decisionId: 7,
     what: "Approve card 7: what it shows is carried out now, as you.",
     card: true,
+    page: "/cards/7",
   });
   assert.equal(cardActionFor("post", "/api/backend/decisions/7/reject").verb, "reject");
   assert.equal(cardActionFor("POST", "http://this.app/api/backend/decisions/7/cancel").verb, "cancel");
@@ -107,19 +110,20 @@ test("the card is named by its kind and what it says", () => {
   assert.equal(describeDecision({}), "card");
 });
 
-test("the confirmation window's messages", () => {
+test("the old confirmation window's messages", () => {
   const nonce = "a".repeat(32);
   assert.equal(isConfirmMessage({ protocol: CONFIRM_PROTOCOL, type: "answer", nonce, ok: true }, "answer", nonce), true);
   assert.equal(isConfirmMessage({ protocol: CONFIRM_PROTOCOL, type: "answer", nonce: "b".repeat(32) }, "answer", nonce), false);
   assert.equal(isConfirmMessage({ protocol: "oe-embed/v1", type: "answer", nonce }, "answer", nonce), false);
   const action = cardActionFor("POST", "/api/backend/decisions/7/approve");
-  assert.deepEqual(parseAction(action), action);
+  // The window never sends anyone elsewhere.
+  assert.deepEqual(parseAction(action), { ...action, page: null });
   assert.equal(parseAction({ ...action, verb: "send" }), null);
   assert.equal(parseAction({ ...action, decisionId: -1 }), null);
   assert.equal(parseAction({ ...action, what: "x".repeat(301) }), null);
 });
 
-test("the frame checks every request, in any frame, and asks in a window of its own", () => {
+test("the frame checks every request, in any frame, and asks inside it", () => {
   const provider = read("../src/components/embed/EmbedProvider.tsx");
   assert.match(provider, /if \(window\.top === window\.self\) return;/);
   assert.match(provider, /const action = frameActionFor\(method, url, init\?\.body, HOST_CALLS\);/);
@@ -129,12 +133,23 @@ test("the frame checks every request, in any frame, and asks in a window of its 
   assert.match(provider, /const INPUT_EVENTS = \["pointerdown", "keydown", "drop", "paste"\] as const;/);
   assert.match(provider, /\/\/ A Yes is input too[^\n]*\n\s*lastInput\.current = Date\.now\(\);/);
   assert.match(provider, /if \(asks && !\(await confirm\(action\)\)\) throw new CardActionNotConfirmed\(\);/);
+  // Its Yes is the only way to true, and only when the seen rule says so
+  // (scripts/seen.test.mjs).
   const frame = read("../src/components/embed/FrameConfirm.tsx");
-  assert.match(frame, /window\.open\(`\/confirm\?nonce=\$\{nonce\}`/);
-  assert.match(frame, /event\.origin !== window\.location\.origin \|\| event\.source !== current/);
-  // The frame itself has no Yes: only the window does.
-  assert.doesNotMatch(frame, /finish\(true\)/);
+  assert.match(frame, /if \(judged && \(await judged\)\) finish\(true\);/);
+  assert.equal(frame.match(/finish\(true\)/g).length, 1);
+  // One request a page judged itself under the same rule passes once.
+  assert.match(provider, /if \(action && pass && Date\.now\(\) <= pass\.until && isPassed\(pass, method, url\)\) return original\(input, init\);/);
   const page = read("../src/app/confirm/page.tsx");
   assert.match(page, /event\.origin !== window\.location\.origin \|\| event\.source !== opener/);
   assert.match(page, /postMessage\(\{ protocol: CONFIRM_PROTOCOL, type: "answer", nonce, ok \}, window\.location\.origin\)/);
+});
+
+test("without v2, each action is answered on this app's own page, top level", () => {
+  assert.equal(ownPageFor(cardActionFor("POST", "/api/backend/decisions/7/approve"), "/chats/x", "?embed=1"), "/cards/7");
+  assert.equal(ownPageFor(cardActionFor("POST", "/api/backend/alerts/3/approve"), "/", ""), "/cards/alert/3");
+  const send = frameActionFor("POST", "/api/backend/chat", '{"message":"hi"}', CALLS);
+  assert.equal(ownPageFor(send, "/chats/abc", "?embed=1&tab=2"), "/chats/abc?tab=2");
+  assert.equal(ownPageFor(send, "/chats/abc", "?embed=1"), "/chats/abc");
+  assert.equal(ownPageFor(send, "//evil.example/x", ""), "/");
 });
