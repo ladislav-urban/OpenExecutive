@@ -610,7 +610,7 @@ async def _handle_mail(
     from openexecutive.audit import private_rows, rows_for_person
     from openexecutive.people.identity import resolve_email_sender
     roster_sender = resolve_email_sender(from_addr) if from_addr else None
-    if roster_sender is not None and roster_sender.demo:
+    if roster_sender is not None and getattr(roster_sender, "demo", False) is True:
         # A demo person tries the Executive in the app, where their questions
         # are counted (people.demo): their mail gets no turn and no reply.
         logger.info("demo sender person=%s message=%s — left unanswered", roster_sender.id, message_id)

@@ -101,7 +101,7 @@ def _is_demo_recipient(channel: str, channel_ref: str) -> bool:
     except Exception:
         logger.exception("outbound_guard: demo check failed; failing open")
         return False
-    return person is not None and person.demo
+    return person is not None and getattr(person, "demo", False) is True
 
 
 def _availability_reason(channel: str, channel_ref: str, now: datetime) -> str | None:

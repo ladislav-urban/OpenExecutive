@@ -1164,7 +1164,7 @@ def _roster_allow_set() -> RosterAllow:
     # contact planted and used in one turn would pass every check below.
     everyone = [p for p in everyone if not outside_content.added_this_turn(p.id)]
     # Nor a demo person (people.demo): the Executive mails them nothing.
-    everyone = [p for p in everyone if not p.demo]
+    everyone = [p for p in everyone if getattr(p, "demo", False) is not True]
     # Primary addresses and aliases exactly; for a teammate, also their
     # local part on the company's own domains (people.identity) — the same
     # rule inbound mail is matched by.

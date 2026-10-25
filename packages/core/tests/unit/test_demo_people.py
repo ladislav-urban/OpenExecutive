@@ -128,7 +128,7 @@ def test_a_demo_persons_mail_gets_no_turn_and_no_reply() -> None:
     from openexecutive.integrations import email_poller
 
     source = inspect.getsource(email_poller._handle_mail)
-    skip = source.index("if roster_sender is not None and roster_sender.demo:")
+    skip = source.index("if roster_sender is not None and getattr(roster_sender, \"demo\", False) is True:")
     # Before any turn or reply is prepared, and the mail is marked handled.
     assert skip < source.index("sender_in_roster = roster_sender is not None")
     assert "return \"left a demo person's mail unanswered\"" in source
