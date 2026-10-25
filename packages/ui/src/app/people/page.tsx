@@ -13,6 +13,7 @@ import SidePanel from "@/components/ui/SidePanel";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import {
   createPerson,
+  getDirectoryState,
   getPeopleViewer,
   listPeople,
   type PageFormField,
@@ -63,7 +64,25 @@ function channelLabel(channel: string): string {
   return channel === "any" ? "Where they last talked" : channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-function PersonCard({ person, today }: { person: Person; today: string }) {
+// Whether the identity provider's directory manages them, or could: shown to
+// the principal only, and only while the directory sync is on.
+function DirectoryBadge({ person, candidate }: { person: Person; candidate: boolean }) {
+  if (person.directory_managed) {
+    return (
+      <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-surface-hover text-fg-muted" title="Name and email follow your identity provider">
+        Directory
+      </span>
+    );
+  }
+  if (!candidate) return null;
+  return (
+    <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-sky-500/10 text-sky-600 dark:text-sky-400" title="In your identity provider's directory, not linked yet">
+      Link to directory
+    </span>
+  );
+}
+
+function PersonCard({ person, today, candidate = false }: { person: Person; today: string; candidate?: boolean }) {
   const contact = isContact(person);
   const status = personCardStatus(person, today);
   return (
@@ -84,6 +103,7 @@ function PersonCard({ person, today }: { person: Person; today: string }) {
               Principal
             </span>
           )}
+          <DirectoryBadge person={person} candidate={candidate} />
         </div>
         <div className="text-[15px] text-fg-muted mt-0.5 truncate">{person.role || "—"}</div>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-muted">
@@ -568,6 +588,8 @@ export default function PeoplePage() {
   // the check fails) nobody is offered them; the API enforces it regardless.
   const [viewerIsPrincipal, setViewerIsPrincipal] = useState(false);
   const [viewerLoading, setViewerLoading] = useState(true);
+  // People the directory could manage (link candidates), for the principal.
+  const [candidates, setCandidates] = useState<ReadonlySet<number>>(new Set());
 
   const tabs = tabsFor(viewerIsPrincipal);
   // Open on the mode's default tab once the mode is known; a tab the user
@@ -586,7 +608,13 @@ export default function PeoplePage() {
   useEffect(() => {
     refresh();
     getPeopleViewer()
-      .then((v) => setViewerIsPrincipal(v.is_principal))
+      .then((v) => {
+        setViewerIsPrincipal(v.is_principal);
+        if (!v.is_principal) return;
+        getDirectoryState()
+          .then((d) => d?.enabled && setCandidates(new Set(d.candidates.map((c) => c.person_id))))
+          .catch(() => {});
+      })
       .catch(() => setViewerIsPrincipal(false))
       .finally(() => setViewerLoading(false));
   }, []);
@@ -662,7 +690,7 @@ export default function PeoplePage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {shown.map((person) => (
-              <PersonCard key={person.id} person={person} today={today} />
+              <PersonCard key={person.id} person={person} today={today} candidate={candidates.has(person.id)} />
             ))}
           </div>
 

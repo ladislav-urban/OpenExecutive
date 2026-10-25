@@ -317,6 +317,73 @@ async def decline_roster_request(request_id: int, request: Request) -> RosterReq
     return await _answer_request(request_id, "decline", None)
 
 
+# --------------------------------------------------------------------------- #
+# The identity provider's directory (integrations.directory_sync)
+#
+# Declared before ``/people/{person_id}`` for the same reason as the requests.
+# The principal's alone: a 404 for anyone else.
+# --------------------------------------------------------------------------- #
+
+class DirectoryCandidate(BaseModel):
+    person_id: int
+    email: str
+
+
+class DirectoryState(BaseModel):
+    enabled: bool
+    last_run_at: str | None = None
+    last_ok_at: str | None = None
+    stopped: str | None = None
+    # People on the list who are active members but not linked yet: the
+    # People page offers Link for each.
+    candidates: list[DirectoryCandidate] = Field(default_factory=list)
+
+
+@router.get("/people/directory", response_model=DirectoryState)
+def directory_state(request: Request) -> DirectoryState:
+    from openexecutive.config import get_settings
+    from openexecutive.integrations import directory_sync
+
+    _require_principal_requests(request)
+    if not get_settings().directory_sync_enabled:
+        return DirectoryState(enabled=False)
+    last = directory_sync.status() or {}
+    candidates = []
+    for email in last.get("candidates") or []:
+        person = people_store.find_person_by_email(email)
+        # Still on the list, still unlinked: a run since may have linked them.
+        if person is not None and person.id is not None and not person.directory_managed:
+            candidates.append(DirectoryCandidate(person_id=person.id, email=email))
+    return DirectoryState(
+        enabled=True,
+        last_run_at=last.get("last_run_at"),
+        last_ok_at=last.get("last_ok_at"),
+        stopped=last.get("stopped"),
+        candidates=candidates,
+    )
+
+
+@router.post("/people/{person_id}/directory-link", response_model=Person)
+def link_to_directory(person_id: int, request: Request) -> Person:
+    """Let the directory manage this person: their name and email follow
+    the identity provider from the next run, and leaving it suspends them.
+    Needs an active member with their address."""
+    from openexecutive.config import get_settings
+    from openexecutive.integrations import directory_sync
+
+    _require_roster_owner(request)
+    person = _visible_person(person_id, request)
+    if not get_settings().directory_sync_enabled:
+        raise HTTPException(status_code=409, detail="The directory sync is off.")
+    if person.kind != "team" or not person.email or not person.active:
+        raise HTTPException(status_code=409, detail="Only an active team member with an email can be linked.")
+    try:
+        directory_sync.link(person.email)
+    except directory_sync.DirectoryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return _reread(person_id)
+
+
 @router.get("/people/{person_id}", response_model=Person)
 def get_person(person_id: int, request: Request) -> Person:
     return _visible_person(person_id, request)

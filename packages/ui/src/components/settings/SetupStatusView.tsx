@@ -101,7 +101,13 @@ function Tally({ checks }: { checks: SetupCheck[] }) {
  * app's own settings; everything else comes from the API, which tests each
  * part live — so a run takes a few seconds.
  */
-export default function SetupStatusView({ signIn }: { signIn: SetupCheck }) {
+export default function SetupStatusView({
+  signIn,
+  directorySignIn = null,
+}: {
+  signIn: SetupCheck;
+  directorySignIn?: SetupCheck | null;
+}) {
   const [status, setStatus] = useState<SetupStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -128,7 +134,7 @@ export default function SetupStatusView({ signIn }: { signIn: SetupCheck }) {
     return () => inflight.current?.abort();
   }, [check]);
 
-  const checks = sortChecks([signIn, ...(status?.checks ?? [])]);
+  const checks = sortChecks([signIn, ...(directorySignIn ? [directorySignIn] : []), ...(status?.checks ?? [])]);
 
   return (
     <main className="flex-1 min-h-0 overflow-y-auto">
