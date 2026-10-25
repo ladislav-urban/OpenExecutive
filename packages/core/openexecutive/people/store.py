@@ -1039,6 +1039,76 @@ def restore_person(
         return conn.execute(sql, params).rowcount > 0
 
 
+# --------------------------------------------------------------------------- #
+# The identity provider's directory (integrations.directory_sync)
+# --------------------------------------------------------------------------- #
+
+class DirectoryLinkError(ValueError):
+    """Raised when a directory identity is already someone else's."""
+
+
+def list_directory_managed(db_path: Path | None = None) -> list[Person]:
+    """Every non-archived person the directory manages, suspended ones and
+    contacts included: the sync decides what each may get."""
+    if not _resolve_db_path(db_path).exists():
+        return []
+    with _get_conn(db_path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM people WHERE directory_managed = 1 AND archived = 0 ORDER BY id"
+        ).fetchall()
+        return [_row_to_person(row, conn) for row in rows]
+
+
+def find_person_by_directory_subject(
+    subject: str, db_path: Path | None = None
+) -> Person | None:
+    """The non-archived person linked to this directory identity, whatever
+    their state; None when nobody is."""
+    if not subject or not _resolve_db_path(db_path).exists():
+        return None
+    with _get_conn(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM people WHERE directory_subject = ? AND archived = 0 LIMIT 1",
+            (subject,),
+        ).fetchone()
+        return _row_to_person(row, conn) if row is not None else None
+
+
+def link_directory(person_id: int, subject: str, db_path: Path | None = None) -> None:
+    """Mark ``person_id`` as managed by the directory identity ``subject``.
+    Raises ``DirectoryLinkError`` when another row holds it (an archived
+    row's link is dropped: it no longer exists for the directory)."""
+    if not subject:
+        raise ValueError("a directory subject is required")
+    with _get_conn(db_path) as conn:
+        held = conn.execute(
+            "SELECT id, archived FROM people WHERE directory_subject = ? AND id != ?",
+            (subject, person_id),
+        ).fetchall()
+        if any(not r["archived"] for r in held):
+            raise DirectoryLinkError("that directory identity is already linked to another person")
+        conn.execute(
+            "UPDATE people SET directory_subject = NULL, directory_managed = 0"
+            " WHERE directory_subject = ? AND id != ?",
+            (subject, person_id),
+        )
+        conn.execute(
+            "UPDATE people SET directory_subject = ?, directory_managed = 1, updated_at = ?"
+            " WHERE id = ?",
+            (subject, _now(), person_id),
+        )
+
+
+def unlink_directory(person_id: int, db_path: Path | None = None) -> bool:
+    """Stop the directory managing ``person_id``. Their row stays as it is."""
+    with _get_conn(db_path) as conn:
+        return conn.execute(
+            "UPDATE people SET directory_subject = NULL, directory_managed = 0, updated_at = ?"
+            " WHERE id = ? AND directory_managed = 1",
+            (_now(), person_id),
+        ).rowcount > 0
+
+
 def find_approvers(
     scope: AuthorityScope,
     db_path: Path | None = None,

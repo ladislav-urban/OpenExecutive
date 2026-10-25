@@ -24,10 +24,12 @@ _ARCHIVED_READ = re.compile(
 ALLOWED: dict[str, tuple[int, str]] = {
     "people/models.py": (1, "Person.active is defined from it"),
     "people/store.py": (
-        10,
+        12,
         "active_sql itself; address_holder, alias_holder and chat_id_holder keep a "
         "suspended person's addresses and chat ids theirs; list_people(include_suspended=True); "
-        "archive, suspend and restore write the flags",
+        "archive, suspend and restore write the flags; list_directory_managed and "
+        "find_person_by_directory_subject give the directory sync every managed row, "
+        "suspended ones included, so it can restore them",
     ),
     "api/routes/people.py": (
         3,

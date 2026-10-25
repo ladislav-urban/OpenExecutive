@@ -1472,6 +1472,42 @@ class Settings(BaseSettings):
             raise ValueError(f"CONFLUENCE_SYNC_ENABLED=true: {problem}")
         return self
 
+    # Follow the identity provider's directory (integrations/directory_sync.py).
+    # OFF by default. When on, a scheduler heartbeat reads DIRECTORY_SYNC_GROUP's
+    # members from Keycloak's admin API every DIRECTORY_SYNC_INTERVAL_MINUTES,
+    # read-only, as the DIRECTORY_SYNC_CLIENT_ID service account, and creates,
+    # updates, suspends and restores the People it manages. DIRECTORY_SYNC_ISSUER
+    # must equal AUTH_OIDC_ISSUER (the provider people sign in with) or the API
+    # refuses to start. DIRECTORY_SYNC_ADMIN_URL is where the admin API answers
+    # (an internal address; the public host serves no /admin/). See docs/auth.md,
+    # "Following your identity provider's directory".
+    directory_sync_enabled: bool = Field(False, alias="DIRECTORY_SYNC_ENABLED")
+    directory_sync_issuer: str = Field("", alias="DIRECTORY_SYNC_ISSUER")
+    directory_sync_admin_url: str = Field("", alias="DIRECTORY_SYNC_ADMIN_URL")
+    directory_sync_client_id: str = Field("openexecutive-directory", alias="DIRECTORY_SYNC_CLIENT_ID")
+    directory_sync_client_secret: str = Field("", alias="DIRECTORY_SYNC_CLIENT_SECRET")
+    directory_sync_group: str = Field("/dynocortex", alias="DIRECTORY_SYNC_GROUP")
+    # The safety brake: a run that would suspend more than this many people,
+    # or more than this share of the managed ones (from two up), stops and
+    # changes nothing.
+    directory_sync_max_suspend: int = Field(3, ge=0, alias="DIRECTORY_SYNC_MAX_SUSPEND")
+    directory_sync_max_share: float = Field(0.2, gt=0, le=1, alias="DIRECTORY_SYNC_MAX_SHARE")
+    directory_sync_interval_minutes: int = Field(5, ge=1, alias="DIRECTORY_SYNC_INTERVAL_MINUTES")
+    # The web app's SSO issuer, read here only so the sync can refuse a
+    # directory other than the one people sign in through.
+    auth_oidc_issuer: str = Field("", alias="AUTH_OIDC_ISSUER")
+
+    @model_validator(mode="after")
+    def _validate_directory_sync(self) -> "Settings":
+        if not self.directory_sync_enabled:
+            return self
+        from openexecutive.integrations.directory_sync import config_problem
+
+        problem = config_problem(self)
+        if problem:
+            raise ValueError(f"DIRECTORY_SYNC_ENABLED=true: {problem}")
+        return self
+
     @model_validator(mode="after")
     def _validate_drive_sync(self) -> "Settings":
         if not self.drive_sync_enabled:

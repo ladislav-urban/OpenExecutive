@@ -6,7 +6,7 @@
 //
 // The token is checked as the spec says (section 2.6) and anything else is
 // refused: the signature, against the issuer's keys; `iss`; `aud` holding
-// this app's client id; a recent `iat`; the back-channel logout event; a
+// this app's client id; an `exp`; a recent `iat`; the back-channel logout event; a
 // `sid` or a `sub`; no `nonce`; a `jti` not seen before. Tested in
 // scripts/backchannel.test.mjs.
 
@@ -49,7 +49,9 @@ export async function verifyLogoutToken(token: string, check: LogoutCheck): Prom
     ({ payload } = await jwtVerify(token, check.keys, {
       issuer: check.issuer,
       audience: check.clientId,
-      // jwtVerify checks `exp` when present; `iat` is ours to bound.
+      // The spec requires `exp`; jwtVerify checks it, and would skip a
+      // missing one but for this. `iat` is ours to bound.
+      requiredClaims: ["exp"],
       currentDate: new Date(check.now * 1000),
       clockTolerance: CLOCK_SKEW_S,
       // Asymmetric signatures only: never "none", never a shared secret.

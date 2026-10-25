@@ -1,0 +1,98 @@
+{
+ "_comment": "The directory contract's fixed test vector (docs/directory-sync-plan.md), in Keycloak's realm export shape: the groups and the users with their group paths. oe_connector's tests read it, and OpenExecutive's read the same file; change both together.",
+ "realm": "dynocortex",
+ "groups": [
+  {"name": "dynocortex", "path": "/dynocortex", "subGroups": []},
+  {
+   "name": "erpnext",
+   "path": "/erpnext",
+   "subGroups": [
+    {"name": "owner", "path": "/erpnext/owner", "subGroups": []},
+    {"name": "accounts", "path": "/erpnext/accounts", "subGroups": []},
+    {"name": "trial", "path": "/erpnext/trial", "subGroups": []}
+   ]
+  }
+ ],
+ "users": [
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000001",
+   "username": "owner",
+   "email": "dir-owner@example.com",
+   "emailVerified": true,
+   "enabled": true,
+   "firstName": "Olivia",
+   "lastName": "Owner",
+   "groups": ["/dynocortex", "/erpnext", "/erpnext/owner"]
+  },
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000002",
+   "username": "accountant",
+   "email": "dir-accountant@example.com",
+   "emailVerified": true,
+   "enabled": true,
+   "firstName": "Aaron",
+   "lastName": "Accountant",
+   "groups": ["/dynocortex", "/erpnext/accounts"]
+  },
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000003",
+   "username": "trial",
+   "email": "dir-trial@example.com",
+   "emailVerified": true,
+   "enabled": true,
+   "firstName": "Tara",
+   "lastName": "Trial",
+   "groups": ["/erpnext/trial"]
+  },
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000004",
+   "username": "adviser",
+   "email": "dir-adviser@example.com",
+   "emailVerified": true,
+   "enabled": true,
+   "firstName": "Ada",
+   "lastName": "Adviser",
+   "groups": ["/dynocortex"]
+  },
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000005",
+   "username": "disabled",
+   "email": "dir-disabled@example.com",
+   "emailVerified": true,
+   "enabled": false,
+   "firstName": "Dan",
+   "lastName": "Disabled",
+   "groups": ["/dynocortex", "/erpnext/accounts"]
+  },
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000006",
+   "username": "unverified",
+   "email": "dir-unverified@example.com",
+   "emailVerified": false,
+   "enabled": true,
+   "firstName": "Uma",
+   "lastName": "Unverified",
+   "groups": ["/dynocortex", "/erpnext/accounts"]
+  },
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000007",
+   "username": "desk",
+   "email": "dir-desk@example.com",
+   "emailVerified": true,
+   "enabled": true,
+   "firstName": "Dora",
+   "lastName": "Desk",
+   "groups": ["/erpnext"]
+  },
+  {
+   "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000008",
+   "username": "nogroup",
+   "email": "dir-nogroup@example.com",
+   "emailVerified": true,
+   "enabled": true,
+   "firstName": "Nils",
+   "lastName": "Nogroup",
+   "groups": []
+  }
+ ]
+}

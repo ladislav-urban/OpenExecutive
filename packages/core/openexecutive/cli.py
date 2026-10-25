@@ -424,6 +424,36 @@ async def _onedrive_folder(link: str) -> None:
     console.print("Add that to ONEDRIVE_SYNC_FOLDERS (comma-separated for several).")
 
 
+@cli.command("directory-sync")
+@click.option("--dry-run", is_flag=True, help="Print what it would change; change nothing.")
+@click.option(
+    "--allow-mass-suspend",
+    is_flag=True,
+    help="Run past the safety brake, after checking the realm and the group.",
+)
+def directory_sync_command(dry_run: bool, allow_mass_suspend: bool) -> None:
+    """Run one directory sync: People follow the identity provider's group."""
+    from openexecutive.integrations.directory_sync import sync
+
+    report = sync(dry_run=dry_run, allow_mass_suspend=allow_mass_suspend)
+    console.print(report.text(), markup=False)
+    if report.stopped:
+        raise SystemExit(1)
+
+
+@cli.command("directory-link")
+@click.option("--email", required=True, help="The address on both the Person and the directory member.")
+def directory_link_command(email: str) -> None:
+    """Link an existing team Person to their directory identity."""
+    from openexecutive.integrations.directory_sync import DirectoryError, link
+
+    try:
+        console.print(link(email), markup=False)
+    except DirectoryError as error:
+        console.print(f"Not linked: {error}", markup=False)
+        raise SystemExit(1) from None
+
+
 @cli.command("sync-confluence")
 def sync_confluence() -> None:
     """Run one Confluence space → isolated collection sync tick."""
