@@ -1030,12 +1030,19 @@ def check_directory(snap: Snapshot) -> SetupCheck:
             'Check that the scheduler is running, and look in the API log for "directory_sync".',
         )
     managed = list_directory_managed()
-    new = [p for p in managed if p.kind == "team" and not p.is_principal and not p.role.strip() and not p.suspended]
+    # Demo people (people.demo) are one line, not one "new" line each: they
+    # come and go in numbers, and need nothing from the owner.
+    demo = sum(1 for p in managed if p.demo and not p.suspended)
+    new = [
+        p for p in managed
+        if p.kind == "team" and not p.is_principal and not p.demo and not p.role.strip() and not p.suspended
+    ]
     candidates = len(last.get("candidates") or [])
     principal_out = bool((last.get("counts") or {}).get("warning"))
     summary = (
-        f"On: {_plural(len(managed), 'person', 'people')} managed. "
-        f"Last run {_ago((snap.now - finished).total_seconds())}."
+        f"On: {_plural(len(managed), 'person', 'people')} managed"
+        + (f", {demo} of them demo {'user' if demo == 1 else 'users'}" if demo else "")
+        + f". Last run {_ago((snap.now - finished).total_seconds())}."
     )
     todo = []
     if new:

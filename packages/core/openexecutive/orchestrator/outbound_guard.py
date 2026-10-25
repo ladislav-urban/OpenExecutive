@@ -21,6 +21,10 @@ suppress-and-log the send and the Executive can read the reason and adapt
 3. Quiet hours / availability — when ``outbound_respect_quiet_hours`` is set,
    refuse while the recipient is on leave or outside their availability windows.
 
+Before all three, a demo person (``people.demo``) is never sent anything: they
+are on the roster to try the product, and hear from the Executive only in
+their own chat.
+
 Separately, ``check_hold`` applies the recipient's own notification settings
 (``people.notifications``: quiet hours, "In my briefs") to the Executive's
 own outreach only — a DM sent while a proactive source is tagged
@@ -85,6 +89,19 @@ def _parse_iso(value: str) -> datetime | None:
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(UTC)
+
+
+def _is_demo_recipient(channel: str, channel_ref: str) -> bool:
+    """Whether the recipient resolves to a demo person. An unresolvable one
+    isn't (the guard fails open, as for availability)."""
+    try:
+        from openexecutive.people.store import find_person_by_channel_ref
+
+        person = find_person_by_channel_ref(channel, channel_ref)
+    except Exception:
+        logger.exception("outbound_guard: demo check failed; failing open")
+        return False
+    return person is not None and person.demo
 
 
 def _availability_reason(channel: str, channel_ref: str, now: datetime) -> str | None:
@@ -153,6 +170,13 @@ def _evaluate(channel: str, channel_ref: str, text: str, now: datetime) -> str |
     from openexecutive.config import get_settings
 
     settings = get_settings()
+
+    # 0. Never a demo person.
+    if _is_demo_recipient(channel, channel_ref):
+        return (
+            "the recipient is a demo user: the Executive sends them nothing outside "
+            "their own chat. Don't send this"
+        )
 
     # One scan over recent sends covers both dedup and rate windows.
     window_min = max(

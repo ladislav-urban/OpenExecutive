@@ -32,6 +32,7 @@ from openexecutive.integrations.attachments import build_attachment_output
 from openexecutive.orchestrator.answer_sources import TurnSources
 from openexecutive.orchestrator.debug_events import DebugCollector
 from openexecutive.orchestrator.turn_inbox import TurnInbox
+from openexecutive.people import demo as people_demo
 from openexecutive.workflows import turn_files
 from openexecutive.workflows.python_job import available as python_job_available
 from openexecutive.workflows.turn_files import bind as bind_turn_files
@@ -1052,6 +1053,13 @@ async def _run_chat_turn(
     # by signed-in user); see its docstring for the precedence rule that
     # protects against cross-identity leakage.
     caller_person_id = _resolve_caller_person_id(request)
+    # A demo person (people.demo) may ask DEMO_DAILY_QUESTIONS a day: the
+    # question past that is refused here, before it costs anything.
+    demo_caller = await asyncio.to_thread(people_demo.is_demo_person, caller_person_id)
+    if demo_caller:
+        limit = get_settings().demo_daily_questions
+        if not await asyncio.to_thread(people_demo.take_question, caller_person_id, limit):  # type: ignore[arg-type]
+            raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))
     # The rows written before the Executive binds this caller to the session
     # (the "User:" row, the knowledge retrieval, the start of the stream) are
     # private, as the rest of the turn's are, when the principal sent the
@@ -1178,6 +1186,8 @@ async def _run_chat_turn(
     # proxy stamps x-caller-email from it). A header-less request resolves to
     # the principal but is no sign-in, so it never gets Act as me.
     session.web_caller_signed_in = api_caller.signed_in(request)
+    # Per turn: a demo person's turn only reads and advises (Session.demo_caller).
+    session.demo_caller = demo_caller
     # Per turn too: a host origin's page sent it, or wrote earlier in this
     # conversation (Session.from_host). Then it only reads and advises,
     # whichever page asks now: the host's lines stay in what the model reads.

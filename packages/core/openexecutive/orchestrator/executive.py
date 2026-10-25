@@ -210,6 +210,7 @@ from openexecutive.orchestrator.workflow_run_tools import (
     WORKFLOW_RUN_TOOL_HANDLERS,
     WORKFLOW_RUN_TOOLS,
 )
+from openexecutive.people.demo import demo_turn
 from openexecutive.prompts.cache_manager import build_system_blocks
 from openexecutive.providers import get_provider
 from openexecutive.providers.translator import reasoning_replay_block
@@ -2292,8 +2293,10 @@ class Executive:
         principal_withheld = principal_only_withheld(current_session.get())
         # A turn from ERPNext's panel only asks: its specialists and ERPNext's
         # read tools, nothing else (schedule_tools.ERPNEXT_PANEL_TOOLS) — a
-        # stable tool list of its own, and the same guard at dispatch.
-        panel_turn = erpnext_panel_turn(current_session.get())
+        # stable tool list of its own, and the same guard at dispatch. A demo
+        # person's turn in the web chat gets the same (people.demo).
+        demo_speaker = demo_turn(current_session.get())
+        panel_turn = erpnext_panel_turn(current_session.get()) or demo_speaker
         # Python jobs need the sandbox the API image installs: without it the
         # tool is not offered (fixed per process, so the prefix stays stable).
         sandbox_missing = frozenset() if python_job.available() else frozenset({python_job.TOOL_NAME})
@@ -2655,10 +2658,11 @@ class Executive:
                     if label == "call_tool" and isinstance(tu["input"], dict):
                         named = tu["input"].get("name")
                         label = named[:200] if isinstance(named, str) and named else label
-                    logger.warning("%s refused — ERPNext's panel only reads", _loggable_tool(label))
+                    where = "a demo turn" if demo_speaker else "ERPNext's panel"
+                    logger.warning("%s refused — %s only reads", _loggable_tool(label), where)
                     audit_log(
                         "tool_invocation",
-                        f"{label} refused: ERPNext's panel only reads",
+                        f"{label} refused: {where} only reads",
                         session_id=getattr(current_session.get(), "session_id", None),
                         turn_id=turn_id,
                         actor="executive",
@@ -2667,10 +2671,10 @@ class Executive:
                             "kind": "mcp" if tu["name"] in MCP_TOOL_NAMES else "skill",
                             "iteration": iteration,
                             "ok": False,
-                            "refused": "erpnext_panel",
+                            "refused": "demo" if demo_speaker else "erpnext_panel",
                         },
                     )
-                    group_results[tu["id"]] = erpnext_panel_withheld_error(label)
+                    group_results[tu["id"]] = erpnext_panel_withheld_error(label, demo=demo_speaker)
             dispatch_uses = [tu for tu in tool_uses if tu["id"] not in group_results]
 
             specialist_tool_uses = [tu for tu in dispatch_uses if tu["name"] == "consult_specialist"]

@@ -7999,6 +7999,32 @@ integrations:
     directorySignInCheck (ALLOWED_EMAILS overlap = warn; shown only while
     the directory manages someone).
 
+    Demo people (self-registration step 7, option A decided Oct 25, 2026:
+    prospects go on the pilot, which holds only the demo company; no
+    prospect's own company is ever on it). DIRECTORY_SYNC_DEMO_GROUP (a
+    path, empty = none; config_problem checks it) is read with its
+    subgroups after the main group; Member.demo = in both. people column
+    directory_demo (Person.demo), written only by set_directory_demo from
+    the sync (create, and both ways on update: "now demo" / "no longer
+    demo"), cleared by unlink_directory. Create sets
+    DIRECTORY_SYNC_DEMO_ROLE ("Demo user") on create only; no departments,
+    scopes or manager. Brake: demo suspensions against
+    DIRECTORY_SYNC_DEMO_MAX_SUSPEND (50), the team's count and share
+    without them (a batch of ending demos must not stop the run, and must
+    not dilute the team's share). people/demo.py: find_approvers excludes
+    demo rows; outbound_guard refuses a recipient resolving to a demo
+    person (fail open on lookup errors, as the guard does); POST /chat sets
+    Session.demo_caller per turn (is_demo_person fails closed) and refuses
+    the question past DEMO_DAILY_QUESTIONS (50/UTC day, demo_questions
+    upsert, fails closed) with 429 before any cost; ERPNext's panel counts
+    the same (429 daily_limit). A demo turn is held to the panel's tools
+    (ERPNEXT_PANEL_TOOLS, drafts where offered, no web search, the same
+    dispatch guard). Setup status: one line ("N of them demo users"),
+    never "new from the directory". Not built: per-person AI cost totals in
+    Setup status. A demo person still sees what the shared workspace shows
+    every team member (Home, knowledge, People), so they belong only on an
+    install whose company data is demo data.
+
     Recovery: link(email, relink=True) re-points a managed row only when its
     current subject is absent from the group read, and restores a directory
     suspension; unlink(email) drops the link. Hardening from the same

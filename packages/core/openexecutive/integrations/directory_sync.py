@@ -84,11 +84,14 @@ class Member:
     email: str
     full_name: str
     active: bool
+    # Also a member of DIRECTORY_SYNC_DEMO_GROUP.
+    demo: bool = False
 
 
 class DirectoryReader(Protocol):
-    """Reads one group's members. Keycloak today; Entra ID or Google
-    Workspace can be added beside it."""
+    """Reads one group's members, each marked demo when also in the demo
+    group. Keycloak today; Entra ID or Google Workspace can be added beside
+    it."""
 
     def read_members(self) -> dict[str, Member]: ...
 
@@ -189,9 +192,16 @@ def config_problem(settings: Settings) -> str | None:
     if not settings.directory_sync_client_secret:
         return "DIRECTORY_SYNC_CLIENT_SECRET isn't set"
     group = settings.directory_sync_group.strip()
-    if not group.startswith("/") or group == "/" or "//" in group or group.endswith("/"):
+    if not _group_path_ok(group):
         return "DIRECTORY_SYNC_GROUP must be a group path, e.g. /dynocortex"
+    demo = settings.directory_sync_demo_group.strip()
+    if demo and not _group_path_ok(demo):
+        return "DIRECTORY_SYNC_DEMO_GROUP must be a group path, e.g. /erpnext/demo, or empty"
     return None
+
+
+def _group_path_ok(group: str) -> bool:
+    return group.startswith("/") and group != "/" and "//" not in group and not group.endswith("/")
 
 
 # --------------------------------------------------------------------------- #
@@ -219,6 +229,9 @@ class KeycloakReader:
         self.client_id = settings.directory_sync_client_id.strip()
         self._secret = settings.directory_sync_client_secret
         self.group = settings.directory_sync_group.strip()
+        self.demo_group = settings.directory_sync_demo_group.strip()
+        # The group being read, for a "doesn't exist" message.
+        self._reading = self.group
         self._client = httpx.Client(
             timeout=TIMEOUT_S, follow_redirects=False, transport=transport
         )
@@ -268,7 +281,7 @@ class KeycloakReader:
             self._fresh = True
             token = self._token(fresh=True)
         if response.status_code == 404 and path.startswith("group-by-path/"):
-            raise DirectoryError(f"the group {self.group} doesn't exist in the realm")
+            raise DirectoryError(f"the group {self._reading} doesn't exist in the realm")
         if response.status_code != 200:
             raise DirectoryError(f"the admin API answered {response.status_code} for {path.split('/')[0]}")
         try:
@@ -288,24 +301,31 @@ class KeycloakReader:
                 return items
 
     def read_members(self) -> dict[str, Member]:
-        """Every member of the group and the groups under it, by user id."""
+        """Every member of the group and the groups under it, by user id,
+        marked demo when also in the demo group or one under it."""
         try:
-            path = "/".join(quote(part, safe="") for part in self.group.strip("/").split("/"))
-            groups, todo = [], [self._get(f"group-by-path/{path}")]
-            while todo:
-                group = todo.pop()
-                groups.append(group)
-                todo += self._paged(f"groups/{quote(group['id'])}/children", briefRepresentation="true")
-            found: dict[str, dict[str, Any]] = {}
-            for group in groups:
-                for user in self._paged(f"groups/{quote(group['id'])}/members", briefRepresentation="false"):
-                    found[str(user["id"])] = user
+            found = self._group_users(self.group)
+            demo = set(self._group_users(self.demo_group)) if self.demo_group else set()
         finally:
             self._client.close()
-        return {uid: _member(uid, user) for uid, user in found.items()}
+        return {uid: _member(uid, user, demo=uid in demo) for uid, user in found.items()}
+
+    def _group_users(self, group_path: str) -> dict[str, dict[str, Any]]:
+        self._reading = group_path
+        path = "/".join(quote(part, safe="") for part in group_path.strip("/").split("/"))
+        groups, todo = [], [self._get(f"group-by-path/{path}")]
+        while todo:
+            group = todo.pop()
+            groups.append(group)
+            todo += self._paged(f"groups/{quote(group['id'])}/children", briefRepresentation="true")
+        found: dict[str, dict[str, Any]] = {}
+        for group in groups:
+            for user in self._paged(f"groups/{quote(group['id'])}/members", briefRepresentation="false"):
+                found[str(user["id"])] = user
+        return found
 
 
-def _member(uid: str, user: dict[str, Any]) -> Member:
+def _member(uid: str, user: dict[str, Any], *, demo: bool = False) -> Member:
     # A user id is the link, and Keycloak's are UUIDs: anything else is an
     # answer of the wrong shape, and the run stops.
     if not isinstance(user.get("id"), str) or not uid.strip() or uid != uid.strip():
@@ -319,6 +339,7 @@ def _member(uid: str, user: dict[str, Any]) -> Member:
         email=email,
         full_name=name or email.split("@", 1)[0],
         active=bool(user.get("enabled") is True and user.get("emailVerified") is True and email),
+        demo=demo,
     )
 
 
@@ -339,7 +360,17 @@ def _audit(event_type: str, summary: str, details: dict[str, Any]) -> None:
         logger.warning("directory_sync: audit failed", exc_info=True)
 
 
-def _brake(settings: Settings, suspend: int, population: int) -> str | None:
+def _brake(settings: Settings, suspend: int, population: int, demo_suspend: int = 0) -> str | None:
+    """Why the run must stop before suspending ``suspend`` of the
+    ``population`` team people it manages and ``demo_suspend`` demo people,
+    or None. Demo accesses end in batches, so demo people have a brake of
+    their own and don't count toward the team's."""
+    if demo_suspend > settings.directory_sync_demo_max_suspend:
+        return (
+            f"it would suspend {demo_suspend} demo people, more than DIRECTORY_SYNC_DEMO_MAX_SUSPEND "
+            f"({settings.directory_sync_demo_max_suspend}). Check the realm and the groups, then run "
+            "`openexecutive directory-sync --allow-mass-suspend`."
+        )
     if suspend > settings.directory_sync_max_suspend:
         return (
             f"it would suspend {suspend} people, more than DIRECTORY_SYNC_MAX_SUSPEND "
@@ -424,7 +455,9 @@ def _sync(report: Report, reader: DirectoryReader | None, allow_mass_suspend: bo
                 "`openexecutive directory-sync --allow-mass-suspend`."
             )
             return
-        if why := _brake(settings, len(gone), sum(1 for p in team if not p.suspended)):
+        gone_demo = sum(1 for p in gone if p.demo)
+        population = sum(1 for p in team if not p.suspended and not p.demo)
+        if why := _brake(settings, len(gone) - gone_demo, population, gone_demo):
             report.stopped = why
             return
 
@@ -483,12 +516,18 @@ def _add(member: Member, report: Report) -> None:
         else:
             report.add("candidate", member.email, f"link with `openexecutive directory-link --email {member.email}`")
         return
-    report.add("created", member.email)
+    report.add("created", member.email, "demo" if member.demo else "")
     if report.dry_run:
         return
-    pid = store.upsert_person(full_name=member.full_name, email=member.email, kind="team")
+    # A demo person starts with the demo role and nothing else: no
+    # departments, scopes or manager. Set on create only, so the principal
+    # may change it.
+    role = get_settings().directory_sync_demo_role.strip() if member.demo else ""
+    pid = store.upsert_person(full_name=member.full_name, role=role, email=member.email, kind="team")
     try:
         store.link_directory(pid, member.id)
+        if member.demo:
+            store.set_directory_demo(pid, True)
     except Exception:
         # Never leave an unlinked row behind: it would admit their email on
         # any sign-in, unchecked by the directory.
@@ -520,6 +559,13 @@ def _update(person: Person, member: Member, report: Report) -> None:
             store.update_person(person.id, **fields)  # type: ignore[arg-type]
             _audit("directory_person_updated", f"person #{person.id} updated from the directory",
                    {"person_id": person.id, "fields": sorted(fields)})
+    # The demo mark follows the demo group, both ways.
+    if member.demo != person.demo:
+        report.add("updated", member.email, "now demo" if member.demo else "no longer demo")
+        if not report.dry_run:
+            store.set_directory_demo(person.id, member.demo)
+            _audit("directory_person_updated", f"person #{person.id} updated from the directory",
+                   {"person_id": person.id, "fields": ["demo"], "demo": member.demo})
     if person.suspended:
         if person.suspended_by == "directory":
             report.add("restored", member.email)

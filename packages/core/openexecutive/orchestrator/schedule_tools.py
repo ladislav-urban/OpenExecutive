@@ -2390,8 +2390,17 @@ def erpnext_panel_call(tool_use: dict[str, Any]) -> dict[str, Any]:
     return {**tool_use, "name": "call_tool", "input": {"name": name, "arguments": tool_use.get("input")}}
 
 
-def erpnext_panel_withheld_error(tool_name: str) -> str:
-    """The JSON error tool_result for a call a panel turn may not make."""
+def erpnext_panel_withheld_error(tool_name: str, *, demo: bool = False) -> str:
+    """The JSON error tool_result for a call a panel turn may not make, or a
+    demo person's turn (``demo``), which is held to the same list."""
+    if demo:
+        return json.dumps({
+            "error": (
+                f"{tool_name} is not available here: this is a demo, so you can only "
+                "read ERPNext and consult your specialists, and prepare an ERPNext draft "
+                "where offered. Say what you would do instead. Do not retry."
+            )
+        })
     return json.dumps({
         "error": (
             f"{tool_name} is not available here: in ERPNext's panel you can only "

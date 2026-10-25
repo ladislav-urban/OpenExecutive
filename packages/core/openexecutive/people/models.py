@@ -131,6 +131,11 @@ class Person(BaseModel):
     # Not serialised: the provider's id is nobody's business on the wire.
     directory_subject: str | None = Field(default=None, exclude=True)
     directory_managed: bool = False
+    # A demo person: also a member of DIRECTORY_SYNC_DEMO_GROUP, kept in step
+    # by the directory sync. Their chat turns only read and advise, they
+    # never approve for anyone, the Executive sends them nothing, and their
+    # questions a day are capped (docs/auth.md, "Demo people").
+    demo: bool = False
     created_at: str = ""
     updated_at: str = ""
 
