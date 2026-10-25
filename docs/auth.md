@@ -314,25 +314,36 @@ refuses to start with settings it can't trust):
 An install that shows prospects what the Executive can do (on demo data, with
 no company of theirs on it) can let them in through the directory: a member
 of `DIRECTORY_SYNC_GROUP` who is also in `DIRECTORY_SYNC_DEMO_GROUP` (or a
-group under it) is a **demo person** (`people/demo.py`). The mark follows the
-demo group on every run, both ways, and goes when the row is unlinked.
+group under it) is a **demo person** (`people/demo.py`). Only a new person is
+made demo: someone already on the team who is put in the demo group stays a
+team member (the run reports a warning), so whoever controls that group can't
+take the team's approvals and mail away. A demo person who leaves the demo
+group becomes a team member. The mark goes when the row is unlinked. The demo
+group can't be the team's group or hold it.
 
 - **Created with the demo role and nothing else:** no departments, approval
   scopes or manager. The role is set on create only, so you can change it.
-- **Their turns only read and advise.** In the web chat, a demo person's turn
-  gets the same narrow tools as ERPNext's panel: the specialists and
+- **Their turns only read and advise.** On every surface, a demo person's
+  turn gets the same narrow tools as ERPNext's panel: the specialists and
   ERPNext's reads, signed as them, so ERPNext shows them only what it lets
   them see, and an ERPNext draft where drafts are offered to them. Nothing
   that sends, posts, books, schedules, runs or remembers, no web search, and
   none of the Executive's mailbox or calendar. Their chats are their own, as
   everyone's are.
-- **They never approve for anyone**, whatever scopes their row carries: the
-  authority gate never routes a card to them.
+- **They approve nothing for anyone**, whatever scopes their row carries:
+  the authority gate never routes a card to them, and both approval routes
+  refuse them a card someone else's work routed to them. Only a card that is
+  theirs alone (an ERPNext draft they asked for) is theirs to answer.
 - **The Executive sends them nothing** outside their own chat: the outbound
-  guard refuses a DM or mail to a demo person.
+  guard refuses a DM to them, and they are off the mail gateway's
+  allow-list. Mail they send the Executive gets no turn and no reply: the
+  demo is in the app.
 - **A cap on questions a day,** `DEMO_DAILY_QUESTIONS`, across the web chat
-  and ERPNext's panel; the question past it is refused before it costs
-  anything, with a message saying so. The count resets at midnight UTC.
+  and ERPNext's panel. A message added to a running turn counts as one, and
+  so does each uploaded file. The question past it is refused before it
+  costs anything, with a message saying so. The count resets at midnight
+  UTC. Voice transcription still shares the install-wide daily cap
+  (`TRANSCRIPTION_MAX_MB_PER_DAY`), so one demo person can use it up.
 - **One line in Setup status** ("N of them demo users"), never one "new from
   the directory" line each.
 - **Their own brake.** Demo accesses end in batches (the provider removes
