@@ -106,6 +106,9 @@ EVENT_TYPES: tuple[str, ...] = (
     "fact_reviewed",                # the principal approved or declined a teammate's proposed standing fact
     "fact_approval_changed",        # the principal turned "needs my approval" on or off for a teammate's standing facts
     "fact_confirmation",            # an emailed standing-fact change held, confirmed, cancelled or refused (integrations/fact_confirmation.py)
+    # People (people/store.py) — private to the principal.
+    "person_suspended",  # someone was taken out of every access decision, reversibly (details.by: principal | directory)
+    "person_restored",   # a suspended person was brought back with everything they had
     "grounding",  # unattended prose held back / refused / rewritten for naming people or figures not in its inputs
     # ERPNext drafts (integrations/erpnext_drafts.py) — written private to the card's person.
     "erpnext_draft_proposed",   # propose_erpnext_draft left a card; details name the DocType and card, never its fields

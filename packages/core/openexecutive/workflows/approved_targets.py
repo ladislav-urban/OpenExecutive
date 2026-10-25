@@ -164,7 +164,7 @@ def approver_for(workflow_name: str) -> int | None:
         # the team: they are never asked to approve anything.
         if (
             owner is not None
-            and not getattr(owner, "archived", False)
+            and getattr(owner, "active", True)
             and getattr(owner, "kind", "team") == "team"
         ):
             return owner_id

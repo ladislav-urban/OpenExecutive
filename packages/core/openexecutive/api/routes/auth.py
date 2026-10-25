@@ -50,7 +50,8 @@ class AllowedEmail(BaseModel):
 
 @router.get("/auth/allowed-emails", response_model=list[AllowedEmail])
 def allowed_emails() -> list[AllowedEmail]:
-    """Return ``[{email, person_id}]`` for every non-archived Person with an email.
+    """Return ``[{email, person_id}]`` for every active (not archived, not
+    suspended) team member with an email.
 
     Empty list when no people are seeded yet (fresh install); the UI then
     relies on ``ALLOWED_EMAILS`` alone, so a brand-new operator can sign in

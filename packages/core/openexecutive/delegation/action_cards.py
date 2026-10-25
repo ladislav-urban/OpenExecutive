@@ -172,7 +172,7 @@ def _roster_person(person_id: int | None, *, contacts: bool) -> Any:
     if person_id is None:
         return None
     person = get_person(person_id)
-    if person is None or person.archived:
+    if person is None or not person.active:
         return None
     if person.kind != "team" and not contacts:
         return None
@@ -449,7 +449,7 @@ def _settled(person_id: Any, speaker_id: int, now: datetime) -> bool:
     if pid == speaker_id:
         return True
     found = get_person(pid)
-    if found is None or found.archived or found.kind not in ("team", "contact"):
+    if found is None or not found.active or found.kind not in ("team", "contact"):
         return False
     try:
         created = datetime.fromisoformat(str(found.created_at or ""))
@@ -612,7 +612,7 @@ async def approve(
 
     payload = _payload(instance)
     person = get_person(_int(payload.get("person_id")) or 0)
-    if person is None or person.id is None or person.archived or person.id != instance.approver_person_id:
+    if person is None or person.id is None or not person.active or person.id != instance.approver_person_id:
         raise ApproveRefused(404, "gone", "This card is no longer there.")
     refused = caller_refusal(caller, normalize_email(person.email or ""))
     if refused == NOT_YOURS:

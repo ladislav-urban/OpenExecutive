@@ -71,6 +71,9 @@ PreferredChannel = Literal["email", "slack", "telegram", "discord", "any"]
 PersonKind = Literal["team", "contact"]
 PERSON_KINDS: tuple[str, ...] = ("team", "contact")
 
+SuspendedBy = Literal["principal", "directory"]
+SUSPENDED_BY: tuple[str, ...] = ("principal", "directory")
+
 
 class Person(BaseModel):
     """A real human who can receive work, approve actions, and respond.
@@ -116,5 +119,24 @@ class Person(BaseModel):
     on_leave_until: date | None = None
     reports_to_person_id: int | None = None
     archived: bool = False
+    # A reversible "off" (``people.store.suspend_person``): out of every
+    # access decision like an archived person, but nothing of theirs is
+    # deleted. ``suspended_by`` is "principal" or "directory", so the
+    # directory sync only ever restores a suspension it made itself.
+    suspended: bool = False
+    suspended_by: SuspendedBy | None = None
+    suspended_at: str | None = None
+    # The identity provider's id for this person (an OIDC ``sub``), and
+    # whether its directory manages the row (name and email follow it).
+    # Not serialised: the provider's id is nobody's business on the wire.
+    directory_subject: str | None = Field(default=None, exclude=True)
+    directory_managed: bool = False
     created_at: str = ""
     updated_at: str = ""
+
+    @property
+    def active(self) -> bool:
+        """Whether this person counts for access: sign-in, being a speaker,
+        approving, being emailed or chased. History and memory read
+        ``archived`` alone."""
+        return not self.archived and not self.suspended

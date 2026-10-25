@@ -237,7 +237,7 @@ def _roster_slice(alert: Alert, sensitive: bool) -> list[dict[str, Any]]:
         ):
             routed = get_person(alert.routed_to_person_id)
             # Team only: a contact is never routed to, nudged or chased.
-            if routed is not None and not routed.archived and routed.kind == "team":
+            if routed is not None and routed.active and routed.kind == "team":
                 people[alert.routed_to_person_id] = routed
         if sensitive:
             for p in list_people():

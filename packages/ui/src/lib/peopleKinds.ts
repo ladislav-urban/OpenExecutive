@@ -76,9 +76,13 @@ export type CardStatusTone = "ok" | "warn" | "muted";
  * expected to reply. Their approval scopes are on their own page.
  */
 export function personCardStatus(
-  person: Pick<Person, "kind" | "email" | "on_leave_until" | "response_sla_hours">,
+  person: Pick<Person, "kind" | "email" | "on_leave_until" | "response_sla_hours" | "suspended" | "suspended_by">,
   today: string,
 ): { label: string; tone: CardStatusTone } {
+  // Suspended outranks everything else: they can't sign in or be reached.
+  if (person.suspended) {
+    return { label: person.suspended_by === "directory" ? "Suspended (directory)" : "Suspended", tone: "warn" };
+  }
   if (isContact(person)) {
     return person.email ? { label: "Email on file", tone: "ok" } : { label: "No email", tone: "muted" };
   }

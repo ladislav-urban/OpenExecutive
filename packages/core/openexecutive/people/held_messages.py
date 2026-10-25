@@ -512,7 +512,7 @@ async def release_due(now: datetime, *, db_path: Path | None = None) -> int:
         ids = [m.id for m in messages]
         try:
             person = get_person(person_id)
-            if person is None or person.archived:
+            if person is None or not person.active:
                 _drop(ids, now, db_path)
                 _audit_dropped(person_id, len(ids), "no longer on the People list")
                 continue

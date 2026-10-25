@@ -170,7 +170,7 @@ def _is_principal(person_id: int | None) -> bool:
     from openexecutive.people.store import get_person
 
     person = get_person(person_id)
-    return bool(person is not None and person.is_principal and not person.archived)
+    return bool(person is not None and person.is_principal and person.active)
 
 
 def principal_speaking(session: Any) -> bool:

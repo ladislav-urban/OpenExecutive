@@ -1136,7 +1136,7 @@ def _recover_channel_id_from_person_id(value: str, channel: str) -> str | None:
     from openexecutive.people.store import get_person
 
     person = get_person(int(value))
-    if person is None or person.archived:
+    if person is None or not person.active:
         return None
     from openexecutive.orchestrator.people_tools import (
         contacts_reachable_now,
@@ -1499,7 +1499,7 @@ async def message_person(tool_input: dict[str, Any], *, alert_fallback: bool = T
         text = f"{text.rstrip()}\n\n{link_line}"
 
     person = get_person(person_id)
-    if person is None or person.archived:
+    if person is None or not person.active:
         return json.dumps({"error": (
             f"person_id {person_id} is not on the People roster. Call "
             "lookup_person to get a valid person_id."

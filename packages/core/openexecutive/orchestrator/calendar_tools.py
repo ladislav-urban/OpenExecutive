@@ -287,7 +287,7 @@ def _resolve_attendees(
             return {"error": f"person_id {person_id} not found on roster"}
         if not person.email:
             return {"error": f"person {person.full_name!r} (id={person_id}) has no email"}
-        if getattr(person, "archived", False):
+        if not getattr(person, "active", True):
             return {"error": f"person {person.full_name!r} (id={person_id}) is archived"}
         if turn_is_private_to_principal() and not person.is_principal:
             return {"error": PRIVATE_TURN_REFUSAL}
@@ -356,7 +356,7 @@ def _pick_recap_target(
             person = get_person(int(pid))
         except (TypeError, ValueError):
             continue
-        if person is None or getattr(person, "archived", False):
+        if person is None or not getattr(person, "active", True):
             continue
         # The recap ask is a chase that fires later, unattended: never a
         # contact (they cannot answer the bot anyway).

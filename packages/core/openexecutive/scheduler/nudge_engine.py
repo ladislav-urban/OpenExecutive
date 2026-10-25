@@ -585,7 +585,7 @@ def _static_channel_for_person(
     from openexecutive.people.registry import get_person
 
     person = get_person(person_id)
-    if person is None or person.archived:
+    if person is None or not person.active:
         return None
     channel, ref = _resolve_channel(person)
     if not ref:

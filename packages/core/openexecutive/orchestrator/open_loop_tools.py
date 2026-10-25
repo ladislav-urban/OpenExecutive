@@ -299,6 +299,7 @@ _ASSIGN_REFUSALS = {
         "to team members only"
     ),
     "owner_archived": "that person is archived",
+    "owner_suspended": "that person is suspended; the principal can restore them in People",
     "unknown_assigner": "the person asking is not an active team member",
     "missing_text": "the task is empty",
     "owner_at_cap": "that person already has as many open loops as they can carry; close some first",

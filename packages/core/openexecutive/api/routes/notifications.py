@@ -83,7 +83,7 @@ def _caller(request: Request) -> Person:
     except Exception as exc:
         logger.exception("notifications: caller lookup failed")
         raise _refuse(503, "roster_unavailable", "Couldn't read the People list.") from exc
-    if person is None or person.id is None or person.archived:
+    if person is None or person.id is None or not person.active:
         raise _refuse(
             403, "not_on_roster", "Notification settings are for people on the People list."
         )

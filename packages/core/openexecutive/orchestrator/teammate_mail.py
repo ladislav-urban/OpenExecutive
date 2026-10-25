@@ -249,7 +249,7 @@ def _reader_id(session: Any) -> int | None:
         and getattr(session, "email_sender_authenticated", False) is True
     ):
         person = get_person(int(caller))
-        if person is not None and person.kind == "team" and not person.archived:
+        if person is not None and person.kind == "team" and person.active:
             return int(person.id) if person.id is not None else None
     return None
 

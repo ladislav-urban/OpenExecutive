@@ -144,7 +144,7 @@ def can_delegate(person: Person | None) -> bool:
     if not (
         person is not None
         and person.id is not None
-        and not person.archived
+        and person.active
         and person.kind == "team"
     ):
         return False

@@ -577,7 +577,7 @@ export default function PeoplePage() {
 
   function refresh() {
     setLoading(true);
-    listPeople({ includeContacts: true })
+    listPeople({ includeContacts: true, includeSuspended: true })
       .then(setPeople)
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));

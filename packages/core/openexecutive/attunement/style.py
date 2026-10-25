@@ -750,7 +750,7 @@ async def run_style_pass(
         if not _style_enabled(settings):
             return result
         person = get_person(person_id)
-        if person is None or person.archived or person.id is None:
+        if person is None or not person.active or person.id is None:
             return result
         watermark = _claim_pass(person_id, force=force, settings=settings, db_path=db_path)
         if watermark is None:
@@ -873,7 +873,7 @@ def build_style_block(person_id: int | None, *, db_path: Path | None = None) -> 
         if not _style_enabled(get_settings()):
             return ""
         person = get_person(person_id)
-        if person is None or person.archived:
+        if person is None or not person.active:
             return ""
         # Re-checked on every render, not only when stored: a rule saved under
         # an older, weaker check never reaches a turn.

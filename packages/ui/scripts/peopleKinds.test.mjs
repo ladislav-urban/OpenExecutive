@@ -82,3 +82,16 @@ test("a card's one status: email for a contact, leave or reply time for the team
   assert.deepEqual(personCardStatus({ ...base, kind: "contact" }, "2026-10-03"), { label: "No email", tone: "muted" });
   assert.equal(personCardStatus({ ...base, kind: "contact", email: "a@b.c" }, "2026-10-03").label, "Email on file");
 });
+
+test("a suspended person's card says so, and who suspended them", () => {
+  const base = { kind: "team", email: null, on_leave_until: "2026-10-10", response_sla_hours: 12 };
+  assert.deepEqual(
+    personCardStatus({ ...base, suspended: true, suspended_by: "principal" }, "2026-10-03"),
+    { label: "Suspended", tone: "warn" },
+  );
+  assert.equal(
+    personCardStatus({ ...base, suspended: true, suspended_by: "directory" }, "2026-10-03").label,
+    "Suspended (directory)",
+  );
+  assert.equal(personCardStatus({ ...base, suspended: false }, "2026-10-03").label, "On leave until 2026-10-10");
+});

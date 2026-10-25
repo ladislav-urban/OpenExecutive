@@ -229,7 +229,7 @@ def _valid_specialists() -> frozenset[str]:
 
 
 def _person_exists(person_id: int) -> bool:
-    """True if person_id resolves to a non-archived team member. An approval
+    """True if person_id resolves to an active team member. An approval
     gate's approver and a cadence recipient are messaged by unattended runs,
     which never reach one of the principal's contacts."""
     try:
@@ -238,7 +238,7 @@ def _person_exists(person_id: int) -> bool:
         person = get_person(person_id)
         return (
             person is not None
-            and not getattr(person, "archived", False)
+            and getattr(person, "active", True)
             and getattr(person, "kind", "team") == "team"
         )
     except Exception:

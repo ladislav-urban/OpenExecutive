@@ -170,7 +170,7 @@ def can_keep_notes(person: Any) -> bool:
     return (
         person is not None
         and getattr(person, "id", None) is not None
-        and not getattr(person, "archived", False)
+        and getattr(person, "active", True)
         and getattr(person, "kind", None) == "team"
     )
 

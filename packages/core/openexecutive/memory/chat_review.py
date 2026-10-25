@@ -236,7 +236,7 @@ def _verified_person(session: Any, person_id: int | None) -> Any:
     if person_id is None or session is None:
         return None
     person = get_person(int(person_id))
-    if person is None or person.archived or not verified_speaker(session, person):
+    if person is None or not person.active or not verified_speaker(session, person):
         return None
     if person.is_principal:
         return person if is_principal_on_verified_surface(session) else None
@@ -766,7 +766,7 @@ async def _review_person(
 
     try:
         person = get_person(person_id)
-        if person is None or person.archived or person.id is None:
+        if person is None or not person.active or person.id is None:
             return
         surface = json.loads(turns[-1]["surface"] or "{}")
         session = _rebuild_session(session_id, person, surface if isinstance(surface, dict) else {})

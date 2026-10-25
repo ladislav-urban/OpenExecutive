@@ -1354,7 +1354,7 @@ def _followup_owner(action: ScheduledAction) -> Person | None:
     except Exception:
         logger.warning("scheduler: follow-up owner lookup failed", exc_info=True)
         return None
-    if person is None or person.archived or not _own_ref(person, action.channel, action.channel_ref):
+    if person is None or not person.active or not _own_ref(person, action.channel, action.channel_ref):
         return None
     return person
 
@@ -1446,7 +1446,7 @@ async def _run_teammate_followup(
 
     assert action.id is not None
     creator = get_person(int(action.created_by_person_id or 0))
-    if creator is not None and creator.is_principal and not creator.archived:
+    if creator is not None and creator.is_principal and creator.active:
         return False
 
     def _audit(phase: str, summary: str, **extra: object) -> None:
@@ -1464,7 +1464,7 @@ async def _run_teammate_followup(
             },
         )
 
-    if creator is None or creator.archived or creator.kind != "team":
+    if creator is None or not creator.active or creator.kind != "team":
         reason = "the person who scheduled it is no longer on the team"
     elif not _own_ref(creator, action.channel, action.channel_ref):
         reason = "a teammate's follow-up may only reach that teammate"

@@ -114,7 +114,7 @@ def _teammate(name: str) -> Any:
     from openexecutive.people.store import list_people
 
     wanted = " ".join(name.lower().split())
-    team = [p for p in list_people() if p.kind == "team" and not p.archived and p.id is not None]
+    team = [p for p in list_people() if p.kind == "team" and p.active and p.id is not None]
     exact = [p for p in team if p.full_name.lower() == wanted or (p.email or "").lower() == wanted]
     found = exact or [p for p in team if wanted and wanted in p.full_name.lower()]
     if not found:

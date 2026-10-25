@@ -393,7 +393,7 @@ def _proposer(session: Any) -> tuple[Any, str] | str:
     panel_person: Any = None
     if erpnext_panel_turn(session):
         panel_person = find_person_by_email(str(session.erpnext_panel_email).strip().lower())
-        if panel_person is None or panel_person.archived or panel_person.kind != "team":
+        if panel_person is None or not panel_person.active or panel_person.kind != "team":
             return "This ERPNext user is not on the team in OpenExecutive, so no draft can be proposed for them."
         principal = bool(panel_person.is_principal)
     else:
@@ -1072,7 +1072,7 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     payload = _payload(instance)
     person_id = payload.get("person_id")
     person = get_person(person_id) if isinstance(person_id, int) and not isinstance(person_id, bool) else None
-    if person is None or person.id is None or person.archived or person.id != instance.approver_person_id:
+    if person is None or person.id is None or not person.active or person.id != instance.approver_person_id:
         raise ApproveRefused(404, "gone", "This card is no longer there.")
     email = normalize_email(person.email or "")
     refused = caller_refusal(caller, email)

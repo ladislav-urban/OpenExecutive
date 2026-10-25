@@ -28,11 +28,13 @@ from pathlib import Path
 
 from openexecutive.people.models import (
     PERSON_KINDS,
+    SUSPENDED_BY,
     AuthorityScope,
     AvailabilityWindow,
     Person,
     PersonKind,
     PreferredChannel,
+    SuspendedBy,
 )
 
 logger = logging.getLogger(__name__)
@@ -74,6 +76,20 @@ def _now() -> str:
 # SQL fragment every team-only read appends. A kind this code does not know
 # (a hand-edited row) is not "team", so it is left out — deny by default.
 _TEAM_ONLY = " AND kind = 'team'"
+
+
+def active_sql(alias: str = "") -> str:
+    """The one predicate for "this person counts for access": not archived
+    and not suspended. Every query that decides sign-in, a speaker, an
+    approver, a recipient or a chase filters with it; one that means "ever
+    existed" (history, audit, an address that must stay unique) filters on
+    ``archived`` alone. ``alias`` is a table alias, e.g. ``"p"``.
+    ``tests/unit/test_people_active_predicate.py`` keeps every module to it."""
+    prefix = f"{alias}." if alias else ""
+    return f"{prefix}archived = 0 AND {prefix}suspended = 0"
+
+
+ACTIVE_SQL = active_sql()
 
 
 def _kind_filter(include_contacts: bool) -> str:
@@ -179,14 +195,30 @@ def initialize_db(db_path: Path | None = None) -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column" not in str(exc).lower():
                     raise
-        # Additive migration: the chat app each person last talked in.
-        for column in ("last_channel", "last_channel_at"):
+        # Additive migrations: the chat app each person last talked in;
+        # suspension (who and when, and when last restored, which restarts
+        # their open loops' expiry clock); the identity provider's directory.
+        for column, decl in (
+            ("last_channel", "TEXT"),
+            ("last_channel_at", "TEXT"),
+            ("suspended", "INTEGER NOT NULL DEFAULT 0"),
+            ("suspended_by", "TEXT"),
+            ("suspended_at", "TEXT"),
+            ("restored_at", "TEXT"),
+            ("directory_subject", "TEXT"),
+            ("directory_managed", "INTEGER NOT NULL DEFAULT 0"),
+        ):
             if column not in cols:
                 try:
-                    conn.execute(f"ALTER TABLE people ADD COLUMN {column} TEXT")
+                    conn.execute(f"ALTER TABLE people ADD COLUMN {column} {decl}")
                 except sqlite3.OperationalError as exc:
                     if "duplicate column" not in str(exc).lower():
                         raise
+        # One row per directory identity; NULL (no directory) repeats freely.
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_people_directory_subject"
+            " ON people(directory_subject) WHERE directory_subject IS NOT NULL"
+        )
         # The principal is never a contact; repair a hand-edited row so every
         # team-only read keeps finding them.
         conn.execute(
@@ -282,6 +314,7 @@ def _row_to_person(row: sqlite3.Row, conn: sqlite3.Connection) -> Person:
     # An unknown stored kind reads as a contact (least access); the principal
     # always reads as team (initialize_db repairs such a row on boot).
     kind: PersonKind = "team" if raw_kind == "team" or is_principal else "contact"
+    suspended_by = _optional(row, "suspended_by")
     return Person(
         id=person_id,
         full_name=row["full_name"],
@@ -301,6 +334,11 @@ def _row_to_person(row: sqlite3.Row, conn: sqlite3.Connection) -> Person:
         on_leave_until=on_leave,
         reports_to_person_id=row["reports_to_person_id"],
         archived=bool(row["archived"]),
+        suspended=_optional(row, "suspended") is not None,
+        suspended_by=suspended_by if suspended_by in SUSPENDED_BY else None,  # type: ignore[arg-type]
+        suspended_at=_optional(row, "suspended_at"),
+        directory_subject=_optional(row, "directory_subject"),
+        directory_managed=_optional(row, "directory_managed") is not None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         authority_scope=_load_scope(person_id, conn),
@@ -346,8 +384,13 @@ def upsert_person(
     with _get_conn(db_path) as conn:
         if person_id is not None and person_id > 0:
             row = conn.execute(
-                "SELECT kind FROM people WHERE id = ?", (person_id,)
+                "SELECT * FROM people WHERE id = ?", (person_id,)
             ).fetchone()
+            # The principal is never suspended: making a suspended row the
+            # principal would leave no active principal, which opens the
+            # roster to anyone (``_require_roster_owner``). Restore first.
+            if is_principal and row is not None and _optional(row, "suspended") is not None:
+                raise PrincipalSuspendError("restore this person before making them the principal")
             # Same reading as _row_to_person: an unknown stored kind is a contact.
             stored_kind = (
                 (row["kind"] if row["kind"] in PERSON_KINDS else "contact")
@@ -493,7 +536,7 @@ def find_person_by_slack_id(
         return None
     with _get_conn(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM people WHERE slack_user_id = ? AND archived = 0"
+            "SELECT * FROM people WHERE slack_user_id = ? AND " + ACTIVE_SQL
             + _kind_filter(include_contacts) + " LIMIT 1",
             (slack_user_id,),
         ).fetchone()
@@ -514,7 +557,7 @@ def find_person_by_telegram_chat_id(
         return None
     with _get_conn(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM people WHERE telegram_chat_id = ? AND archived = 0"
+            "SELECT * FROM people WHERE telegram_chat_id = ? AND " + ACTIVE_SQL
             + _kind_filter(include_contacts) + " LIMIT 1",
             (telegram_chat_id,),
         ).fetchone()
@@ -548,7 +591,7 @@ def find_person_by_email(
         # A contact may share an address with a team member (an assistant's
         # alias, a duplicate entry); the team row wins.
         row = conn.execute(
-            "SELECT * FROM people WHERE LOWER(email) = LOWER(?) AND archived = 0"
+            "SELECT * FROM people WHERE LOWER(email) = LOWER(?) AND " + ACTIVE_SQL
             + _kind_filter(include_contacts)
             + " ORDER BY kind = 'team' DESC, id LIMIT 1",
             (email,),
@@ -582,13 +625,33 @@ def find_person_by_address(
         params: tuple[str, ...] = (norm, norm) if alias_clause else (norm,)
         row = conn.execute(
             "SELECT * FROM people WHERE (LOWER(TRIM(email)) = ?" + alias_clause + ")"
-            " AND archived = 0" + _kind_filter(include_contacts)
+            " AND " + ACTIVE_SQL + _kind_filter(include_contacts)
             + " ORDER BY kind = 'team' DESC, id LIMIT 1",
             params,
         ).fetchone()
         if row is None:
             return None
         return _row_to_person(row, conn)
+
+
+_CHAT_ID_COLUMNS = ("slack_user_id", "telegram_chat_id", "discord_user_id")
+
+
+def chat_id_holder(column: str, ref: str, db_path: Path | None = None) -> int | None:
+    """The id of the non-archived person (any kind, a suspended one
+    included) whose ``column`` is ``ref``; else None. As ``address_holder``
+    is for addresses: a suspended person keeps their chat ids, so a roster
+    request can't hand one to a new row meanwhile."""
+    if column not in _CHAT_ID_COLUMNS:
+        raise ValueError(f"not a chat id column: {column!r}")
+    if not ref or not _resolve_db_path(db_path).exists():
+        return None
+    with _get_conn(db_path) as conn:
+        row = conn.execute(
+            f"SELECT id FROM people WHERE {column} = ? AND archived = 0 ORDER BY id LIMIT 1",  # noqa: S608 — column from a fixed list
+            (ref,),
+        ).fetchone()
+    return int(row["id"]) if row is not None else None
 
 
 class AddressInUseError(ValueError):
@@ -602,7 +665,10 @@ def address_holder(
     email: str, db_path: Path | None = None, *, exclude_person_id: int | None = None
 ) -> int | None:
     """The id of the non-archived person (any kind) holding ``email`` as
-    their address or an alias, other than ``exclude_person_id``; else None."""
+    their address or an alias, other than ``exclude_person_id``; else None.
+
+    ``archived`` alone, not ``ACTIVE_SQL``: a suspended person still holds
+    their addresses, so no one else can take them before they are restored."""
     norm = normalize_email(email)
     if not norm or not _resolve_db_path(db_path).exists():
         return None
@@ -632,7 +698,8 @@ def alias_holder(
     email: str, db_path: Path | None = None, *, exclude_person_id: int | None = None
 ) -> int | None:
     """The id of the non-archived person holding ``email`` as an alias (not
-    as their primary address), other than ``exclude_person_id``; else None."""
+    as their primary address), other than ``exclude_person_id``; else None.
+    A suspended person still holds theirs, as in ``address_holder``."""
     norm = normalize_email(email)
     if not norm or not _resolve_db_path(db_path).exists():
         return None
@@ -749,7 +816,7 @@ def find_person_by_discord_id(
         return None
     with _get_conn(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM people WHERE discord_user_id = ? AND archived = 0"
+            "SELECT * FROM people WHERE discord_user_id = ? AND " + ACTIVE_SQL
             + _kind_filter(include_contacts) + " LIMIT 1",
             (discord_user_id,),
         ).fetchone()
@@ -823,8 +890,8 @@ def find_principal_person(db_path: Path | None = None) -> Person | None:
         return None
     with _get_conn(db_path) as conn:
         row = conn.execute(
-            "SELECT * FROM people WHERE is_principal = 1 AND archived = 0 "
-            "ORDER BY id LIMIT 1"
+            "SELECT * FROM people WHERE is_principal = 1 AND " + ACTIVE_SQL
+            + " ORDER BY id LIMIT 1"
         ).fetchone()
         if row is None:
             return None
@@ -836,12 +903,20 @@ def list_people(
     db_path: Path | None = None,
     *,
     include_contacts: bool = False,
+    include_suspended: bool = False,
 ) -> list[Person]:
-    """The roster, principal first. Team members only unless
-    ``include_contacts`` — see the module docstring."""
+    """The active roster, principal first. Team members only unless
+    ``include_contacts`` — see the module docstring. A suspended person is
+    left out unless ``include_suspended`` (the People page, names for
+    history); ``include_archived`` returns everyone who ever existed."""
     if not _resolve_db_path(db_path).exists():
         return []
-    where = [] if include_archived else ["archived = 0"]
+    if include_archived:
+        where = []
+    elif include_suspended:
+        where = ["archived = 0"]
+    else:
+        where = [ACTIVE_SQL]
     if not include_contacts:
         where.append("kind = 'team'")
     clause = f" WHERE {' AND '.join(where)}" if where else ""
@@ -866,7 +941,7 @@ def is_principal_or_self(
     if person_id is not None and caller_person_id == person_id:
         return True
     caller = get_person(caller_person_id, db_path=db_path)
-    return bool(caller is not None and caller.is_principal and not caller.archived)
+    return bool(caller is not None and caller.is_principal and caller.active)
 
 
 def _left_the_team(person_id: int) -> None:
@@ -912,11 +987,63 @@ def archive_person(person_id: int, db_path: Path | None = None) -> bool:
     return archived
 
 
+class PrincipalSuspendError(ValueError):
+    """Raised when asked to suspend the principal."""
+
+
+def suspend_person(
+    person_id: int, *, by: SuspendedBy, db_path: Path | None = None
+) -> bool:
+    """Take a person out of every access decision, reversibly. Nothing of
+    theirs is deleted: their addresses, open loops (paused, see
+    ``attunement.open_loops.expire_open_loops``) and working style stay as
+    they are for ``restore_person``. True when a row changed; False for an
+    unknown, archived or already suspended person. Raises
+    ``PrincipalSuspendError`` for the principal."""
+    if by not in SUSPENDED_BY:
+        raise ValueError(f"by must be one of {list(SUSPENDED_BY)}, got {by!r}")
+    person = get_person(person_id, db_path)
+    if person is None or person.archived or person.suspended:
+        return False
+    if person.is_principal:
+        raise PrincipalSuspendError("the principal can't be suspended")
+    now = _now()
+    with _get_conn(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE people SET suspended = 1, suspended_by = ?, suspended_at = ?,"
+            " updated_at = ? WHERE id = ? AND archived = 0 AND suspended = 0"
+            " AND is_principal = 0",
+            (by, now, now, person_id),
+        )
+        return cursor.rowcount > 0
+
+
+def restore_person(
+    person_id: int, *, only_by: SuspendedBy | None = None, db_path: Path | None = None
+) -> bool:
+    """Undo ``suspend_person``: the person counts for access again, with
+    everything they had. ``only_by`` restores only a suspension that party
+    made (the directory sync never lifts the principal's). Records
+    ``restored_at``, which restarts their open loops' expiry clock. True
+    when a row changed."""
+    now = _now()
+    sql = (
+        "UPDATE people SET suspended = 0, suspended_by = NULL, suspended_at = NULL,"
+        " restored_at = ?, updated_at = ? WHERE id = ? AND archived = 0 AND suspended = 1"
+    )
+    params: list[object] = [now, now, person_id]
+    if only_by is not None:
+        sql += " AND suspended_by = ?"
+        params.append(only_by)
+    with _get_conn(db_path) as conn:
+        return conn.execute(sql, params).rowcount > 0
+
+
 def find_approvers(
     scope: AuthorityScope,
     db_path: Path | None = None,
 ) -> list[Person]:
-    """Return non-archived team members who can approve the given scope token.
+    """Return active team members who can approve the given scope token.
 
     Includes:
     - People who hold the exact scope token.
@@ -936,11 +1063,11 @@ def find_approvers(
             SELECT DISTINCT p.*
             FROM people p
             JOIN person_authority_scope pas ON pas.person_id = p.id
-            WHERE p.archived = 0
+            WHERE {active}
               AND p.kind = 'team'
               AND pas.scope_token IN (?, ?)
             ORDER BY p.is_principal ASC, p.response_sla_hours ASC, p.id ASC
-            """,
+            """.format(active=active_sql("p")),  # noqa: S608 — a fixed fragment
             (scope.value, AuthorityScope.WILDCARD.value),
         ).fetchall()
         return [_row_to_person(row, conn) for row in rows]

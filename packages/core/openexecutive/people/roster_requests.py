@@ -843,15 +843,12 @@ def _finish(
 
 
 def _chat_holder(channel: str, ref: str) -> int | None:
+    """Who holds this chat id, a suspended person included: approving a
+    request from a suspended person's account must not give it to a new
+    row (``people.store.chat_id_holder``)."""
     from openexecutive.people import store
 
-    finder = {
-        "slack": store.find_person_by_slack_id,
-        "discord": store.find_person_by_discord_id,
-        "telegram": store.find_person_by_telegram_chat_id,
-    }[channel]
-    holder = finder(ref, include_contacts=True)
-    return holder.id if holder is not None else None
+    return store.chat_id_holder(CHANNEL_FIELD[channel], ref)
 
 
 def _channel_kwargs(channel: str, ref: str) -> dict[str, Any]:
@@ -885,7 +882,7 @@ def _link_person(request: RosterRequest, person_id: int, replace_channel_id: boo
     from openexecutive.people import store
 
     person = store.get_person(person_id)
-    if person is None or person.archived or person.id is None:
+    if person is None or not person.active or person.id is None:
         raise ValueError("that person is not on the People list")
     ref = request.channel_ref
     if request.channel == "email":

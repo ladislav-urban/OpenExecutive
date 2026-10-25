@@ -461,8 +461,8 @@ def test_feedback_route_authorization(monkeypatch: pytest.MonkeyPatch) -> None:
         "openexecutive.memory.session_store.get_session_owner", lambda sid: (True, owner["id"])
     )
     monkeypatch.setattr(route, "set_message_feedback", lambda *a, **k: True)
-    principal = SimpleNamespace(is_principal=True, archived=False, kind="team")
-    teammate = SimpleNamespace(is_principal=False, archived=False, kind="team")
+    principal = SimpleNamespace(is_principal=True, archived=False, active=True, kind="team")
+    teammate = SimpleNamespace(is_principal=False, archived=False, active=True, kind="team")
     monkeypatch.setattr("openexecutive.people.store.get_person",
                         lambda pid, db_path=None: principal if pid == 1 else teammate)
     body = route.MessageFeedback(feedback="down")

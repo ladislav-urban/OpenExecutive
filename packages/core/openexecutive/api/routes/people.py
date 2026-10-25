@@ -107,10 +107,13 @@ def caller_is_principal(request: Request) -> bool:
 
 
 def _visible_person(person_id: int, request: Request) -> Person:
-    """The person, or 404 — also for a contact when the caller is not the
-    principal, exactly as for an id that does not exist."""
+    """The person, or 404 — also for a contact or a suspended person when
+    the caller is not the principal, exactly as for an id that does not
+    exist: who is suspended is the principal's business alone."""
     person = people_store.get_person(person_id)
-    if person is None or (person.kind != "team" and not caller_is_principal(request)):
+    if person is None or (
+        (person.kind != "team" or person.suspended) and not caller_is_principal(request)
+    ):
         raise HTTPException(status_code=404, detail="Person not found")
     return person
 
@@ -126,13 +129,20 @@ class PeopleViewer(BaseModel):
 
 @router.get("/people", response_model=list[Person])
 def list_people(
-    request: Request, include_archived: bool = False, include_contacts: bool = False
+    request: Request,
+    include_archived: bool = False,
+    include_contacts: bool = False,
+    include_suspended: bool = False,
 ) -> list[Person]:
-    return people_store.list_people(
+    # Anyone but the principal gets the team as if no contact or suspended
+    # person existed — ``include_archived`` included.
+    principal = (include_contacts or include_suspended or include_archived) and caller_is_principal(request)
+    people = people_store.list_people(
         include_archived=include_archived,
-        # Anyone but the principal gets the team, as if no contact existed.
-        include_contacts=include_contacts and caller_is_principal(request),
+        include_contacts=include_contacts and principal,
+        include_suspended=include_suspended and principal,
     )
+    return people if principal else [p for p in people if not p.suspended]
 
 
 @router.get("/people/me", response_model=PeopleViewer)
@@ -149,7 +159,7 @@ def people_viewer(request: Request) -> PeopleViewer:
 
 @router.get("/people/by-scope/{token}", response_model=list[Person])
 def people_by_scope(token: str) -> list[Person]:
-    """Return non-archived people who can approve the given scope token."""
+    """Return active people who can approve the given scope token."""
     try:
         scope = AuthorityScope(token)
     except ValueError as exc:
@@ -354,7 +364,9 @@ def create_person(body: PersonCreate, request: Request) -> Person:
         # a contact is private to a principal there is not yet.
         raise HTTPException(status_code=403, detail=_CONTACTS_ARE_PRIVATE)
     aliases = _checked_aliases(body.email_aliases, primary=body.email, person_id=None)
-    if body.email and people_store.alias_holder(body.email) is not None:
+    if body.email and (
+        people_store.alias_holder(body.email) is not None or _held_by_suspended(body.email, None)
+    ):
         raise HTTPException(status_code=409, detail=_ADDRESS_IN_USE)
     pid = people_store.upsert_person(
         full_name=body.full_name,
@@ -386,6 +398,18 @@ def create_person(body: PersonCreate, request: Request) -> Person:
 
 
 _ADDRESS_IN_USE = "That address is already on another person."
+_MANAGED_IN_DIRECTORY = "Their name and email are managed in your identity provider."
+
+
+def _held_by_suspended(email: str, person_id: int | None) -> bool:
+    """Whether a suspended person (other than ``person_id``) holds
+    ``email``: they keep their address while suspended, and a second row
+    with it would sign in as them (``find_person_by_email`` skips them)."""
+    holder = people_store.address_holder(email, exclude_person_id=person_id)
+    if holder is None:
+        return False
+    person = people_store.get_person(holder)
+    return bool(person is not None and person.suspended)
 
 
 def _checked_aliases(
@@ -430,13 +454,21 @@ def patch_person(person_id: int, body: PersonPatch, request: Request) -> Person:
         raise HTTPException(status_code=403, detail=_CONTACTS_ARE_PRIVATE)
 
     raw = body.model_dump(exclude_unset=True)
+    if existing.directory_managed and (
+        (body.full_name is not None and body.full_name != existing.full_name)
+        or (body.email is not None and body.email != existing.email)
+    ):
+        raise HTTPException(status_code=409, detail=_MANAGED_IN_DIRECTORY)
     new_primary = body.email if body.email is not None else existing.email
     aliases: list[str] | None = None
     if body.email_aliases is not None:
         aliases = _checked_aliases(
             body.email_aliases, primary=new_primary, person_id=person_id
         )
-    if body.email and people_store.alias_holder(body.email, exclude_person_id=person_id) is not None:
+    if body.email and (
+        people_store.alias_holder(body.email, exclude_person_id=person_id) is not None
+        or _held_by_suspended(body.email, person_id)
+    ):
         raise HTTPException(status_code=409, detail=_ADDRESS_IN_USE)
     if raw:
         people_store.update_person(
@@ -480,6 +512,63 @@ def archive_person(person_id: int, request: Request) -> Response:
     people_store.archive_person(person_id)
     people_registry.invalidate()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def _audit_suspension(event_type: str, person: Person, by: str) -> None:
+    from openexecutive.audit import log_event
+
+    verb = "suspended" if event_type == "person_suspended" else "restored"
+    log_event(
+        event_type,
+        f"person #{person.id} {verb}",
+        actor="user" if by == "principal" else "directory",
+        details={"person_id": person.id, "by": by},
+        private=True,
+    )
+
+
+@router.post("/people/{person_id}/suspend", response_model=Person)
+def suspend_person(person_id: int, request: Request) -> Person:
+    """Take someone out of every access decision (sign-in, chat, approvals,
+    mail, chasing) without deleting anything of theirs. ``/restore`` undoes
+    it. The principal's alone, and the principal can't be suspended."""
+    _require_roster_owner(request)
+    person = _visible_person(person_id, request)
+    if person.archived:
+        raise HTTPException(status_code=409, detail="This person is archived")
+    if person.suspended:
+        return person
+    try:
+        people_store.suspend_person(person_id, by="principal")
+    except people_store.PrincipalSuspendError as exc:
+        raise HTTPException(status_code=422, detail="The principal can't be suspended.") from exc
+    people_registry.invalidate()
+    _audit_suspension("person_suspended", person, "principal")
+    return _reread(person_id)
+
+
+@router.post("/people/{person_id}/restore", response_model=Person)
+def restore_person(person_id: int, request: Request) -> Person:
+    """Bring a suspended person back with their loops, working style and
+    addresses as they were."""
+    _require_roster_owner(request)
+    person = _visible_person(person_id, request)
+    if person.archived:
+        raise HTTPException(status_code=409, detail="This person is archived")
+    if not person.suspended:
+        return person
+    people_store.restore_person(person_id)
+    people_registry.invalidate()
+    _after_roster_write()
+    _audit_suspension("person_restored", person, "principal")
+    return _reread(person_id)
+
+
+def _reread(person_id: int) -> Person:
+    person = people_store.get_person(person_id)
+    if person is None:
+        raise HTTPException(status_code=500, detail="Person vanished")
+    return person
 
 
 # --------------------------------------------------------------------------- #
@@ -556,6 +645,7 @@ _ASSIGN_REFUSED: dict[str, tuple[int, str]] = {
     "unknown_owner": (404, "Person not found"),
     "owner_is_contact": (409, "Tasks are assigned to team members, not contacts"),
     "owner_archived": (409, "This person is archived"),
+    "owner_suspended": (409, "This person is suspended"),
     "unknown_assigner": (403, "Only someone on the team can assign a task"),
     "missing_text": (422, "Describe the task"),
     "owner_at_cap": (409, "They already have as many open loops as they can carry — close some first"),
@@ -586,7 +676,7 @@ async def assign_person_open_loop(
     _visible_person(person_id, request)
     caller = _resolve_caller_person_id(request)
     assigner = people_store.get_person(caller) if caller is not None else None
-    if assigner is None or assigner.id is None or assigner.archived or assigner.kind != "team":
+    if assigner is None or assigner.id is None or not assigner.active or assigner.kind != "team":
         raise HTTPException(status_code=403, detail="Only someone on the team can assign a task")
     result = assign_open_loop(
         owner_person_id=person_id, text=body.task, assigned_by_person_id=assigner.id,

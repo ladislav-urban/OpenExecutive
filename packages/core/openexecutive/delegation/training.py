@@ -184,7 +184,7 @@ def _person_name(person_id: int) -> str | None:
     from openexecutive.people.store import get_person
 
     person = get_person(person_id)
-    if person is None or person.archived:
+    if person is None or not person.active:
         return None
     return str(person.full_name or person.email or "") or None
 

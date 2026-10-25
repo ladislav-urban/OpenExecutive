@@ -80,7 +80,7 @@ def _viewer(request: Request) -> Any:
     except Exception as exc:
         logger.exception("may_do: caller lookup failed")
         raise HTTPException(status_code=503, detail="Couldn't read the People list.") from exc
-    if person is None or person.id is None or person.archived or person.kind != "team":
+    if person is None or person.id is None or not person.active or person.kind != "team":
         raise HTTPException(status_code=403, detail="Only people on the team can see this.")
     return person
 

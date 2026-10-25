@@ -649,7 +649,7 @@ def _team_out(person: Person) -> TeamOut | None:
             continue
         try:
             member = get_person(person_id)
-            if member is None or member.archived or member.kind != "team":
+            if member is None or not member.active or member.kind != "team":
                 continue
             drafted, sent = drafts.usage_since(person_id, since)
             watching = inbox.get_watch(person_id).enabled

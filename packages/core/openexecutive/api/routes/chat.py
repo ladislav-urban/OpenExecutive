@@ -684,7 +684,7 @@ def _shared_member(session_id: str, caller_person_id: int | None) -> bool:
     except Exception:
         logger.exception("chat: couldn't read who session %s is shared with", session_id)
         return False
-    if person is None or person.archived or person.kind != "team":
+    if person is None or not person.active or person.kind != "team":
         return False
     return not _mail_private(session_id)
 
@@ -712,7 +712,7 @@ def chat_people(session_id: str, *, strict: bool = False) -> list[tuple[int, str
             person = get_person(int(pid))
             if person is None:
                 continue
-            if pid != owner and (person.archived or person.kind != "team"):
+            if pid != owner and (not person.active or person.kind != "team"):
                 continue
             out.append((int(pid), person.full_name, pid == owner))
         return out

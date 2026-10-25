@@ -61,6 +61,7 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
         from openexecutive.people.store import (
             get_person,
             list_people,
+            restore_person,
             set_authority_scope,
             upsert_person,
         )
@@ -73,7 +74,7 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
             return {}
 
         init_people_db()
-        existing = {p.full_name.strip().lower(): p for p in list_people()}
+        existing = {p.full_name.strip().lower(): p for p in list_people(include_suspended=True)}
 
         ids: dict[str, int] = {}
         for draft in named:
@@ -86,6 +87,11 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
                     is_principal=draft.is_principal,
                 )
             else:
+                if draft.is_principal and prior.suspended and prior.id is not None:
+                    # The owner named them as the principal, who is never
+                    # suspended: bring them back first (the store refuses
+                    # a suspended principal, which would leave none).
+                    restore_person(prior.id)
                 pid = upsert_person(
                     person_id=prior.id,
                     full_name=name,
@@ -140,7 +146,7 @@ def _demote_stale_principals(keep_ids: set[int]) -> None:
         upsert_person,
     )
 
-    for person in list_people():
+    for person in list_people(include_suspended=True):
         if not person.is_principal or person.id is None or person.id in keep_ids:
             continue
         upsert_person(
@@ -183,6 +189,19 @@ class OwnerEmailError(ValueError):
     fixed, input-free string, safe to return as an HTTP detail."""
 
 
+def _address_holder(email: str) -> Any:
+    """Whoever holds ``email`` as their address or an alias, a suspended
+    teammate included (they keep theirs, and ``find_person_by_address``
+    skips them), so the owner never takes an address someone still has."""
+    from openexecutive.people.store import address_holder, find_person_by_address, get_person
+
+    holder = find_person_by_address(email)
+    if holder is None:
+        held_by = address_holder(email)
+        holder = get_person(held_by) if held_by is not None else None
+    return holder
+
+
 def check_owner_email(
     raw: str | None, principal_name: str, *, caller_email: str | None = None
 ) -> str | None:
@@ -205,14 +224,14 @@ def check_owner_email(
         return None
     if len(email) > _OWNER_EMAIL_MAX_LEN or not _OWNER_EMAIL_RE.fullmatch(email):
         raise OwnerEmailError("That email address doesn't look right. Check it and try again.")
-    from openexecutive.people.store import find_person_by_address, list_people
+    from openexecutive.people.store import list_people
 
     key = principal_name.strip().lower()
     try:
         # A teammate's alias counts as theirs, like their address.
-        holder = find_person_by_address(email)
+        holder = _address_holder(email)
         # The same dict save_onboarding_people builds, so the same row wins.
-        own_row = {p.full_name.strip().lower(): p for p in list_people()}.get(key)
+        own_row = {p.full_name.strip().lower(): p for p in list_people(include_suspended=True)}.get(key)
     except (OSError, sqlite3.Error) as exc:
         # Unknown is not "free": saving anyway could give two people one email.
         logger.warning("check_owner_email: lookup failed (%s)", type(exc).__name__)
@@ -277,7 +296,7 @@ def adopt_owner_row(email: str | None, principal_name: str, caller_email: str | 
             return False
         if holder.full_name.strip().lower() == key:
             return False
-        if any(p.full_name.strip().lower() == key for p in list_people()):
+        if any(p.full_name.strip().lower() == key for p in list_people(include_suspended=True)):
             return False
         return update_person(holder.id, full_name=principal_name.strip())
     except (OSError, sqlite3.Error) as exc:
@@ -304,7 +323,7 @@ def owner_change_blocked(principal_name: str, caller_person_id: int | None) -> b
     if current is None:
         return False
     # The same dict save_onboarding_people builds, so the same row wins.
-    own_row = {p.full_name.strip().lower(): p for p in list_people()}.get(
+    own_row = {p.full_name.strip().lower(): p for p in list_people(include_suspended=True)}.get(
         principal_name.strip().lower()
     )
     if own_row is not None and own_row.id == current.id:
@@ -345,10 +364,10 @@ def link_owner_email(person_id: int, email: str) -> bool:
     again adds it.
     """
     try:
-        from openexecutive.people.store import find_person_by_address, get_person, update_person
+        from openexecutive.people.store import get_person, update_person
 
         person = get_person(person_id)
-        holder = find_person_by_address(email)
+        holder = _address_holder(email)
         if (
             person is None
             or (person.email and person.email.strip().lower() != email)
