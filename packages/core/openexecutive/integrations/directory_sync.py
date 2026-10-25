@@ -591,7 +591,12 @@ def link(email: str, *, relink: bool = False, reader: DirectoryReader | None = N
         if problem := config_problem(settings):
             raise DirectoryError(problem)
         reader = KeycloakReader(settings)
-    members = reader.read_members()
+    try:
+        members = reader.read_members()
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        raise DirectoryError(
+            f"the provider's answer isn't the shape the directory contract says ({type(error).__name__})"
+        ) from None
     matches = [m for m in members.values() if m.active and m.email == norm]
     if len(matches) != 1:
         raise DirectoryError(f"no active member of {settings.directory_sync_group} has the address {norm}")
