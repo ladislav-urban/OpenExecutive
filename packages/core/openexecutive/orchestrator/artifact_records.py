@@ -87,7 +87,7 @@ def viewer_for_person(person_id: int | None) -> Viewer:
         person = get_person(person_id)
     except Exception:
         return Viewer(person_id=person_id)
-    is_principal = bool(person is not None and person.is_principal and not person.archived)
+    is_principal = bool(person is not None and person.is_principal and person.active)
     return Viewer(person_id=person_id, is_principal=is_principal)
 
 

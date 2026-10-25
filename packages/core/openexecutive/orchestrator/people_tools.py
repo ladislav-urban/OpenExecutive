@@ -45,7 +45,7 @@ LIST_PEOPLE_TOOL: dict[str, Any] = {
         "properties": {
             "include_archived": {
                 "type": "boolean",
-                "description": "If true, also include archived (soft-deleted) people. Default false.",
+                "description": "If true, also include archived (soft-deleted) and suspended people. Default false.",
             },
         },
     },
@@ -488,7 +488,7 @@ def team_member_id(person_id: int | None) -> int | None:
     except Exception:
         logger.warning("people_tools: teammate lookup for audit rows failed — rows kept to them", exc_info=True)
         return int(person_id)
-    if person is None or person.is_principal or person.archived or person.kind != "team":
+    if person is None or person.is_principal or not person.active or person.kind != "team":
         return None
     return int(person_id)
 
@@ -559,7 +559,7 @@ def sent_by_principal(
     itself, as it will say on the turn's session (``Session.speaker_verified``)."""
     if sender is None or getattr(sender, "is_principal", False) is not True:
         return False
-    if getattr(sender, "archived", False) is True:
+    if getattr(sender, "active", True) is False:
         return False
     return _is_verified_speaker_surface(_inbound_surface(channel, channel_ref, sender, speaker_verified))
 
@@ -797,7 +797,7 @@ def teammate_on_verified_surface(session: Any) -> Any:
     except Exception:
         logger.warning("people_tools: teammate lookup failed — refusing", exc_info=True)
         return None
-    if person is None or person.is_principal or person.archived or person.kind != "team":
+    if person is None or person.is_principal or not person.active or person.kind != "team":
         return None
     return person
 
@@ -861,6 +861,7 @@ async def handle_list_people(tool_input: dict[str, Any]) -> str:
             "department_slugs": p.department_slugs,
             "authority_scope": [s.value for s in p.authority_scope],
             "archived": p.archived,
+            "suspended": p.suspended,
         }
         for p in people
     ]
@@ -1305,7 +1306,7 @@ def _person_name(person_id: int) -> str:
         person = None
     # Only a team member is named: a contact or an archived row reads
     # exactly like an unknown id, so this can't confirm one exists.
-    if person is None or getattr(person, "kind", None) != "team" or getattr(person, "archived", False):
+    if person is None or getattr(person, "kind", None) != "team" or not getattr(person, "active", True):
         return "This person"
     name = str(getattr(person, "full_name", "") or "").strip()
     return name.split()[0] if name else "This person"

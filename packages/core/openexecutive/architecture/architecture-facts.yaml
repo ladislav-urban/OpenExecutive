@@ -4346,6 +4346,49 @@ people:
     and working style. Adding a team member in solo offers to switch the
     workspace to team mode (`PUT /workspace`) or keep solo. Pure helpers:
     packages/ui/src/lib/peopleKinds.ts.
+  suspended: |
+    A reversible "off" (`people.store.suspend_person` / `restore_person`,
+    `POST /people/{id}/suspend` and `/restore`, the principal's alone via
+    `_require_roster_owner`; the principal can't be suspended,
+    `PrincipalSuspendError` → 422). Why not archive: `archive_person`
+    closes the person's open loops, deletes their working style and frees
+    their aliases, and nothing unarchives, so an identity provider's
+    directory removing someone (the directory sync, which suspends with
+    `by="directory"`) or the principal pausing someone must not use it.
+
+    Columns (PRAGMA-guarded additive migration): `suspended`,
+    `suspended_by` ("principal" | "directory"), `suspended_at`,
+    `restored_at`, plus the directory link `directory_subject` (the
+    provider's `sub`, UNIQUE when set) and `directory_managed` (name and
+    email follow the provider; `PATCH /people/{id}` changing either is a
+    409).
+
+    ONE PREDICATE: `Person.active` (not archived, not suspended), and
+    `people.store.ACTIVE_SQL` / `active_sql(alias)` in SQL. Every access
+    decision reads it: `/auth/allowed-emails`, caller resolution
+    (`api.caller.person_id_for` → `find_person_by_email`), every
+    `find_person_by_*`, `find_approvers`, `find_principal_person`, the
+    registry, the MCP gateway's roster allow-set (email egress), the
+    Slack / Telegram / Discord gates (a suspended sender goes to roster
+    intake like a stranger), channel resolution (so the nudge engine
+    never chases them), shared chats, card approvals, Act as me, open-loop
+    assignment (`owner_suspended`). "Ever existed" reads keep `archived`
+    alone: `address_holder` / `alias_holder` (a suspended person keeps
+    their addresses, so nobody takes them meanwhile), memory replay,
+    history names, a suspended person's working style route.
+    `tests/unit/test_people_active_predicate.py` scans every module for
+    `.archived` / `archived = 0` and fails on one not allow-listed with a
+    reason. `store.list_people` returns active people unless
+    `include_suspended` (the People page, onboarding's name dedupe) or
+    `include_archived`; `GET /people?include_suspended=true` is honoured
+    for the principal only.
+
+    PAUSED, NOT CLOSED: `attunement.open_loops.expire_open_loops` skips
+    loops whose owner is suspended or was restored after the TTL cutoff
+    (`restored_at`), so a restore brings loops back as they were with a
+    fresh TTL. Restore calls `_after_roster_write`, so anything they sent
+    to roster intake while suspended is matched and answered. Audited
+    `person_suspended` / `person_restored` (private, `details.by`).
   aliases: |
     A Person has one PRIMARY address (`Person.email`, the one they sign in
     with) and up to 10 ALIASES (`Person.email_aliases`, table

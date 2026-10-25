@@ -23,6 +23,7 @@ import {
   getPersonWorkingStyle,
   resetPersonWorkingStyle,
   savePersonWorkingStyle,
+  setPersonSuspended,
   updatePerson,
   type AvailabilityWindow,
   type OpenLoop,
@@ -543,6 +544,7 @@ export default function PersonDetailPage() {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
+  const [suspending, setSuspending] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -665,13 +667,15 @@ export default function PersonDetailPage() {
     try {
       const slaNum = Number(form.response_sla_hours);
       const wasContact = person ? isContact(person) : false;
+      // A directory-managed name and email follow the identity provider.
+      const nameIsManaged = person?.directory_managed ?? false;
       const updated = await updatePerson(personId, {
-        full_name: trimmedName,
+        ...(nameIsManaged ? {} : { full_name: trimmedName }),
         role: form.role.trim(),
         // The principal is always on the team, and only the principal may
         // change anyone's kind; the server refuses otherwise.
         ...(person?.is_principal || !viewerIsPrincipal ? {} : { kind: form.kind }),
-        email: form.email.trim() || null,
+        ...(nameIsManaged ? {} : { email: form.email.trim() || null }),
         email_aliases: form.email_aliases.split(/[\s,;]+/).map((a) => a.trim()).filter(Boolean),
         slack_user_id: form.slack_user_id.trim() || null,
         telegram_chat_id: form.telegram_chat_id.trim() || null,
@@ -713,6 +717,28 @@ export default function PersonDetailPage() {
     }
   }
 
+  async function doSetSuspended(suspend: boolean) {
+    if (
+      suspend &&
+      !window.confirm(
+        "Suspend this person? They can't sign in, message the Executive, approve anything or be emailed until you restore them. Nothing of theirs is deleted: their open loops wait and their working style is kept.",
+      )
+    ) {
+      return;
+    }
+    setSuspending(true);
+    setSaveErr(null);
+    try {
+      const updated = await setPersonSuspended(personId, suspend);
+      setPerson(updated);
+      resetForm(updated);
+    } catch (e) {
+      setSaveErr(e instanceof Error ? e.message : suspend ? "Suspend failed" : "Restore failed");
+    } finally {
+      setSuspending(false);
+    }
+  }
+
   // Contacts get the Overview alone: they approve nothing, have no
   // availability and are never chased. An archived person keeps their
   // approvals and availability on record but nothing new is learned.
@@ -730,10 +756,22 @@ export default function PersonDetailPage() {
       ]
     : [];
   const activeTab: PersonTab = tabs.some((t) => t.id === tab) ? tab : "overview";
+  const suspendItem =
+    person && !person.is_principal && !person.archived && viewerIsPrincipal
+      ? [
+          person.suspended
+            ? { label: suspending ? "Restoring…" : "Restore person", disabled: suspending, onSelect: () => void doSetSuspended(false) }
+            : { label: suspending ? "Suspending…" : "Suspend person", disabled: suspending, onSelect: () => void doSetSuspended(true) },
+        ]
+      : [];
   const menuItems =
     person && !person.is_principal && !person.archived
-      ? [{ label: archiving ? "Archiving…" : "Archive person", danger: true, disabled: archiving, onSelect: () => void doArchive() }]
+      ? [
+          ...suspendItem,
+          { label: archiving ? "Archiving…" : "Archive person", danger: true, disabled: archiving, onSelect: () => void doArchive() },
+        ]
       : [];
+  const managed = person?.directory_managed ?? false;
 
   return (
     <div className="flex flex-col h-full bg-surface">
@@ -775,6 +813,11 @@ export default function PersonDetailPage() {
                         Archived
                       </span>
                     )}
+                    {person.suspended && (
+                      <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                        {person.suspended_by === "directory" ? "Suspended (directory)" : "Suspended"}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
@@ -810,6 +853,15 @@ export default function PersonDetailPage() {
                 </div>
               </div>
 
+              {person.suspended && (
+                <div className="mb-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[15px] text-fg">
+                  {person.suspended_by === "directory"
+                    ? "Suspended because they are no longer in your identity provider's directory. They come back on their own when they are added again."
+                    : "Suspended: they can't sign in, message the Executive, approve anything or be emailed."}{" "}
+                  Their open loops wait and their working style is kept until they are restored.
+                </div>
+              )}
+
               {saveErr && (
                 <div className="mb-4 p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-500 text-[15px]">
                   {saveErr}
@@ -836,8 +888,11 @@ export default function PersonDetailPage() {
                         <input
                           value={form.full_name}
                           onChange={(e) => setForm((f) => ({ ...f, full_name: e.target.value }))}
+                          readOnly={managed}
+                          aria-readonly={managed}
                           className={INPUT_CLS}
                         />
+                        {managed && <span className={HINT_CLS}>Managed in your identity provider.</span>}
                       </label>
                       <label className={LABEL_CLS}>
                         {formContact ? "Role and company" : "Role"}
@@ -869,8 +924,11 @@ export default function PersonDetailPage() {
                         type="email"
                         value={form.email}
                         onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
+                        readOnly={managed}
+                        aria-readonly={managed}
                         className={INPUT_CLS}
                       />
+                      {managed && <span className={HINT_CLS}>Managed in your identity provider.</span>}
                     </label>
 
                     <label className={LABEL_CLS}>

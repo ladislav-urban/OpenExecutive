@@ -463,6 +463,7 @@ def assign_open_loop(
     (17:00 in the user's timezone, clamped to 60 days out); None means the
     default due window. Never raises on a refusal: ``reason`` is one of
     ``disabled``, ``unknown_owner``, ``owner_is_contact``, ``owner_archived``,
+    ``owner_suspended``,
     ``unknown_assigner``, ``missing_text``, ``owner_at_cap``, ``duplicate``."""
     from openexecutive.config import get_settings
     from openexecutive.people.store import get_person
@@ -477,8 +478,10 @@ def assign_open_loop(
         return AssignResult(None, "owner_is_contact")
     if owner.archived:
         return AssignResult(None, "owner_archived")
+    if owner.suspended:
+        return AssignResult(None, "owner_suspended")
     assigner = get_person(assigned_by_person_id)
-    if assigner is None or assigner.archived or assigner.kind != "team":
+    if assigner is None or not assigner.active or assigner.kind != "team":
         return AssignResult(None, "unknown_assigner")
     clean = _clean(text, _TEXT_MAX)
     if len(clean) < _TEXT_MIN:
@@ -620,12 +623,21 @@ def expire_open_loops(
         return 0
     cutoff = (now - timedelta(days=ttl)).isoformat()
     with _get_conn(resolved) as conn:
+        # A suspended owner's loops are paused, not expired, and a restore
+        # restarts the clock: they come back as they were.
+        people_cols = {r["name"] for r in conn.execute("PRAGMA table_info(people)")}
+        paused = (
+            " AND assigned_to_person_id NOT IN (SELECT id FROM people"
+            " WHERE suspended = 1 OR restored_at >= ?)"
+            if {"suspended", "restored_at"} <= people_cols else ""
+        )
+        params: tuple[str, ...] = (OPEN_LOOP_KIND, cutoff, cutoff) if paused else (OPEN_LOOP_KIND, cutoff)
         ids = [
             int(r["id"])
             for r in conn.execute(
                 "SELECT id FROM scheduled_actions WHERE kind = ? "
-                "AND awaiting_response_since IS NOT NULL AND created_at < ?",
-                (OPEN_LOOP_KIND, cutoff),
+                "AND awaiting_response_since IS NOT NULL AND created_at < ?" + paused,
+                params,
             ).fetchall()
         ]
     return sum(1 for loop_id in ids if close_open_loop(loop_id, reason="expired", db_path=db_path))
@@ -849,7 +861,7 @@ async def run_open_loop_pass(
     if not (settings.attunement_enabled and settings.attunement_open_loops_enabled):
         return counts
     speaker = get_person(person_id)
-    if speaker is None or speaker.archived or speaker.id is None:
+    if speaker is None or not speaker.active or speaker.id is None:
         return counts
 
     # Loops the speaker may close: their own, or any when the principal speaks.
@@ -1065,7 +1077,7 @@ def _accept_loop(
     if not quote_ok:
         return "bad_quote"
     owner = _resolve_owner(str(item.get("owner", "")), speaker=speaker, roster=roster)
-    if owner is None or owner.id is None or owner.archived:
+    if owner is None or owner.id is None or not owner.active:
         return "unknown_owner"
     if getattr(owner, "kind", "team") != "team":
         # The roster is team-only, so this is defence in depth: a loop's owner

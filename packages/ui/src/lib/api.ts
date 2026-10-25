@@ -4625,13 +4625,30 @@ export interface Person {
   on_leave_until: string | null;
   reports_to_person_id: number | null;
   archived: boolean;
+  // A reversible "off": out of sign-in, chat, approvals, mail and chasing,
+  // with nothing of theirs deleted. "directory" when the identity provider's
+  // directory sync suspended them.
+  suspended?: boolean;
+  suspended_by?: "principal" | "directory" | null;
+  suspended_at?: string | null;
+  // Their name and email follow the identity provider's directory and are
+  // read-only here.
+  directory_managed?: boolean;
+  directory_subject?: string | null;
 }
 
 // Team members only by default — the pickers (department head, workflow
 // approver, …) must never offer a contact. The People page asks for both;
 // the server honours that only for the principal (contacts are theirs alone).
-export async function listPeople(opts: { includeContacts?: boolean } = {}): Promise<Person[]> {
-  const query = opts.includeContacts ? "?include_contacts=true" : "";
+// Suspended people are left out unless `includeSuspended` (the People page;
+// the server honours it only for the principal, like contacts).
+export async function listPeople(
+  opts: { includeContacts?: boolean; includeSuspended?: boolean } = {},
+): Promise<Person[]> {
+  const params = new URLSearchParams();
+  if (opts.includeContacts) params.set("include_contacts", "true");
+  if (opts.includeSuspended) params.set("include_suspended", "true");
+  const query = params.size ? `?${params}` : "";
   const res = await fetch(`${API_BASE}/people${query}`);
   if (!res.ok) throw new Error(`Failed to load people: ${res.statusText}`);
   return res.json();
@@ -4814,6 +4831,16 @@ export async function archivePerson(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/people/${id}/archive`, { method: "POST" });
   if (res.status === 403) throw new Error(PEOPLE_PRINCIPAL_ONLY);
   if (!res.ok) throw new Error(`Failed to archive person: ${res.statusText}`);
+}
+
+// Suspend: out of every access decision, reversibly. Restore brings back
+// their open loops, working style and addresses as they were.
+export async function setPersonSuspended(id: number, suspended: boolean): Promise<Person> {
+  const action = suspended ? "suspend" : "restore";
+  const res = await fetch(`${API_BASE}/people/${id}/${action}`, { method: "POST" });
+  if (res.status === 403) throw new Error(PEOPLE_PRINCIPAL_ONLY);
+  if (!res.ok) throw new Error(await errorDetail(res, `Could not ${action} them: ${res.statusText}`));
+  return res.json();
 }
 
 // Attunement — open loops: things a person committed to or was asked for in

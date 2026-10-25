@@ -1579,7 +1579,7 @@ async def _scan_due(person_ids: list[int], now: datetime) -> None:
         except Exception:
             logger.warning("delegation.inbox: couldn't read person %s", person_id, exc_info=True)
             continue
-        if person is None or person.archived:
+        if person is None or not person.active:
             # Not theirs to have any more: waits the interval like a scan.
             _update_watch(person_id, status="act_as_me_off", last_poll_at=now.isoformat())
             _LAST_SETTLE[person_id] = now

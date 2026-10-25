@@ -117,7 +117,7 @@ def speaker(session: Any) -> Person | None:
     except Exception:
         logger.warning("department_gate: couldn't read the speaker — holding their sends", exc_info=True)
         return Person(id=int(person_id), full_name="", kind="team")
-    if person is None or person.is_principal or person.archived or person.kind != "team":
+    if person is None or person.is_principal or not person.active or person.kind != "team":
         return None
     return person
 

@@ -2051,7 +2051,7 @@ def _waiting_cards(caller: int | None) -> int:
     except Exception:
         logger.warning("today: reading the caller failed", exc_info=True)
         return 0
-    if person is None or person.archived:
+    if person is None or not person.active:
         return 0
     return waiting_card_count(person)
 

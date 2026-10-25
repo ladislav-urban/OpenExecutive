@@ -128,7 +128,7 @@ def _require_owner(request: Request, session_id: str) -> int:
         from openexecutive.people.store import get_person
 
         person = get_person(caller)
-        if person is not None and person.is_principal and not person.archived:
+        if person is not None and person.is_principal and person.active:
             return caller
     raise HTTPException(status_code=404, detail="Session not found")
 
@@ -581,7 +581,7 @@ def put_session_shares(session_id: str, body: SharesUpdate, request: Request) ->
 
     for pid in person_ids:
         person = get_person(pid)
-        if person is None or person.archived or person.kind != "team" or pid == owner:
+        if person is None or not person.active or person.kind != "team" or pid == owner:
             raise HTTPException(status_code=422, detail=f"Can't share with person {pid}")
     added, removed = set_shares(session_id, person_ids, owner)
     if added or removed:

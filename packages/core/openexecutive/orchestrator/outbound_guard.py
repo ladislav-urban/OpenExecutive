@@ -234,7 +234,7 @@ def check_hold(
         from openexecutive.people.store import find_person_by_channel_ref
 
         person = find_person_by_channel_ref(channel, channel_ref)
-        if person is None or person.id is None or person.archived:
+        if person is None or person.id is None or not person.active:
             return None
         source = tag[0]
         hold = hold_for(

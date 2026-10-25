@@ -885,7 +885,7 @@ def _link_person(request: RosterRequest, person_id: int, replace_channel_id: boo
     from openexecutive.people import store
 
     person = store.get_person(person_id)
-    if person is None or person.archived or person.id is None:
+    if person is None or not person.active or person.id is None:
         raise ValueError("that person is not on the People list")
     ref = request.channel_ref
     if request.channel == "email":

@@ -335,7 +335,7 @@ def _teammates() -> list[Person]:
 
     return [
         p for p in list_people()
-        if not p.is_principal and not p.archived and p.kind == "team" and p.id is not None
+        if not p.is_principal and p.active and p.kind == "team" and p.id is not None
     ]
 
 

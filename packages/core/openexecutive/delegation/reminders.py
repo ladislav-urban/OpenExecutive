@@ -204,7 +204,7 @@ async def send_due(now: datetime, *, db_path: Path | None = None) -> int:
     for reminder in due:
         try:
             person = get_person(reminder.person_id)
-            if person is not None and not person.archived and _held(person, now):
+            if person is not None and person.active and _held(person, now):
                 # Quiet hours or leave: left unclaimed, so it goes once they end.
                 continue
             if not _claim(reminder.id, now, db_path):
@@ -213,7 +213,7 @@ async def send_due(now: datetime, *, db_path: Path | None = None) -> int:
             if now - due_at > STALE_AFTER:
                 logger.info("reminders: dropped reminder %s, %s late", reminder.id, now - due_at)
                 continue
-            if person is None or person.archived:
+            if person is None or not person.active:
                 continue
             rows = private_rows() if person.is_principal else rows_for_person(reminder.person_id)
             with rows:

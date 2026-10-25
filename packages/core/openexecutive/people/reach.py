@@ -88,7 +88,7 @@ def note_talked(session: Any) -> bool:
         from openexecutive.people.store import get_person, note_last_channel
 
         person = get_person(person_id)
-        if person is None or person.archived or channel_id(person, channel) != ref:
+        if person is None or not person.active or channel_id(person, channel) != ref:
             return False
         if channel == "telegram":
             if not ref.isdigit():

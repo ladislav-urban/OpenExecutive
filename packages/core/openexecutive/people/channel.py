@@ -156,7 +156,7 @@ def is_reachable_now(
     callers that already hold the roster (e.g. the /today builder) avoid a
     registry round-trip per person.
     """
-    if person.archived:
+    if not person.active:
         return False
     if not is_within_availability(person, now=now, quiet_hours=quiet_hours, urgent=urgent):
         return False

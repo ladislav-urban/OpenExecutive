@@ -168,7 +168,7 @@ async def _notify(
 
     owner = get_person(owner_person_id)
     assigner = get_person(assigned_by_person_id)
-    if owner is None or owner.id is None or owner.archived:
+    if owner is None or owner.id is None or not owner.active:
         return NoticeResult("not_reached", detail="owner not on the People list")
     assigner_name = assigner.full_name if assigner is not None else "Someone on your team"
     text = notice_text(assigner_name=assigner_name, task=task, due_at=due_at)

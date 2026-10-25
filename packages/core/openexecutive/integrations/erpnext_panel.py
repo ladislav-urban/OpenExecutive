@@ -458,7 +458,7 @@ def _person_for(email: str) -> Any:
     from openexecutive.people.store import find_person_by_email
 
     person = find_person_by_email(email)
-    if person is None or person.archived or person.kind != "team" or person.id is None:
+    if person is None or not person.active or person.kind != "team" or person.id is None:
         return None
     return person
 

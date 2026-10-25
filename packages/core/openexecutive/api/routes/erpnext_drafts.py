@@ -48,7 +48,7 @@ def _waiting_drafts(person: Any) -> int:
     from openexecutive.api.caller import signing_on
     from openexecutive.integrations.erpnext_drafts import cards
 
-    if person.id is None or person.archived or (not person.is_principal and not signing_on()):
+    if person.id is None or not person.active or (not person.is_principal and not signing_on()):
         return 0
     return len(cards(person))
 
@@ -97,7 +97,7 @@ def get_erpnext_drafts(request: Request) -> DraftCardsOut:
 
     person_id = _resolve_caller_person_id(request)
     person = get_person(person_id) if person_id is not None else None
-    if person is None or person.id is None or person.archived:
+    if person is None or person.id is None or not person.active:
         return DraftCardsOut(cards=[])
     # A teammate's cards hold ERPNext figures read as them, which ERPNext
     # gives a teammate in the web app only under signed sign-ins
