@@ -150,11 +150,12 @@ export function directorySignInCheck(
     link: null,
     last_activity: null,
   });
-  const overlap = [...allowedEmails].filter((email) => managed.has(email)).sort();
-  if (overlap.length > 0) {
+  // A count, not the addresses: every signed-in viewer sees this page.
+  const overlap = [...allowedEmails].filter((email) => managed.has(email)).length;
+  if (overlap > 0) {
     return check(
       "warn",
-      `ALLOWED_EMAILS also lists ${overlap.join(", ")}, whom the directory manages: they keep access even after leaving your identity provider.`,
+      `ALLOWED_EMAILS also lists ${overlap} ${overlap === 1 ? "person" : "people"} the directory manages: they keep access even after leaving your identity provider.`,
       "Remove them from ALLOWED_EMAILS and restart the app. Keep it to one break-glass address the directory doesn't manage.",
     );
   }

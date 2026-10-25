@@ -988,7 +988,12 @@ def _plural(n: int, one: str, many: str) -> str:
 
 def check_directory(snap: Snapshot) -> SetupCheck:
     """The directory sync (integrations.directory_sync): its last run and
-    what waits for the principal."""
+    what waits for the principal.
+
+    Setup status is one answer for every signed-in viewer, so this light
+    names no group, no reason a run stopped and no suspended count: who is
+    suspended is the principal's alone (People), and why a run stopped is
+    in ``GET /people/directory`` and the CLI's dry run."""
     from openexecutive.integrations import directory_sync
     from openexecutive.people.store import list_directory_managed
 
@@ -1001,17 +1006,19 @@ def check_directory(snap: Snapshot) -> SetupCheck:
             "To follow your identity provider instead, see docs/auth.md, \"Following your identity provider's directory\".",
         )
     last = directory_sync.status()
-    group = settings.directory_sync_group
     if last is None:
         return _result(
-            "directory", "warn", f"On, following {group}, but it hasn't run yet.",
+            "directory", "warn", "On, but it hasn't run yet.",
             "The first run starts a minute after the app does. If it doesn't, look in the API log for \"directory_sync\".",
         )
     if last.get("stopped"):
         return _result(
             "directory", "error",
-            f"The last run stopped and changed nothing: {last['stopped']}",
-            "Fix what it names, then run `openexecutive directory-sync --dry-run` to check.",
+            "The last run stopped and changed nothing, so people removed in your identity provider "
+            "still have access here.",
+            "Run `openexecutive directory-sync --dry-run` to see why (the owner also sees it on People), "
+            "fix it, then run it again.",
+            link="/people",
         )
     ok_at = last.get("last_ok_at")
     finished = datetime.fromisoformat(ok_at) if ok_at else None
@@ -1024,13 +1031,11 @@ def check_directory(snap: Snapshot) -> SetupCheck:
         )
     managed = list_directory_managed()
     new = [p for p in managed if p.kind == "team" and not p.is_principal and not p.role.strip() and not p.suspended]
-    suspended = sum(1 for p in managed if p.suspended)
     candidates = len(last.get("candidates") or [])
     principal_out = bool((last.get("counts") or {}).get("warning"))
     summary = (
-        f"Following {group}: {_plural(len(managed), 'person', 'people')} managed"
-        + (f", {suspended} suspended" if suspended else "")
-        + f". Last run {_ago((snap.now - finished).total_seconds())}."
+        f"On: {_plural(len(managed), 'person', 'people')} managed. "
+        f"Last run {_ago((snap.now - finished).total_seconds())}."
     )
     todo = []
     if new:
@@ -1038,11 +1043,11 @@ def check_directory(snap: Snapshot) -> SetupCheck:
     if candidates:
         todo.append(f"{_plural(candidates, 'person', 'people')} on People to link")
     if principal_out:
-        todo.append("you aren't an active member of the group")
+        todo.append("the owner isn't an active member of the directory's group")
     if todo:
         return _result(
-            "directory", "warn", f"{summary} Waiting for you: {'; '.join(todo)}.",
-            "Open People: give new people their role and departments, and link the ones marked Link.",
+            "directory", "warn", f"{summary} Waiting for the owner: {'; '.join(todo)}.",
+            "In People, the owner gives new people their role and departments, and links the ones marked Link to directory.",
             link="/people",
         )
     return _result("directory", "ok", summary)

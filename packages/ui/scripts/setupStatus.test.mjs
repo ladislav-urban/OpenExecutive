@@ -170,6 +170,8 @@ test("directory sign-in: ALLOWED_EMAILS listing a managed person is a warning", 
     true,
   );
   assert.equal(warn.state, "warn");
-  assert.match(warn.summary, /ben@co\.example, jane@co\.example/);
+  assert.match(warn.summary, /lists 2 people/);
+  // A count only: every signed-in viewer sees this page.
+  assert.doesNotMatch(warn.summary, /@/);
   assert.match(warn.fix, /break-glass/);
 });

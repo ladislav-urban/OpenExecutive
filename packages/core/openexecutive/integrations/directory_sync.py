@@ -653,7 +653,12 @@ def _status_conn(db_path: Path | None = None) -> sqlite3.Connection:
     )
     cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({STATUS_TABLE})")}
     if "candidates_json" not in cols:
-        conn.execute(f"ALTER TABLE {STATUS_TABLE} ADD COLUMN candidates_json TEXT NOT NULL DEFAULT '[]'")
+        try:
+            conn.execute(f"ALTER TABLE {STATUS_TABLE} ADD COLUMN candidates_json TEXT NOT NULL DEFAULT '[]'")
+        except sqlite3.OperationalError as exc:
+            # Another connection added it first.
+            if "duplicate column" not in str(exc).lower():
+                raise
     return conn
 
 

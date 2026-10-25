@@ -114,6 +114,7 @@ def test_all_in_order(kc: Keycloak, principal: int) -> None:  # noqa: F811
             people_store.update_person(p.id, role="Staff")
     check = _check()
     assert check.state == "ok" and "3 people managed" in check.summary
+    assert "/dynocortex" not in check.summary
 
 
 def test_a_stopped_run_is_an_error(kc: Keycloak, principal: int) -> None:  # noqa: F811
@@ -121,7 +122,7 @@ def test_a_stopped_run_is_an_error(kc: Keycloak, principal: int) -> None:  # noq
     kc.fail_members = True
     run(kc)
     check = _check()
-    assert check.state == "error" and "500" in check.summary
+    assert check.state == "error" and "500" not in check.summary  # the reason is the owner's
 
 
 def test_a_stalled_sync_is_a_warning(kc: Keycloak, principal: int, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
@@ -137,7 +138,7 @@ def test_the_principal_out_of_the_group_waits_for_them(kc: Keycloak, principal: 
     run(kc)
     kc.user("owner")["enabled"] = False
     run(kc)
-    assert "you aren't an active member" in _check().summary
+    assert "the owner isn't an active member" in _check().summary
 
 
 def test_candidates_survive_a_stopped_run(kc: Keycloak, principal: int) -> None:  # noqa: F811
@@ -146,3 +147,17 @@ def test_candidates_survive_a_stopped_run(kc: Keycloak, principal: int) -> None:
     kc.fail_members = True
     run(kc)
     assert directory_sync.status()["candidates"] == ["dir-adviser@example.com"]
+
+
+def test_the_light_never_says_who_is_suspended(kc: Keycloak, principal: int) -> None:  # noqa: F811
+    run(kc)
+    kc.user("adviser")["enabled"] = False
+    run(kc)
+    assert "suspended" not in _check().summary.lower()
+
+
+def test_a_stopped_runs_reason_is_the_owners_on_people(kc: Keycloak, principal: int, client: TestClient) -> None:  # noqa: F811
+    run(kc)
+    kc.fail_members = True
+    run(kc)
+    assert "500" in client.get("/people/directory").json()["stopped"]
