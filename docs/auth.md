@@ -585,11 +585,22 @@ parent window, and every `init` field is validated. In a frame:
     screen, uncovered, untransformed, unfiltered and at full opacity, without a break, for
     at least 700 ms. The browser computes that answer; the page around can't fake it. A
     cover that lets clicks through (`pointer-events: none`) and a frame cropped to show the
-    Yes without the words above it fail it too. The browser reports at most every 100 ms,
-    so reports it hasn't delivered yet are read at the click (`takeRecords`);
-  - the real pointer has moved inside the panel while it was visible (a cursor drawn by the
-    page around doesn't move it);
-  - the click is trusted and on the Yes button itself.
+    Yes without the words above it fail it too. The browser reports at most every 100 ms;
+    reports it hasn't delivered yet are read at each look (`takeRecords`);
+  - the real pointer has been inside the panel, without leaving, for at least 500 ms, and
+    has moved there (a cursor drawn by the page around doesn't move it). A frame slid under
+    the pointer between the two clicks of a lured double-click fails this. Leaving the
+    panel, or the frame losing focus, starts it again;
+  - the press began on Yes after all of that held, and the click that follows is trusted
+    and on Yes too. A key press on a focused Yes has no pointer press, so it never counts;
+  - 250 ms after the click, the panel is still in the same unbroken run of "seen" and the
+    pointer still inside, so a cover laid on just before the click shows up first.
+
+  The panel and the inline Approve below keep Open Executive's own colours and face
+  (`.consent` in `globals.css`), whatever the host's theme: otherwise a host could draw the
+  question white on white, or in a symbol font, while the browser still reports it seen.
+  Anyone who can't point (a keyboard, a touch screen) answers on this app's own page, which
+  the panel links to.
 
   A browser without v2 (Firefox, Safari) can't tell, so the panel offers no Yes there: it
   links to this app's own page for it, top level in the same tab (the card's page,

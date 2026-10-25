@@ -7871,9 +7871,17 @@ auth:
     inside the frame (components/embed/FrameConfirm.tsx) whose Yes counts
     only under lib/seen.ts: IntersectionObserver v2 (trackVisibility, delay
     100 ms) reported the panel whole, visible and uncovered without a break
-    for >= 700 ms (pending records read at the click with takeRecords), a
-    trusted pointermove inside it while visible, and a trusted click on Yes
-    itself. Without v2 (Firefox, Safari) no Yes: a link to the app's own
+    for >= 700 ms (pending records taken at each look with takeRecords); the
+    pointer inside it without leaving for >= 500 ms (DWELL_MS, longer than a
+    double-click) with a trusted pointermove while seen (pointerleave or the
+    frame's blur reset it); a trusted pointerdown on Yes after that, then a
+    trusted click on Yes; and 250 ms later (SETTLE_MS) still the same run of
+    seen with the pointer inside. A key press has no pointerdown, so never
+    counts. FrameConfirm and the inline Approve carry `.consent`, which
+    re-declares the app's own colour tokens and a system font on them, so a
+    host's init theme or font can't blank the question. Each also links to
+    the app's own page (target _top) for keyboard and touch users.
+    Without v2 (Firefox, Safari) no Yes: a link to the app's own
     page (cards/<id>, cards/alert/<id>, else the asking page without
     embed) with target _top, same tab. Never fails open. Before Oct 2026
     this was a popup (/confirm, oe-confirm/v1), since an in-frame dialog

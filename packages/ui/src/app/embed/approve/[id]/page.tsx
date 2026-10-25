@@ -15,7 +15,7 @@ import {
   type CardOutcome,
 } from "@/lib/embed";
 import { alertIdFrom, approvedLine, offersApprove } from "@/lib/hostApprove";
-import { SeenGate, tracksVisibility, watchPanel } from "@/lib/seen";
+import { SeenGate, tracksVisibility, watchPanel, type Watch } from "@/lib/seen";
 
 // The inline Approve a host places on its own screen for one of Home's cards
 // (lib/hostApprove.ts): a small frame of this app's own, showing the card's
@@ -23,7 +23,9 @@ import { SeenGate, tracksVisibility, watchPanel } from "@/lib/seen";
 // it. It offers Approve only once the host that placed it asks for this
 // card (`approve-ready`, then `approve-ask`), and its Approve counts only
 // under lib/seen.ts's rule. A browser that can't report the frame seen gets
-// a link to the card's own page instead, top level in the same tab.
+// a link to the card's own page instead, top level in the same tab, and so
+// does anyone who can't point. It keeps this app's own colours and face
+// (`.consent`, globals.css), whatever the host's theme.
 
 const noSubscribe = () => () => {};
 
@@ -46,7 +48,8 @@ export default function InlineApprove() {
   const panel = useRef<HTMLElement | null>(null);
   const button = useRef<HTMLButtonElement | null>(null);
   const gate = useRef(new SeenGate());
-  const flush = useRef<(() => void) | null>(null);
+  const watch = useRef<Watch | null>(null);
+  const judging = useRef(false);
 
   useEffect(() => {
     if (id === null) return;
@@ -86,15 +89,16 @@ export default function InlineApprove() {
   // Approve arms only under lib/seen.ts's rule, from the host's ask on.
   useEffect(() => {
     if (host === null || !panel.current) return;
-    const check = () => setReady(gate.current.clickCounts({ isTrusted: true, onYes: true, now: performance.now() }));
-    const watch = watchPanel(window, panel.current, gate.current, check);
-    if (!watch) return;
-    flush.current = watch.flush;
+    const check = () => setReady(watch.current?.armed() ?? false);
+    const isApprove = (target: unknown) => target !== null && target === button.current;
+    const watching = watchPanel(window, panel.current, isApprove, gate.current, check);
+    if (!watching) return;
+    watch.current = watching;
     const timer = window.setInterval(check, 100);
     return () => {
       window.clearInterval(timer);
-      watch.stop();
-      flush.current = null;
+      watching.stop();
+      watch.current = null;
     };
   }, [host]);
 
@@ -103,13 +107,10 @@ export default function InlineApprove() {
   };
 
   const approve = async (event: React.MouseEvent<HTMLButtonElement>) => {
-    if (!card || busy) return;
-    flush.current?.();
-    const counts = gate.current.clickCounts({
-      isTrusted: event.nativeEvent.isTrusted,
-      onYes: event.target === button.current,
-      now: performance.now(),
-    });
+    if (!card || busy || judging.current || !watch.current) return;
+    judging.current = true;
+    const counts = await watch.current.judge({ isTrusted: event.nativeEvent.isTrusted, target: event.target });
+    judging.current = false;
     if (!counts) return;
     const p = card.proposal;
     setBusy(true);
@@ -143,8 +144,7 @@ export default function InlineApprove() {
   return (
     <main
       ref={panel}
-      onPointerMove={(event) => gate.current.pointerMoved(event.nativeEvent.isTrusted)}
-      className="bg-surface px-4 py-3 text-fg"
+      className="consent bg-surface px-4 py-3 text-fg"
     >
       {!framed ? (
         <p className="text-sm text-fg-muted">
@@ -173,7 +173,10 @@ export default function InlineApprove() {
                 <p className="text-xs text-fg-subtle">The Executive then does it as you, in a new chat.</p>
               )}
               <div className="flex items-center justify-end gap-2">
-                {!ready && !busy && <span className="text-xs text-fg-subtle">Point here to approve.</span>}
+                <a href={cardPage} target="_top" rel="noopener" className="mr-auto text-xs text-accent hover:underline">
+                  Open the card
+                </a>
+                {!ready && !busy && <span className="text-xs text-fg-subtle">Hold the pointer here to approve.</span>}
                 <button type="button" className={buttonClass("secondary", "sm")} onClick={() => tellHost("not_now")} disabled={busy}>
                   Not now
                 </button>

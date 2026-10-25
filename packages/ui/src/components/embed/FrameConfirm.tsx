@@ -4,14 +4,17 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { buttonClass } from "@/components/ui/Button";
 import { ownPageFor, type CardAction } from "@/lib/cardActions";
-import { SeenGate, tracksVisibility, watchPanel } from "@/lib/seen";
+import { SeenGate, tracksVisibility, watchPanel, type Watch } from "@/lib/seen";
 
 // In a frame, a card action, a chat message or another change asks here,
 // inside the frame, naming what will happen. The page around the frame
-// could hide or cover it and lure clicks, so its Yes counts only once the
-// browser has reported this panel seen and the pointer has moved in it
-// (lib/seen.ts). A browser that can't report that offers no Yes: the person
-// opens this app's own page for it, top level in the same tab. Cancel is No.
+// could hide, cover or move it and lure clicks, so its Yes counts only under
+// lib/seen.ts's rule: seen, pointed at for a moment, pressed and clicked for
+// real, and still seen a moment later. A browser that can't report that
+// offers no Yes: the person opens this app's own page for it, top level in
+// the same tab, as can anyone who can't point (a keyboard, a touch screen).
+// The panel keeps this app's own colours and face (`.consent`, globals.css),
+// whatever the host's theme. Cancel is No.
 
 const YES: Record<CardAction["verb"], string> = {
   approve: "Yes, approve",
@@ -30,7 +33,7 @@ export default function FrameConfirm({
   const panel = useRef<HTMLDivElement | null>(null);
   const yes = useRef<HTMLButtonElement | null>(null);
   const gate = useRef(new SeenGate());
-  const flush = useRef<(() => void) | null>(null);
+  const watch = useRef<Watch | null>(null);
   const answered = useRef(false);
   // Shown only in the browser (EmbedProvider asks from a request), so
   // `window` is there. False where the browser can't tell it is seen.
@@ -48,27 +51,24 @@ export default function FrameConfirm({
   );
 
   useEffect(() => {
-    const check = () => setReady(gate.current.clickCounts({ isTrusted: true, onYes: true, now: performance.now() }));
-    const watch = panel.current ? watchPanel(window, panel.current, gate.current, check) : null;
-    if (!watch) return;
-    flush.current = watch.flush;
-    // The run of "seen" grows without a new report, so look again meanwhile.
+    const check = () => setReady(watch.current?.armed() ?? false);
+    const watching = panel.current
+      ? watchPanel(window, panel.current, (target) => target !== null && target === yes.current, gate.current, check)
+      : null;
+    if (!watching) return;
+    watch.current = watching;
+    // The runs of "seen" and "inside" grow without an event, so look again meanwhile.
     const timer = window.setInterval(check, 100);
     return () => {
       window.clearInterval(timer);
-      watch.stop();
-      flush.current = null;
+      watching.stop();
+      watch.current = null;
     };
   }, []);
 
-  const onYes = (event: React.MouseEvent<HTMLButtonElement>) => {
-    flush.current?.();
-    const counts = gate.current.clickCounts({
-      isTrusted: event.nativeEvent.isTrusted,
-      onYes: event.target === yes.current,
-      now: performance.now(),
-    });
-    if (counts) finish(true);
+  const onYes = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    const judged = watch.current?.judge({ isTrusted: event.nativeEvent.isTrusted, target: event.target });
+    if (judged && (await judged)) finish(true);
   };
 
   const danger = action.verb === "reject" || action.verb === "cancel";
@@ -80,8 +80,7 @@ export default function FrameConfirm({
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="frame-confirm-title"
-        onPointerMove={(event) => gate.current.pointerMoved(event.nativeEvent.isTrusted)}
-        className="w-full max-w-md rounded-2xl border border-line bg-surface-elevated p-5 shadow-xl"
+        className="consent w-full max-w-md rounded-2xl border border-line bg-surface-elevated p-5 shadow-xl"
       >
         <h2 id="frame-confirm-title" className="text-base font-semibold text-fg">
           Are you sure?
@@ -105,7 +104,7 @@ export default function FrameConfirm({
             <button
               ref={yes}
               type="button"
-              onClick={onYes}
+              onClick={(event) => void onYes(event)}
               disabled={!ready}
               className={buttonClass(danger ? "danger" : "primary", "sm")}
             >
@@ -113,8 +112,13 @@ export default function FrameConfirm({
             </button>
           )}
         </div>
-        {supported && !ready && (
-          <p className="mt-2 text-right text-xs text-fg-subtle">Point at this box to answer.</p>
+        {supported && (
+          <p className="mt-2 text-right text-xs text-fg-subtle">
+            {!ready && "Hold the pointer on this box to answer. "}
+            <a href={ownPage} target="_top" rel="noopener" className="text-accent hover:underline">
+              Answer on its own page
+            </a>
+          </p>
         )}
       </div>
     </div>

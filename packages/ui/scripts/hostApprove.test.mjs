@@ -79,7 +79,8 @@ test("the inline Approve offers Approve only on the host's ask for this card, fr
 });
 
 test("the inline Approve counts a click only under the seen rule, and opens no window", () => {
-  assert.match(INLINE, /gate\.current\.clickCounts\(\{\s*isTrusted: event\.nativeEvent\.isTrusted,\s*onYes: event\.target === button\.current/);
+  assert.match(INLINE, /const counts = await watch\.current\.judge\(\{ isTrusted: event\.nativeEvent\.isTrusted, target: event\.target \}\);/);
+  assert.match(INLINE, /const isApprove = \(target: unknown\) => target !== null && target === button\.current;/);
   assert.doesNotMatch(INLINE, /window\.open\(/);
   // Without v2: the card's own page, top level in the same tab.
   assert.match(INLINE, /target="_top"/);
@@ -90,4 +91,25 @@ test("the size it asks for is bounded", () => {
   assert.equal(sizeMessage(10_000).height, MAX_APPROVE_HEIGHT);
   assert.equal(sizeMessage(-5).height, 0);
   assert.equal(sizeMessage(Number.NaN).height, 0);
+});
+
+test("only the inline Approve lets a request past the frame's gate, and only after its own judging", async () => {
+  const { readdirSync, statSync } = await import("node:fs");
+  const root = new URL("../src/", import.meta.url);
+  const users = [];
+  const walk = (dir) => {
+    for (const name of readdirSync(dir)) {
+      const url = new URL(name, dir);
+      if (statSync(url).isDirectory()) walk(new URL(`${name}/`, dir));
+      else if (/\.tsx?$/.test(name) && /usePassOnce\(/.test(readFileSync(url, "utf8"))) users.push(url.pathname);
+    }
+  };
+  walk(root);
+  assert.deepEqual(
+    users.map((p) => decodeURIComponent(p).replace(/^.*\/src\//, "")),
+    ["app/embed/approve/[id]/page.tsx", "components/embed/EmbedProvider.tsx"].sort(),
+  );
+  // passOnce is called only after judge said yes.
+  const judged = INLINE.indexOf("if (!counts) return;");
+  assert.ok(judged > 0 && INLINE.indexOf("passOnce(") > judged);
 });

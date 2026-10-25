@@ -136,7 +136,7 @@ test("the frame checks every request, in any frame, and asks inside it", () => {
   // Its Yes is the only way to true, and only when the seen rule says so
   // (scripts/seen.test.mjs).
   const frame = read("../src/components/embed/FrameConfirm.tsx");
-  assert.match(frame, /if \(counts\) finish\(true\);/);
+  assert.match(frame, /if \(judged && \(await judged\)\) finish\(true\);/);
   assert.equal(frame.match(/finish\(true\)/g).length, 1);
   // One request a page judged itself under the same rule passes once.
   assert.match(provider, /if \(action && pass && Date\.now\(\) <= pass\.until && isPassed\(pass, method, url\)\) return original\(input, init\);/);
