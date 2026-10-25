@@ -2,8 +2,10 @@
 // origins"), so its checks never need this app running or its secrets:
 //
 //   embed-manifest.json  the navigation (navConfig.ts's destinations and
-//                        hubs, team and solo), the routes, the contract and
+//                        hubs, team and solo), the routes, the contract,
 //                        the User Guide's section ids (/guide?section=<id>)
+//                        and the pieces a host places on its own screens
+//                        (the inline Approve, /embed/approve/{alertId})
 //   host-list.json       the calls a host origin's page may make
 //
 // The third, openapi.json, comes from the API (scripts/export-openapi.py).
@@ -14,7 +16,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildDestinations, buildHubs } from "../src/components/shell/navConfig.ts";
-import { APP_ROUTES, EMBED_CONTRACT, EMBED_PROTOCOL, THEME_TOKENS } from "../src/lib/embed.ts";
+import { APP_ROUTES, EMBED_CONTRACT, EMBED_PROTOCOL, MAX_APPROVE_HEIGHT, THEME_TOKENS } from "../src/lib/embed.ts";
 import { GUIDE_SECTION_IDS } from "../src/lib/guideSections.ts";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -35,6 +37,8 @@ export function embedManifest() {
     routes: [...APP_ROUTES],
     navigation: { team: navigation("team"), solo: navigation("solo") },
     guideSections: [...GUIDE_SECTION_IDS],
+    // app/embed/*: placed in a host's own screen, never shown as a page.
+    pieces: { approve: { path: "/embed/approve/{alertId}", query: "?embed=1", maxHeight: MAX_APPROVE_HEIGHT } },
   };
 }
 

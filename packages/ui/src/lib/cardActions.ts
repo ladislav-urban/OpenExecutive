@@ -1,14 +1,15 @@
-// In a frame, what the page changes beyond the host list asks first, in a
-// window of its own (components/embed/EmbedProvider.tsx, app/confirm).
+// In a frame, what the page changes beyond the host list asks first
+// (components/embed/EmbedProvider.tsx, FrameConfirm.tsx).
 //
 // A page that frames this one (a host origin, or any page frame-ancestors
 // lets in) can't read or click inside the frame, but it can make the frame
-// invisible, lay its own buttons over it and catch clicks meant for those:
-// two lured clicks beat any confirmation drawn inside the frame. So in a
-// frame, approving, rejecting or cancelling a card, and any other change the
-// host list doesn't already let the host make itself (a setting, Handle it
-// for me, People), first opens a small window of this app's own, which no
-// page can cover, naming what will happen; only its Yes goes ahead. Outside
+// invisible, lay its own buttons over it and catch clicks meant for those.
+// So in a frame, approving, rejecting or cancelling a card, sending a chat
+// message, and any other change the host list doesn't already let the host
+// make itself (a setting, Handle it for me, People), first asks inside the
+// frame, naming what will happen; its Yes counts only once the browser has
+// reported the question seen (lib/seen.ts). A browser that can't report it
+// gets no Yes: the person goes to `page`, this app's own, top level. Outside
 // a frame nothing changes.
 //
 // The embedded shell checks every request the page sends against
@@ -28,6 +29,9 @@ export type CardAction = {
   // a click (it could have been lured); one the page makes on its own
   // can't have been.
   card: boolean;
+  // The card's own page, where a browser that can't tell the frame is seen
+  // answers it instead (null: the page that asked, opened on its own).
+  page: string | null;
 };
 
 type HostCall = readonly [method: string, pattern: string];
@@ -87,7 +91,7 @@ export function cardActionFor(method: string, url: string, body?: unknown): Card
         : verb === "reject"
           ? `Dismiss card ${id}: nothing on it will happen.`
           : `Cancel card ${id}: what it started stops, and nothing more on it will happen.`;
-    return { verb, decisionId: id, what, card: true };
+    return { verb, decisionId: id, what, card: true, page: `/cards/${id}` };
   }
   m = /^\/alerts\/(\d+)\/approve$/.exec(path);
   if (m) {
@@ -96,6 +100,7 @@ export function cardActionFor(method: string, url: string, body?: unknown): Card
       decisionId: null,
       what: `Approve the proposal on alert ${m[1]}: what it proposes is carried out now, as you.`,
       card: true,
+      page: `/cards/alert/${m[1]}`,
     };
   }
   m = /^\/workflows\/runs\/([^/]+)\/decision$/.exec(path);
@@ -110,13 +115,14 @@ export function cardActionFor(method: string, url: string, body?: unknown): Card
           ? `Sign off workflow run ${run}: it carries on with what it was waiting to do.`
           : `Turn down workflow run ${run}: it stops where it is waiting.`,
       card: true,
+      page: null,
     };
   }
   m = /^\/people\/requests\/(\d+)\/(approve|decline)$/.exec(path);
   if (m) {
     return m[2] === "approve"
-      ? { verb: "approve", decisionId: null, what: `Add the person in request ${m[1]} to People, as you answered it.`, card: true }
-      : { verb: "reject", decisionId: null, what: `Decline request ${m[1]}: they are not added to People.`, card: true };
+      ? { verb: "approve", decisionId: null, what: `Add the person in request ${m[1]} to People, as you answered it.`, card: true, page: null }
+      : { verb: "reject", decisionId: null, what: `Decline request ${m[1]}: they are not added to People.`, card: true, page: null };
   }
   return null;
 }
@@ -183,6 +189,7 @@ export function frameActionFor(
       // Always: a message sent after a Yes (a queued one, Try again) may
       // carry words that weren't typed here.
       card: true,
+      page: null,
     };
   }
   if (onHostList(hostCalls, verb, path)) return null;
@@ -192,6 +199,7 @@ export function frameActionFor(
     decisionId: null,
     what: `${named ? named[1] : "Make this change in Open Executive, as you."} (${verb} ${path.slice(0, 120)})`,
     card: false,
+    page: null,
   };
 }
 
@@ -216,8 +224,23 @@ export function describeDecision(instance: { decision_class?: unknown; proposed_
   return detail ? `${kind}: ${detail}` : kind;
 }
 
-// The confirmation window and the frame that opened it talk in these, on
-// this app's own origin only (each side checks the origin and the window).
+/**
+ * Where a browser that can't tell the frame is seen answers `action`: the
+ * card's own page, or else the page that asked (`pathname` + `search`), in
+ * both cases without `embed`, so it opens as this app's own page.
+ */
+export function ownPageFor(action: CardAction, pathname: string, search: string): string {
+  if (action.page) return action.page;
+  const params = new URLSearchParams(search);
+  params.delete("embed");
+  const query = params.toString();
+  const path = pathname.startsWith("/") && !pathname.startsWith("//") ? pathname : "/";
+  return query ? `${path}?${query}` : path;
+}
+
+// The old confirmation window (app/confirm, kept for one release) and the
+// frame that opened it talk in these, on this app's own origin only (each
+// side checks the origin and the window).
 export const CONFIRM_PROTOCOL = "oe-confirm/v1";
 
 export function isConfirmMessage(data: unknown, type: string, nonce: string): data is Record<string, unknown> {
@@ -237,7 +260,13 @@ export function parseAction(value: unknown): CardAction | null {
   if (typeof a.what !== "string" || a.what.length > 300) return null;
   const id = a.decisionId;
   if (id !== null && !(typeof id === "number" && Number.isInteger(id) && id > 0)) return null;
-  return { verb: a.verb as CardAction["verb"], what: a.what, decisionId: id as number | null, card: a.card === true };
+  return {
+    verb: a.verb as CardAction["verb"],
+    what: a.what,
+    decisionId: id as number | null,
+    card: a.card === true,
+    page: null,
+  };
 }
 
 export class CardActionNotConfirmed extends Error {

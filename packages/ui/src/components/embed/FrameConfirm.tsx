@@ -2,20 +2,23 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { CONFIRM_PROTOCOL, isConfirmMessage, type CardAction } from "@/lib/cardActions";
+import { buttonClass } from "@/components/ui/Button";
+import { ownPageFor, type CardAction } from "@/lib/cardActions";
+import { SeenGate, tracksVisibility, watchPanel } from "@/lib/seen";
 
-// In a frame, a card action or another change asks in a window of this
-// app's own (app/confirm), not inside the frame: the page around the frame
-// can cover the frame with anything, but not another window. This is what
-// the frame shows meanwhile. The window is opened at once when the browser
-// allows it (the click that asked counts); otherwise, or after it was closed,
-// a button opens it. Closing it, or Cancel here, is No.
+// In a frame, a card action, a chat message or another change asks here,
+// inside the frame, naming what will happen. The page around the frame
+// could hide or cover it and lure clicks, so its Yes counts only once the
+// browser has reported this panel seen and the pointer has moved in it
+// (lib/seen.ts). A browser that can't report that offers no Yes: the person
+// opens this app's own page for it, top level in the same tab. Cancel is No.
 
-function makeNonce(): string {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
-}
+const YES: Record<CardAction["verb"], string> = {
+  approve: "Yes, approve",
+  reject: "Yes, dismiss",
+  cancel: "Yes, cancel it",
+  change: "Yes, go ahead",
+};
 
 export default function FrameConfirm({
   action,
@@ -24,85 +27,95 @@ export default function FrameConfirm({
   action: CardAction;
   onAnswer: (ok: boolean) => void;
 }) {
-  const [nonce] = useState(makeNonce);
-  const popup = useRef<Window | null>(null);
-  const [open, setOpen] = useState(false);
+  const panel = useRef<HTMLDivElement | null>(null);
+  const yes = useRef<HTMLButtonElement | null>(null);
+  const gate = useRef(new SeenGate());
+  const flush = useRef<(() => void) | null>(null);
   const answered = useRef(false);
+  // Shown only in the browser (EmbedProvider asks from a request), so
+  // `window` is there. False where the browser can't tell it is seen.
+  const [supported] = useState(() => tracksVisibility(window));
+  const [ownPage] = useState(() => ownPageFor(action, window.location.pathname, window.location.search));
+  const [ready, setReady] = useState(false);
 
   const finish = useCallback(
     (ok: boolean) => {
       if (answered.current) return;
       answered.current = true;
-      if (popup.current && !popup.current.closed) popup.current.close();
       onAnswer(ok);
     },
     [onAnswer],
   );
 
-  const openWindow = useCallback(() => {
-    const opened = window.open(`/confirm?nonce=${nonce}`, `oe-confirm-${nonce}`, "popup,width=460,height=420");
-    popup.current = opened;
-    return opened !== null;
-  }, [nonce]);
-
   useEffect(() => {
-    const onMessage = (event: MessageEvent) => {
-      const current = popup.current;
-      if (!current || event.origin !== window.location.origin || event.source !== current) return;
-      if (isConfirmMessage(event.data, "ready", nonce)) {
-        current.postMessage({ protocol: CONFIRM_PROTOCOL, type: "ask", nonce, action }, window.location.origin);
-      } else if (isConfirmMessage(event.data, "answer", nonce)) {
-        finish(event.data.ok === true);
-      }
-    };
-    window.addEventListener("message", onMessage);
-    // Opened now, while the click that asked still counts as one.
-    const opened = openWindow();
-    const timer = window.setInterval(() => {
-      const isOpen = popup.current !== null && !popup.current.closed;
-      setOpen(isOpen);
-    }, 300);
-    if (!opened) window.setTimeout(() => setOpen(false), 0);
+    const check = () => setReady(gate.current.clickCounts({ isTrusted: true, onYes: true, now: performance.now() }));
+    const watch = panel.current ? watchPanel(window, panel.current, gate.current, check) : null;
+    if (!watch) return;
+    flush.current = watch.flush;
+    // The run of "seen" grows without a new report, so look again meanwhile.
+    const timer = window.setInterval(check, 100);
     return () => {
-      window.removeEventListener("message", onMessage);
       window.clearInterval(timer);
+      watch.stop();
+      flush.current = null;
     };
-  }, [action, nonce, finish, openWindow]);
+  }, []);
+
+  const onYes = (event: React.MouseEvent<HTMLButtonElement>) => {
+    flush.current?.();
+    const counts = gate.current.clickCounts({
+      isTrusted: event.nativeEvent.isTrusted,
+      onYes: event.target === yes.current,
+      now: performance.now(),
+    });
+    if (counts) finish(true);
+  };
+
+  const danger = action.verb === "reject" || action.verb === "cancel";
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/60 px-4">
       <div
+        ref={panel}
         role="alertdialog"
         aria-modal="true"
         aria-labelledby="frame-confirm-title"
+        onPointerMove={(event) => gate.current.pointerMoved(event.nativeEvent.isTrusted)}
         className="w-full max-w-md rounded-2xl border border-line bg-surface-elevated p-5 shadow-xl"
       >
         <h2 id="frame-confirm-title" className="text-base font-semibold text-fg">
-          Confirm in the small window
+          Are you sure?
         </h2>
         <p className="mt-2 text-sm text-fg">{action.what}</p>
-        <p className="mt-2 text-xs text-fg-subtle">
-          This page is shown inside another one, so you say yes in a window of its own, where nothing else can cover
-          it.
-        </p>
+        {!supported && (
+          <p className="mt-2 text-xs text-fg-subtle">
+            This page is shown inside another one, and this browser can&rsquo;t tell whether this question is really
+            on screen, so answer it on Open Executive&rsquo;s own page. Your browser&rsquo;s Back brings you here again.
+          </p>
+        )}
         <div className="mt-5 flex justify-end gap-2">
-          <button
-            type="button"
-            onClick={() => finish(false)}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm font-medium hover:bg-surface-overlay"
-          >
+          <button type="button" onClick={() => finish(false)} className={buttonClass("secondary", "sm")}>
             Cancel
           </button>
-          {!open && (
+          {!supported ? (
+            <a href={ownPage} target="_top" rel="noopener" className={buttonClass("primary", "sm")}>
+              Open it here
+            </a>
+          ) : (
             <button
+              ref={yes}
               type="button"
-              onClick={() => setOpen(openWindow())}
-              className="rounded-lg bg-accent-strong px-3 py-1.5 text-sm font-medium text-white"
+              onClick={onYes}
+              disabled={!ready}
+              className={buttonClass(danger ? "danger" : "primary", "sm")}
             >
-              Open the window
+              {YES[action.verb]}
             </button>
           )}
         </div>
+        {supported && !ready && (
+          <p className="mt-2 text-right text-xs text-fg-subtle">Point at this box to answer.</p>
+        )}
       </div>
     </div>
   );

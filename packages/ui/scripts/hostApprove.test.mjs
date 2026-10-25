@@ -1,10 +1,12 @@
-// The window a host's screen opens to approve a card (lib/hostApprove.ts,
-// app/confirm/alert/[id]): which addresses it takes, that it approves only
-// what the card offers, what it says after, and that no page may frame it.
+// Approving a card from a host's screen (lib/hostApprove.ts): the inline
+// Approve (app/embed/approve/[id]) and the old window it replaces
+// (app/confirm/alert/[id]): which addresses they take, that they approve
+// only what the card offers, what they say after, and who may frame them.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { EMBED_PROTOCOL, isApproveAsk } from "../src/lib/embed.ts";
+import { EMBED_PROTOCOL, MAX_APPROVE_HEIGHT, isApproveAsk, sizeMessage } from "../src/lib/embed.ts";
 import { ARM_DELAY_MS, alertIdFrom, approvedLine, clickCounts, offersApprove } from "../src/lib/hostApprove.ts";
 import { neverFramed } from "../src/lib/middlewarePaths.ts";
 
@@ -59,4 +61,33 @@ test("no page may frame a confirmation window", () => {
   for (const path of ["/cards/alert/28", "/confirmations", "/", "/chats/confirm"]) {
     assert.ok(!neverFramed(path), path);
   }
+});
+
+// The inline Approve a host places (app/embed/approve/[id]), which replaces
+// the window above.
+const INLINE = readFileSync(new URL("../src/app/embed/approve/[id]/page.tsx", import.meta.url), "utf8");
+
+test("a host may place the inline Approve in a frame", () => {
+  for (const path of ["/embed/approve/28", "/embed/approve/28/"]) assert.ok(!neverFramed(path), path);
+});
+
+test("the inline Approve offers Approve only on the host's ask for this card, from its parent", () => {
+  assert.match(INLINE, /acceptsEvent\(event, hostOrigins, parent\) \|\| !isApproveAsk\(event\.data, id\)/);
+  assert.match(INLINE, /const canApprove = proposal \? host !== null && offersApprove/);
+  // Watching (and so arming) starts only once a host asked.
+  assert.match(INLINE, /if \(host === null \|\| !panel\.current\) return;\s*const check/);
+});
+
+test("the inline Approve counts a click only under the seen rule, and opens no window", () => {
+  assert.match(INLINE, /gate\.current\.clickCounts\(\{\s*isTrusted: event\.nativeEvent\.isTrusted,\s*onYes: event\.target === button\.current/);
+  assert.doesNotMatch(INLINE, /window\.open\(/);
+  // Without v2: the card's own page, top level in the same tab.
+  assert.match(INLINE, /target="_top"/);
+});
+
+test("the size it asks for is bounded", () => {
+  assert.deepEqual(sizeMessage(120.2), { protocol: EMBED_PROTOCOL, type: "size", height: 121 });
+  assert.equal(sizeMessage(10_000).height, MAX_APPROVE_HEIGHT);
+  assert.equal(sizeMessage(-5).height, 0);
+  assert.equal(sizeMessage(Number.NaN).height, 0);
 });

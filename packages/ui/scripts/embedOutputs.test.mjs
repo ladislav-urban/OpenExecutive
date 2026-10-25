@@ -1,5 +1,6 @@
 // The build outputs for host apps (scripts/embed-outputs.mjs).
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 import test from "node:test";
 import { isAppPath } from "../src/lib/embed.ts";
 import { embedManifest, hostList } from "./embed-outputs.mjs";
@@ -20,4 +21,12 @@ test("the manifest names every destination and hub tab by a route of this app", 
 test("the host list goes out as it is", () => {
   const list = hostList();
   assert.ok(Array.isArray(list.calls) && list.calls.length > 0);
+});
+
+test("the manifest names the inline Approve a host places, at a page this app has", () => {
+  const { approve } = embedManifest().pieces;
+  assert.equal(approve.path, "/embed/approve/{alertId}");
+  assert.equal(approve.query, "?embed=1");
+  assert.ok(approve.maxHeight > 0);
+  assert.ok(existsSync(new URL("../src/app/embed/approve/[id]/page.tsx", import.meta.url)));
 });
