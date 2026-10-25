@@ -423,11 +423,11 @@ def _sync(report: Report, reader: DirectoryReader | None, allow_mass_suspend: bo
     for member in sorted(active.values(), key=lambda m: m.email):
         before = len(report.changes)
         try:
-            person = by_subject.get(member.id)
-            if person is None:
+            linked = by_subject.get(member.id)
+            if linked is None:
                 _add(member, report)
             else:
-                _update(person, member, report)
+                _update(linked, member, report)
         except Exception as error:
             # One person's failure leaves the others to run, and what it said
             # it would do for them didn't happen: only the failure stands.
