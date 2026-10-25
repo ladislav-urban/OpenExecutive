@@ -129,6 +129,46 @@ export function signInCheck(env: SignInEnv): SetupCheck {
   );
 }
 
+/**
+ * Sign-in for the People the identity provider's directory manages
+ * (lib/directory.ts), or null when it manages nobody (the sync is off, or
+ * hasn't linked anyone). `managed` are their addresses, from
+ * GET /auth/allowed-emails.
+ */
+export function directorySignInCheck(
+  managed: ReadonlySet<string>,
+  allowedEmails: ReadonlySet<string>,
+  googleSignIn: boolean,
+): SetupCheck | null {
+  if (managed.size === 0) return null;
+  const check = (state: SetupState, summary: string, fix: string | null = null): SetupCheck => ({
+    id: "directory_sign_in",
+    label: "Directory sign-in",
+    state,
+    summary,
+    fix,
+    link: null,
+    last_activity: null,
+  });
+  // A count, not the addresses: every signed-in viewer sees this page.
+  const overlap = [...allowedEmails].filter((email) => managed.has(email)).length;
+  if (overlap > 0) {
+    return check(
+      "warn",
+      `ALLOWED_EMAILS also lists ${overlap} ${overlap === 1 ? "person" : "people"} the directory manages: they keep access even after leaving your identity provider.`,
+      "Remove them from ALLOWED_EMAILS and restart the app. Keep it to one break-glass address the directory doesn't manage.",
+    );
+  }
+  const n = managed.size;
+  const who = `${n} ${n === 1 ? "person" : "people"} the directory manages`;
+  return check(
+    "ok",
+    googleSignIn
+      ? `The ${who} sign in only through your identity provider: Google sign-in is refused for them, and stays on for everyone else.`
+      : `The ${who} sign in only through your identity provider, as their own account there.`,
+  );
+}
+
 // Worst first, so what needs fixing is at the top of the page.
 const STATE_RANK: Record<SetupState, number> = { error: 0, warn: 1, ok: 2, off: 3 };
 

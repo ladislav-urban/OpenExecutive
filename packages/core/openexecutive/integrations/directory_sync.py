@@ -591,7 +591,12 @@ def link(email: str, *, relink: bool = False, reader: DirectoryReader | None = N
         if problem := config_problem(settings):
             raise DirectoryError(problem)
         reader = KeycloakReader(settings)
-    members = reader.read_members()
+    try:
+        members = reader.read_members()
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
+        raise DirectoryError(
+            f"the provider's answer isn't the shape the directory contract says ({type(error).__name__})"
+        ) from None
     matches = [m for m in members.values() if m.active and m.email == norm]
     if len(matches) != 1:
         raise DirectoryError(f"no active member of {settings.directory_sync_group} has the address {norm}")
@@ -646,6 +651,14 @@ def _status_conn(db_path: Path | None = None) -> sqlite3.Connection:
         " id INTEGER PRIMARY KEY CHECK (id = 1),"
         " last_run_at TEXT, last_ok_at TEXT, stopped TEXT, counts_json TEXT NOT NULL DEFAULT '{}')"
     )
+    cols = {row["name"] for row in conn.execute(f"PRAGMA table_info({STATUS_TABLE})")}
+    if "candidates_json" not in cols:
+        try:
+            conn.execute(f"ALTER TABLE {STATUS_TABLE} ADD COLUMN candidates_json TEXT NOT NULL DEFAULT '[]'")
+        except sqlite3.OperationalError as exc:
+            # Another connection added it first.
+            if "duplicate column" not in str(exc).lower():
+                raise
     return conn
 
 
@@ -655,13 +668,22 @@ def _record_status(report: Report, db_path: Path | None = None) -> None:
         conn = _status_conn(db_path)
         try:
             with conn:
+                # The link candidates of a finished run; a stopped run read
+                # nothing reliable, so the last ones are kept.
+                candidates = (
+                    None if report.stopped
+                    else json.dumps(sorted({who for a, who, _ in report.changes if a == "candidate"})[:100])
+                )
                 conn.execute(
-                    f"INSERT INTO {STATUS_TABLE} (id, last_run_at, last_ok_at, stopped, counts_json)"
-                    " VALUES (1, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET"
+                    f"INSERT INTO {STATUS_TABLE}"
+                    " (id, last_run_at, last_ok_at, stopped, counts_json, candidates_json)"
+                    " VALUES (1, ?, ?, ?, ?, COALESCE(?, '[]')) ON CONFLICT(id) DO UPDATE SET"
                     " last_run_at = excluded.last_run_at,"
                     " last_ok_at = COALESCE(excluded.last_ok_at, last_ok_at),"
-                    " stopped = excluded.stopped, counts_json = excluded.counts_json",
-                    (now, None if report.stopped else now, report.stopped, json.dumps(report.counts())),
+                    " stopped = excluded.stopped, counts_json = excluded.counts_json,"
+                    " candidates_json = COALESCE(?, candidates_json)",
+                    (now, None if report.stopped else now, report.stopped, json.dumps(report.counts()),
+                     candidates, candidates),
                 )
         finally:
             conn.close()
@@ -671,8 +693,9 @@ def _record_status(report: Report, db_path: Path | None = None) -> None:
 
 def status(db_path: Path | None = None) -> dict[str, Any] | None:
     """The last run: ``last_run_at``, ``last_ok_at`` (a run that read the
-    whole directory and finished), ``stopped`` and ``counts``; None before
-    the first."""
+    whole directory and finished), ``stopped``, ``counts`` and
+    ``candidates`` (the addresses of unmanaged People who are active
+    members, from the last finished run); None before the first."""
     conn = _status_conn(db_path)
     try:
         row = conn.execute(f"SELECT * FROM {STATUS_TABLE} WHERE id = 1").fetchone()
@@ -684,7 +707,12 @@ def status(db_path: Path | None = None) -> dict[str, Any] | None:
         counts = json.loads(row["counts_json"] or "{}")
     except ValueError:
         counts = {}
+    try:
+        candidates = json.loads(row["candidates_json"] or "[]")
+    except ValueError:
+        candidates = []
     return {
+        "candidates": [c for c in candidates if isinstance(c, str)] if isinstance(candidates, list) else [],
         "last_run_at": row["last_run_at"],
         "last_ok_at": row["last_ok_at"],
         "stopped": row["stopped"],

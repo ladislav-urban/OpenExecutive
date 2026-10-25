@@ -16,11 +16,13 @@ import {
   archivePerson,
   assignOpenLoop,
   closeOpenLoop,
+  getDirectoryState,
   getPeopleViewer,
   getPerson,
   getPersonOpenLoops,
   getPersonOutreach,
   getPersonWorkingStyle,
+  linkPersonToDirectory,
   resetPersonWorkingStyle,
   savePersonWorkingStyle,
   setPersonSuspended,
@@ -545,6 +547,9 @@ export default function PersonDetailPage() {
   const [saving, setSaving] = useState(false);
   const [archiving, setArchiving] = useState(false);
   const [suspending, setSuspending] = useState(false);
+  // In the identity provider's directory but not linked yet (principal only).
+  const [linkCandidate, setLinkCandidate] = useState(false);
+  const [linking, setLinking] = useState(false);
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
@@ -717,6 +722,35 @@ export default function PersonDetailPage() {
     }
   }
 
+  useEffect(() => {
+    if (!viewerIsPrincipal) return;
+    getDirectoryState()
+      .then((d) => setLinkCandidate(Boolean(d?.enabled && d.candidates.some((c) => c.person_id === personId))))
+      .catch(() => setLinkCandidate(false));
+  }, [viewerIsPrincipal, personId]);
+
+  async function doLink() {
+    if (
+      !window.confirm(
+        "Link this person to your identity provider? From its next run their name and email follow it, and leaving it suspends them here.",
+      )
+    ) {
+      return;
+    }
+    setLinking(true);
+    setSaveErr(null);
+    try {
+      const updated = await linkPersonToDirectory(personId);
+      setPerson(updated);
+      resetForm(updated);
+      setLinkCandidate(false);
+    } catch (e) {
+      setSaveErr(e instanceof Error ? e.message : "Link failed");
+    } finally {
+      setLinking(false);
+    }
+  }
+
   async function doSetSuspended(suspend: boolean) {
     if (
       suspend &&
@@ -764,9 +798,16 @@ export default function PersonDetailPage() {
             : { label: suspending ? "Suspending…" : "Suspend person", disabled: suspending, onSelect: () => void doSetSuspended(true) },
         ]
       : [];
+  const linkItem =
+    person && linkCandidate && !person.directory_managed
+      ? [{ label: linking ? "Linking…" : "Link to directory", disabled: linking, onSelect: () => void doLink() }]
+      : [];
   const menuItems =
-    person && !person.is_principal && !person.archived
+    person && person.is_principal
+      ? linkItem
+      : person && !person.archived
       ? [
+          ...linkItem,
           ...suspendItem,
           { label: archiving ? "Archiving…" : "Archive person", danger: true, disabled: archiving, onSelect: () => void doArchive() },
         ]
@@ -811,6 +852,14 @@ export default function PersonDetailPage() {
                     {person.archived && (
                       <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-rose-500/10 text-rose-500">
                         Archived
+                      </span>
+                    )}
+                    {person.directory_managed && (
+                      <span
+                        className="inline-block px-2 py-0.5 rounded-full text-xs font-medium bg-surface-hover text-fg-muted"
+                        title="Name and email follow your identity provider"
+                      >
+                        Directory
                       </span>
                     )}
                     {person.suspended && (

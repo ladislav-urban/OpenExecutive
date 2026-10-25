@@ -4832,6 +4832,32 @@ export async function archivePerson(id: number): Promise<void> {
   if (!res.ok) throw new Error(`Failed to archive person: ${res.statusText}`);
 }
 
+// The identity provider's directory sync (the principal's alone; 404 for
+// anyone else). `candidates` are People on the list who are active members
+// but not linked yet.
+export interface DirectoryState {
+  enabled: boolean;
+  last_run_at: string | null;
+  last_ok_at: string | null;
+  stopped: string | null;
+  candidates: { person_id: number; email: string }[];
+}
+
+export async function getDirectoryState(): Promise<DirectoryState | null> {
+  const res = await fetch(`${API_BASE}/people/directory`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+// Let the directory manage them: their name and email follow the identity
+// provider from its next run, and leaving it suspends them.
+export async function linkPersonToDirectory(id: number): Promise<Person> {
+  const res = await fetch(`${API_BASE}/people/${id}/directory-link`, { method: "POST" });
+  if (res.status === 403) throw new Error(PEOPLE_PRINCIPAL_ONLY);
+  if (!res.ok) throw new Error(await errorDetail(res, `Could not link them: ${res.statusText}`));
+  return res.json();
+}
+
 // Suspend: out of every access decision, reversibly. Restore brings back
 // their open loops, working style and addresses as they were.
 export async function setPersonSuspended(id: number, suspended: boolean): Promise<Person> {

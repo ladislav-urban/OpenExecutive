@@ -23,7 +23,7 @@ import os
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlsplit
@@ -106,6 +106,7 @@ LABELS: dict[str, str] = {
     "discord": "Discord",
     "telegram": "Telegram",
     "google_chat": "Google Chat",
+    "directory": "Identity provider directory",
     "scheduler": "Daily schedule",
     "brief": "Daily brief",
     "memory": "Long-term memory (Honcho)",
@@ -976,6 +977,82 @@ async def check_your_gmail(snap: Snapshot) -> SetupCheck:
 # ---------------------------------------------------------------------------
 
 
+# A run every DIRECTORY_SYNC_INTERVAL_MINUTES: no finished run for this long
+# means it has stalled (oe_connector's check uses the same 15 minutes).
+_DIRECTORY_STALE = timedelta(minutes=15)
+
+
+def _plural(n: int, one: str, many: str) -> str:
+    return f"{n} {one if n == 1 else many}"
+
+
+def check_directory(snap: Snapshot) -> SetupCheck:
+    """The directory sync (integrations.directory_sync): its last run and
+    what waits for the principal.
+
+    Setup status is one answer for every signed-in viewer, so this light
+    names no group, no reason a run stopped and no suspended count: who is
+    suspended is the principal's alone (People), and why a run stopped is
+    in ``GET /people/directory`` and the CLI's dry run."""
+    from openexecutive.integrations import directory_sync
+    from openexecutive.people.store import list_directory_managed
+
+    settings = snap.settings
+    if not settings.directory_sync_enabled:
+        return _result(
+            "directory",
+            "off",
+            "Off: people are added and removed here, in People.",
+            "To follow your identity provider instead, see docs/auth.md, \"Following your identity provider's directory\".",
+        )
+    last = directory_sync.status()
+    if last is None:
+        return _result(
+            "directory", "warn", "On, but it hasn't run yet.",
+            "The first run starts a minute after the app does. If it doesn't, look in the API log for \"directory_sync\".",
+        )
+    if last.get("stopped"):
+        return _result(
+            "directory", "error",
+            "The last run stopped and changed nothing, so people removed in your identity provider "
+            "still have access here.",
+            "Run `openexecutive directory-sync --dry-run` to see why (the owner also sees it on People), "
+            "fix it, then run it again.",
+            link="/people",
+        )
+    ok_at = last.get("last_ok_at")
+    finished = datetime.fromisoformat(ok_at) if ok_at else None
+    if finished is None or snap.now - finished > _DIRECTORY_STALE:
+        return _result(
+            "directory", "warn",
+            f"No run has finished in the last {int(_DIRECTORY_STALE.total_seconds() // 60)} minutes, "
+            "so people removed in your identity provider still have access here.",
+            'Check that the scheduler is running, and look in the API log for "directory_sync".',
+        )
+    managed = list_directory_managed()
+    new = [p for p in managed if p.kind == "team" and not p.is_principal and not p.role.strip() and not p.suspended]
+    candidates = len(last.get("candidates") or [])
+    principal_out = bool((last.get("counts") or {}).get("warning"))
+    summary = (
+        f"On: {_plural(len(managed), 'person', 'people')} managed. "
+        f"Last run {_ago((snap.now - finished).total_seconds())}."
+    )
+    todo = []
+    if new:
+        todo.append(f"{_plural(len(new), 'person', 'people')} new from the directory with no role yet")
+    if candidates:
+        todo.append(f"{_plural(candidates, 'person', 'people')} on People to link")
+    if principal_out:
+        todo.append("the owner isn't an active member of the directory's group")
+    if todo:
+        return _result(
+            "directory", "warn", f"{summary} Waiting for the owner: {'; '.join(todo)}.",
+            "In People, the owner gives new people their role and departments, and links the ones marked Link to directory.",
+            link="/people",
+        )
+    return _result("directory", "ok", summary)
+
+
 def check_scheduler(snap: Snapshot) -> SetupCheck:
     from openexecutive.scheduler.pause import get_pause_state
     from openexecutive.scheduler.runner import scheduler_heartbeat
@@ -1230,6 +1307,7 @@ def _check_runners(
         "discord": lambda: check_discord(snap, http),
         "telegram": lambda: check_telegram(snap, http),
         "google_chat": off_loop(check_google_chat),
+        "directory": off_loop(check_directory),
         "scheduler": off_loop(check_scheduler),
         "brief": off_loop(check_brief),
         "memory": lambda: check_memory(snap),

@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { parseAllowedEmails } from "../src/lib/allowlist.ts";
 import {
+  directorySignInCheck,
   EXAMPLE_EMAIL_DOMAINS,
   formatAgo,
   isExampleEmail,
@@ -152,4 +153,25 @@ test("only in-app paths become links", () => {
   for (const bad of [null, "", "//evil.example", "https://evil.example", "javascript:alert(1)", "/people?next=//x", "people"]) {
     assert.equal(safeInAppLink(bad), null, String(bad));
   }
+});
+
+test("directory sign-in: shown only while the directory manages someone", () => {
+  assert.equal(directorySignInCheck(new Set(), new Set(["a@co.example"]), true), null);
+  const ok = directorySignInCheck(new Set(["jane@co.example"]), new Set(["owner@co.example"]), true);
+  assert.equal(ok.state, "ok");
+  assert.match(ok.summary, /Google sign-in is refused for them/);
+  assert.doesNotMatch(directorySignInCheck(new Set(["jane@co.example"]), new Set(), false).summary, /Google/);
+});
+
+test("directory sign-in: ALLOWED_EMAILS listing a managed person is a warning", () => {
+  const warn = directorySignInCheck(
+    new Set(["jane@co.example", "ben@co.example"]),
+    new Set(["ben@co.example", "owner@co.example", "jane@co.example"]),
+    true,
+  );
+  assert.equal(warn.state, "warn");
+  assert.match(warn.summary, /lists 2 people/);
+  // A count only: every signed-in viewer sees this page.
+  assert.doesNotMatch(warn.summary, /@/);
+  assert.match(warn.fix, /break-glass/);
 });

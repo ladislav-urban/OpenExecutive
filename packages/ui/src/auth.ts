@@ -124,7 +124,7 @@ const checkEmailAllowed = (email: string) =>
  * read fresh at sign-in (not from the roster cache: a sign-in is rare, and
  * it must see a reassigned email at once). Null when it can't be read.
  */
-async function loadDirectorySubjects(): Promise<ReadonlyMap<string, string> | null> {
+export async function loadDirectorySubjects(): Promise<ReadonlyMap<string, string> | null> {
   try {
     const headers: Record<string, string> = {};
     if (BACKEND_SHARED_SECRET) headers["x-api-key"] = BACKEND_SHARED_SECRET;
