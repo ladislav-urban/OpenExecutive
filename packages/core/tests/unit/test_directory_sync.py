@@ -347,8 +347,10 @@ def test_the_token_and_secret_never_reach_the_audit(kc: Keycloak, principal: int
     ("name", "value", "says"),
     [
         ("auth_oidc_issuer", "https://other.example.com/realms/dynocortex", "AUTH_OIDC_ISSUER"),
+        ("auth_oidc_issuer", ISSUER + "/", "slash"),
+        ("directory_sync_issuer", ISSUER + "/", "slash"),
         ("directory_sync_issuer", "http://id.example.com/realms/dynocortex", "DIRECTORY_SYNC_ISSUER"),
-        ("directory_sync_issuer", "https://id.example.com/", "realms"),
+        ("directory_sync_issuer", "https://id.example.com", "realms"),
         ("directory_sync_admin_url", "http://keycloak.example.com:8180", "DIRECTORY_SYNC_ADMIN_URL"),
         ("directory_sync_admin_url", "https://user:pw@keycloak", "DIRECTORY_SYNC_ADMIN_URL"),
         ("directory_sync_client_secret", "", "DIRECTORY_SYNC_CLIENT_SECRET"),
@@ -382,3 +384,93 @@ def test_the_sign_in_list_names_the_subject_only_while_the_sync_is_on(
     assert rows["dir-accountant@example.com"] == by_email("dir-accountant@example.com").directory_subject
     monkeypatch.setenv("DIRECTORY_SYNC_ENABLED", "false")
     assert all(r.directory_subject is None for r in allowed_emails())
+
+
+# --------------------------------------------------------------------------- #
+# Security review (Oct 25, 2026)
+# --------------------------------------------------------------------------- #
+
+def test_the_principals_identity_is_never_on_the_sign_in_list(kc: Keycloak, principal: int) -> None:
+    """The principal is never from the directory: their Google or
+    ALLOWED_EMAILS sign-in stays the way in when the provider is wrong."""
+    from openexecutive.api.routes.auth import allowed_emails
+
+    run(kc)
+    assert people_store.get_person(principal).directory_managed
+    rows = {r.email: r.directory_subject for r in allowed_emails()}
+    assert rows["dir-owner@example.com"] is None
+    assert rows["dir-adviser@example.com"] is not None
+
+
+def test_a_re_created_identity_is_re_linked_and_restored(kc: Keycloak, principal: int) -> None:
+    run(kc)
+    adviser = by_email("dir-adviser@example.com")
+    # Deleted and re-created at the provider: a new id, the same email.
+    kc.user("adviser")["id"] = "0b6f9f0e-1c7a-4d1e-9a51-0000000000aa"
+    report = run(kc)
+    assert ("conflict", "dir-adviser@example.com") in [(a, w) for a, w, _ in report.changes]
+    assert people_store.get_person(adviser.id).suspended
+
+    reader = directory_sync.KeycloakReader(get_settings(), transport=httpx.MockTransport(kc.handle))
+    with pytest.raises(directory_sync.DirectoryError, match="--relink"):
+        directory_sync.link("dir-adviser@example.com", reader=reader)
+    reader = directory_sync.KeycloakReader(get_settings(), transport=httpx.MockTransport(kc.handle))
+    directory_sync.link("dir-adviser@example.com", relink=True, reader=reader)
+    person = people_store.get_person(adviser.id)
+    assert person.active and person.directory_subject == "0b6f9f0e-1c7a-4d1e-9a51-0000000000aa"
+    assert run(kc).changes == []
+
+
+def test_relinking_someone_whose_identity_is_still_there_is_refused(kc: Keycloak, principal: int) -> None:
+    run(kc)
+    reader = directory_sync.KeycloakReader(get_settings(), transport=httpx.MockTransport(kc.handle))
+    with pytest.raises(directory_sync.DirectoryError, match="already linked"):
+        directory_sync.link("dir-adviser@example.com", relink=True, reader=reader)
+
+
+def test_unlink_hands_the_row_back(kc: Keycloak, principal: int) -> None:
+    run(kc)
+    pid = by_email("dir-adviser@example.com").id
+    assert "Unlinked" in directory_sync.unlink("dir-adviser@example.com")
+    person = people_store.get_person(pid)
+    assert not person.directory_managed and person.directory_subject is None
+    # The next run sees an unmanaged person with a member's email: a candidate.
+    assert ("candidate", "dir-adviser@example.com") in [(a, w) for a, w, _ in run(kc).changes]
+    with pytest.raises(directory_sync.DirectoryError):
+        directory_sync.unlink("nobody@example.com")
+
+
+@pytest.mark.parametrize("bad_id", ["", " ", None, 7])
+def test_a_member_without_a_usable_id_stops_the_run(kc: Keycloak, principal: int, bad_id: object) -> None:
+    kc.user("adviser")["id"] = bad_id
+    report = run(kc)
+    assert report.stopped and "shape" in report.stopped
+    assert by_email("dir-accountant@example.com") is None
+
+
+def test_a_failed_link_leaves_no_unmanaged_row(
+    kc: Keycloak, principal: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(*_: object, **__: object) -> None:
+        raise people_store.DirectoryLinkError("taken")
+
+    monkeypatch.setattr(people_store, "link_directory", refuse)
+    report = run(kc)
+    assert report.count("failed") == 3
+    # Archived, so nobody can sign in with the address unchecked.
+    assert people_store.find_person_by_email("dir-accountant@example.com") is None
+    # The principal's own row is only ever linked, never made or archived.
+    owner = people_store.get_person(principal)
+    assert owner is not None and owner.active and not owner.directory_managed
+
+
+def test_turned_off_the_heartbeat_ends_and_writes_nothing(
+    monkeypatch: pytest.MonkeyPatch, env: list[tuple[str, dict]]
+) -> None:
+    import asyncio
+
+    monkeypatch.setenv("DIRECTORY_SYNC_ENABLED", "false")
+    assert asyncio.run(directory_sync.run_scheduled()) is None
+    assert directory_sync.enqueue_next_directory_sync_scan() is None
+    assert directory_sync.sync().stopped == "DIRECTORY_SYNC_ENABLED is off."
+    assert directory_sync.status() is None and env == []

@@ -7963,8 +7963,19 @@ integrations:
     refuses Google for a managed email (directory_managed, decided Oct 23,
     2026) and SSO with another sub (directory_subject_mismatch); when it
     can't be read, only an ALLOWED_EMAILS hit goes ahead
-    (directory_unavailable). Person.directory_subject is never serialised
-    elsewhere.
+    (directory_unavailable). Never the principal's subject (security review
+    Oct 25, 2026: a re-created realm or a disabled principal must not lock
+    the only roster owner out), and /auth/allowed-emails is server-only in
+    the UI proxy (proxySegments SERVER_ONLY). Person.directory_subject is
+    never serialised elsewhere.
+
+    Recovery: link(email, relink=True) re-points a managed row only when its
+    current subject is absent from the group read, and restores a directory
+    suspension; unlink(email) drops the link. Hardening from the same
+    review: a member id that isn't a non-blank string stops the run; a row
+    whose link fails is archived (no unmanaged row admitting the email);
+    neither issuer may end with "/" (ended_sessions iss is compared
+    verbatim); off, the heartbeat stops chaining and nothing is recorded.
   chat_directory: |
     No raw chat ids: the person page, Add person and a department's
     Channels settings pick Slack, Discord and Telegram people and rooms by

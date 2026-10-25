@@ -443,14 +443,32 @@ def directory_sync_command(dry_run: bool, allow_mass_suspend: bool) -> None:
 
 @cli.command("directory-link")
 @click.option("--email", required=True, help="The address on both the Person and the directory member.")
-def directory_link_command(email: str) -> None:
+@click.option(
+    "--relink",
+    is_flag=True,
+    help="Re-point someone already managed whose identity was re-created at the provider.",
+)
+def directory_link_command(email: str, relink: bool) -> None:
     """Link an existing team Person to their directory identity."""
     from openexecutive.integrations.directory_sync import DirectoryError, link
 
     try:
-        console.print(link(email), markup=False)
+        console.print(link(email, relink=relink), markup=False)
     except DirectoryError as error:
         console.print(f"Not linked: {error}", markup=False)
+        raise SystemExit(1) from None
+
+
+@cli.command("directory-unlink")
+@click.option("--email", required=True, help="The address of the Person the directory manages.")
+def directory_unlink_command(email: str) -> None:
+    """Stop the directory managing a Person; their row stays as it is."""
+    from openexecutive.integrations.directory_sync import DirectoryError, unlink
+
+    try:
+        console.print(unlink(email), markup=False)
+    except DirectoryError as error:
+        console.print(f"Not unlinked: {error}", markup=False)
         raise SystemExit(1) from None
 
 

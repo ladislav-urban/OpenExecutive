@@ -76,7 +76,12 @@ def allowed_emails() -> list[AllowedEmail]:
         AllowedEmail(
             email=p.email.lower(),
             person_id=p.id,  # type: ignore[arg-type]
-            directory_subject=p.directory_subject if directory_on and p.directory_managed else None,
+            # Never the principal's: the principal is never from the
+            # directory, so their sign-in (Google, ALLOWED_EMAILS) stays the
+            # way in when the provider is wrong or the realm was re-created.
+            directory_subject=(
+                p.directory_subject if directory_on and p.directory_managed and not p.is_principal else None
+            ),
         )
         for p in people_store.list_people()
         if p.email and p.id is not None

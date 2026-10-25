@@ -168,13 +168,17 @@ def _realm(issuer: str) -> str:
 def config_problem(settings: Settings) -> str | None:
     """Why the settings can't be used, or None. Checked when the settings
     load, so a sync that can't be trusted never starts."""
-    issuer = settings.directory_sync_issuer.strip().rstrip("/")
+    issuer = settings.directory_sync_issuer.strip()
+    # Exactly as the web app has it: an ended session's ``iss`` must equal
+    # its AUTH_OIDC_ISSUER character for character, so no trailing slash.
+    if issuer.endswith("/") or settings.auth_oidc_issuer.strip().endswith("/"):
+        return "DIRECTORY_SYNC_ISSUER and AUTH_OIDC_ISSUER must not end with a slash"
     if problem := _url_problem(issuer, "DIRECTORY_SYNC_ISSUER", internal=False):
         return problem
     realm = _realm(issuer)
     if not realm or "/" in realm:
         return "DIRECTORY_SYNC_ISSUER must be the realm's issuer URL (…/realms/<realm>)"
-    if issuer != settings.auth_oidc_issuer.strip().rstrip("/"):
+    if issuer != settings.auth_oidc_issuer.strip():
         return "DIRECTORY_SYNC_ISSUER must equal AUTH_OIDC_ISSUER, the provider people sign in with"
     if problem := _url_problem(
         settings.directory_sync_admin_url.strip().rstrip("/"), "DIRECTORY_SYNC_ADMIN_URL", internal=True
@@ -302,6 +306,10 @@ class KeycloakReader:
 
 
 def _member(uid: str, user: dict[str, Any]) -> Member:
+    # A user id is the link, and Keycloak's are UUIDs: anything else is an
+    # answer of the wrong shape, and the run stops.
+    if not isinstance(user.get("id"), str) or not uid.strip() or uid != uid.strip():
+        raise ValueError("a member without a usable id")
     email = str(user.get("email") or "").strip().lower()
     name = " ".join(
         part for part in (str(user.get("firstName") or "").strip(), str(user.get("lastName") or "").strip()) if part
@@ -367,7 +375,7 @@ def sync(
         report.stopped = f"the run failed ({type(error).__name__})."
     finally:
         _run_lock.release()
-    if not dry_run:
+    if not dry_run and get_settings().directory_sync_enabled:
         _record_status(report)
         if report.wrote or report.stopped:
             _audit(
@@ -479,7 +487,13 @@ def _add(member: Member, report: Report) -> None:
     if report.dry_run:
         return
     pid = store.upsert_person(full_name=member.full_name, email=member.email, kind="team")
-    store.link_directory(pid, member.id)
+    try:
+        store.link_directory(pid, member.id)
+    except Exception:
+        # Never leave an unlinked row behind: it would admit their email on
+        # any sign-in, unchecked by the directory.
+        store.archive_person(pid)
+        raise
     _audit("directory_person_created", f"person #{pid} created from the directory", {"person_id": pid})
 
 
@@ -543,33 +557,79 @@ def _suspend(person: Person, settings: Settings) -> None:
 # Linking an existing Person
 # --------------------------------------------------------------------------- #
 
-def link(email: str, *, reader: DirectoryReader | None = None) -> str:
+def _holder(norm: str) -> Person | None:
+    """The person whose primary address is ``norm``, a suspended one included."""
+    from openexecutive.people import store
+
+    holder_id = store.address_holder(norm)
+    person = store.get_person(holder_id) if holder_id is not None else None
+    if person is None or store.normalize_email(person.email or "") != norm:
+        return None
+    return person
+
+
+def link(email: str, *, relink: bool = False, reader: DirectoryReader | None = None) -> str:
     """Link the team Person whose address is ``email`` to the active member
-    with that email, so the sync manages them. Returns what it did; raises
-    ``DirectoryError`` when it can't."""
+    with that email, so the sync manages them. ``relink`` re-points a
+    managed row whose identity is gone from the group (the user, or the
+    realm, was re-created) and restores it if the directory had suspended
+    it. Returns what it did; raises ``DirectoryError`` when it can't."""
     from openexecutive.people import registry, store
 
     settings = get_settings()
     norm = store.normalize_email(email)
-    person = store.find_person_by_email(norm)
-    if person is None or person.id is None:
-        raise DirectoryError(f"no active team member has the address {norm}")
-    if person.directory_managed:
-        raise DirectoryError(f"{norm} is already managed by the directory")
+    person = _holder(norm)
+    if person is None or person.id is None or person.kind != "team":
+        raise DirectoryError(f"no team member has the address {norm}")
+    if person.directory_managed and not relink:
+        raise DirectoryError(
+            f"{norm} is already managed by the directory (use --relink if their identity was re-created)"
+        )
+    if not person.directory_managed and not person.active:
+        raise DirectoryError(f"{norm} is suspended; restore them first")
     if reader is None:
         if problem := config_problem(settings):
             raise DirectoryError(problem)
         reader = KeycloakReader(settings)
-    matches = [m for m in reader.read_members().values() if m.active and m.email == norm]
+    members = reader.read_members()
+    matches = [m for m in members.values() if m.active and m.email == norm]
     if len(matches) != 1:
         raise DirectoryError(f"no active member of {settings.directory_sync_group} has the address {norm}")
+    if person.directory_managed:
+        if person.directory_subject == matches[0].id:
+            raise DirectoryError(f"{norm} is already linked to that identity")
+        if person.directory_subject in members:
+            raise DirectoryError(f"the identity {norm} is linked to is still in the group; nothing to re-link")
     try:
         store.link_directory(person.id, matches[0].id)
     except store.DirectoryLinkError as error:
         raise DirectoryError(str(error)) from None
+    if person.suspended and person.suspended_by == "directory":
+        store.restore_person(person.id, only_by="directory")
     registry.invalidate()
-    _audit("directory_person_linked", f"person #{person.id} linked to the directory", {"person_id": person.id})
+    _audit(
+        "directory_person_linked",
+        f"person #{person.id} linked to the directory",
+        {"person_id": person.id, "relinked": person.directory_managed},
+    )
     return f"Linked {person.full_name} ({norm}). The next run keeps their name and email in step."
+
+
+def unlink(email: str) -> str:
+    """Stop the directory managing the person whose address is ``email``.
+    Their row stays as it is, editable here, and sign-in no longer checks
+    their identity at the provider. Raises ``DirectoryError``."""
+    from openexecutive.people import registry, store
+
+    norm = store.normalize_email(email)
+    person = _holder(norm)
+    if person is None or person.id is None or not person.directory_managed:
+        raise DirectoryError(f"nobody the directory manages has the address {norm}")
+    store.unlink_directory(person.id)
+    registry.invalidate()
+    _audit("directory_person_unlinked", f"person #{person.id} unlinked from the directory", {"person_id": person.id})
+    tail = " They stay suspended until you restore them in People." if person.suspended else ""
+    return f"Unlinked {person.full_name} ({norm}).{tail}"
 
 
 # --------------------------------------------------------------------------- #
@@ -676,13 +736,20 @@ def bootstrap_directory_sync_scan(db_path: Path | None = None) -> int | None:
 def enqueue_next_directory_sync_scan(
     *, after: datetime | None = None, db_path: Path | None = None
 ) -> int | None:
+    settings = get_settings()
+    if not settings.directory_sync_enabled:
+        # Turned off: the heartbeat ends here, and startup starts it again
+        # once it is back on.
+        return None
     base = (after or datetime.now(UTC)).astimezone(UTC)
-    return _enqueue(base + timedelta(minutes=get_settings().directory_sync_interval_minutes), db_path)
+    return _enqueue(base + timedelta(minutes=settings.directory_sync_interval_minutes), db_path)
 
 
-async def run_scheduled(run: Callable[..., Report] = sync) -> Report:
+async def run_scheduled(run: Callable[..., Report] = sync) -> Report | None:
     """One scheduled run, off the event loop (the reads and the store are
-    blocking)."""
+    blocking). Nothing while the sync is off."""
+    if not get_settings().directory_sync_enabled:
+        return None
     report = await asyncio.to_thread(run)
     if report.stopped:
         logger.warning("directory_sync: stopped, nothing was changed: %s", report.stopped)

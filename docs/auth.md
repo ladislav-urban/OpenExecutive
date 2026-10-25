@@ -281,7 +281,16 @@ members and keeps People in step. It never writes to the provider.
   only through SSO, and only as their own identity there: a Google sign-in
   with their email is refused (audit reason `directory_managed`), and so is an
   SSO sign-in from another account the provider gave their email to
-  (`directory_subject_mismatch`).
+  (`directory_subject_mismatch`). Not you: the principal is never from the
+  directory, so your Google or `ALLOWED_EMAILS` sign-in keeps working when the
+  provider is wrong.
+- **When an identity is re-created** (the user deleted and added again, or
+  the whole realm rebuilt), the old link points at an id that's gone: the
+  person is suspended and their new identity shows as a conflict, and a
+  rebuilt realm stops the run ("none came back"). Re-point each one with
+  `openexecutive directory-link --email <address> --relink`, which also
+  restores them. `openexecutive directory-unlink --email <address>` hands a
+  row back to People instead.
 
 Set it on the API (all off until `DIRECTORY_SYNC_ENABLED=true`, and the API
 refuses to start with settings it can't trust):
@@ -289,7 +298,7 @@ refuses to start with settings it can't trust):
 | Variable | Value |
 |---|---|
 | `DIRECTORY_SYNC_ENABLED` | `true` |
-| `DIRECTORY_SYNC_ISSUER` | The realm's issuer. Must equal `AUTH_OIDC_ISSUER`, so the sync follows the provider people sign in with |
+| `DIRECTORY_SYNC_ISSUER` | The realm's issuer, exactly as `AUTH_OIDC_ISSUER` (no trailing slash on either), so the sync follows the provider people sign in with |
 | `DIRECTORY_SYNC_ADMIN_URL` | Where Keycloak's admin API answers, e.g. `http://keycloak:8180` on the compose network (the public host serves no `/admin/`). Plain http only to this machine, a private address or a compose service |
 | `DIRECTORY_SYNC_CLIENT_ID` / `_SECRET` | A confidential client with only a service account and the `realm-management` roles `view-users` and `query-groups` (default id `openexecutive-directory`). Write the secret into `.env` with an editor, never on a command line |
 | `DIRECTORY_SYNC_GROUP` | The group, default `/dynocortex` (its subgroups count too) |
