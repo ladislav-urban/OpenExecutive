@@ -7969,6 +7969,16 @@ integrations:
     the UI proxy (proxySegments SERVER_ONLY). Person.directory_subject is
     never serialised elsewhere.
 
+    People and Setup status (step 8): GET /people/directory (principal
+    only) maps the last finished run's candidate addresses to unlinked
+    active People; POST /people/{id}/directory-link calls link(). The cards
+    and the person page badge Directory / Link to directory. Setup status:
+    api.setup_checks.check_directory (off / not run / stopped = error /
+    no finished run in 15 min = warn / waiting for the principal = warn,
+    linking /people), and the UI's own lib/setupStatus.ts
+    directorySignInCheck (ALLOWED_EMAILS overlap = warn; shown only while
+    the directory manages someone).
+
     Recovery: link(email, relink=True) re-points a managed row only when its
     current subject is absent from the group read, and restores a directory
     suspension; unlink(email) drops the link. Hardening from the same
