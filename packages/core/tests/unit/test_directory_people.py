@@ -117,6 +117,25 @@ def test_all_in_order(kc: Keycloak, principal: int) -> None:  # noqa: F811
     assert "/dynocortex" not in check.summary
 
 
+def test_demo_people_are_one_line_and_wait_for_nobody(
+    kc: Keycloak, principal: int, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
+    from .test_directory_sync import add_demo_group
+
+    monkeypatch.setenv("DIRECTORY_SYNC_DEMO_GROUP", "/erpnext/demo")
+    add_demo_group(kc)
+    run(kc)
+    for p in people_store.list_directory_managed():
+        if not p.is_principal and not p.demo and p.id is not None:
+            people_store.update_person(p.id, role="Staff")
+    check = _check()
+    assert check.state == "ok" and "4 people managed, 1 of them demo user" in check.summary
+    # Even with no role, a demo person is never "new from the directory".
+    demo = next(p for p in people_store.list_directory_managed() if p.demo)
+    people_store.update_person(demo.id, role="")
+    assert _check().state == "ok"
+
+
 def test_a_stopped_run_is_an_error(kc: Keycloak, principal: int) -> None:  # noqa: F811
     run(kc)
     kc.fail_members = True

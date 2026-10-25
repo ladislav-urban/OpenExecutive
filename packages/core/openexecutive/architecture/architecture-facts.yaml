@@ -7999,6 +7999,51 @@ integrations:
     directorySignInCheck (ALLOWED_EMAILS overlap = warn; shown only while
     the directory manages someone).
 
+    Demo people (self-registration step 7, option A decided Oct 25, 2026:
+    prospects go on the pilot, which holds only the demo company; no
+    prospect's own company is ever on it). DIRECTORY_SYNC_DEMO_GROUP (a
+    path, empty = none; config_problem checks it) is read with its
+    subgroups after the main group; Member.demo = in both; config_problem
+    also refuses a demo group equal to DIRECTORY_SYNC_GROUP or an ancestor
+    of it. people column directory_demo (Person.demo), written only by
+    set_directory_demo: by the sync on create only, by link() for a member
+    of the demo group, and by hand (`openexecutive directory-demo --email
+    [--off]`, directory_sync.set_demo, audited, never the principal). The
+    run never flips it either way, only warns: security review Oct 25, 2026
+    found that team→demo let whoever controls the demo group strip the team
+    of approvals and mail and move their later suspensions onto the demo
+    brake, and demo→team let one membership change (or a short answer) hand
+    a stranger the team's tools, uncapped. Cleared by unlink_directory.
+    Executive.chat reads the speaker from person_id or, for Google Chat,
+    gate_sender_person_id (off the event loop). POST /chat answers 503 when
+    the roster can't be read (people.demo.demo_state None) rather than the
+    demo cap's 429. Create sets
+    DIRECTORY_SYNC_DEMO_ROLE ("Demo user") on create only; no departments,
+    scopes or manager. Brake: demo suspensions against
+    DIRECTORY_SYNC_DEMO_MAX_SUSPEND (50), the team's count and share
+    without them (a batch of ending demos must not stop the run, and must
+    not dilute the team's share). people/demo.py: find_approvers excludes
+    demo rows, and POST /alerts/{id}/approve and decisions._resolver
+    refuse a demo caller (except an approver_only class, their own ERPNext
+    draft); outbound_guard refuses a recipient resolving to a demo person
+    (fail open on lookup errors, as the guard does), and
+    mcp_gateway._roster_allow_set leaves demo people out, so no Gmail or
+    Outlook send reaches them; email_poller._handle_mail marks a demo
+    sender's mail handled with no turn and no reply. POST /chat sets
+    Session.demo_caller per turn, and Executive.chat (both paths) also sets
+    it from the bound speaker on every surface (is_demo_person fails
+    closed). The question past DEMO_DAILY_QUESTIONS (50/UTC day,
+    demo_questions upsert, fails closed) gets 429 before any cost:
+    POST /chat, each /chat/add message and each /chat/upload file count
+    (_take_demo_questions); ERPNext's panel counts the same (429
+    daily_limit). Transcription shares the install-wide cap. A demo turn is held to the panel's tools
+    (ERPNEXT_PANEL_TOOLS, drafts where offered, no web search, the same
+    dispatch guard). Setup status: one line ("N of them demo users"),
+    never "new from the directory". Not built: per-person AI cost totals in
+    Setup status. A demo person still sees what the shared workspace shows
+    every team member (Home, knowledge, People), so they belong only on an
+    install whose company data is demo data.
+
     Recovery: link(email, relink=True) re-points a managed row only when its
     current subject is absent from the group read, and restores a directory
     suspension; unlink(email) drops the link. Hardening from the same

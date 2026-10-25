@@ -207,6 +207,7 @@ def initialize_db(db_path: Path | None = None) -> None:
             ("restored_at", "TEXT"),
             ("directory_subject", "TEXT"),
             ("directory_managed", "INTEGER NOT NULL DEFAULT 0"),
+            ("directory_demo", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if column not in cols:
                 try:
@@ -339,6 +340,7 @@ def _row_to_person(row: sqlite3.Row, conn: sqlite3.Connection) -> Person:
         suspended_at=_optional(row, "suspended_at"),
         directory_subject=_optional(row, "directory_subject"),
         directory_managed=_optional(row, "directory_managed") is not None,
+        demo=_optional(row, "directory_demo") is not None,
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         authority_scope=_load_scope(person_id, conn),
@@ -1103,9 +1105,20 @@ def unlink_directory(person_id: int, db_path: Path | None = None) -> bool:
     """Stop the directory managing ``person_id``. Their row stays as it is."""
     with _get_conn(db_path) as conn:
         return conn.execute(
-            "UPDATE people SET directory_subject = NULL, directory_managed = 0, updated_at = ?"
-            " WHERE id = ? AND directory_managed = 1",
+            "UPDATE people SET directory_subject = NULL, directory_managed = 0, directory_demo = 0,"
+            " updated_at = ? WHERE id = ? AND directory_managed = 1",
             (_now(), person_id),
+        ).rowcount > 0
+
+
+def set_directory_demo(person_id: int, demo: bool, db_path: Path | None = None) -> bool:
+    """Mark a directory-managed person demo or not; True when it changed.
+    Only the directory sync calls it: the mark follows the demo group."""
+    with _get_conn(db_path) as conn:
+        return conn.execute(
+            "UPDATE people SET directory_demo = ?, updated_at = ?"
+            " WHERE id = ? AND directory_managed = 1 AND directory_demo != ?",
+            (int(demo), _now(), person_id, int(demo)),
         ).rowcount > 0
 
 
@@ -1120,7 +1133,9 @@ def find_approvers(
     - People who hold WILDCARD (approves everything).
 
     A contact never approves anything, whatever scopes a hand-edited row
-    carries — there is deliberately no opt-in here.
+    carries — there is deliberately no opt-in here. Nor does a demo person
+    (``Person.demo``): they are on the roster to try the product, not to
+    decide anything for anyone.
 
     Sort order: non-principals first (prefer delegated humans over the
     fallback principal), then by response_sla_hours ASC (fastest SLA first).
@@ -1135,6 +1150,7 @@ def find_approvers(
             JOIN person_authority_scope pas ON pas.person_id = p.id
             WHERE {active}
               AND p.kind = 'team'
+              AND p.directory_demo = 0
               AND pas.scope_token IN (?, ?)
             ORDER BY p.is_principal ASC, p.response_sla_hours ASC, p.id ASC
             """.format(active=active_sql("p")),  # noqa: S608 — a fixed fragment

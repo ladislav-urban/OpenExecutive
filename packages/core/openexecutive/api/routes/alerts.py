@@ -327,6 +327,11 @@ async def approve_alert(
     ):
         # A card nobody was routed to is the principal's, as on Today.
         raise HTTPException(status_code=403, detail="This one is for someone else to approve.")
+    from openexecutive.people.demo import is_demo_person
+
+    if not _caller_is_principal(request) and is_demo_person(approver):
+        # A demo person approves nothing, whoever routed the card to them (people.demo).
+        raise HTTPException(status_code=403, detail="This one is for someone else to approve.")
 
     approval = approvals.claim(
         alert_id, approved_by_person_id=approver, edited_body=body.edited_body,

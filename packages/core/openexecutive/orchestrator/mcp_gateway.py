@@ -1141,7 +1141,7 @@ def _roster_allow_set() -> RosterAllow:
     can't drift apart. Reads the live roster on each call (channel access is
     roster-driven and changes at runtime).
 
-    Team members and the Executive's own address are always in it. The
+    Team members (not demo people) and the Executive's own address are always in it. The
     principal's contacts are in it only when
     ``people_tools.contacts_reachable_now()`` — a turn the principal started on
     a verified surface, or ``grant_contact_egress``. On any other turn a
@@ -1163,6 +1163,8 @@ def _roster_allow_set() -> RosterAllow:
     # Nobody added (or given a new address) this turn until the next one: a
     # contact planted and used in one turn would pass every check below.
     everyone = [p for p in everyone if not outside_content.added_this_turn(p.id)]
+    # Nor a demo person (people.demo): the Executive mails them nothing.
+    everyone = [p for p in everyone if getattr(p, "demo", False) is not True]
     # Primary addresses and aliases exactly; for a teammate, also their
     # local part on the company's own domains (people.identity) — the same
     # rule inbound mail is matched by.

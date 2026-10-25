@@ -258,6 +258,11 @@ class Session:
     # read-only (schedule_tools.ERPNEXT_PANEL_TOOLS), never the principal's,
     # and its ERPNext calls run as that same ERPNext user.
     erpnext_panel_email: str = ""
+    # Set per turn by the web chat route: the speaker is a demo person
+    # (``people.demo``). Such a turn gets the panel's narrow tool list: its
+    # specialists and ERPNext's reads (signed as them, so ERPNext shows them
+    # only what it lets them see), and the ERPNext draft tool where offered.
+    demo_caller: bool = False
     # Evals and tests only (``delegation.settings.DelegationOverride``): run
     # as if the speaker had Act as me, against a fake mailbox.
     delegation_override: Any = None

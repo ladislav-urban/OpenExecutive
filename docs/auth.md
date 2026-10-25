@@ -304,6 +304,61 @@ refuses to start with settings it can't trust):
 | `DIRECTORY_SYNC_GROUP` | The group, default `/dynocortex` (its subgroups count too) |
 | `DIRECTORY_SYNC_MAX_SUSPEND` / `_MAX_SHARE` | The brake, default 3 and 0.2 |
 | `DIRECTORY_SYNC_INTERVAL_MINUTES` | Default 5 |
+| `DIRECTORY_SYNC_DEMO_GROUP` | A second group whose members are *demo people* (below), e.g. `/erpnext/demo`; empty, the default, for none |
+| `DIRECTORY_SYNC_DEMO_ROLE` | The role a demo person is created with, default `Demo user` |
+| `DIRECTORY_SYNC_DEMO_MAX_SUSPEND` | The demo people's own brake, default 50 |
+| `DEMO_DAILY_QUESTIONS` | Questions a demo person may ask a day, default 50 (0: no limit) |
+
+#### Demo people
+
+An install that shows prospects what the Executive can do (on demo data, with
+no company of theirs on it) can let them in through the directory: a member
+of `DIRECTORY_SYNC_GROUP` who is also in `DIRECTORY_SYNC_DEMO_GROUP` (or a
+group under it) is a **demo person** (`people/demo.py`). Only a new person is
+made demo: someone already on the team who is put in the demo group stays a
+team member (the run reports a warning), so whoever controls that group can't
+take the team's approvals and mail away. Nor does a demo person who leaves
+the demo group become a team member by themselves: the run reports a warning,
+and `openexecutive directory-demo --email <address> --off` makes them one
+(without `--off`, it marks a managed team member demo). Linking someone with
+`directory-link` who is in the demo group makes them demo. The mark goes when
+the row is unlinked. The demo group can't be the team's group or hold it.
+
+- **Created with the demo role and nothing else:** no departments, approval
+  scopes or manager. The role is set on create only, so you can change it.
+- **Their turns only read and advise.** On every surface, a demo person's
+  turn gets the same narrow tools as ERPNext's panel: the specialists and
+  ERPNext's reads, signed as them, so ERPNext shows them only what it lets
+  them see, and an ERPNext draft where drafts are offered to them. Nothing
+  that sends, posts, books, schedules, runs or remembers, no web search, and
+  none of the Executive's mailbox or calendar. Their chats are their own, as
+  everyone's are.
+- **They approve nothing for anyone**, whatever scopes their row carries:
+  the authority gate never routes a card to them, and both approval routes
+  refuse them a card someone else's work routed to them. Only a card that is
+  theirs alone (an ERPNext draft they asked for) is theirs to answer.
+- **The Executive sends them nothing** outside their own chat: the outbound
+  guard refuses a DM to them, and they are off the mail gateway's
+  allow-list. Mail they send the Executive gets no turn and no reply: the
+  demo is in the app.
+- **A cap on questions a day,** `DEMO_DAILY_QUESTIONS`, across the web chat
+  and ERPNext's panel. A message added to a running turn counts as one, and
+  so does each uploaded file. The question past it is refused before it
+  costs anything, with a message saying so. The count resets at midnight
+  UTC. Voice transcription still shares the install-wide daily cap
+  (`TRANSCRIPTION_MAX_MB_PER_DAY`), so one demo person can use it up.
+- **One line in Setup status** ("N of them demo users"), never one "new from
+  the directory" line each.
+- **Their own brake.** Demo accesses end in batches (the provider removes
+  them from the groups on their end date, and the next run suspends them), so
+  their suspensions count against `DIRECTORY_SYNC_DEMO_MAX_SUSPEND` and not
+  against the team's brake, and the team's share is reckoned without them.
+- **Sign-in** follows the directory as for any managed person: SSO only, never
+  Google.
+
+A demo person still reaches what the shared workspace shows every team
+member: Home's briefing and cards, the knowledge base, People. Put them only
+on an install whose company data is demo data.
 
 **`ALLOWED_EMAILS` still lets people in by itself**, so a removed member
 listed there keeps access. With the directory on, keep it to one

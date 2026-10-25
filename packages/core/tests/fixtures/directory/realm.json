@@ -9,7 +9,7 @@
    "subGroups": [
     {"name": "owner", "path": "/erpnext/owner", "subGroups": []},
     {"name": "accounts", "path": "/erpnext/accounts", "subGroups": []},
-    {"name": "trial", "path": "/erpnext/trial", "subGroups": []}
+    {"name": "demo", "path": "/erpnext/demo", "subGroups": []}
    ]
   }
  ],
@@ -36,13 +36,13 @@
   },
   {
    "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000003",
-   "username": "trial",
-   "email": "dir-trial@example.com",
+   "username": "demo",
+   "email": "dir-demo@example.com",
    "emailVerified": true,
    "enabled": true,
    "firstName": "Tara",
-   "lastName": "Trial",
-   "groups": ["/erpnext/trial"]
+   "lastName": "Demo",
+   "groups": ["/erpnext/demo"]
   },
   {
    "id": "0b6f9f0e-1c7a-4d1e-9a51-000000000004",

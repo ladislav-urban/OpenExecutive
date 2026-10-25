@@ -474,3 +474,179 @@ def test_turned_off_the_heartbeat_ends_and_writes_nothing(
     assert directory_sync.enqueue_next_directory_sync_scan() is None
     assert directory_sync.sync().stopped == "DIRECTORY_SYNC_ENABLED is off."
     assert directory_sync.status() is None and env == []
+
+
+# --------------------------------------------------------------------------- #
+# Demo people (DIRECTORY_SYNC_DEMO_GROUP)
+# --------------------------------------------------------------------------- #
+
+def add_demo_group(kc: Keycloak, *, demo_user: bool = True) -> None:
+    """The shared realm's demo user (in /erpnext/demo only, so ERPNext alone)
+    given agents too: approval with --with-agents adds /dynocortex."""
+    if demo_user:
+        kc.user("demo")["groups"].append("/dynocortex")
+    else:
+        kc.users = [u for u in kc.users if u["username"] != "demo"]
+
+
+@pytest.fixture
+def demo_on(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DIRECTORY_SYNC_DEMO_GROUP", "/erpnext/demo")
+
+
+def test_a_member_of_the_demo_group_too_is_marked_demo(kc: Keycloak, demo_on: None) -> None:
+    add_demo_group(kc)
+    reader = directory_sync.KeycloakReader(get_settings(), transport=httpx.MockTransport(kc.handle))
+    members = reader.read_members()
+    assert {m.email for m in members.values() if m.demo} == {"dir-demo@example.com"}
+
+
+def test_a_demo_person_is_created_with_the_demo_role_and_nothing_else(
+    kc: Keycloak, principal: int, demo_on: None
+) -> None:
+    add_demo_group(kc)
+    report = run(kc)
+    assert ("created", "dir-demo@example.com", "demo") in report.changes
+    demo = by_email("dir-demo@example.com")
+    assert demo.demo and demo.role == "Demo user"
+    assert demo.department_slugs == [] and demo.authority_scope == [] and demo.reports_to_person_id is None
+    assert not by_email("dir-accountant@example.com").demo
+    # The role is set on create only: the principal may change it.
+    people_store.update_person(demo.id, role="Prospect, Acme")
+    run(kc)
+    assert by_email("dir-demo@example.com").role == "Prospect, Acme"
+
+
+def test_leaving_the_demo_group_never_makes_a_demo_person_a_team_member(
+    kc: Keycloak, principal: int, demo_on: None
+) -> None:
+    # One membership change (or a short answer) must not hand a stranger the
+    # team's tools, uncapped: only an operator does that.
+    add_demo_group(kc)
+    run(kc)
+    kc.user("demo")["groups"] = ["/dynocortex"]
+    report = run(kc)
+    assert (
+        "warning", "dir-demo@example.com", "left the demo group; still a demo person (openexecutive directory-demo --off)"
+    ) in report.changes
+    assert by_email("dir-demo@example.com").demo
+    assert directory_sync.set_demo("dir-demo@example.com", False) == "Tara Demo (dir-demo@example.com) is now a team member."
+    assert not by_email("dir-demo@example.com").demo
+    assert directory_sync.set_demo("dir-demo@example.com", True).endswith("is now a demo person.")
+
+
+def test_marking_by_hand_is_only_for_managed_team_members(kc: Keycloak, principal: int, demo_on: None) -> None:
+    run(kc)
+    people_store.upsert_person(full_name="Hand Made", email="hand@example.com")
+    for email in ("hand@example.com", "nobody@example.com"):
+        with pytest.raises(directory_sync.DirectoryError):
+            directory_sync.set_demo(email, True)
+    with pytest.raises(directory_sync.DirectoryError, match="principal"):
+        directory_sync.set_demo("dir-owner@example.com", True)
+
+
+def test_linking_a_demo_group_member_makes_them_demo(kc: Keycloak, principal: int, demo_on: None) -> None:
+    add_demo_group(kc)
+    pid = people_store.upsert_person(full_name="Dana Demo", email="dir-demo@example.com")
+    reader = directory_sync.KeycloakReader(get_settings(), transport=httpx.MockTransport(kc.handle))
+    said = directory_sync.link("dir-demo@example.com", reader=reader)
+    assert "demo person" in said
+    assert people_store.get_person(pid).demo  # type: ignore[union-attr]
+
+
+def test_an_existing_team_member_is_never_made_demo(kc: Keycloak, principal: int, demo_on: None) -> None:
+    # Whoever controls the demo group must not strip the team of approvals
+    # and mail, nor move their suspensions onto the demo brake.
+    add_demo_group(kc)
+    run(kc)
+    kc.user("accountant")["groups"].append("/erpnext/demo")
+    report = run(kc)
+    assert ("warning", "dir-accountant@example.com", "in the demo group but already on the team; kept as a team member") in report.changes
+    assert not by_email("dir-accountant@example.com").demo
+    # Leaving the team then counts against the team's brake, not the demo one.
+    kc.users = [u for u in kc.users if u["username"] != "accountant"]
+    for n in range(3):
+        pid = people_store.upsert_person(full_name=f"Extra {n}", email=f"x{n}@example.com")
+        people_store.link_directory(pid, f"kc-extra-{n}")
+    report = run(kc)
+    assert report.stopped and "DIRECTORY_SYNC_MAX_SUSPEND" in report.stopped
+
+
+def test_without_a_demo_group_nobody_is_demo(kc: Keycloak, principal: int) -> None:
+    add_demo_group(kc)
+    run(kc)
+    assert not by_email("dir-demo@example.com").demo
+
+
+def test_a_missing_demo_group_stops_the_run(kc: Keycloak, principal: int, demo_on: None) -> None:
+    del kc.groups["/erpnext/demo"]
+    report = run(kc)
+    assert report.stopped and "/erpnext/demo" in report.stopped
+    assert by_email("dir-accountant@example.com") is None
+
+
+def test_demo_accesses_ending_together_have_a_brake_of_their_own(
+    kc: Keycloak, principal: int, demo_on: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    add_demo_group(kc, demo_user=False)
+    for n in range(6):
+        kc.users.append({
+            "id": f"demo-{n}", "username": f"demo{n}", "email": f"demo{n}@example.com",
+            "firstName": "Demo", "lastName": str(n), "enabled": True, "emailVerified": True,
+            "groups": ["/dynocortex", "/erpnext/demo"],
+        })
+    run(kc)
+    assert all(by_email(f"demo{n}@example.com").demo for n in range(6))
+    # Six demo accesses end at once: more than the team's brake (3, and 20%),
+    # within the demo brake.
+    kc.users = [u for u in kc.users if not u["username"].startswith("demo")]
+    report = run(kc)
+    assert report.stopped is None and report.count("suspended") == 6
+    # Over the demo brake, the run stops and changes nothing.
+    for n in range(6):
+        people_store.restore_person(by_email(f"demo{n}@example.com").id)
+    monkeypatch.setenv("DIRECTORY_SYNC_DEMO_MAX_SUSPEND", "5")
+    report = run(kc)
+    assert report.stopped and "DIRECTORY_SYNC_DEMO_MAX_SUSPEND" in report.stopped
+    assert all(by_email(f"demo{n}@example.com").active for n in range(6))
+
+
+def test_demo_people_dont_soften_the_teams_brake(
+    kc: Keycloak, principal: int, demo_on: None
+) -> None:
+    add_demo_group(kc, demo_user=False)
+    for n in range(20):
+        kc.users.append({
+            "id": f"demo-{n}", "username": f"demo{n}", "email": f"demo{n}@example.com",
+            "firstName": "Demo", "lastName": str(n), "enabled": True, "emailVerified": True,
+            "groups": ["/dynocortex", "/erpnext/demo"],
+        })
+    run(kc)
+    # Two of the three team members leave: over 20% of the team, though only
+    # 2 of 23 managed people. Twenty demo people don't dilute the team's share.
+    pid = people_store.upsert_person(full_name="Extra", email="x@example.com")
+    people_store.link_directory(pid, "kc-extra")
+    kc.users = [u for u in kc.users if u["username"] != "adviser"]
+    report = run(kc)
+    assert report.stopped and "DIRECTORY_SYNC_MAX_SHARE" in report.stopped
+
+
+def test_the_demo_group_cant_be_the_teams_or_hold_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = get_settings()
+    for value in ("/dynocortex", "/"):
+        monkeypatch.setattr(settings, "directory_sync_demo_group", value)
+        assert "DIRECTORY_SYNC_DEMO_GROUP" in (directory_sync.config_problem(settings) or ""), value
+    monkeypatch.setattr(settings, "directory_sync_group", "/company/team")
+    monkeypatch.setattr(settings, "directory_sync_demo_group", "/company")
+    assert "holding it" in (directory_sync.config_problem(settings) or "")
+    monkeypatch.setattr(settings, "directory_sync_demo_group", "/company/team-demo")
+    assert directory_sync.config_problem(settings) is None
+
+
+@pytest.mark.parametrize("value", ["erpnext/demo", "/", "/erpnext//demo", "/erpnext/demo/"])
+def test_a_demo_group_must_be_a_group_path(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "directory_sync_demo_group", value)
+    assert "DIRECTORY_SYNC_DEMO_GROUP" in (directory_sync.config_problem(settings) or "")
+    monkeypatch.setattr(settings, "directory_sync_demo_group", "")
+    assert directory_sync.config_problem(settings) is None

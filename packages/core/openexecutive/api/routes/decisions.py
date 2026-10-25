@@ -244,8 +244,14 @@ def _resolver(instance: DecisionInstance, request: Request) -> int | None:
 
     caller = _resolve_caller_person_id(request)
     if _approver_only(instance):
+        # A card only its own person answers (an ERPNext draft they asked
+        # for): a demo person may answer theirs too.
         if caller is not None and caller == instance.approver_person_id:
             return caller
+    elif _demo_caller(caller):
+        # A demo person decides nothing for anyone else (people.demo),
+        # whoever routed the card to them.
+        pass
     elif _approver_is_principal(request):
         return caller
     elif _principal_and_approver(instance):
@@ -258,6 +264,12 @@ def _resolver(instance: DecisionInstance, request: Request) -> int | None:
         instance.id, instance.decision_class,
     )
     raise HTTPException(status_code=403, detail=_NOT_YOURS)
+
+
+def _demo_caller(caller: int | None) -> bool:
+    from openexecutive.people.demo import is_demo_person
+
+    return is_demo_person(caller)
 
 
 def _refresh(instance_id: int) -> DecisionInstance:

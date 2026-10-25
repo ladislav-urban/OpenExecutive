@@ -1493,6 +1493,18 @@ class Settings(BaseSettings):
     directory_sync_max_suspend: int = Field(3, ge=0, alias="DIRECTORY_SYNC_MAX_SUSPEND")
     directory_sync_max_share: float = Field(0.2, gt=0, le=1, alias="DIRECTORY_SYNC_MAX_SHARE")
     directory_sync_interval_minutes: int = Field(5, ge=1, alias="DIRECTORY_SYNC_INTERVAL_MINUTES")
+    # Demo people (docs/auth.md, "Demo people"): members of this group too
+    # (a path, e.g. /erpnext/demo; empty = none) are marked demo. They are
+    # created with DIRECTORY_SYNC_DEMO_ROLE and no departments, scopes or
+    # manager; their chat turns only read and advise, they never approve for
+    # anyone, the Executive sends them nothing, and each may ask
+    # DEMO_DAILY_QUESTIONS a day (0 = no limit). Demo accesses end in batches,
+    # so their suspensions have a brake of their own,
+    # DIRECTORY_SYNC_DEMO_MAX_SUSPEND, apart from the team's.
+    directory_sync_demo_group: str = Field("", alias="DIRECTORY_SYNC_DEMO_GROUP")
+    directory_sync_demo_role: str = Field("Demo user", max_length=80, alias="DIRECTORY_SYNC_DEMO_ROLE")
+    directory_sync_demo_max_suspend: int = Field(50, ge=0, alias="DIRECTORY_SYNC_DEMO_MAX_SUSPEND")
+    demo_daily_questions: int = Field(50, ge=0, alias="DEMO_DAILY_QUESTIONS")
     # The web app's SSO issuer, read here only so the sync can refuse a
     # directory other than the one people sign in through.
     auth_oidc_issuer: str = Field("", alias="AUTH_OIDC_ISSUER")

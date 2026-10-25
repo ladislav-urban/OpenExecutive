@@ -32,6 +32,7 @@ from openexecutive.integrations.attachments import build_attachment_output
 from openexecutive.orchestrator.answer_sources import TurnSources
 from openexecutive.orchestrator.debug_events import DebugCollector
 from openexecutive.orchestrator.turn_inbox import TurnInbox
+from openexecutive.people import demo as people_demo
 from openexecutive.workflows import turn_files
 from openexecutive.workflows.python_job import available as python_job_available
 from openexecutive.workflows.turn_files import bind as bind_turn_files
@@ -964,6 +965,22 @@ def _seed_seen_channel_refs(session: Any, person_id: int | None) -> None:
             session.seen_channel_refs.add((channel, str(ref)))
 
 
+async def _take_demo_questions(person_id: int | None, n: int) -> None:
+    """Count ``n`` questions for a demo person, or 429 once their day's are
+    used (people.demo). Nothing for anyone else."""
+    demo = await asyncio.to_thread(people_demo.demo_state, person_id)
+    if demo is None:
+        raise HTTPException(status_code=503, detail="People can't be read just now. Try again in a moment.")
+    if not demo:
+        return
+    from openexecutive.config import get_settings
+
+    limit = get_settings().demo_daily_questions
+    for _ in range(n):
+        if not await asyncio.to_thread(people_demo.take_question, person_id, limit):  # type: ignore[arg-type]
+            raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))
+
+
 def _resolve_caller_person_id(request: Request) -> int | None:
     """Resolve the calling Person from the `x-caller-email` header.
 
@@ -1052,6 +1069,16 @@ async def _run_chat_turn(
     # by signed-in user); see its docstring for the precedence rule that
     # protects against cross-identity leakage.
     caller_person_id = _resolve_caller_person_id(request)
+    # A demo person (people.demo) may ask DEMO_DAILY_QUESTIONS a day: the
+    # question past that is refused here, before it costs anything.
+    demo_known = await asyncio.to_thread(people_demo.demo_state, caller_person_id)
+    if demo_known is None:
+        raise HTTPException(status_code=503, detail="People can't be read just now. Try again in a moment.")
+    demo_caller = demo_known
+    if demo_caller:
+        limit = get_settings().demo_daily_questions
+        if not await asyncio.to_thread(people_demo.take_question, caller_person_id, limit):  # type: ignore[arg-type]
+            raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))
     # The rows written before the Executive binds this caller to the session
     # (the "User:" row, the knowledge retrieval, the start of the stream) are
     # private, as the rest of the turn's are, when the principal sent the
@@ -1178,6 +1205,8 @@ async def _run_chat_turn(
     # proxy stamps x-caller-email from it). A header-less request resolves to
     # the principal but is no sign-in, so it never gets Act as me.
     session.web_caller_signed_in = api_caller.signed_in(request)
+    # Per turn: a demo person's turn only reads and advises (Session.demo_caller).
+    session.demo_caller = demo_caller
     # Per turn too: a host origin's page sent it, or wrote earlier in this
     # conversation (Session.from_host). Then it only reads and advises,
     # whichever page asks now: the host's lines stay in what the model reads.
@@ -2115,6 +2144,8 @@ async def chat_add(body: AddChatMessageRequest, request: Request) -> dict[str, s
     """
     client_turn_id = _clean_client_turn_id(body.client_turn_id)
     message_id = _clean_client_turn_id(body.message_id)
+    # A demo person's added message is a question of its own (people.demo).
+    await _take_demo_questions(_resolve_caller_person_id(request), 1)
     turn_id = (
         _add_to_turn(
             client_turn_id,
@@ -2158,6 +2189,8 @@ async def chat_upload(
             status_code=400,
             detail=f"Too many files: limit {_MAX_FILES_PER_TURN} per turn",
         )
+    # A demo person's files count a question each, on top of the message's (people.demo).
+    await _take_demo_questions(_resolve_caller_person_id(request), len(files))
 
     text_parts: list[str] = []
     image_blocks: list[dict[str, Any]] = []
