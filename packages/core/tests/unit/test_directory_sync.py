@@ -517,17 +517,33 @@ def test_a_demo_person_is_created_with_the_demo_role_and_nothing_else(
     assert by_email("dir-demo@example.com").role == "Prospect, Acme"
 
 
-def test_the_demo_mark_follows_the_demo_group(kc: Keycloak, principal: int, demo_on: None) -> None:
+def test_leaving_the_demo_group_makes_a_demo_person_a_team_member(
+    kc: Keycloak, principal: int, demo_on: None
+) -> None:
     add_demo_group(kc)
     run(kc)
     kc.user("demo")["groups"] = ["/dynocortex"]
     report = run(kc)
     assert ("updated", "dir-demo@example.com", "no longer demo") in report.changes
     assert not by_email("dir-demo@example.com").demo
+
+
+def test_an_existing_team_member_is_never_made_demo(kc: Keycloak, principal: int, demo_on: None) -> None:
+    # Whoever controls the demo group must not strip the team of approvals
+    # and mail, nor move their suspensions onto the demo brake.
+    add_demo_group(kc)
+    run(kc)
     kc.user("accountant")["groups"].append("/erpnext/demo")
     report = run(kc)
-    assert ("updated", "dir-accountant@example.com", "now demo") in report.changes
-    assert by_email("dir-accountant@example.com").demo
+    assert ("warning", "dir-accountant@example.com", "in the demo group but already on the team; kept as a team member") in report.changes
+    assert not by_email("dir-accountant@example.com").demo
+    # Leaving the team then counts against the team's brake, not the demo one.
+    kc.users = [u for u in kc.users if u["username"] != "accountant"]
+    for n in range(3):
+        pid = people_store.upsert_person(full_name=f"Extra {n}", email=f"x{n}@example.com")
+        people_store.link_directory(pid, f"kc-extra-{n}")
+    report = run(kc)
+    assert report.stopped and "DIRECTORY_SYNC_MAX_SUSPEND" in report.stopped
 
 
 def test_without_a_demo_group_nobody_is_demo(kc: Keycloak, principal: int) -> None:
@@ -587,6 +603,18 @@ def test_demo_people_dont_soften_the_teams_brake(
     kc.users = [u for u in kc.users if u["username"] != "adviser"]
     report = run(kc)
     assert report.stopped and "DIRECTORY_SYNC_MAX_SHARE" in report.stopped
+
+
+def test_the_demo_group_cant_be_the_teams_or_hold_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = get_settings()
+    for value in ("/dynocortex", "/"):
+        monkeypatch.setattr(settings, "directory_sync_demo_group", value)
+        assert "DIRECTORY_SYNC_DEMO_GROUP" in (directory_sync.config_problem(settings) or ""), value
+    monkeypatch.setattr(settings, "directory_sync_group", "/company/team")
+    monkeypatch.setattr(settings, "directory_sync_demo_group", "/company")
+    assert "holding it" in (directory_sync.config_problem(settings) or "")
+    monkeypatch.setattr(settings, "directory_sync_demo_group", "/company/team-demo")
+    assert directory_sync.config_problem(settings) is None
 
 
 @pytest.mark.parametrize("value", ["erpnext/demo", "/", "/erpnext//demo", "/erpnext/demo/"])

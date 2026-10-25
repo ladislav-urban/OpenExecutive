@@ -610,6 +610,13 @@ async def _handle_mail(
     from openexecutive.audit import private_rows, rows_for_person
     from openexecutive.people.identity import resolve_email_sender
     roster_sender = resolve_email_sender(from_addr) if from_addr else None
+    if roster_sender is not None and roster_sender.demo:
+        # A demo person tries the Executive in the app, where their questions
+        # are counted (people.demo): their mail gets no turn and no reply.
+        logger.info("demo sender person=%s message=%s — left unanswered", roster_sender.id, message_id)
+        if done is not None:
+            await done()
+        return "left a demo person's mail unanswered"
     sender_in_roster = roster_sender is not None
     # Mail from one of the principal's contacts, or mail they forwarded: its
     # turn is private to the principal (see `_run_executive`), and so is every

@@ -210,7 +210,7 @@ from openexecutive.orchestrator.workflow_run_tools import (
     WORKFLOW_RUN_TOOL_HANDLERS,
     WORKFLOW_RUN_TOOLS,
 )
-from openexecutive.people.demo import demo_turn
+from openexecutive.people.demo import demo_turn, is_demo_person
 from openexecutive.prompts.cache_manager import build_system_blocks
 from openexecutive.providers import get_provider
 from openexecutive.providers.translator import reasoning_replay_block
@@ -1363,6 +1363,10 @@ class Executive:
         # so tool handlers can tell who is asking — e.g. close_open_loop only
         # lets the principal or the loop's owner close a loop.
         session.caller_person_id = person_id
+        # A demo person's turn is held to the panel's narrow tools on every
+        # surface, not only where the route said so (people.demo).
+        if person_id is not None:
+            session.demo_caller = session.demo_caller or is_demo_person(person_id)
         # Persona and model can be overridden via the Agent Council admin UI.
         # Override is admin-set (not per-request dynamic), so placing it in the
         # cached block is fine — cache misses once on change, then hits normally.
@@ -1742,6 +1746,10 @@ class Executive:
         # so tool handlers can tell who is asking — e.g. close_open_loop only
         # lets the principal or the loop's owner close a loop.
         session.caller_person_id = person_id
+        # A demo person's turn is held to the panel's narrow tools on every
+        # surface, not only where the route said so (people.demo).
+        if person_id is not None:
+            session.demo_caller = session.demo_caller or is_demo_person(person_id)
 
         persona_override: str | None = None
         persona_instructions: str | None = None

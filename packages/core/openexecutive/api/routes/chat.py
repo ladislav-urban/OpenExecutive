@@ -965,6 +965,19 @@ def _seed_seen_channel_refs(session: Any, person_id: int | None) -> None:
             session.seen_channel_refs.add((channel, str(ref)))
 
 
+async def _take_demo_questions(person_id: int | None, n: int) -> None:
+    """Count ``n`` questions for a demo person, or 429 once their day's are
+    used (people.demo). Nothing for anyone else."""
+    if not await asyncio.to_thread(people_demo.is_demo_person, person_id):
+        return
+    from openexecutive.config import get_settings
+
+    limit = get_settings().demo_daily_questions
+    for _ in range(n):
+        if not await asyncio.to_thread(people_demo.take_question, person_id, limit):  # type: ignore[arg-type]
+            raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))
+
+
 def _resolve_caller_person_id(request: Request) -> int | None:
     """Resolve the calling Person from the `x-caller-email` header.
 
@@ -2125,6 +2138,8 @@ async def chat_add(body: AddChatMessageRequest, request: Request) -> dict[str, s
     """
     client_turn_id = _clean_client_turn_id(body.client_turn_id)
     message_id = _clean_client_turn_id(body.message_id)
+    # A demo person's added message is a question of its own (people.demo).
+    await _take_demo_questions(_resolve_caller_person_id(request), 1)
     turn_id = (
         _add_to_turn(
             client_turn_id,
@@ -2168,6 +2183,8 @@ async def chat_upload(
             status_code=400,
             detail=f"Too many files: limit {_MAX_FILES_PER_TURN} per turn",
         )
+    # A demo person's files count a question each, on top of the message's (people.demo).
+    await _take_demo_questions(_resolve_caller_person_id(request), len(files))
 
     text_parts: list[str] = []
     image_blocks: list[dict[str, Any]] = []

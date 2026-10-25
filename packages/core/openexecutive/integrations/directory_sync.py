@@ -197,6 +197,8 @@ def config_problem(settings: Settings) -> str | None:
     demo = settings.directory_sync_demo_group.strip()
     if demo and not _group_path_ok(demo):
         return "DIRECTORY_SYNC_DEMO_GROUP must be a group path, e.g. /erpnext/demo, or empty"
+    if demo and (demo == group or group.startswith(demo + "/")):
+        return "DIRECTORY_SYNC_DEMO_GROUP must not be DIRECTORY_SYNC_GROUP or a group holding it"
     return None
 
 
@@ -559,13 +561,19 @@ def _update(person: Person, member: Member, report: Report) -> None:
             store.update_person(person.id, **fields)  # type: ignore[arg-type]
             _audit("directory_person_updated", f"person #{person.id} updated from the directory",
                    {"person_id": person.id, "fields": sorted(fields)})
-    # The demo mark follows the demo group, both ways.
-    if member.demo != person.demo:
-        report.add("updated", member.email, "now demo" if member.demo else "no longer demo")
+    # A demo person who leaves the demo group stays on as a team member. The
+    # other way round is never automatic: marking an existing team member
+    # demo takes their approvals and mail away, and would move their later
+    # suspension from the team's brake to the demo one, so whoever controls
+    # the demo group could strip or remove the team past the brake.
+    if person.demo and not member.demo:
+        report.add("updated", member.email, "no longer demo")
         if not report.dry_run:
-            store.set_directory_demo(person.id, member.demo)
+            store.set_directory_demo(person.id, False)
             _audit("directory_person_updated", f"person #{person.id} updated from the directory",
-                   {"person_id": person.id, "fields": ["demo"], "demo": member.demo})
+                   {"person_id": person.id, "fields": ["demo"], "demo": False})
+    elif member.demo and not person.demo:
+        report.add("warning", member.email, "in the demo group but already on the team; kept as a team member")
     if person.suspended:
         if person.suspended_by == "directory":
             report.add("restored", member.email)

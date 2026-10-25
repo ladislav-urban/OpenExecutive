@@ -101,6 +101,75 @@ def test_the_executive_sends_a_demo_person_nothing(monkeypatch: pytest.MonkeyPat
     assert outbound_guard.check_outbound_allowed("slack_dm", "U-TOM", "Hello") is None
 
 
+def test_no_mail_reaches_a_demo_person() -> None:
+    from openexecutive.orchestrator import mcp_gateway as gw
+
+    _demo(email="dana@example.com")
+    people_store.upsert_person(full_name="Tom Team", email="tom@example.com")
+    allow = gw._roster_allow_set()
+    assert "tom@example.com" in allow and "dana@example.com" not in allow
+
+
+def test_a_demo_persons_mail_gets_no_turn_and_no_reply() -> None:
+    from openexecutive.integrations import email_poller
+
+    source = inspect.getsource(email_poller._handle_mail)
+    skip = source.index("if roster_sender is not None and roster_sender.demo:")
+    # Before any turn or reply is prepared, and the mail is marked handled.
+    assert skip < source.index("sender_in_roster = roster_sender is not None")
+    assert "return \"left a demo person's mail unanswered\"" in source
+
+
+def test_every_surface_holds_a_demo_speaker_to_the_narrow_tools() -> None:
+    source = inspect.getsource(executive)
+    marked = "session.demo_caller = session.demo_caller or is_demo_person(person_id)"
+    # Both chat paths (the stream and committee review) mark it after binding the speaker.
+    assert source.count("session.caller_person_id = person_id\n" + " " * 8 + "# A demo person's turn") == 2
+    assert source.count(marked) == 2
+
+
+def test_a_demo_person_approves_none_of_anyone_elses_cards(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import HTTPException
+
+    from openexecutive.api.routes import chat, decisions
+
+    demo = _demo()
+    monkeypatch.setattr(chat, "_resolve_caller_person_id", lambda _r: demo)
+    card = SimpleNamespace(id=1, decision_class="meeting_scheduling", approver_person_id=demo)
+    with pytest.raises(HTTPException) as refused:
+        decisions._resolver(card, request=None)  # type: ignore[arg-type]
+    assert refused.value.status_code == 403
+    # Their own card (one only its person answers) stays theirs.
+    monkeypatch.setattr(decisions, "_approver_only", lambda _i: True)
+    assert decisions._resolver(card, request=None) == demo  # type: ignore[arg-type]
+
+    from openexecutive.api.routes import alerts
+
+    assert "if not _caller_is_principal(request) and is_demo_person(approver):" in inspect.getsource(alerts)
+
+
+def test_added_messages_and_files_count_as_questions(monkeypatch: pytest.MonkeyPatch) -> None:
+    import asyncio
+
+    from fastapi import HTTPException
+
+    from openexecutive.api.routes import chat
+
+    demo = _demo()
+    monkeypatch.setenv("DEMO_DAILY_QUESTIONS", "3")
+    asyncio.run(chat._take_demo_questions(demo, 2))
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(chat._take_demo_questions(demo, 2))
+    assert refused.value.status_code == 429
+    assert people_demo.questions_today(demo) == 3
+    # Nobody else is counted.
+    other = people_store.upsert_person(full_name="Tom Team", email="tom@example.com")
+    asyncio.run(chat._take_demo_questions(other, 10))
+    source = inspect.getsource(chat)
+    assert "await _take_demo_questions(_resolve_caller_person_id(request), 1)" in source
+    assert "await _take_demo_questions(_resolve_caller_person_id(request), len(files))" in source
+
+
 def test_a_demo_turn_is_told_why_a_tool_isnt_there() -> None:
     error = json.loads(schedule_tools.erpnext_panel_withheld_error("send_email", demo=True))["error"]
     assert "demo" in error and "Do not retry" in error
