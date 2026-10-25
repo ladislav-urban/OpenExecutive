@@ -480,20 +480,13 @@ def test_turned_off_the_heartbeat_ends_and_writes_nothing(
 # Demo people (DIRECTORY_SYNC_DEMO_GROUP)
 # --------------------------------------------------------------------------- #
 
-DEMO_ID = "0b6f9f0e-1c7a-4d1e-9a51-0000000000d1"
-
-
 def add_demo_group(kc: Keycloak, *, demo_user: bool = True) -> None:
-    """The demo group under /erpnext, and a demo user in it and in /dynocortex."""
-    group = {"name": "demo", "path": "/erpnext/demo"}
-    kc.groups["/erpnext"].setdefault("subGroups", []).append(group)
-    kc.groups["/erpnext/demo"] = group
+    """The shared realm's demo user (in /erpnext/demo only, so ERPNext alone)
+    given agents too: approval with --with-agents adds /dynocortex."""
     if demo_user:
-        kc.users.append({
-            "id": DEMO_ID, "username": "demo", "email": "dir-demo@example.com",
-            "firstName": "Dana", "lastName": "Demo", "enabled": True, "emailVerified": True,
-            "groups": ["/dynocortex", "/erpnext/demo"],
-        })
+        kc.user("demo")["groups"].append("/dynocortex")
+    else:
+        kc.users = [u for u in kc.users if u["username"] != "demo"]
 
 
 @pytest.fixture
@@ -544,6 +537,7 @@ def test_without_a_demo_group_nobody_is_demo(kc: Keycloak, principal: int) -> No
 
 
 def test_a_missing_demo_group_stops_the_run(kc: Keycloak, principal: int, demo_on: None) -> None:
+    del kc.groups["/erpnext/demo"]
     report = run(kc)
     assert report.stopped and "/erpnext/demo" in report.stopped
     assert by_email("dir-accountant@example.com") is None
