@@ -82,6 +82,7 @@ from openexecutive.evals.scenarios import (
     scenario_delegation,
     scenario_inbox,
     scenario_principal_role,
+    scenario_query,
     scenario_supplier,
     scenario_turn_surface,
     scenario_voice_persona,
@@ -632,7 +633,7 @@ def _make_chat_runner(
                         delegation_override=delegation,
                         **surface,
                     )
-                    query = scenario["query"]
+                    query = scenario_query(scenario)
                     # Records which specialists the turn consulted, for
                     # the scenario's routing expectation (routing_check).
                     collector = DebugCollector()

@@ -250,6 +250,19 @@ def scenario_turn_surface(scenario: dict[str, Any]) -> tuple[dict[str, Any], str
     return session_fields, context_block(probe)
 
 
+def scenario_query(scenario: dict[str, Any]) -> str:
+    """The turn's message: the scenario's ``query``, after the page block its
+    ``page`` gives a panel turn, as ``integrations.erpnext_panel`` builds it
+    (``{"screen": "/watchlist"}``, ``{"doctype": ..., "name": ...}``)."""
+    page = scenario.get("page")
+    if page is None:
+        return scenario["query"]
+    from openexecutive.integrations.erpnext_panel import page_block
+
+    where = page_block(page)
+    return f"{where}\n\n{scenario['query']}" if where else scenario["query"]
+
+
 def scenario_voice_persona(scenario: dict[str, Any]) -> str | None:
     """The scenario's ``voice_persona`` slug, or None to use the install's
     voice. An unknown slug raises ValueError, so a typo fails the scenario
@@ -507,6 +520,15 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_surface(s)
         except ValueError as e:
             raise ValueError(f"`surface`: {e}") from e
+    if s.get("page") is not None:
+        if scenario_surface(s) != SURFACE_ERPNEXT_PANEL:
+            raise ValueError("`page`: only a scenario with surface: erpnext_panel has a page")
+        if not isinstance(s["page"], dict):
+            raise ValueError("`page`: must be a mapping")
+        from openexecutive.integrations.erpnext_panel import page_block
+
+        if not page_block(s["page"]):
+            raise ValueError("`page`: the panel would send nothing for it")
     if s.get("delegation") is not None:
         try:
             scenario_delegation(s)

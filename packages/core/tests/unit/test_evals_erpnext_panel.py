@@ -75,6 +75,29 @@ def test_make_eval_runs_a_panel_scenario_the_same_way() -> None:
     assert seen["channel_context_block"] == PANEL_CONTEXT_BLOCK
 
 
+def test_a_panel_scenario_on_a_screen_gets_the_routes_page_block(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.integrations.erpnext_panel import page_block
+
+    page = {"screen": "/watchlist"}
+    seen = _run(monkeypatch, {"id": "p", "query": "q", "surface": "erpnext_panel", "page": page})
+    assert seen["user_message"] == f"{page_block(page)}\n\nq"
+    assert _run(monkeypatch, {"id": "p", "query": "q", "surface": "erpnext_panel"})["user_message"] == "q"
+
+
+def test_a_page_is_only_for_a_panel_scenario_and_must_say_something() -> None:
+    with pytest.raises(ValueError, match="page"):
+        validate_scenario_yaml("id: x\nquery: q\npage:\n  screen: /watchlist\n")
+    with pytest.raises(ValueError, match="page"):
+        validate_scenario_yaml("id: x\nquery: q\nsurface: erpnext_panel\npage:\n  screen: watchlist\n")
+    validate_scenario_yaml("id: x\nquery: q\nsurface: erpnext_panel\npage:\n  screen: /watchlist\n")
+
+
+def test_the_screen_scenarios_ship_with_their_page() -> None:
+    found = {s["id"]: s for s in load_scenarios(kind="chat") if s["id"] in ("erpnext_020", "erpnext_021")}
+    assert found["erpnext_020"]["page"] == {"screen": "/watchlist"}
+    assert found["erpnext_021"]["page"] == {"screen": "/"}
+
+
 def test_any_other_scenario_runs_in_the_web_app(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _run(monkeypatch, {"id": "w", "query": "q"})
     assert not erpnext_panel_turn(seen["session"])
