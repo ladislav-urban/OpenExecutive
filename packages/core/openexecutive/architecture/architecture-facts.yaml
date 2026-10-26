@@ -10130,7 +10130,7 @@ integrations:
     the OpenExecutive app for anything else); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
     people, memory, settings), so it says so and suggests Chats rather than
-    guess (evals erpnext_020, erpnext_021: a scenario's `page` becomes the
+    guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the
     route's page block, evals.scenarios.scenario_query). Eval erpnext_006 runs a turn
     this way: a chat scenario's `surface: erpnext_panel`
     (evals.scenarios.scenario_surface) makes evals.runner give the session
