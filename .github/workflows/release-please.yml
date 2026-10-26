@@ -53,7 +53,7 @@ concurrency:
 jobs:
   release-please:
     if: github.repository == 'SenteLabsAI/OpenExecutive'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     steps:
       - name: Require the release token
         env:
