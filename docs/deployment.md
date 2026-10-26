@@ -966,6 +966,15 @@ back-channel post. When someone signs out of ERPNext at the provider, the desk's
 frame and its calls then ask for sign-in again
 ([auth.md, "Signing out (SSO)"](auth.md#signing-out-sso)).
 
+**Signing in without a popup.** The desk can sign someone in to Open Executive
+in one pass: the tab goes to `https://exec.example.com/signin/sso?to=<the desk
+page>`, through the provider, and back. With the provider's session already
+open from ERPNext's own sign-in, there is nothing to type. Nothing needs setting
+for it: the provider redirect is the client's usual
+`https://exec.example.com/api/auth/callback/oidc`, and `to` must be a desk page
+on an origin in `OE_HOST_ORIGINS`
+([auth.md, "Host origins"](auth.md#host-origins-showing-open-executive-inside-another-app)).
+
 **What ERPNext's origin may do.** Its pages may frame Open Executive's and make
 the calls on the host list (`packages/ui/src/lib/host-list.json`): reads, alert
 handling, chatting and the watch list, never approving a card, sending,

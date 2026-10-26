@@ -623,6 +623,21 @@ parent window, and every `init` field is validated. In a frame:
 - **Sign-in opens in a popup.** `/signin` shows one button that opens the normal sign-in
   in a small window ending at `/signin/done`, which tells its opener (this app's origin or
   a host origin, addressed exactly) and closes.
+- **Or the host's page signs in in one pass, with no popup.** A host's page may send the
+  tab, top level, to `/signin/sso?to=<its own page>&hint=<its user's email>`
+  (`app/signin/sso`, `lib/signinReturn.ts`; `pieces.signIn` in `embed-manifest.json`).
+  - `to` must be an absolute URL on exactly one of the host origins, with no user info,
+    and a desk path (`/desk/…` or `/app/…`, no `..` or `//`). Anything else goes to this
+    app's Home.
+  - Signed in already, the tab goes straight back. Otherwise the SSO sign-in starts at
+    once, with `hint` as the provider's `login_hint` when it is a plain email. With the
+    provider's session still open there is nothing to type.
+  - The way back, `/signin/return`, checks `to` again and needs the new session.
+  - A sign-in the provider refuses comes back to `to` with `oe_signin=failed`, so the host
+    can say why: a ten-minute http-only cookie on `/signin` remembers `to`, and `/signin`
+    forwards a refusal to `/signin/sso?failed=1`.
+  - `/signin/sso` needs no session (`lib/middlewarePaths.ts`); `/signin/return` does. Only
+    OIDC sign-in takes this path; without `AUTH_OIDC_ISSUER` it goes to Home.
 - **The host's user hint** (an email, display only) shows a warning with Sign out when it
   isn't who is signed in here.
 - **Changes ask inside the frame, and the browser must have seen the question, in any

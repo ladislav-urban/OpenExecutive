@@ -51,6 +51,9 @@ test("Auth.js routes and the sign-in page need no session but still get the midd
     "/api/auth/callback/google",
     "/signin",
     "/signin/",
+    // A host's page sends someone with no session here to get one.
+    "/signin/sso",
+    "/signin/sso/",
   ]) {
     assert.equal(runsMiddleware(path), true, path);
     assert.equal(gated(path), false, path);
@@ -67,6 +70,10 @@ test("a path that only starts with an excluded entry is still gated", () => {
     "/favicon.ico/x",
     "/signin-help",
     "/signin/done",
+    // The way back needs the session it just got.
+    "/signin/return",
+    "/signin/sso/x",
+    "/signin/ssox",
   ]) {
     assert.equal(gated(path), true, path);
   }

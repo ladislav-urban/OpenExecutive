@@ -30,3 +30,12 @@ test("the manifest names the inline Approve a host places, at a page this app ha
   assert.ok(approve.maxHeight > 0);
   assert.ok(existsSync(new URL("../src/app/embed/approve/[id]/page.tsx", import.meta.url)));
 });
+
+test("the manifest names the one-pass sign-in, at a route this app has", () => {
+  const { signIn } = embedManifest().pieces;
+  assert.equal(signIn.path, "/signin/sso");
+  assert.equal(signIn.failed, "oe_signin=failed");
+  for (const route of ["sso", "return"]) {
+    assert.ok(existsSync(new URL(`../src/app/signin/${route}/route.ts`, import.meta.url)), route);
+  }
+});

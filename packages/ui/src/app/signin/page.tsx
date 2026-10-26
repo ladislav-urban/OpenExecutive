@@ -1,9 +1,10 @@
 import { AuthError } from "next-auth";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { GOOGLE_SIGN_IN, LOCAL_LOGIN, OIDC, auth, sessionStillAllowed, signIn } from "@/auth";
 import { LOCAL_LOGIN_PROVIDER_ID } from "@/lib/localLogin";
 import { OIDC_PROVIDER_ID } from "@/lib/oidc";
+import { RETURN_COOKIE } from "@/lib/signinReturn";
 import BrandMark from "@/components/BrandMark";
 import EmbedSignIn, { EmbedProductName } from "@/components/embed/EmbedSignIn";
 
@@ -27,6 +28,12 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
   const session = await auth();
   if (session && (await sessionStillAllowed(session, (await headers()).get("host")))) {
     redirect(safeDest);
+  }
+
+  // A sign-in a host's page started (/signin/sso) that the provider refused
+  // goes back to that page, which says so, instead of stopping here.
+  if (error && (await cookies()).get(RETURN_COOKIE)) {
+    redirect("/signin/sso?failed=1");
   }
 
   const errorMessage = error ? describeError(error) : null;
