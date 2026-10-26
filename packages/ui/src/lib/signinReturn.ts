@@ -27,6 +27,9 @@ export const RETURN_COOKIE_PATH = "/signin";
 export const FAILED_PARAM = "oe_signin";
 export const FAILED_VALUE = "failed";
 
+// An encoded dot, slash or backslash in a path: kept in step with lib/erpnextLinks.ts.
+const ENCODED_SEPARATOR_RE = /%(?:2e|2f|5c)/i;
+
 const MAX_TO_CHARS = 2048;
 const MAX_HINT_CHARS = 320;
 const EMAIL_RE = /^[^\s@<>"']+@[^\s@<>"']+$/;
@@ -44,6 +47,10 @@ export function returnTarget(to: string | null | undefined, origins: readonly st
   if (url.username || url.password || !origins.includes(url.origin)) return null;
   const route = `${url.pathname}${url.search}`;
   if (!DESK_ROUTE_RE.test(route) || route.includes("..") || route.includes("//")) return null;
+  // The parser leaves `%2e`, `%2f` and `%5c` encoded, so `/desk/%2e%2e%2flogin`
+  // would pass the checks above and reach the host's `/login`. Desk routes
+  // never need them.
+  if (ENCODED_SEPARATOR_RE.test(url.pathname)) return null;
   return `${url.origin}${route}`;
 }
 

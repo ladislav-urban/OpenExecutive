@@ -38,6 +38,10 @@ test("anything else goes nowhere", () => {
     "https://erp.example.com/api/method/frappe.auth.get_logged_user",
     "https://erp.example.com/desk/../api/method/x",
     "https://erp.example.com/desk//evil",
+    "https://erp.example.com/desk/%2E%2E%2Flogin",
+    "https://erp.example.com/desk/%2e%2e%2F%2e%2e%2Flogin?redirect-to=%2F%2Fevil.com",
+    "https://erp.example.com/desk/x%2F%2Fy",
+    "https://erp.example.com/desk/x%5Cy",
     "javascript:alert(1)//https://erp.example.com/desk/x",
     `https://erp.example.com/desk/${"a".repeat(2100)}`,
   ]) {
@@ -59,9 +63,11 @@ test("login_hint is a plain email or nothing", () => {
   }
 });
 
-test("the desk-route rule is the same one erpnextLinks keeps", () => {
-  const rule = (source) => source.match(/const DESK_ROUTE_RE = (\/.+\/);/)[1];
-  assert.equal(rule(read("../src/lib/signinReturn.ts")), rule(read("../src/lib/erpnextLinks.ts")));
+test("the desk-route rules are the same ones erpnextLinks keeps", () => {
+  for (const name of ["DESK_ROUTE_RE", "ENCODED_SEPARATOR_RE"]) {
+    const rule = (source) => source.match(new RegExp(`const ${name} = (\/.+\/i?);`))[1];
+    assert.equal(rule(read("../src/lib/signinReturn.ts")), rule(read("../src/lib/erpnextLinks.ts")), name);
+  }
 });
 
 test("the routes check `to` both ways and never trust the hop", () => {
