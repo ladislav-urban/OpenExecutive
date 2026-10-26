@@ -63,11 +63,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      # python-version sets UV_PYTHON, so uv uses the 3.11 above. Without it,
+      # uv prefers a Python it manages itself: on a self-hosted runner
+      # (vars.CI_RUNNER) that can be a newer one, which installs different
+      # dependencies (rapidocr-onnxruntime is for < 3.13) and fails tests.
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: packages/core/uv.lock
+          python-version: "3.11"
 
       # docker/Dockerfile installs from uv.lock with `uv sync --locked`, which
       # fails the image build if the lock is stale. `uv sync` below would
@@ -121,11 +126,16 @@ jobs:
         with:
           python-version: "3.11"
 
+      # python-version sets UV_PYTHON, so uv uses the 3.11 above. Without it,
+      # uv prefers a Python it manages itself: on a self-hosted runner
+      # (vars.CI_RUNNER) that can be a newer one, which installs different
+      # dependencies (rapidocr-onnxruntime is for < 3.13) and fails tests.
       - name: Install uv
         uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
         with:
           enable-cache: true
           cache-dependency-glob: packages/core/uv.lock
+          python-version: "3.11"
 
       - name: Install dependencies
         run: cd packages/core && uv sync --extra dev
