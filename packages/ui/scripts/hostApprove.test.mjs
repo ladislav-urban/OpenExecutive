@@ -86,6 +86,20 @@ test("the inline Approve counts a click only under the seen rule, and opens no w
   assert.match(INLINE, /target="_top"/);
 });
 
+test("the inline Approve always offers a way back out, not only beside an armed Approve", () => {
+  // The host hides the card's own buttons until card-done, so without v2
+  // (Firefox, Safari), a card it can't approve, or one no longer here, a
+  // Not now must still tell it, or the card stays stuck until a reload.
+  const notNow = INLINE.match(/onClick=\{\(\) => tellHost\("not_now"\)\}/g) ?? [];
+  assert.equal(notNow.length, 3);
+  const fallback = INLINE.indexOf("this browser can't show here that Approve is really on screen");
+  const gone = INLINE.indexOf("no longer waiting");
+  for (const at of [fallback, gone]) {
+    assert.ok(at > 0);
+    assert.match(INLINE.slice(at, at + 600), /tellHost\("not_now"\)/);
+  }
+});
+
 test("the size it asks for is bounded", () => {
   assert.deepEqual(sizeMessage(120.2), { protocol: EMBED_PROTOCOL, type: "size", height: 121 });
   assert.equal(sizeMessage(10_000).height, MAX_APPROVE_HEIGHT);
