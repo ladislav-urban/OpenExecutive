@@ -1,20 +1,10 @@
 // In a frame, a card action, and any other change off the host list that
 // follows a click, asks inside the frame under lib/seen.ts's rule
-// (lib/cardActions.ts, components/embed/EmbedProvider.tsx, FrameConfirm.tsx;
-// the old window, app/confirm, stays for one release).
+// (lib/cardActions.ts, components/embed/EmbedProvider.tsx, FrameConfirm.tsx).
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import {
-  CONFIRM_PROTOCOL,
-  messageOf,
-  cardActionFor,
-  describeDecision,
-  frameActionFor,
-  isConfirmMessage,
-  ownPageFor,
-  parseAction,
-} from "../src/lib/cardActions.ts";
+import { messageOf, cardActionFor, frameActionFor, ownPageFor } from "../src/lib/cardActions.ts";
 
 const API = readFileSync(new URL("../src/lib/api.ts", import.meta.url), "utf8");
 const CALLS = JSON.parse(readFileSync(new URL("../src/lib/host-list.json", import.meta.url), "utf8")).calls;
@@ -101,28 +91,6 @@ test("a send's message, from JSON or a form", () => {
   assert.equal(messageOf(undefined), "");
 });
 
-test("the card is named by its kind and what it says", () => {
-  assert.equal(
-    describeDecision({ decision_class: "reply_send", proposed_payload_json: '{"subject":"Re: the pilot  plan"}' }),
-    "reply send: Re: the pilot plan",
-  );
-  assert.equal(describeDecision({ decision_class: "app_action", proposed_payload_json: "not json" }), "app action");
-  assert.equal(describeDecision({}), "card");
-});
-
-test("the old confirmation window's messages", () => {
-  const nonce = "a".repeat(32);
-  assert.equal(isConfirmMessage({ protocol: CONFIRM_PROTOCOL, type: "answer", nonce, ok: true }, "answer", nonce), true);
-  assert.equal(isConfirmMessage({ protocol: CONFIRM_PROTOCOL, type: "answer", nonce: "b".repeat(32) }, "answer", nonce), false);
-  assert.equal(isConfirmMessage({ protocol: "oe-embed/v1", type: "answer", nonce }, "answer", nonce), false);
-  const action = cardActionFor("POST", "/api/backend/decisions/7/approve");
-  // The window never sends anyone elsewhere.
-  assert.deepEqual(parseAction(action), { ...action, page: null });
-  assert.equal(parseAction({ ...action, verb: "send" }), null);
-  assert.equal(parseAction({ ...action, decisionId: -1 }), null);
-  assert.equal(parseAction({ ...action, what: "x".repeat(301) }), null);
-});
-
 test("the frame checks every request, in any frame, and asks inside it", () => {
   const provider = read("../src/components/embed/EmbedProvider.tsx");
   assert.match(provider, /if \(window\.top === window\.self\) return;/);
@@ -140,9 +108,6 @@ test("the frame checks every request, in any frame, and asks inside it", () => {
   assert.equal(frame.match(/finish\(true\)/g).length, 1);
   // One request a page judged itself under the same rule passes once.
   assert.match(provider, /if \(action && pass && Date\.now\(\) <= pass\.until && isPassed\(pass, method, url\)\) return original\(input, init\);/);
-  const page = read("../src/app/confirm/page.tsx");
-  assert.match(page, /event\.origin !== window\.location\.origin \|\| event\.source !== opener/);
-  assert.match(page, /postMessage\(\{ protocol: CONFIRM_PROTOCOL, type: "answer", nonce, ok \}, window\.location\.origin\)/);
 });
 
 test("without v2, each action is answered on this app's own page, top level", () => {

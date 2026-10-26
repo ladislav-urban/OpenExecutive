@@ -18,9 +18,6 @@
 //                                                       (/embed/approve/<id>,
 //                                                       lib/hostApprove.ts)
 //
-// The approve messages also pass between a host and the old approve window
-// (/confirm/alert/<id>, popup ↔ opener), kept for one release.
-//
 // Each carries `protocol: "oe-embed/v1"` and `type`. None carries a secret, a
 // token or an identity anyone acts on: `userHint` is shown, never trusted.
 // The frame takes a message only from its parent window and only from a
@@ -86,7 +83,6 @@ export const APP_ROUTES = [
   "chats",
   "clients",
   "company-profile",
-  "confirm",
   "council",
   "delegate",
   "demo",
@@ -109,7 +105,7 @@ export const APP_ROUTES = [
 
 // Pages that stay in the frame even if the host shows the same place
 // natively: a card's own page is where it is approved, in this app's origin.
-const NEVER_NATIVE = ["/cards", "/confirm", "/embed", "/signin"];
+const NEVER_NATIVE = ["/cards", "/embed", "/signin"];
 
 const MAX_PRODUCT_NAME = 40;
 const MAX_NATIVE_PATHS = 20;

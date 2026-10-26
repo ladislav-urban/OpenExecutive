@@ -203,27 +203,6 @@ export function frameActionFor(
   };
 }
 
-/** A line naming the card, from its decision (GET /decisions/{id}): its kind and what it says. */
-export function describeDecision(instance: { decision_class?: unknown; proposed_payload_json?: unknown }): string {
-  const kind = typeof instance.decision_class === "string" ? instance.decision_class.replace(/[_-]+/g, " ") : "card";
-  let detail = "";
-  if (typeof instance.proposed_payload_json === "string") {
-    try {
-      const payload = JSON.parse(instance.proposed_payload_json) as Record<string, unknown>;
-      for (const key of ["summary", "title", "subject", "why", "card"]) {
-        const value = payload[key];
-        if (typeof value === "string" && value.trim()) {
-          detail = value.trim().replace(/\s+/g, " ").slice(0, 200);
-          break;
-        }
-      }
-    } catch {
-      // No detail: the kind alone.
-    }
-  }
-  return detail ? `${kind}: ${detail}` : kind;
-}
-
 /**
  * Where a browser that can't tell the frame is seen answers `action`: the
  * card's own page, or else the page that asked (`pathname` + `search`), in
@@ -236,37 +215,6 @@ export function ownPageFor(action: CardAction, pathname: string, search: string)
   const query = params.toString();
   const path = pathname.startsWith("/") && !pathname.startsWith("//") ? pathname : "/";
   return query ? `${path}?${query}` : path;
-}
-
-// The old confirmation window (app/confirm, kept for one release) and the
-// frame that opened it talk in these, on this app's own origin only (each
-// side checks the origin and the window).
-export const CONFIRM_PROTOCOL = "oe-confirm/v1";
-
-export function isConfirmMessage(data: unknown, type: string, nonce: string): data is Record<string, unknown> {
-  return (
-    typeof data === "object" &&
-    data !== null &&
-    (data as Record<string, unknown>).protocol === CONFIRM_PROTOCOL &&
-    (data as Record<string, unknown>).type === type &&
-    (data as Record<string, unknown>).nonce === nonce
-  );
-}
-
-export function parseAction(value: unknown): CardAction | null {
-  if (typeof value !== "object" || value === null) return null;
-  const a = value as Record<string, unknown>;
-  if (!["approve", "reject", "cancel", "change"].includes(a.verb as string)) return null;
-  if (typeof a.what !== "string" || a.what.length > 300) return null;
-  const id = a.decisionId;
-  if (id !== null && !(typeof id === "number" && Number.isInteger(id) && id > 0)) return null;
-  return {
-    verb: a.verb as CardAction["verb"],
-    what: a.what,
-    decisionId: id as number | null,
-    card: a.card === true,
-    page: null,
-  };
 }
 
 export class CardActionNotConfirmed extends Error {

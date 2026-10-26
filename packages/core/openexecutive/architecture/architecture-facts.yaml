@@ -7886,7 +7886,8 @@ auth:
     embed) with target _top, same tab. Never fails open. Before Oct 2026
     this was a popup (/confirm, oe-confirm/v1), since an in-frame dialog
     without the visibility check was beaten by two lured clicks on an
-    invisible frame; /confirm and /confirm/alert/<id> stay one release.
+    invisible frame; /confirm and /confirm/alert/<id> were removed in Oct
+    2026, a release after the inline Approve replaced them.
 
     Pages (all, host origins set or not): Content-Security-Policy
     script-src 'self' 'nonce-…' 'strict-dynamic' (+ 'unsafe-eval' on the
@@ -7915,8 +7916,7 @@ auth:
     EmbedProvider's passOnce for exactly that request (method + URL, 2 s)
     so the frame's own gate doesn't ask again, then approves as the app's
     own page and posts card-done {alertId, outcome} to that host; size
-    {height <= 480} tells the host how tall to make it. The old window,
-    /confirm/alert/<id> (frame-ancestors 'none'), stays one release.
+    {height <= 480} tells the host how tall to make it.
     /signin offers a popup ending at /signin/done, which posts signed-in
     to its opener (own origin and each host origin) and closes. In ANY
     frame card actions (decisions approve/reject/cancel, alerts approve,
@@ -10180,7 +10180,7 @@ integrations:
     /desk/dynocortex/cards/<id> in its hosted frame; /cards/<id> renders an
     erpnext_draft decision with ErpnextDraftCardItem, as Home does, for the
     card's own person only (GET /erpnext/drafts), and approving there asks
-    in /confirm like any card action in a frame. A made draft's "Open in
+    in the frame (FrameConfirm) like any card action in a frame. A made draft's "Open in
     ERPNext" (lib/erpnextLinks.ts) sends the host open {kind: "host",
     route} in embedded mode when the document's origin is exactly the
     host's (useEmbed().hostOrigin) and its path is a /desk/ or /app/ route
