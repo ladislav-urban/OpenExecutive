@@ -1,7 +1,7 @@
 """ERPNext drafts a person approves: ``propose_erpnext_draft`` and its cards.
 
 ERPNext phase 4 (design: oe_connector's ``docs/erpnext-integration.md``,
-"Writes come last", and ``docs/erpnext-phase4-plan.md``). The Executive can
+"Writes come last", and ``docs/finished_work/erpnext-phase4-plan.md``). The Executive can
 prepare ERPNext documents as unsubmitted drafts: in 4a a ToDo (a follow-up
 assigned to someone) and a Material Request (a restock); in 4b a Quotation
 (to a customer) and a Purchase Order (to a supplier), which ERPNext prices

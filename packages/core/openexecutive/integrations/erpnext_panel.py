@@ -38,7 +38,7 @@ Conversations live in this process (``_Conversations``), keyed by the person
 and the panel's conversation id, and end on restart or after an idle hour.
 
 **Showing what the answer talks about** (oe_connector's
-``docs/erpnext-panel-views-plan.md``). The reply also carries ``views``: the
+``docs/finished_work/erpnext-panel-views-plan.md``). The reply also carries ``views``: the
 ``view`` argument of each ``erpnext__show_in_erpnext`` call the turn made, in
 order, and ``call``: the turn's last ``list_records``, ``run_report`` or
 ``get_record`` call, for oe_connector to fall back on. The gateway notes them

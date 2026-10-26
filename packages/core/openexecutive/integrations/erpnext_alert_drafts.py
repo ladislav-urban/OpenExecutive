@@ -1,6 +1,6 @@
 """Drafts an ERPNext alert suggests: a "Prepare" button on the alert's card.
 
-ERPNext phase 4b (design: oe_connector's ``docs/erpnext-phase4-plan.md``,
+ERPNext phase 4b (design: oe_connector's ``docs/finished_work/erpnext-phase4-plan.md``,
 Decisions #5). oe_connector sends two of its alerts with a ``suggest``
 object, built from ERPNext's own fields and signed with the event: a stock
 alert the Material Request ERPNext's own reorder would raise, an overdue
