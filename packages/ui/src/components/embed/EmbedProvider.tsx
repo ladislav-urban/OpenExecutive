@@ -51,8 +51,7 @@ export function useEmbed(): EmbedState {
 }
 
 // The listed host origins (OE_HOST_ORIGINS), for a page a host opened or
-// placed that answers it (app/embed/approve, app/confirm/alert): empty when
-// none is listed.
+// placed that answers it (app/embed/approve): empty when none is listed.
 const HostOriginsContext = createContext<readonly string[]>([]);
 
 export function useHostOrigins(): readonly string[] {

@@ -676,9 +676,6 @@ parent window, and every `init` field is validated. In a frame:
   Approve counts only under the rule above; without v2 it links to the card's own page,
   top level. It tells the host its height (`size`, at most 480 px) and, once answered,
   `card-done` (the card's id and `approved` or `not_now`). Nothing else crosses.
-- **The old windows** (`/confirm`, `/confirm/alert/<id>`) stay for one release for hosts
-  that still open them, then go. They send `frame-ancestors 'none'` (judged on the path as
-  sent and decoded).
 
 `make embed-outputs` writes what a host app checks itself against without running this
 app or holding its secrets: `embed-manifest.json` (the navigation, the routes and the

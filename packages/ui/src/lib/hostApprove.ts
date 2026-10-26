@@ -16,19 +16,7 @@
 // browser has reported it seen (lib/seen.ts). A browser that can't report
 // that links to the card's own page instead, top level in the same tab.
 //
-// The window a host opened for this before (/confirm/alert/<id>) stays for
-// one release, with its own arming rule below.
-//
 // No imports, so `npm test` can exercise this.
-
-// The old window's rule: in front for ARM_DELAY_MS, then the pointer moved
-// in it, and a press that began before it armed doesn't count.
-export const ARM_DELAY_MS = 700;
-
-/** Whether a click on the old window's Approve counts: armed, and pressed after it armed. */
-export function clickCounts(armedAt: number | null, pressedAt: number | null): boolean {
-  return armedAt !== null && pressedAt !== null && pressedAt >= armedAt;
-}
 
 /** The alert id from the page's address, or null for anything else. */
 export function alertIdFrom(param: string | undefined | null): number | null {

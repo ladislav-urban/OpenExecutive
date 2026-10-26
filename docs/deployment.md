@@ -970,9 +970,10 @@ frame and its calls then ask for sign-in again
 the calls on the host list (`packages/ui/src/lib/host-list.json`): reads, alert
 handling, chatting and the watch list, never approving a card, sending,
 settings or People. A chat turn sent from the desk is on the `host` surface,
-which only reads and advises. A change made inside the frame asks first in a
-small window of Open Executive's own (`/confirm`), so the desk's page can't
-click it unseen. Every change to the host list, the `host` surface's tools or
+which only reads and advises. A change made inside the frame asks first, inside
+the frame, and its Yes counts only once the browser reports the question seen;
+a browser that can't report it opens Open Executive's own page for it in the
+same tab instead. So the desk's page can't click it unseen. Every change to the host list, the `host` surface's tools or
 the CSP headers is read with `security-reviewer`
 ([auth.md, "Host origins"](auth.md#host-origins-showing-open-executive-inside-another-app)).
 
