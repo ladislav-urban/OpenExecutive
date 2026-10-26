@@ -16,6 +16,8 @@ export type ErpnextLink = { kind: "host"; route: string } | { kind: "tab"; href:
 
 // The host's own rule, kept in step with oe_embed.bundle.js's DESK_ROUTE_RE.
 const DESK_ROUTE_RE = /^\/(?:desk|app)\/[A-Za-z0-9_\-./%]*(?:\?[^#\s]*)?$/;
+// An encoded dot, slash or backslash in a path: no desk route needs one.
+const ENCODED_SEPARATOR_RE = /%(?:2e|2f|5c)/i;
 
 /** How to open `href` (an absolute http(s) URL): in the host, or in a new tab. */
 export function erpnextLink(href: string, hostOrigin: string | null): ErpnextLink {
@@ -30,5 +32,7 @@ export function erpnextLink(href: string, hostOrigin: string | null): ErpnextLin
   if (url.origin !== hostOrigin || url.username || url.password) return tab;
   const route = `${url.pathname}${url.search}`;
   if (!DESK_ROUTE_RE.test(route) || route.includes("..") || route.includes("//")) return tab;
+  // Left encoded by the parser, `%2e%2e%2f` would pass the checks above.
+  if (ENCODED_SEPARATOR_RE.test(url.pathname)) return tab;
   return { kind: "host", route };
 }

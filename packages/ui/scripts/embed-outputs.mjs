@@ -5,7 +5,8 @@
 //                        hubs, team and solo), the routes, the contract,
 //                        the User Guide's section ids (/guide?section=<id>)
 //                        and the pieces a host places on its own screens
-//                        (the inline Approve, /embed/approve/{alertId})
+//                        (the inline Approve, /embed/approve/{alertId}, and
+//                        the one-pass sign-in, /signin/sso)
 //   host-list.json       the calls a host origin's page may make
 //
 // The third, openapi.json, comes from the API (scripts/export-openapi.py).
@@ -38,7 +39,11 @@ export function embedManifest() {
     navigation: { team: navigation("team"), solo: navigation("solo") },
     guideSections: [...GUIDE_SECTION_IDS],
     // app/embed/*: placed in a host's own screen, never shown as a page.
-    pieces: { approve: { path: "/embed/approve/{alertId}", query: "?embed=1", maxHeight: MAX_APPROVE_HEIGHT } },
+    pieces: {
+      approve: { path: "/embed/approve/{alertId}", query: "?embed=1", maxHeight: MAX_APPROVE_HEIGHT },
+      // Sign in and come back to the host's page in one pass (app/signin/sso).
+      signIn: { path: "/signin/sso", query: "?to={hostPage}&hint={email}", failed: "oe_signin=failed" },
+    },
   };
 }
 
