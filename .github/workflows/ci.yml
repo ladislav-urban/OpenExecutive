@@ -21,7 +21,7 @@ jobs:
   # required checks. Pushes to main run everything.
   changes:
     name: Detect changed areas
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     outputs:
       python: ${{ steps.filter.outputs.python }}
       ui: ${{ steps.filter.outputs.ui }}
@@ -54,7 +54,7 @@ jobs:
     name: Python lint & type check
     needs: changes
     if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -87,7 +87,7 @@ jobs:
   pr-checks:
     name: PR rules (arch docs, stubs, evals)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -112,7 +112,7 @@ jobs:
     name: Python tests
     needs: changes
     if: needs.changes.outputs.python == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -153,7 +153,7 @@ jobs:
     name: UI type check
     needs: changes
     if: needs.changes.outputs.ui == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
