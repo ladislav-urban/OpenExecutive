@@ -12,6 +12,7 @@ import {
   type ErpnextDraftCreated,
 } from "@/lib/api";
 import { openMessage } from "@/lib/embed";
+import { draftMadeLine } from "@/lib/erpnextDraftWords";
 import { erpnextLink } from "@/lib/erpnextLinks";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
@@ -254,9 +255,7 @@ export function ErpnextDraftCardItem({
       {done ? (
         <div className="mt-4 space-y-2">
           <p className="text-sm text-emerald-700 dark:text-emerald-300">
-            {created
-              ? `Draft ${created.name} ${created.already_created ? "was already" : "is now"} in ERPNext, unsubmitted. Review and submit it there.`
-              : "The draft is in ERPNext, unsubmitted. Review and submit it there."}
+            {draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false)}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {link && (
