@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import ArmingState, { READY_RING } from "@/components/embed/ArmingState";
 import { buttonClass } from "@/components/ui/Button";
 import { ownPageFor, type CardAction } from "@/lib/cardActions";
 import { SeenGate, tracksVisibility, watchPanel, type Watch } from "@/lib/seen";
@@ -15,6 +16,14 @@ import { SeenGate, tracksVisibility, watchPanel, type Watch } from "@/lib/seen";
 // the same tab, as can anyone who can't point (a keyboard, a touch screen).
 // The panel keeps this app's own colours and face (`.consent`, globals.css),
 // whatever the host's theme. Cancel is No.
+
+// What one click on Yes does, for "Ready: one click …" (ArmingState).
+const DOES: Record<CardAction["verb"], string> = {
+  approve: "approves",
+  reject: "dismisses it",
+  cancel: "cancels it",
+  change: "goes ahead",
+};
 
 const YES: Record<CardAction["verb"], string> = {
   approve: "Yes, approve",
@@ -40,6 +49,8 @@ export default function FrameConfirm({
   const [supported] = useState(() => tracksVisibility(window));
   const [ownPage] = useState(() => ownPageFor(action, window.location.pathname, window.location.search));
   const [ready, setReady] = useState(false);
+  // How far along arming is, for the bar only (ArmingState).
+  const [progress, setProgress] = useState(0);
 
   const finish = useCallback(
     (ok: boolean) => {
@@ -51,7 +62,10 @@ export default function FrameConfirm({
   );
 
   useEffect(() => {
-    const check = () => setReady(watch.current?.armed() ?? false);
+    const check = () => {
+      setReady(watch.current?.armed() ?? false);
+      setProgress(watch.current?.progress() ?? 0);
+    };
     const watching = panel.current
       ? watchPanel(window, panel.current, (target) => target !== null && target === yes.current, gate.current, check)
       : null;
@@ -106,19 +120,21 @@ export default function FrameConfirm({
               type="button"
               onClick={(event) => void onYes(event)}
               disabled={!ready}
-              className={buttonClass(danger ? "danger" : "primary", "sm")}
+              className={`${buttonClass(danger ? "danger" : "primary", "sm")} ${ready ? READY_RING : ""}`}
             >
               {YES[action.verb]}
             </button>
           )}
         </div>
         {supported && (
-          <p className="mt-2 text-right text-xs text-fg-subtle">
-            {!ready && "Hold the pointer on this box to answer. "}
-            <a href={ownPage} target="_top" rel="noopener" className="text-accent hover:underline">
-              Answer on its own page
-            </a>
-          </p>
+          <div className="mt-3 space-y-2">
+            <ArmingState progress={progress} ready={ready} does={DOES[action.verb]} />
+            <p className="text-right text-xs text-fg-subtle">
+              <a href={ownPage} target="_top" rel="noopener" className="text-accent hover:underline">
+                Answer on its own page
+              </a>
+            </p>
+          </div>
         )}
       </div>
     </div>

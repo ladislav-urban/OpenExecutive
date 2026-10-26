@@ -290,3 +290,39 @@ test("the host's colours and font never reach a Yes asked in a frame", () => {
   assert.match(read("../src/components/embed/FrameConfirm.tsx"), /className="consent /);
   assert.match(read("../src/app/embed/approve/[id]/page.tsx"), /className="consent /);
 });
+
+test("arming progress is shown, never counted: 0 until the pointer moved in, 1 only when armed", () => {
+  const gate = new SeenGate();
+  gate.observe(seen(0));
+  assert.equal(gate.progress(300), 0, "seen, but no pointer yet");
+  gate.pointerInside(true, 0, false);
+  assert.equal(gate.progress(300), 0, "a pointer that hasn't moved");
+  gate.pointerInside(true, 10, true);
+  // The slower of "seen" (SEEN_MS) and the rest (DWELL_MS) sets it.
+  assert.equal(gate.progress(SEEN_MS / 2), Math.min((SEEN_MS / 2) / SEEN_MS, (SEEN_MS / 2) / DWELL_MS));
+  for (let now = 0; now <= T; now += 25) {
+    assert.equal(gate.progress(now) >= 1, gate.armed(now), `at ${now}`);
+  }
+  // A press while it fills doesn't count, and doesn't count later either.
+  assert.equal(pressAndClick(gate, SEEN_MS - 100), false);
+  assert.equal(gate.clickCounts(real(T + 50)), false);
+  gate.pointerGone();
+  assert.equal(gate.progress(T + 100), 0);
+});
+
+test("both in-frame Yes show the arming bar and a ready ring, and still disable Yes until armed", () => {
+  for (const path of ["../src/app/embed/approve/[id]/page.tsx", "../src/components/embed/FrameConfirm.tsx"]) {
+    const source = read(path);
+    assert.match(source, /<ArmingState progress=\{progress\} ready=\{ready\}/, path);
+    assert.match(source, /READY_RING/, path);
+    assert.match(source, /disabled=\{!ready/, path);
+  }
+});
+
+test("arming never changes the inline Approve's height, which its host is told", () => {
+  // One fixed-height line whatever it says, and still there (hidden) while approving.
+  assert.match(read("../src/components/embed/ArmingState.tsx"), /className=\{`h-4 truncate /);
+  const inline = read("../src/app/embed/approve/[id]/page.tsx");
+  assert.doesNotMatch(inline, /!busy && <ArmingState/);
+  assert.match(inline, /<div className=\{busy \? "invisible" : undefined\}>\s*<ArmingState/);
+});
