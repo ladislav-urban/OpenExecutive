@@ -154,7 +154,14 @@ export default function InlineApprove() {
           </a>
         </p>
       ) : id === null || card === null ? (
-        <p className="text-sm text-fg-muted">This card isn&rsquo;t here: it may be someone else&rsquo;s, or no longer waiting.</p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="text-sm text-fg-muted">This card isn&rsquo;t here: it may be someone else&rsquo;s, or no longer waiting.</p>
+          {host !== null && id !== null && (
+            <button type="button" className={buttonClass("secondary", "sm")} onClick={() => tellHost("not_now")}>
+              Not now
+            </button>
+          )}
+        </div>
       ) : card === undefined || !proposal ? (
         <p className="text-sm text-fg-muted">Loading the card…</p>
       ) : done ? (
@@ -192,12 +199,21 @@ export default function InlineApprove() {
               </div>
             </>
           ) : (
-            <p className="text-sm text-fg-muted">
-              <a href={cardPage} target="_top" rel="noopener" className="text-accent hover:underline">
-                Open this card in Open Executive
-              </a>{" "}
-              to answer it{!supported ? ": this browser can't show here that Approve is really on screen" : ""}.
-            </p>
+            // The host hid the card's own buttons while this is open, so a way
+            // back out is always here, not only beside an armed Approve.
+            <div className="flex items-start justify-between gap-2">
+              <p className="text-sm text-fg-muted">
+                <a href={cardPage} target="_top" rel="noopener" className="text-accent hover:underline">
+                  Open this card in Open Executive
+                </a>{" "}
+                to answer it{!supported ? ": this browser can't show here that Approve is really on screen" : ""}.
+              </p>
+              {host !== null && (
+                <button type="button" className={buttonClass("secondary", "sm")} onClick={() => tellHost("not_now")}>
+                  Not now
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}
