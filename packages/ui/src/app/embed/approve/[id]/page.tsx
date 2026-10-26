@@ -3,6 +3,7 @@
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
+import ArmingState, { READY_RING } from "@/components/embed/ArmingState";
 import { useHostOrigins, usePassOnce } from "@/components/embed/EmbedProvider";
 import { buttonClass } from "@/components/ui/Button";
 import { approveAlert, approveDecision, getAlertCard, type AlertCard } from "@/lib/api";
@@ -42,6 +43,8 @@ export default function InlineApprove() {
   // False where the browser can't tell the frame is seen.
   const supported = useSyncExternalStore(noSubscribe, () => tracksVisibility(window), () => true);
   const [ready, setReady] = useState(false);
+  // How far along arming is, for the bar only (ArmingState).
+  const [progress, setProgress] = useState(0);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
@@ -89,7 +92,10 @@ export default function InlineApprove() {
   // Approve arms only under lib/seen.ts's rule, from the host's ask on.
   useEffect(() => {
     if (host === null || !panel.current) return;
-    const check = () => setReady(watch.current?.armed() ?? false);
+    const check = () => {
+      setReady(watch.current?.armed() ?? false);
+      setProgress(watch.current?.progress() ?? 0);
+    };
     const isApprove = (target: unknown) => target !== null && target === button.current;
     const watching = watchPanel(window, panel.current, isApprove, gate.current, check);
     if (!watching) return;
@@ -183,19 +189,23 @@ export default function InlineApprove() {
                 <a href={cardPage} target="_top" rel="noopener" className="mr-auto text-xs text-accent hover:underline">
                   Open the card
                 </a>
-                {!ready && !busy && <span className="text-xs text-fg-subtle">Hold the pointer here to approve.</span>}
                 <button type="button" className={buttonClass("secondary", "sm")} onClick={() => tellHost("not_now")} disabled={busy}>
                   Not now
                 </button>
                 <button
                   ref={button}
                   type="button"
-                  className={buttonClass("primary", "sm")}
+                  className={`${buttonClass("primary", "sm")} ${ready && !busy ? READY_RING : ""}`}
                   onClick={(event) => void approve(event)}
                   disabled={!ready || busy}
                 >
                   {busy ? "Approving…" : "Approve"}
                 </button>
+              </div>
+              {/* Hidden, not removed, while approving: the height the host is
+                  told stays the same, so it doesn't learn the moment a click counted. */}
+              <div className={busy ? "invisible" : undefined}>
+                <ArmingState progress={progress} ready={ready} does="approves" />
               </div>
             </>
           ) : (

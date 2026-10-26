@@ -108,6 +108,18 @@ export class SeenGate {
     return this.moved && this.seenFor(now) && this.insideSince !== null && now - this.insideSince >= DWELL_MS;
   }
 
+  /**
+   * How far along arming is, 0 to 1, for showing it: the slower of "seen"
+   * and the pointer's rest, and 0 until the pointer has moved in the panel.
+   * Display only: whether a press counts is `armed`, never this.
+   */
+  progress(now: number): number {
+    if (!this.moved || this.visibleSince === null || this.insideSince === null) return 0;
+    const seen = (now - this.visibleSince) / SEEN_MS;
+    const rest = (now - this.insideSince) / DWELL_MS;
+    return Math.max(0, Math.min(1, seen, rest));
+  }
+
   /** A press began (`pointerdown`): it counts only on Yes, trusted, while armed. */
   pressed(press: { isTrusted: boolean; onYes: boolean; now: number }): void {
     const counts = press.isTrusted && press.onYes && this.armed(press.now);
@@ -152,6 +164,8 @@ type Win = {
 export type Watch = {
   /** Whether `armed` now (for showing Yes as ready). */
   armed: () => boolean;
+  /** How far along arming is, 0 to 1 (SeenGate.progress), for showing it only. */
+  progress: () => number;
   /** Judge a click on Yes: resolves true only if it counts and still holds SETTLE_MS later. */
   judge: (click: PointerLike) => Promise<boolean>;
   stop: () => void;
@@ -206,6 +220,7 @@ export function watchPanel(
 
   return {
     armed: () => gate.armed(now()),
+    progress: () => gate.progress(now()),
     judge: async (click) => {
       flush();
       if (!gate.clickCounts({ isTrusted: click.isTrusted, onYes: isYes(click.target), now: now() })) return false;
