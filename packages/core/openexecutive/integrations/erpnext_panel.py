@@ -106,6 +106,9 @@ _CONVERSATION_RE = re.compile(r"[A-Za-z0-9_-]{1,64}")
 # Page context values: a DocType, document or report name, as ERPNext names
 # them. Anything else is dropped rather than quoted to the model.
 _PAGE_VALUE_RE = re.compile(r"[\w .,:/()&'+-]{1,140}")
+# One of Dynocortex's own screens beside the panel, by this app's path for it
+# (`/watchlist`, `/settings/status`): the host sends it where no ERPNext page is open.
+_SCREEN_RE = re.compile(r"/[a-z0-9_/-]{0,139}")
 
 _ledger = JtiLedger()
 
@@ -298,7 +301,8 @@ def page_block(page: Any) -> str:
     """What the person has open in ERPNext, from the fields the panel sends,
     as an untrusted block for the user turn: document names can be written by
     outsiders (a web-form lead, a customer's name). Unknown or odd values are
-    left out."""
+    left out. ``screen`` names one of Dynocortex's own screens instead, by
+    this app's path for it (SCREEN_RULE says what the turn can't see there)."""
     if not isinstance(page, dict):
         return ""
 
@@ -314,7 +318,16 @@ def page_block(page: Any) -> str:
     elif doctype:
         where = f"the {doctype} list"
     else:
-        return ""
+        screen = page.get("screen")
+        if not isinstance(screen, str) or not _SCREEN_RE.fullmatch(screen) or "//" in screen:
+            return ""
+        from openexecutive.orchestrator.content_trust import wrap_untrusted
+
+        return wrap_untrusted(
+            f"Open in Dynocortex: its own screen {screen}, not an ERPNext page.",
+            source="erpnext",
+            author="erpnext_page",
+        )
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
     return wrap_untrusted(f"Open in ERPNext: {where}.", source="erpnext", author="erpnext_page")
@@ -336,6 +349,16 @@ SHOW_RULE = (
     "workspace ({'kind': 'workspace', 'workspace': 'Stock'}). Never write "
     "routes or links."
 )
+# Both panel blocks carry it too: beside one of Dynocortex's own screens the
+# panel names the screen, but its turn reads none of what the screen shows.
+SCREEN_RULE = (
+    "When the page block says one of Dynocortex's own screens is open (its "
+    "Home, Watch list, People, Settings and the like), you can't see what that "
+    "screen shows: not their briefing, watches, people, memory or settings. "
+    "Say so in a sentence, answer what you can from ERPNext and your "
+    "specialists, and suggest Chats for the rest. Never guess what the "
+    "screen shows. "
+)
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
     "a chat docked on every ERPNext page; people there call you Dynocortex, "
@@ -345,6 +368,7 @@ PANEL_CONTEXT_BLOCK = (
     "change anything, or reach any other system. Keep answers short enough for "
     "a side panel. If they ask for something you cannot do here, say so and "
     "suggest the OpenExecutive app. "
+    + SCREEN_RULE
     + SHOW_RULE
 )
 # The same, for a person this turn may prepare ERPNext drafts for (phase 4b,
@@ -363,6 +387,7 @@ PANEL_DRAFTS_CONTEXT_BLOCK = (
     "reach any other system. Keep answers short enough for a side panel. If "
     "they ask for something you cannot do here, say so and suggest the "
     "OpenExecutive app. "
+    + SCREEN_RULE
     + SHOW_RULE
 )
 

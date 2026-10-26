@@ -38,7 +38,11 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     if ctx.get("runway_months"):
         profile.financials.runway_months = ctx["runway_months"]
 
-    from openexecutive.evals.scenarios import scenario_principal_role, scenario_turn_surface
+    from openexecutive.evals.scenarios import (
+        scenario_principal_role,
+        scenario_query,
+        scenario_turn_surface,
+    )
 
     # `workspace_mode: solo` runs the scenario as solo mode on this session
     # only (see openexecutive.evals.runner), and a `principal_role` block
@@ -53,7 +57,7 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     )
 
     response = await executive.chat(
-        user_message=scenario["query"],
+        user_message=scenario_query(scenario),
         session=session,
         channel_context_block=channel_block,
         # chat() sets the turn's speaker from this, as the chat route passes
