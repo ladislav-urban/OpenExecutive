@@ -9778,7 +9778,7 @@ integrations:
 
     Drafts a person approves (phase 4a, and 4b's Quotation and Purchase
     Order; integrations/erpnext_drafts.py; design oe_connector
-    docs/erpnext-phase4-plan.md). Off unless ERPNEXT_DRAFTS_ENABLED and
+    docs/finished_work/erpnext-phase4-plan.md). Off unless ERPNEXT_DRAFTS_ENABLED and
     ERPNEXT_CALLER_PRIVATE_KEY are both set, ERPNEXT_DRAFT_DOCTYPES names a
     DocType, and the gateway has the erpnext server (prompts.
     connected_systems.erpnext_drafts_on, plus drafts_on's server check).
@@ -10147,7 +10147,7 @@ integrations:
     sink); posts only over HTTPS (HTTP to loopback) with redirects off; and
     lets only an enabled System User ask (not the service user,
     Administrator or a portal user).
-    Views (oe_connector's docs/erpnext-panel-views-plan.md): both panel
+    Views (oe_connector's docs/finished_work/erpnext-panel-views-plan.md): both panel
     blocks end with erpnext_panel.SHOW_RULE, asking the Executive to call
     erpnext__show_in_erpnext (connected_systems.ERPNEXT_SHOW_TOOL, never in
     block 0) for what the answer is about. The route sets a per-turn holder
