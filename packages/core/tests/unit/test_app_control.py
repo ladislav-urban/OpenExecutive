@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -302,10 +303,21 @@ def test_chips() -> None:
     assert waiting["decision_id"] == 7
     assert summarize_action(tool_name="do_in_app", tool_input={}, tool_result=json.dumps({"error": "no"})) is None
     link = summarize_action(tool_name="open_in_app", tool_input={},
-                            tool_result=json.dumps({"status": "link", "link": "/today", "screen": "Today"}))
-    assert link is not None and link["link"] == "/today"
+                            tool_result=json.dumps({"status": "link", "link": "/", "screen": "Today"}))
+    assert link is not None and link["link"] == "/"
     assert summarize_action(tool_name="open_in_app", tool_input={},
                             tool_result=json.dumps({"status": "link", "link": "//evil.example"})) is None
+
+
+def test_no_screen_links_an_old_address() -> None:
+    # An old address redirects in the web app (packages/ui's pageAliases.ts),
+    # and a host's frame opened at one used to lose its embedded mode on the
+    # way: link the page itself.
+    aliases_ts = Path(__file__).resolve().parents[4] / "packages" / "ui" / "src" / "lib" / "pageAliases.ts"
+    old = set(re.findall(r'source: "([^"]+)"', aliases_ts.read_text(encoding="utf-8")))
+    assert "/today" in old
+    for name, (path, _label) in app_control.CATALOG.screens.items():
+        assert path.split("?")[0] not in old, name
 
 
 def test_the_catalog_is_whole() -> None:

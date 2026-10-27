@@ -125,7 +125,7 @@ export function shouldRedirectToOnboard(input: RedirectInput): boolean {
 export const FIRST_RUN_LINKS = {
   setup: "/onboard",
   execMailbox: "/settings/status",
-  ownMailbox: "/settings/act-as-me",
+  ownMailbox: "/delegate/act-as-me",
   people: "/people",
 } as const;
 

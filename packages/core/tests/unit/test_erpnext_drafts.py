@@ -357,7 +357,7 @@ def test_the_chip_says_it_waits_and_carries_the_card(erp: FakeErpnext, roster: S
     chip = summarize_action(tool_name=drafts.PROPOSE, tool_input={}, tool_result=raw)
     assert chip is not None
     assert chip["summary"] == "Waiting for your approval: Material Request draft"
-    assert isinstance(chip["decision_id"], int) and chip["link"] == "/today"
+    assert isinstance(chip["decision_id"], int) and chip["link"] == "/"
 
 
 def test_a_draft_erpnext_refuses_leaves_no_card(erp: FakeErpnext, roster: SimpleNamespace) -> None:
