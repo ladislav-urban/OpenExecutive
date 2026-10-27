@@ -309,6 +309,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     settings = get_settings()
 
+    # Held shared from here to the end of shutdown: `openexecutive demo-reset`
+    # takes it exclusively, so it refuses while the API starts, runs or stops,
+    # and an API started during a reset waits for it (cli/demo_reset.py).
+    from openexecutive.cli.demo_reset import take_api_lock
+
+    api_lock_handle = await asyncio.to_thread(take_api_lock, settings)
+
     # Installed extensions (orchestrator/extensions.py) load here, so the
     # first chat turn or Documents read doesn't import them on the loop.
     from openexecutive.orchestrator import extensions
@@ -844,6 +851,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from openexecutive.orchestrator.mcp_gateway import set_active_gateway
         set_active_gateway(None)
         await app.state.mcp_gateway.close()
+
+    # Last: the demo reset's lock (taken first, above).
+    if api_lock_handle is not None:
+        api_lock_handle.close()
 
     # Cleanup if needed (ChromaDB handles persistence)
 

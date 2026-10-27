@@ -1505,6 +1505,11 @@ class Settings(BaseSettings):
     directory_sync_demo_role: str = Field("Demo user", max_length=80, alias="DIRECTORY_SYNC_DEMO_ROLE")
     directory_sync_demo_max_suspend: int = Field(50, ge=0, alias="DIRECTORY_SYNC_DEMO_MAX_SUSPEND")
     demo_daily_questions: int = Field(50, ge=0, alias="DEMO_DAILY_QUESTIONS")
+    # The demo company `openexecutive demo-reset --bundle <dir>` may load
+    # (cli/demo_reset.py): its bundle must name exactly this company.
+    # Empty (the default) refuses every bundle, so a real company is never
+    # replaced by one.
+    demo_reset_company: str = Field("", max_length=200, alias="DEMO_RESET_COMPANY")
     # The web app's SSO issuer, read here only so the sync can refuse a
     # directory other than the one people sign in through.
     auth_oidc_issuer: str = Field("", alias="AUTH_OIDC_ISSUER")

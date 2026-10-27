@@ -126,6 +126,19 @@ ENV FASTEMBED_CACHE_PATH=/opt/fastembed-cache
 RUN uv pip install --system "fastembed==0.8.1" \
     && python -c "from fastembed import TextEmbedding; TextEmbedding('sentence-transformers/all-MiniLM-L6-v2')"
 
+# Bake the ONNX model Chroma embeds company documents and queries with
+# (knowledge/store.py, Chroma's ONNXMiniLM_L6_V2, ~80 MB). Chroma keeps it
+# under $HOME/.cache, which no volume holds, so without this every fresh
+# container (the nightly demo reset's one-off one included) downloads it from
+# Chroma's model host on its first embed. knowledge/store.py reads
+# CHROMA_ONNX_MODEL_DIR, so the image path works for any user. Chroma checks
+# the archive's SHA-256 on download; no `|| true`, as above.
+ENV CHROMA_ONNX_MODEL_DIR=/opt/chroma-onnx/all-MiniLM-L6-v2
+RUN python -c "from pathlib import Path; from chromadb.utils.embedding_functions.onnx_mini_lm_l6_v2 import ONNXMiniLM_L6_V2 as M; M.DOWNLOAD_PATH = Path('$CHROMA_ONNX_MODEL_DIR'); M()(['warm'])" \
+    && test -f "$CHROMA_ONNX_MODEL_DIR/onnx/model.onnx" \
+    && rm -f "$CHROMA_ONNX_MODEL_DIR/onnx.tar.gz" \
+    && chmod -R a+rX /opt/chroma-onnx
+
 # Google Workspace MCP server, run co-located as a stdio child of the MCP gateway
 # (see docker/workspace-mcp-launch.sh + packages/core/mcp_servers.json.example).
 # Installed into its OWN venv — NOT the system env — so its deps (fastmcp etc.)

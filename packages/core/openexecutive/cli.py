@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 
 import click
 from rich.console import Console
@@ -472,6 +473,36 @@ def directory_demo_command(email: str, off: bool) -> None:
     except DirectoryError as error:
         console.print(f"Not changed: {error}", markup=False)
         raise SystemExit(1) from None
+
+
+@cli.command("demo-reset")
+@click.option(
+    "--bundle",
+    "bundle_dir",
+    required=True,
+    type=click.Path(file_okay=False, path_type=Path),
+    help="The demo company bundle oe_connector wrote (bundle.json, profile.yaml, ...).",
+)
+def demo_reset_command(bundle_dir: Path) -> None:
+    """Replace the demo company with a bundle, and delete demo people's own
+    chats, cards and memory. Keeps directory-managed people, sign-ins,
+    settings, the audit log and the principal's own state. Run it with the
+    API stopped."""
+    from openexecutive.cli.demo_reset import BundleError, demo_reset
+    from openexecutive.config import get_settings
+
+    try:
+        summary = asyncio.run(demo_reset(bundle_dir, get_settings()))
+    except BundleError as error:
+        console.print(f"Not reset: {error}", markup=False)
+        raise SystemExit(1) from None
+    console.print(
+        f"Reset {summary['company']} from the bundle made {summary['bundle_made_at']}"
+        f" in {summary['seconds']}s: {summary['docs_indexed']} document chunks indexed,"
+        f" {summary['people_seeded']} people added, {summary['departments_seeded']} departments,"
+        f" {summary['demo_people']} demo people's own state deleted.",
+        markup=False,
+    )
 
 
 @cli.command("directory-unlink")
