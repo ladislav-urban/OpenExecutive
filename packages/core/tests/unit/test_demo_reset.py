@@ -339,3 +339,15 @@ def test_cli_exits_non_zero_on_refusal(env: SimpleNamespace, monkeypatch: pytest
     result = CliRunner().invoke(cli, ["demo-reset", "--bundle", str(_bundle(env.tmp, **{"bundle.json": None}))])
     assert result.exit_code == 1
     assert "Not reset: bundle.json is missing" in result.output
+
+
+def test_a_named_pipe_is_refused_without_blocking(env: SimpleNamespace) -> None:
+    import os
+
+    if not hasattr(os, "mkfifo"):
+        pytest.skip("no named pipes here")
+    bundle = _bundle(env.tmp)
+    (bundle / "people.yaml").unlink()
+    os.mkfifo(bundle / "people.yaml")
+    with pytest.raises(dr.BundleError, match="not a plain file"):
+        dr.stage_bundle(bundle, env.tmp / "staged")

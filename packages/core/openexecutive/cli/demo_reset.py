@@ -164,6 +164,8 @@ class _BundleMemory(MemorySpec):
 # ── Staging: a private copy, read without following links ───────────────────
 
 _NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
+# A named pipe opens at once (and fstat refuses it) instead of blocking the job.
+_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
 _DIR_FD = os.open in os.supports_dir_fd and _NOFOLLOW != 0
 
 
@@ -187,11 +189,11 @@ def _open_in(dir_fd: int | None, parent: Path, name: str, flags: int) -> int:
     """Open ``name`` in a directory without following a link at it."""
     try:
         if _DIR_FD and dir_fd is not None:
-            return os.open(name, flags | _NOFOLLOW, dir_fd=dir_fd)
+            return os.open(name, flags | _NOFOLLOW | _NONBLOCK, dir_fd=dir_fd)
         # No dir_fd (Windows): the link check and the open are two steps.
         if (parent / name).is_symlink():
             raise BundleError(f"{name} is a link")
-        return os.open(parent / name, flags | _NOFOLLOW)
+        return os.open(parent / name, flags | _NOFOLLOW | _NONBLOCK)
     except FileNotFoundError:
         raise BundleError(f"{name} is missing") from None
     except OSError as error:
@@ -280,9 +282,16 @@ def _name_key(name: str) -> str:
 def read_bundle(directory: Path, expected_company: str, kept_names: set[str] | None = None) -> Bundle:
     """Check the whole (staged) bundle in ``directory``; raises ``BundleError``.
 
-    ``kept_names`` are the Persons the reset keeps (``_kept_names``): the
-    roster may not name one, or an alert or a department would reach them.
+    ``kept_names`` are the Persons the reset keeps (``_roster``): the roster
+    may not name one, or an alert or a department would reach them.
     """
+    try:
+        return _check_bundle(directory, expected_company, kept_names)
+    except RecursionError:
+        raise BundleError("the bundle nests too deeply") from None
+
+
+def _check_bundle(directory: Path, expected_company: str, kept_names: set[str] | None) -> Bundle:
     from openexecutive.memory.company_profile import CompanyProfile
 
     try:
