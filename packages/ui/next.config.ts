@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { NextConfig } from "next";
+import { PAGE_ALIASES } from "./src/lib/pageAliases";
 
 // Note: backend proxying is handled by `src/app/api/backend/[...path]/route.ts`
 // so streaming SSE responses aren't buffered. Don't add a `rewrites()` rule
@@ -14,6 +15,10 @@ const nextConfig: NextConfig = {
   outputFileTracingRoot: path.resolve(__dirname),
   // mermaid v11 is ESM-only; Next.js webpack needs to transpile it
   transpilePackages: ["mermaid"],
+  // Old addresses, kept with their query (`?embed=1` above all): lib/pageAliases.ts.
+  async redirects() {
+    return PAGE_ALIASES.map((alias) => ({ ...alias, permanent: false }));
+  },
   experimental: {
     // The middleware sees every request body, and Next keeps only the first
     // 10 MB of one unless told otherwise: a larger upload reaches the API cut
