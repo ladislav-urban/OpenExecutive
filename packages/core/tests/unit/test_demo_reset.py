@@ -25,12 +25,13 @@ COMPANY = "Aurora Components (Demo)"
 class _FakeStore:
     COMPANY_COLLECTION = "company_docs"
     RESEARCH_COLLECTION = "research"
+    calls: list[str] = []
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         pass
 
     def __getattr__(self, name: str) -> Any:
-        return lambda *args, **kwargs: None
+        return lambda *args, **kwargs: _FakeStore.calls.append(name)
 
 
 @pytest.fixture
@@ -58,6 +59,7 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     async def _ingest(**kwargs: Any) -> int:
         return 1
 
+    _FakeStore.calls = []
     monkeypatch.setattr(store, "ChromaDBStore", _FakeStore)
     monkeypatch.setattr(loader, "ingest_file", _ingest)
     audited: list[str] = []
@@ -169,10 +171,11 @@ def _bundle(root: Path, **changes: Any) -> Path:
 
 
 async def test_reset_keeps_directory_people_principal_chat_and_audit_log(env: SimpleNamespace) -> None:
-    from openexecutive.people import demo, store as people_store
+    from openexecutive.people import demo
+    from openexecutive.people import store as people_store
 
     principal = _person("Pat Principal", principal=True, directory=True)
-    teammate = _person("Morgan Hale", directory=True)
+    teammate = _person("Taylor Team", directory=True)
     visitor = _person("Vic Visitor", directory=True, demo=True)
     fictional = _person("Old Head")
     _chat(env.db, "principal-chat", principal)
@@ -207,14 +210,17 @@ async def test_reset_keeps_directory_people_principal_chat_and_audit_log(env: Si
     assert demo.questions_today(visitor, db_path=env.db) == 0
     assert _count(env.db, "SELECT COUNT(*) FROM watchlist") == 0
     assert fictional not in kept
-    # The bundle's company: Morgan Hale is the kept directory Person, not a copy.
-    assert _count(env.db, "SELECT COUNT(*) FROM people WHERE full_name = 'Morgan Hale'") == 1
-    assert _count(env.db, "SELECT head_person_id FROM departments WHERE slug = 'warehouse'") == teammate
+    # The bundle's company, its people resolved only to the ones it added.
+    morgan = _count(env.db, "SELECT id FROM people WHERE full_name = 'Morgan Hale'")
+    assert morgan not in {principal, teammate, visitor, fictional}
+    assert _count(env.db, "SELECT head_person_id FROM departments WHERE slug = 'warehouse'") == morgan
     assert _count(env.db, "SELECT COUNT(*) FROM people WHERE full_name = 'Dana Reyes'") == 1
+    # The principal's artifacts and attachments stay indexed.
+    assert "delete_attachment_docs" not in _FakeStore.calls
     assert _count(env.db, "SELECT COUNT(*) FROM decisions") == 1
     assert _count(env.db, "SELECT COUNT(*) FROM alerts") == 1
     assert (env.settings.company_profile_path.parent / "docs" / "company_overview.md").exists()
-    assert summary["people_seeded"] == 1 and summary["demo_people"] == 1
+    assert summary["people_seeded"] == 2 and summary["demo_people"] == 1
     assert env.audited == ["demo_reset"] and env.rebootstrapped == [True]
 
 
@@ -223,7 +229,7 @@ async def test_reset_twice_leaves_one_copy(env: SimpleNamespace) -> None:
     await dr.demo_reset(_bundle(env.tmp), env.settings)
     (env.tmp / "bundle").rename(env.tmp / "first")
     await dr.demo_reset(_bundle(env.tmp), env.settings)
-    assert _count(env.db, "SELECT COUNT(*) FROM people") == 3
+    assert _count(env.db, "SELECT COUNT(*) FROM people") == 3  # the principal and the bundle's two
     assert _count(env.db, "SELECT COUNT(*) FROM departments") == 2
     assert _count(env.db, "SELECT COUNT(*) FROM decisions") == 1
 
@@ -247,11 +253,15 @@ async def test_reset_twice_leaves_one_copy(env: SimpleNamespace) -> None:
         ({"departments.yaml": {"departments": [{"slug": "s", "title": "S", "head_person_name": "Nobody"}]}},
          COMPANY, "head is not in people.yaml"),
         ({"memory.json": None}, COMPANY, "memory.json is missing"),
+        ({"departments.yaml": {"departments": [{"slug": "sales", "title": "Sales", "authority_level": "auto_execute"}]}},
+         COMPANY, "auto_execute"),
+        ({"people.yaml": {"people": [{"full_name": "Pat  principal"}]}}, COMPANY, "keeps: Pat  principal"),
     ],
 )
 async def test_refused_bundle_changes_nothing(
     env: SimpleNamespace, changes: dict[str, Any], settings_company: str, reason: str
 ) -> None:
+    _person("Pat Principal", principal=True)
     fictional = _person("Old Head")
     env.settings.demo_reset_company = settings_company
     with pytest.raises(dr.BundleError, match=reason):
@@ -261,16 +271,63 @@ async def test_refused_bundle_changes_nothing(
     assert env.audited == []
 
 
-def test_a_linked_document_is_refused(env: SimpleNamespace) -> None:
+@pytest.mark.parametrize("target", ["docs/leak.md", "memory.json", "docs"])
+def test_a_link_is_refused_when_staging(env: SimpleNamespace, target: str) -> None:
     bundle = _bundle(env.tmp)
-    secret = env.tmp / "secret.txt"
-    secret.write_text("key", encoding="utf-8")
+    secret = env.tmp / ("secret_dir" if target == "docs" else "secret.txt")
+    if target == "docs":
+        secret.mkdir()
+        (secret / "x.md").write_text("key", encoding="utf-8")
+    else:
+        secret.write_text("key", encoding="utf-8")
+    link = bundle / target
+    if link.is_dir():
+        for child in link.iterdir():
+            child.unlink()
+        link.rmdir()
+    elif link.exists():
+        link.unlink()
     try:
-        (bundle / "docs" / "leak.md").symlink_to(secret)
+        link.symlink_to(secret)
     except OSError:
         pytest.skip("symlinks unavailable here")
-    with pytest.raises(dr.BundleError, match="not a plain file"):
+    with pytest.raises(dr.BundleError):
+        dr.stage_bundle(bundle, env.tmp / "staged")
+
+
+def test_yaml_aliases_are_refused(env: SimpleNamespace) -> None:
+    bundle = _bundle(env.tmp)
+    lines = ["a: &a [x, x]", "b: &b [*a, *a]", "people: [{full_name: Dana Reyes}]"]
+    (bundle / "people.yaml").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    with pytest.raises(dr.BundleError, match="aliases"):
         dr.read_bundle(bundle, COMPANY)
+
+
+async def test_a_principal_marked_demo_keeps_their_chats(env: SimpleNamespace) -> None:
+    principal = _person("Pat Principal", principal=True, directory=True, demo=True)
+    _chat(env.db, "principal-chat", principal)
+    await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert _count(env.db, "SELECT COUNT(*) FROM chat_messages WHERE session_id = 'principal-chat'") == 1
+
+
+async def test_refused_while_the_api_holds_its_lock(env: SimpleNamespace) -> None:
+    pytest.importorskip("fcntl")
+    fictional = _person("Old Head")
+    with dr.api_lock(env.settings), pytest.raises(dr.BundleError, match="API"):
+        await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert _count(env.db, "SELECT COUNT(*) FROM people WHERE id = ?", fictional) == 1
+
+
+async def test_a_failure_part_way_is_audited(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.knowledge import loader
+
+    async def _broken(**kwargs: Any) -> int:
+        raise RuntimeError("embedding failed")
+
+    monkeypatch.setattr(loader, "ingest_file", _broken)
+    with pytest.raises(RuntimeError):
+        await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert env.audited == ["demo_reset_failed"]
 
 
 def test_cli_exits_non_zero_on_refusal(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:

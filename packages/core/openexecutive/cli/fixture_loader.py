@@ -446,8 +446,9 @@ async def _apply_state_from_source(
     writing, so the source dir is fully authoritative.
 
     ``demo_reset`` (``cli/demo_reset.py``) replaces only the fictional part of
-    the roster (``seed_demo_people``), leaves the workspace settings as they
-    are and deletes nothing from the audit log.
+    the roster (``seed_demo_people``), leaves the workspace settings, the
+    artifact and attachment indexes as they are, and deletes nothing from the
+    audit log.
     """
     from openexecutive.knowledge.loader import ingest_file
     from openexecutive.knowledge.store import ChromaDBStore
@@ -489,13 +490,17 @@ async def _apply_state_from_source(
         collection=ChromaDBStore.RESEARCH_COLLECTION,
         where={"type": "recent_research"},
     )
-    # Indexed artifacts (orchestrator/artifact_tools.py) are per-company too.
-    store.delete_documents(
-        collection=ChromaDBStore.RESEARCH_COLLECTION,
-        where={"type": "artifact"},
-    )
+    # Indexed artifacts (orchestrator/artifact_tools.py) and inbound
+    # attachments are per-company too. A demo reset keeps them: the demo
+    # company stays the same one, they are the principal's own (demo turns
+    # make no artifacts), and retrieval never reads attachments.
+    if not demo_reset:
+        store.delete_documents(
+            collection=ChromaDBStore.RESEARCH_COLLECTION,
+            where={"type": "artifact"},
+        )
+        store.delete_attachment_docs()
     store.delete_notion_docs()
-    store.delete_attachment_docs()
     from openexecutive.knowledge.notion_sync import reset_local_state
 
     reset_local_state(profile_path=settings.company_profile_path)

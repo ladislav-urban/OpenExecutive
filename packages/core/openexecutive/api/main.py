@@ -731,8 +731,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # called mcp_server.mount() → streamable_http_app(). The run-once guard
     # tolerates repeated create_app() lifespans in the test suite (the manager
     # can only be run once per instance).
-    async with mcp_server.run_session_manager():
-        yield
+    # Held shared for the life of the app: `openexecutive demo-reset` takes it
+    # exclusively, so it refuses while the API runs (cli/demo_reset.py).
+    from openexecutive.cli.demo_reset import api_lock
+
+    with api_lock(settings):
+        async with mcp_server.run_session_manager():
+            yield
 
     # Shut Discord down FIRST so the gateway stops accepting new events before
     # we tear down email_poller/scheduler/resumer that handlers might call into.
