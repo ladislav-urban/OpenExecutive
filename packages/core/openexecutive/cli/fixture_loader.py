@@ -435,13 +435,19 @@ def list_all_fixtures() -> list[dict[str, Any]]:
     return generated + curated
 
 
-async def _apply_state_from_source(source_dir: Path, settings: Any) -> dict[str, Any]:
+async def _apply_state_from_source(
+    source_dir: Path, settings: Any, *, demo_reset: bool = False
+) -> dict[str, Any]:
     """Apply profile.yaml + docs/ + memory.json + people.yaml + departments.yaml
     from ``source_dir`` to the live company state.
 
     Shared by ``load_fixture()`` (source = fixture dir) and ``unload_fixture()``
     (source = ``_user_backup/`` dir). Wipes the company-side state before
     writing, so the source dir is fully authoritative.
+
+    ``demo_reset`` (``cli/demo_reset.py``) replaces only the fictional part of
+    the roster (``seed_demo_people``), leaves the workspace settings as they
+    are and deletes nothing from the audit log.
     """
     from openexecutive.knowledge.loader import ingest_file
     from openexecutive.knowledge.store import ChromaDBStore
@@ -519,7 +525,12 @@ async def _apply_state_from_source(source_dir: Path, settings: Any) -> dict[str,
     # ── 4. Seed people first so episodic seeding can resolve
     #       assigned_to_person on scheduled_actions, and departments seeding
     #       can resolve head_person_id by name.
-    people_seeded = _seed_people(source_dir / "people.yaml")
+    if demo_reset:
+        from openexecutive.cli.demo_reset import seed_demo_people
+
+        people_seeded = seed_demo_people(source_dir / "people.yaml")
+    else:
+        people_seeded = _seed_people(source_dir / "people.yaml")
     memory_seeded = _seed_episodic_memory(source_dir / "memory.json", settings)
     departments_seeded = _seed_departments(source_dir / "departments.yaml")
 
@@ -531,7 +542,8 @@ async def _apply_state_from_source(source_dir: Path, settings: Any) -> dict[str,
     # they are rather than reset. No scheduler side effects either way:
     # scheduled_actions were just rebuilt from memory.json.
     workspace_applied = _apply_workspace(
-        workspace_wanted, keep_when_missing=restoring_user_backup
+        None if demo_reset else workspace_wanted,
+        keep_when_missing=restoring_user_backup or demo_reset,
     )
 
     # ── 5. Wipe the external-monitoring layer ──────────────────────────────
@@ -573,16 +585,18 @@ async def _apply_state_from_source(source_dir: Path, settings: Any) -> dict[str,
     # the "no findings on a seeded run" failure. Surgical delete of just the
     # three research event types; the rest of /audit history is untouched.
     research_history_cleared = 0
-    try:
-        from openexecutive.monitoring.research.scheduler import (
-            clear_research_run_history,
-        )
+    # A demo reset keeps the whole audit log: the demo's report reads it.
+    if not demo_reset:
+        try:
+            from openexecutive.monitoring.research.scheduler import (
+                clear_research_run_history,
+            )
 
-        research_history_cleared = clear_research_run_history(EPISODIC_DB_PATH)
-    except Exception:
-        logger.exception(
-            "fixture: clear_research_run_history failed (non-fatal)"
-        )
+            research_history_cleared = clear_research_run_history(EPISODIC_DB_PATH)
+        except Exception:
+            logger.exception(
+                "fixture: clear_research_run_history failed (non-fatal)"
+            )
 
     return {
         "display_name": profile.name,
@@ -706,6 +720,53 @@ def _reregister_surviving_user_knowledge(db_path: Path) -> int:
         )
         registered += 1
     return registered
+
+
+def rebootstrap_scheduled_actions() -> None:
+    """Enqueue the built-in scheduled actions ``api/main.py`` enqueues at boot.
+
+    For a path that has just emptied ``scheduled_actions`` (factory reset,
+    demo reset): the bootstraps only run on API boot, so without this the box
+    has no morning brief, digest, reflection or check-ins until a restart.
+    Each is idempotent (it checks for a pending/running row first). Best
+    effort: one failing never stops the others.
+    """
+    from openexecutive.config import get_settings
+    from openexecutive.departments.cadence import bootstrap_cadences
+    from openexecutive.scheduler.runner import seed_principal_briefs
+
+    try:
+        seed_principal_briefs()
+    except Exception:
+        logger.exception("rebootstrap: seed_principal_briefs failed")
+    try:
+        bootstrap_cadences()
+    except Exception:
+        logger.exception("rebootstrap: bootstrap_cadences failed")
+    if get_settings().nudge_scan_enabled:
+        try:
+            from openexecutive.scheduler.nudge_engine import bootstrap_nudge_scan
+            bootstrap_nudge_scan()
+        except Exception:
+            logger.exception("rebootstrap: bootstrap_nudge_scan failed")
+    if get_settings().external_monitor_enabled:
+        try:
+            from openexecutive.monitoring.pipeline import (
+                bootstrap_external_monitor_scan,
+            )
+            bootstrap_external_monitor_scan()
+        except Exception:
+            logger.exception("rebootstrap: bootstrap_external_monitor_scan failed")
+    if get_settings().watchlist_research_enabled:
+        try:
+            from openexecutive.monitoring.research.scheduler import (
+                bootstrap_watchlist_research_scan,
+            )
+            bootstrap_watchlist_research_scan()
+        except Exception:
+            logger.exception(
+                "rebootstrap: bootstrap_watchlist_research_scan failed"
+            )
 
 
 async def reset_all_state(
@@ -983,10 +1044,7 @@ async def reset_all_state(
         # All three calls are idempotent (each checks for a pending/running
         # row before inserting), so calling them again on a freshly-empty
         # table simply enqueues one row apiece.
-        from openexecutive.config import get_settings
-        from openexecutive.departments.cadence import bootstrap_cadences
         from openexecutive.memory.workspace_settings import reset_workspace_settings
-        from openexecutive.scheduler.runner import seed_principal_briefs
 
         # Factory state is team mode with no zone of its own — reset it
         # before the bootstraps below, which read both.
@@ -994,38 +1052,7 @@ async def reset_all_state(
             reset_workspace_settings()
         except Exception:
             logger.exception("reset: reset_workspace_settings failed")
-        try:
-            seed_principal_briefs()
-        except Exception:
-            logger.exception("reset: seed_principal_briefs failed")
-        try:
-            bootstrap_cadences()
-        except Exception:
-            logger.exception("reset: bootstrap_cadences failed")
-        if get_settings().nudge_scan_enabled:
-            try:
-                from openexecutive.scheduler.nudge_engine import bootstrap_nudge_scan
-                bootstrap_nudge_scan()
-            except Exception:
-                logger.exception("reset: bootstrap_nudge_scan failed")
-        if get_settings().external_monitor_enabled:
-            try:
-                from openexecutive.monitoring.pipeline import (
-                    bootstrap_external_monitor_scan,
-                )
-                bootstrap_external_monitor_scan()
-            except Exception:
-                logger.exception("reset: bootstrap_external_monitor_scan failed")
-        if get_settings().watchlist_research_enabled:
-            try:
-                from openexecutive.monitoring.research.scheduler import (
-                    bootstrap_watchlist_research_scan,
-                )
-                bootstrap_watchlist_research_scan()
-            except Exception:
-                logger.exception(
-                    "reset: bootstrap_watchlist_research_scan failed"
-                )
+        rebootstrap_scheduled_actions()
 
         # 5b. External per-person memory (Honcho) — best-effort. The
         # wrapper swallows its own errors and audits them; the second

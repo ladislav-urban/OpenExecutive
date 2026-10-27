@@ -10937,6 +10937,35 @@ fixtures:
     fixture and the restored user state start with a clean watchlist instead
     of inheriting the previous company's monitors.
   packaging: Fixtures are copied into the API Docker image so demos work in deployed environments.
+  demo_reset: |
+    `openexecutive demo-reset --bundle <dir>` (cli/demo_reset.py, decided
+    Oct 27, 2026) puts the demo install's company back every night, from
+    the bundle oe_connector writes from ERPNext's seeded demo company
+    (oe_connector docs/demo/openexecutive-demo-data-plan.md): the curated
+    fixtures' files plus bundle.json (format openexecutive-demo-bundle,
+    format_version 1, company, made_at, erpnext_site). It refuses, changing
+    nothing, a bundle with no bundle.json, another format or version, a
+    company other than profile.yaml's or DEMO_RESET_COMPANY's (unset refuses
+    every bundle, so a real company is never replaced), a principal or any
+    contact handle in people.yaml (strict Pydantic models, extra keys
+    forbidden), scheduled_actions in memory.json, or a linked or oversized
+    file. It replaces the company through _apply_state_from_source(demo_reset=True):
+    profile, docs and their collection, departments and goals, decisions,
+    initiatives, advice, alerts, scheduled actions (the built-in ones are
+    re-enqueued, rebootstrap_scheduled_actions), the watch list (company-wide,
+    so the principal's watches go too) and the fictional roster (every
+    Person neither directory-managed nor the principal; a bundle name that
+    matches a kept Person resolves to that Person). It deletes demo people's
+    own state (PERSON_STATE / SESSION_STATE: chats, shares, chat review,
+    cards in decision_instances, facts they recorded, history notes,
+    attunement, held messages, question counts). It keeps directory-managed
+    Persons as they are, sign-ins, workspace settings, keys, the whole
+    audit log (it logs a demo_reset event) and the principal's own chats and
+    cards. It runs with the API stopped (`compose run`): the fixture lock is
+    per process, so a flock on company/.demo_reset.lock keeps one reset at a
+    time, and a restart drops the API's cached company and open Chroma
+    client. About 25 s for a four-document bundle, most of it start-up and
+    embedding.
   solo_fixture: |
     fixtures/companies/solo_studio (Tallgrass Studio, a one-person design
     studio) is one example of a solo principal — an owner; solo principals
