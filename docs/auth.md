@@ -357,8 +357,9 @@ the row is unlinked. The demo group can't be the team's group or hold it.
   Google.
 - **Reset with the demo company.** On a demo install whose company is reset
   every night, `openexecutive demo-reset --bundle <dir>` (with
-  `DEMO_RESET_COMPANY` set) deletes their chats, cards, memory and question
-  count with the company. It keeps them, their sign-in, and the audit log.
+  `DEMO_RESET_COMPANY` set) deletes their chats, cards, memory (Honcho's
+  included) and question count with the company. It keeps them, their
+  sign-in, and the audit log.
 
 A demo person still reaches what the shared workspace shows every team
 member: Home's briefing and cards, the knowledge base, People. Put them only

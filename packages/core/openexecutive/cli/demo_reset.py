@@ -11,13 +11,15 @@ What it does (decided by the owner, Oct 27, 2026):
 
 - **Replaces the company:** the profile, ``company/docs/`` and their
   collection, departments and goals, decisions, initiatives, advice, briefing
-  alerts, scheduled actions, the watch list, and the fictional roster (every
-  Person the directory doesn't manage, except the principal).
+  alerts, scheduled actions, the watch list, and the fictional roster
+  (``FICTIONAL_PEOPLE``: no contact handle, email alias or directory link).
 - **Deletes demo people's own state** (``Person.demo``): their chats, cards,
-  memory and question count, through ``PERSON_STATE`` / ``SESSION_STATE``.
-- **Keeps** every directory-managed Person as it is, everyone's sign-in,
-  the workspace settings, keys, the audit log and usage records, and the
-  principal's own chats, memory and cards.
+  memory and question count, through ``PERSON_STATE`` / ``SESSION_STATE``,
+  and what Honcho holds of them (``honcho_client.forget_people``).
+- **Keeps** every directory-managed Person as it is, anyone added by hand,
+  everyone's sign-in, the workspace settings, keys, the audit log and usage
+  records (only the research scan's run history goes, so the scan runs on the
+  new company), and the principal's own chats, memory and cards.
 
 The bundle comes from another host, so it is untrusted: it is first copied
 into a private directory without following links (``stage_bundle``), then
@@ -70,6 +72,17 @@ MAX_DOCS = 200
 MAX_DOC_BYTES = 1024 * 1024
 
 LOCK_NAME = ".demo_reset.lock"
+
+# The Persons the reset replaces: the fictional roster, whom nobody can reach
+# or sign in as. Everyone else is kept: the principal, a directory-managed
+# Person, and anyone added by hand or unlinked from the directory, who has a
+# contact handle, an email alias or a directory subject.
+FICTIONAL_PEOPLE = (
+    "directory_managed = 0 AND is_principal = 0 AND directory_subject IS NULL"
+    " AND COALESCE(email, '') = '' AND COALESCE(slack_user_id, '') = ''"
+    " AND COALESCE(telegram_chat_id, '') = '' AND COALESCE(discord_user_id, '') = ''"
+    " AND id NOT IN (SELECT person_id FROM person_emails)"
+)
 
 # Each demo person's own rows: (table, column holding their person id). A
 # table that isn't there (created on first use) is skipped.
@@ -395,6 +408,37 @@ def _delete_in(
     return deleted
 
 
+def _sessions_of(conn: sqlite3.Connection, tables: dict[str, set[str]], person_ids: list[int]) -> list[Any]:
+    if "caller_person_id" not in tables.get("sessions", set()):
+        return []
+    return _select_in(conn, "SELECT session_id FROM sessions WHERE caller_person_id IN ({marks})", person_ids)
+
+
+def honcho_sessions(person_ids: list[int], db_path: Path) -> list[str]:
+    """The Honcho session ids of ``person_ids``: each chat's, and their own
+    ``person-<id>`` one. Honcho ids replace characters (``_safe_honcho_id``)
+    and people choose their chat ids, so an id that is also another session's
+    or another Person's in Honcho is left out: a demo user could otherwise
+    name a chat to delete someone else's memory."""
+    from openexecutive.memory.honcho_client import _safe_honcho_id
+
+    if not person_ids or not db_path.exists():
+        return []
+    conn = sqlite3.connect(str(db_path))
+    try:
+        tables = _tables(conn)
+        theirs = {str(s) for s in _sessions_of(conn, tables, person_ids)}
+        others = [str(r[0]) for r in conn.execute("SELECT session_id FROM sessions")] if "sessions" in tables else []
+        everyone = [r[0] for r in conn.execute("SELECT id FROM people")] if "people" in tables else []
+    finally:
+        conn.close()
+    gone = set(person_ids)
+    kept = {_safe_honcho_id(s) for s in others if s not in theirs}
+    kept |= {f"person-{pid}" for pid in everyone if pid not in gone}
+    wanted = {_safe_honcho_id(s) for s in theirs} | {f"person-{pid}" for pid in gone}
+    return sorted(wanted - kept)
+
+
 def clear_people_state(person_ids: list[int], db_path: Path) -> dict[str, int]:
     """Delete ``person_ids``' own chats, cards, memory and question count."""
     counts: dict[str, int] = {}
@@ -403,11 +447,7 @@ def clear_people_state(person_ids: list[int], db_path: Path) -> dict[str, int]:
     conn = sqlite3.connect(str(db_path))
     try:
         tables = _tables(conn)
-        sessions: list[Any] = []
-        if "caller_person_id" in tables.get("sessions", set()):
-            sessions = _select_in(
-                conn, "SELECT session_id FROM sessions WHERE caller_person_id IN ({marks})", person_ids
-            )
+        sessions = _sessions_of(conn, tables, person_ids)
         # A replay is keyed by the reviewed turn, so it goes before the turns.
         if "turn_row_id" in tables.get("chat_review_replays", set()) and "chat_review_turns" in tables:
             turns = {
@@ -444,14 +484,35 @@ def _roster(db_path: Path) -> tuple[list[int], list[int], set[str]]:
                 "SELECT id FROM people WHERE directory_managed = 1 AND directory_demo = 1 AND is_principal = 0"
             )
         ]
-        fictional = [r[0] for r in conn.execute("SELECT id FROM people WHERE directory_managed = 0 AND is_principal = 0")]
-        kept = {
-            _name_key(r[0])
-            for r in conn.execute("SELECT full_name FROM people WHERE directory_managed = 1 OR is_principal = 1")
-        }
+        fictional = [r[0] for r in conn.execute(f"SELECT id FROM people WHERE {FICTIONAL_PEOPLE}")]  # noqa: S608 — fixed SQL
+        kept = _kept_names(conn)
     finally:
         conn.close()
     return demo, fictional, kept
+
+
+def _kept_names(conn: sqlite3.Connection) -> set[str]:
+    rows = conn.execute(f"SELECT full_name FROM people WHERE NOT ({FICTIONAL_PEOPLE})")  # noqa: S608 — fixed SQL
+    return {_name_key(r[0]) for r in rows}
+
+
+def _drop_roster_requests_of(conn: sqlite3.Connection, tables: dict[str, set[str]], gone: list[int]) -> None:
+    """Point no roster request at a replaced Person: a suggestion of one is
+    dropped, and a request resolved to one goes, with its messages."""
+    request_cols = tables.get("roster_requests", set())
+    if not gone or "resolved_person_id" not in request_cols:
+        return
+    resolved = _select_in(conn, "SELECT id FROM roster_requests WHERE resolved_person_id IN ({marks})", gone)
+    _delete_in(conn, tables, "roster_request_messages", "request_id", resolved)
+    _delete_in(conn, tables, "roster_requests", "id", resolved)
+    if "suggested_person_id" in request_cols:
+        for start in range(0, len(gone), 500):
+            chunk = gone[start:start + 500]
+            conn.execute(
+                "UPDATE roster_requests SET suggested_person_id = NULL"
+                f" WHERE suggested_person_id IN ({','.join('?' * len(chunk))})",  # noqa: S608 — placeholders only
+                chunk,
+            )
 
 
 def seed_demo_people(people_path: Path) -> int:
@@ -472,15 +533,13 @@ def seed_demo_people(people_path: Path) -> int:
     conn = sqlite3.connect(str(db_path))
     try:
         tables = _tables(conn)
-        kept = {
-            _name_key(r[0])
-            for r in conn.execute("SELECT full_name FROM people WHERE directory_managed = 1 OR is_principal = 1")
-        }
+        kept = _kept_names(conn)
         if any(_name_key(row.full_name) in kept for row in rows):
             raise BundleError("people.yaml names someone this install keeps")
-        gone = [r[0] for r in conn.execute("SELECT id FROM people WHERE directory_managed = 0 AND is_principal = 0")]
-        for table in ("person_authority_scope", "person_availability", "person_emails"):
+        gone = [r[0] for r in conn.execute(f"SELECT id FROM people WHERE {FICTIONAL_PEOPLE}")]  # noqa: S608 — fixed SQL
+        for table in ("person_authority_scope", "person_availability"):
             _delete_in(conn, tables, table, "person_id", gone)
+        _drop_roster_requests_of(conn, tables, gone)
         if gone:
             for start in range(0, len(gone), 500):
                 chunk = gone[start:start + 500]
@@ -541,22 +600,34 @@ def _lock_path(settings: Any) -> Path:
     return Path(settings.company_profile_path).parent / LOCK_NAME
 
 
-@contextmanager
-def api_lock(settings: Any) -> Iterator[None]:
-    """Held shared by a running API (``api/main.py``'s lifespan), so a reset,
-    which takes it exclusively, refuses while the API is up. Works across
-    containers sharing the company volume (one kernel). No-op without flock."""
+def take_api_lock(settings: Any) -> IO[str] | None:
+    """Take the lock shared, as a running API does (``api/main.py``'s lifespan,
+    from its first step to its last), so a reset, which takes it exclusively,
+    refuses while the API is up. Waits while a reset holds it, so it blocks:
+    call it off the event loop. Closing the handle releases it. Works across
+    containers sharing the company volume (one kernel). ``None`` without flock."""
     handle = _open_lock(settings)
     if handle is None:
-        yield
-        return
+        return None
     import fcntl
 
     try:
         fcntl.flock(handle, fcntl.LOCK_SH)
+    except BaseException:
+        handle.close()
+        raise
+    return handle
+
+
+@contextmanager
+def api_lock(settings: Any) -> Iterator[None]:
+    """``take_api_lock`` for a ``with`` block."""
+    handle = take_api_lock(settings)
+    try:
         yield
     finally:
-        handle.close()
+        if handle is not None:
+            handle.close()
 
 
 def _open_lock(settings: Any) -> IO[str] | None:
@@ -594,6 +665,7 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
     """Apply the bundle in ``bundle_dir`` with the keep rules above."""
     from openexecutive.audit import log_event
     from openexecutive.cli import fixture_loader
+    from openexecutive.memory import honcho_client
     from openexecutive.memory.episodic import DB_PATH
 
     started = time.monotonic()
@@ -603,8 +675,12 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             demo_ids, fictional_ids, kept_names = _roster(DB_PATH)
             bundle = read_bundle(staged, settings.demo_reset_company, kept_names)
             try:
+                gone_ids = sorted({*demo_ids, *fictional_ids})
+                gone_sessions = honcho_sessions(gone_ids, DB_PATH)
                 summary = await fixture_loader._apply_state_from_source(staged, settings, demo_reset=True)
-                cleared = clear_people_state(sorted({*demo_ids, *fictional_ids}), DB_PATH)
+                cleared = clear_people_state(gone_ids, DB_PATH)
+                # Their memory in Honcho too, or the Executive recalls yesterday's demo.
+                peer_memory = await honcho_client.forget_people(gone_ids, gone_sessions)
                 _drop_orphan_alert_rows(DB_PATH)
                 # memory.json replaced every scheduled action, the built-in ones too.
                 fixture_loader.rebootstrap_scheduled_actions()
@@ -625,6 +701,7 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "erpnext_site": bundle.erpnext_site,
             "demo_people": len(demo_ids),
             "people_state_cleared": cleared,
+            "peer_memory": peer_memory,
             "seconds": seconds,
         }
     )
@@ -637,6 +714,7 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "docs_indexed": summary.get("docs_indexed"),
             "people_seeded": summary.get("people_seeded"),
             "demo_people": len(demo_ids),
+            "peer_memory": peer_memory["status"],
             "seconds": seconds,
         },
     )

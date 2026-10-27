@@ -10959,21 +10959,35 @@ fixtures:
     collection, departments and goals, decisions, initiatives, advice,
     alerts, scheduled actions (the built-in ones are re-enqueued,
     rebootstrap_scheduled_actions), the watch list (company-wide, so the
-    principal's watches go too) and the fictional roster (every Person
-    neither directory-managed nor the principal). Artifact and attachment
-    indexes stay (the principal's; demo turns make none). It deletes demo
-    people's own state (PERSON_STATE / SESSION_STATE: chats, shares, chat
-    review, cards in decision_instances, recorded facts, history notes,
-    attunement, held messages, workflows, delegation rows, question counts;
-    never the principal's, even one marked demo). It keeps directory-managed
-    Persons as they are, sign-ins, workspace settings, keys, and the whole
-    audit log (it logs demo_reset, or demo_reset_failed when the apply fails
-    part way). The API holds a shared flock on company/.demo_reset.lock for
-    its lifetime and the reset takes it exclusively, so the reset refuses
-    while the API runs; the nightly job stops the API and uses `compose
-    run`, which also drops the API's cached company and open Chroma client.
-    About 25 s for a four-document bundle, most of it start-up and
-    embedding.
+    principal's watches go too) and the fictional roster (FICTIONAL_PEOPLE:
+    no contact handle, email alias or directory subject, not the principal;
+    so a Person added by hand or unlinked from the directory is kept). No
+    roster request is left pointing at a replaced Person: a suggestion of
+    one is set to NULL, and a request resolved to one is deleted with its
+    messages. Artifact and attachment indexes stay (the principal's; demo
+    turns make none). It deletes demo people's own state (PERSON_STATE /
+    SESSION_STATE: chats, shares, chat review, cards in decision_instances,
+    recorded facts, history notes, attunement, held messages, workflows,
+    delegation rows, question counts; never the principal's, even one marked
+    demo) and, best-effort, what Honcho holds of them
+    (honcho_client.forget_people: their self-conclusions and their sessions,
+    found through the workspace listings so no peer is minted; Honcho 2.x
+    can't delete a peer, so an emptied one stays). It keeps directory-managed
+    Persons as they are, sign-ins, workspace settings, keys, and the audit
+    log (it logs demo_reset, or demo_reset_failed when the apply fails part
+    way), except the research scan's run history
+    (clear_research_run_history): the bundle is the same company every
+    night, so a kept fingerprint would make watchlist_research_scan skip
+    itself. The API holds a shared flock on company/.demo_reset.lock from
+    the first step of its lifespan to the last of its shutdown
+    (take_api_lock, off the event loop), and the reset takes it
+    exclusively, so the reset refuses while the API starts, runs or stops,
+    and an API started during a reset waits for it. The nightly job stops
+    the API and runs the reset in a one-off container, which also drops the
+    API's cached company and open Chroma client. The image bakes Chroma's
+    ONNX model under CHROMA_ONNX_MODEL_DIR (knowledge/store.py), so that
+    container doesn't download it. About 25 s for a four-document bundle,
+    most of it start-up and embedding.
   solo_fixture: |
     fixtures/companies/solo_studio (Tallgrass Studio, a one-person design
     studio) is one example of a solo principal — an owner; solo principals

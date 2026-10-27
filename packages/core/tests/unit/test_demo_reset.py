@@ -66,6 +66,15 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setattr("openexecutive.audit.log_event", lambda event, *a, **k: audited.append(event))
     rebootstrapped: list[bool] = []
     monkeypatch.setattr(fixture_loader, "rebootstrap_scheduled_actions", lambda: rebootstrapped.append(True))
+    from openexecutive.memory import honcho_client
+
+    forgotten: list[tuple[list[int], list[str]]] = []
+
+    async def _forget(person_ids: list[int], session_ids: list[str]) -> dict[str, Any]:
+        forgotten.append((person_ids, session_ids))
+        return {"status": "disabled", "conclusions": 0, "sessions": 0, "failed": 0}
+
+    monkeypatch.setattr(honcho_client, "forget_people", _forget)
 
     company = tmp_path / "company"
     company.mkdir()
@@ -77,7 +86,8 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         honcho_workspace_id="openexec",
     )
     return SimpleNamespace(
-        db=db, settings=settings, tmp=tmp_path, audited=audited, rebootstrapped=rebootstrapped
+        db=db, settings=settings, tmp=tmp_path, audited=audited, rebootstrapped=rebootstrapped,
+        forgotten=forgotten,
     )
 
 
@@ -191,6 +201,10 @@ async def test_reset_keeps_directory_people_principal_chat_and_audit_log(env: Si
         conn.execute(
             "INSERT INTO audit_log (ts, event_type, summary) VALUES ('now', 'chat_turn', 'kept evidence')"
         )
+        conn.execute(
+            "INSERT INTO audit_log (ts, event_type, summary)"
+            " VALUES ('now', 'watchlist_research_periodic_ran', 'last scan')"
+        )
 
     summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
 
@@ -222,6 +236,12 @@ async def test_reset_keeps_directory_people_principal_chat_and_audit_log(env: Si
     assert (env.settings.company_profile_path.parent / "docs" / "company_overview.md").exists()
     assert summary["people_seeded"] == 2 and summary["demo_people"] == 1
     assert env.audited == ["demo_reset"] and env.rebootstrapped == [True]
+    # The research scan's run history goes, so the scan runs on the new company.
+    assert _count(env.db, "SELECT COUNT(*) FROM audit_log WHERE event_type = 'watchlist_research_periodic_ran'") == 0
+    # Honcho forgets the demo person and the old roster: their own sessions and the demo person's chat.
+    assert env.forgotten == [
+        (sorted([visitor, fictional]), sorted(["visitor-chat", f"person-{visitor}", f"person-{fictional}"]))
+    ]
 
 
 async def test_reset_twice_leaves_one_copy(env: SimpleNamespace) -> None:
@@ -351,3 +371,142 @@ def test_a_named_pipe_is_refused_without_blocking(env: SimpleNamespace) -> None:
     os.mkfifo(bundle / "people.yaml")
     with pytest.raises(dr.BundleError, match="not a plain file"):
         dr.stage_bundle(bundle, env.tmp / "staged")
+
+
+async def test_people_added_by_hand_are_kept(env: SimpleNamespace) -> None:
+    from openexecutive.people import store as people_store
+
+    _person("Pat Principal", principal=True)
+    with_email = people_store.upsert_person(full_name="Hana Hand", role="Buyer", email="hana@example.com")
+    with_alias = _person("Alia Alias")
+    people_store.add_person_email(with_alias, "alia@example.com")
+    with_slack = people_store.upsert_person(full_name="Sam Slack", role="Ops", slack_user_id="U123")
+    fictional = _person("Old Head")
+
+    await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    left = {r[0] for r in sqlite3.connect(str(env.db)).execute("SELECT id FROM people")}
+    assert {with_email, with_alias, with_slack} <= left
+    assert fictional not in left
+    assert _count(env.db, "SELECT COUNT(*) FROM person_emails WHERE person_id = ?", with_alias) == 1
+
+
+async def test_a_bundle_naming_a_person_added_by_hand_is_refused(env: SimpleNamespace) -> None:
+    from openexecutive.people import store as people_store
+
+    people_store.upsert_person(full_name="Dana Reyes", role="Real buyer", email="dana@example.com")
+    with pytest.raises(dr.BundleError, match="keeps: Dana Reyes"):
+        await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+
+async def test_roster_requests_point_at_no_replaced_person(env: SimpleNamespace) -> None:
+    fictional = _person("Old Head")
+    with sqlite3.connect(str(env.db)) as conn:
+        for ref, status, suggested, resolved in (
+            ("a@example.com", "pending", fictional, None),
+            ("b@example.com", "resolved", None, fictional),
+        ):
+            request = conn.execute(
+                "INSERT INTO roster_requests (channel, channel_ref, status, suggested_person_id,"
+                " resolved_person_id, first_seen_at, last_seen_at, expires_at)"
+                " VALUES ('email', ?, ?, ?, ?, 'now', 'now', 'later')",
+                (ref, status, suggested, resolved),
+            ).lastrowid
+            conn.execute(
+                "INSERT INTO roster_request_messages (request_id, external_id, received_at)"
+                " VALUES (?, ?, 'now')",
+                (request, f"m-{ref}"),
+            )
+
+    await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    # The pending one stays, without the suggestion; the resolved one goes, with its messages.
+    assert _count(env.db, "SELECT COUNT(*) FROM roster_requests WHERE channel_ref = 'a@example.com'"
+                  " AND suggested_person_id IS NULL") == 1
+    assert _count(env.db, "SELECT COUNT(*) FROM roster_requests WHERE channel_ref = 'b@example.com'") == 0
+    assert _count(env.db, "SELECT COUNT(*) FROM roster_request_messages") == 1
+
+
+async def test_the_api_lock_is_released_by_closing_its_handle(env: SimpleNamespace) -> None:
+    pytest.importorskip("fcntl")
+    fictional = _person("Old Head")
+    handle = dr.take_api_lock(env.settings)
+    assert handle is not None
+    with pytest.raises(dr.BundleError, match="API"):
+        await dr.demo_reset(_bundle(env.tmp), env.settings)
+    handle.close()
+    (env.tmp / "bundle").rename(env.tmp / "refused")
+    await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert _count(env.db, "SELECT COUNT(*) FROM people WHERE id = ?", fictional) == 0
+
+
+class _AsyncList(list):  # type: ignore[type-arg]
+    def __aiter__(self) -> Any:
+        async def _gen() -> Any:
+            for item in self:
+                yield item
+
+        return _gen()
+
+
+def _fake_honcho(deleted: list[str]) -> SimpleNamespace:
+    def _peer(peer_id: str, conclusion_ids: list[str]) -> SimpleNamespace:
+        async def _list() -> _AsyncList:
+            return _AsyncList(SimpleNamespace(id=c) for c in conclusion_ids)
+
+        async def _delete(conclusion_id: str) -> None:
+            deleted.append(f"conclusion {conclusion_id}")
+
+        return SimpleNamespace(id=peer_id, conclusions=SimpleNamespace(aio=SimpleNamespace(list=_list, delete=_delete)))
+
+    def _session(session_id: str) -> SimpleNamespace:
+        async def _delete() -> None:
+            deleted.append(f"session {session_id}")
+
+        return SimpleNamespace(id=session_id, aio=SimpleNamespace(delete=_delete))
+
+    async def _peers() -> _AsyncList:
+        return _AsyncList([_peer("7", ["c1", "c2"]), _peer("8", ["kept"])])
+
+    async def _sessions() -> _AsyncList:
+        return _AsyncList([_session("visitor-chat"), _session("person-7"), _session("principal-chat")])
+
+    return SimpleNamespace(aio=SimpleNamespace(peers=_peers, sessions=_sessions))
+
+
+async def test_forget_people_deletes_their_conclusions_and_sessions_only(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.memory import honcho_client
+
+    deleted: list[str] = []
+    fake = _fake_honcho(deleted)
+
+    async def _client() -> Any:
+        return fake
+
+    monkeypatch.setattr(honcho_client, "get_settings", lambda: SimpleNamespace(honcho_enabled=True))
+    monkeypatch.setattr(honcho_client, "_get_client", _client)
+    monkeypatch.setattr(honcho_client, "_emit_peer_memory", lambda **kwargs: None)
+
+    summary = await honcho_client.forget_people([7], ["visitor-chat", "person-7"])
+
+    assert sorted(deleted) == ["conclusion c1", "conclusion c2", "session person-7", "session visitor-chat"]
+    assert summary == {"status": "ok", "conclusions": 2, "sessions": 2, "failed": 0}
+
+
+async def test_forget_people_without_honcho_does_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.memory import honcho_client
+
+    monkeypatch.setattr(honcho_client, "get_settings", lambda: SimpleNamespace(honcho_enabled=False))
+    summary = await honcho_client.forget_people([7], [])
+    assert summary["status"] == "disabled"
+
+
+def test_a_demo_chat_named_like_someone_elses_honcho_session_is_not_forgotten(env: SimpleNamespace) -> None:
+    principal = _person("Pat Principal", principal=True, directory=True)
+    visitor = _person("Vic Visitor", directory=True, demo=True)
+    _chat(env.db, "telegram:8519677317", principal)
+    # Both are Honcho's "telegram_8519677317" and "person-<principal>" once sanitized.
+    _chat(env.db, "telegram.8519677317", visitor)
+    _chat(env.db, f"person-{principal}", visitor)
+    _chat(env.db, "visitor-chat", visitor)
+    assert dr.honcho_sessions([visitor], env.db) == sorted(["visitor-chat", f"person-{visitor}"])

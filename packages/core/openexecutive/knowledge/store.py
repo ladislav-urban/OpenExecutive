@@ -40,6 +40,10 @@ def _build_embedding_function() -> Any:
     class _SharedMiniLM(ONNXMiniLM_L6_V2):  # type: ignore[misc]
         _session: Any = None
         _session_lock = threading.Lock()
+        # The image bakes the model here (docker/Dockerfile), so a fresh
+        # container never downloads it. Unset: Chroma's own ~/.cache path.
+        if os.environ.get("CHROMA_ONNX_MODEL_DIR"):
+            DOWNLOAD_PATH = Path(os.environ["CHROMA_ONNX_MODEL_DIR"])
 
         @staticmethod
         def name() -> str:

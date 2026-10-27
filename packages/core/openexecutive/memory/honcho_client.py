@@ -509,6 +509,71 @@ async def _purge_workspace_sessions(client: Any, workspace_id: str) -> dict[str,
     return summary
 
 
+async def forget_people(person_ids: list[int], session_ids: list[str]) -> dict[str, Any]:
+    """Delete what peer memory holds of ``person_ids``, for the demo reset
+    (``cli/demo_reset.py``): each one's self-conclusions (the scope the
+    per-turn prefetch reads) and the Honcho sessions ``session_ids``, exactly
+    as named (the caller's ``honcho_sessions`` leaves out any that is also
+    someone else's).
+
+    Peers and sessions are found through the workspace listings, never
+    ``client.aio.peer(id)``, which would mint one. Honcho 2.x can't delete a
+    peer, so an emptied peer stays. Best-effort under the purge budget: a
+    failure is reported in the returned dict (``status``), never raised.
+    """
+    summary: dict[str, Any] = {"status": "ok", "conclusions": 0, "sessions": 0, "failed": 0}
+    if not person_ids:
+        return summary
+    if not get_settings().honcho_enabled:
+        summary["status"] = "disabled"
+        return summary
+    client = await _get_client()
+    if client is None:
+        summary["status"] = "error"
+        return summary
+    wanted = set(session_ids)
+
+    async def _delete(call: Any) -> bool:
+        try:
+            await asyncio.wait_for(call, timeout=_SESSION_DELETE_TIMEOUT_S)
+            return True
+        except Exception as exc:
+            logger.warning("honcho: forget delete failed: %s", type(exc).__name__)
+            return False
+
+    async def _forget() -> None:
+        # Matched by id only: a fictional Person's row is already gone.
+        for _, peer in await _matched_peers(client, dict.fromkeys(person_ids)):
+            # Ids first, then the deletes: deleting while paging shifts the pages.
+            ids = [c.id async for c in await peer.conclusions.aio.list()]
+            for conclusion_id in ids:
+                if await _delete(peer.conclusions.aio.delete(conclusion_id)):
+                    summary["conclusions"] += 1
+                else:
+                    summary["failed"] += 1
+        sessions = [s async for s in await client.aio.sessions() if str(getattr(s, "id", "")) in wanted]
+        for session in sessions:
+            if await _delete(session.aio.delete()):
+                summary["sessions"] += 1
+            else:
+                summary["failed"] += 1
+
+    try:
+        await asyncio.wait_for(_forget(), timeout=_SESSION_PURGE_BUDGET_S)
+    except Exception as exc:
+        logger.warning("honcho: forgetting demo people failed: %s", type(exc).__name__)
+        summary["status"] = "error"
+    if summary["failed"]:
+        summary["status"] = "error"
+    _emit_peer_memory(
+        op="forget",
+        person_id=None,
+        outcome=summary["status"],
+        details={k: summary[k] for k in ("conclusions", "sessions", "failed")},
+    )
+    return summary
+
+
 def _build_teardown_client(settings: Any, workspace_id: str) -> Any | None:
     """Construct a one-shot Honcho client bound to ``workspace_id``.
 

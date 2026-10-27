@@ -448,7 +448,7 @@ async def _apply_state_from_source(
     ``demo_reset`` (``cli/demo_reset.py``) replaces only the fictional part of
     the roster (``seed_demo_people``), leaves the workspace settings, the
     artifact and attachment indexes as they are, and deletes nothing from the
-    audit log.
+    audit log but the research scan's run history.
     """
     from openexecutive.knowledge.loader import ingest_file
     from openexecutive.knowledge.store import ChromaDBStore
@@ -589,19 +589,20 @@ async def _apply_state_from_source(
     # otherwise make the freshly-seeded watchlist_research_scan skip itself —
     # the "no findings on a seeded run" failure. Surgical delete of just the
     # three research event types; the rest of /audit history is untouched.
+    # A demo reset too: its bundle is the same company every night, so the
+    # fingerprint would match the last run and the scan would never run again.
+    # The rest of the audit log, which the demo's report reads, stays.
     research_history_cleared = 0
-    # A demo reset keeps the whole audit log: the demo's report reads it.
-    if not demo_reset:
-        try:
-            from openexecutive.monitoring.research.scheduler import (
-                clear_research_run_history,
-            )
+    try:
+        from openexecutive.monitoring.research.scheduler import (
+            clear_research_run_history,
+        )
 
-            research_history_cleared = clear_research_run_history(EPISODIC_DB_PATH)
-        except Exception:
-            logger.exception(
-                "fixture: clear_research_run_history failed (non-fatal)"
-            )
+        research_history_cleared = clear_research_run_history(EPISODIC_DB_PATH)
+    except Exception:
+        logger.exception(
+            "fixture: clear_research_run_history failed (non-fatal)"
+        )
 
     return {
         "display_name": profile.name,
