@@ -23,6 +23,7 @@ import {
   signedInMessage,
   themeProperties,
 } from "../src/lib/embed.ts";
+import { PAGE_ALIASES } from "../src/lib/pageAliases.ts";
 
 const EXAMPLES = JSON.parse(readFileSync(new URL("../src/lib/embed-examples.json", import.meta.url), "utf8"));
 
@@ -76,9 +77,13 @@ test("colours", () => {
 
 test("APP_ROUTES is this app's own top-level routes", () => {
   const appDir = new URL("../src/app/", import.meta.url);
-  const routes = readdirSync(appDir)
-    .filter((name) => name !== "api" && statSync(new URL(name, appDir)).isDirectory())
-    .sort();
+  // An old address next.config.ts redirects (lib/pageAliases.ts) is a route
+  // too, with no folder of its own.
+  const aliases = PAGE_ALIASES.map(({ source }) => source.split("/")[1]);
+  const folders = readdirSync(appDir).filter(
+    (name) => name !== "api" && statSync(new URL(name, appDir)).isDirectory(),
+  );
+  const routes = [...new Set([...folders, ...aliases])].sort();
   assert.deepEqual([...APP_ROUTES].sort(), routes);
   assert.equal(isAppPath("/"), true);
   assert.equal(isAppPath("/chats/x-1"), true);

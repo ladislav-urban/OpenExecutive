@@ -72,7 +72,8 @@ export type EmbedInit = {
 
 export type HostMessage = { type: "init"; init: EmbedInit } | { type: "theme"; theme: EmbedTheme };
 
-// This app's top-level routes (src/app/*); scripts/embed.test.mjs keeps it in
+// This app's top-level routes (src/app/*, and the old addresses in
+// lib/pageAliases.ts); scripts/embed.test.mjs keeps it in
 // step. A native path must start with one of them, or be "/".
 export const APP_ROUTES = [
   "architecture",
