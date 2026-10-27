@@ -293,7 +293,7 @@ def summarize_action(
             noun = "action" if ok == 1 else "actions"
             payload["summary"] = f"Done on its own, as you allowed: {ok} {noun}"
             payload["target"] = None
-            payload["link"] = "/today"
+            payload["link"] = "/"
             return payload
         # Otherwise only a stored card earns a chip; it says nothing has happened yet.
         if (parsed or {}).get("status") != "waiting_for_approval":
@@ -303,7 +303,7 @@ def summarize_action(
         noun = "action" if count == 1 else "actions"
         payload["summary"] = f"Waiting for your approval: {count} {noun}" if count else "Waiting for your approval"
         payload["target"] = None
-        payload["link"] = "/today"
+        payload["link"] = "/"
         # The chat shows the card itself under its message, by this id.
         decision_id = (parsed or {}).get("decision_id")
         if isinstance(decision_id, int) and not isinstance(decision_id, bool):
@@ -323,7 +323,7 @@ def summarize_action(
         here = (parsed or {}).get("approve_here") is True
         lead = "Waiting for your approval" if here else "Sent for approval"
         payload["summary"] = f"{lead}: {title}" if title else lead
-        payload["link"] = "/today"
+        payload["link"] = "/"
         # The chat shows the approval card itself under its message, by this
         # id, when the person chatting is the one who approves it.
         decision_id = (parsed or {}).get("decision_instance_id")

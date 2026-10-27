@@ -1035,7 +1035,7 @@ def chip(tool_input: dict[str, Any], parsed: dict[str, Any] | None) -> dict[str,
     noun = doctype if doctype in DRAFT_TOOLS else "ERPNext"
     return {
         "summary": f"Waiting for your approval: {noun} draft",
-        "link": "/today",
+        "link": "/",
         "decision_id": (parsed or {}).get("decision_id"),
     }
 

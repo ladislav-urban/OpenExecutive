@@ -875,13 +875,14 @@ _ACTIONS = (
            _remove_lead_rule, confirm=True, card="Remove the Take the lead rule {title}"),
 )
 
-# Where a link from chat can go (the web app's own paths).
+# Where a link from chat can go: the web app's own paths, each the page itself
+# rather than an old address that redirects to it (packages/ui's pageAliases.ts).
 _SCREENS = (
-    ("today", "/today", "Today"),
+    ("today", "/", "Today"),
     ("chats", "/chats", "all chats"),
     ("settings", "/settings", "Settings"),
     ("notifications", "/settings/notifications", "Settings, Notifications"),
-    ("act_as_me", "/settings/act-as-me", "Settings, Act as me"),
+    ("act_as_me", "/delegate/act-as-me", "Delegate, Act as me"),
     ("memory_settings", "/settings/memory", "Settings, Memory"),
     ("people", "/people", "People"),
     ("departments", "/departments", "Departments"),
@@ -890,7 +891,7 @@ _SCREENS = (
     ("documents", "/artifacts", "Documents"),
     ("knowledge", "/knowledge", "Knowledge (uploaded files)"),
     ("memories", "/memories", "Memory"),
-    ("skills", "/skills", "Skills"),
+    ("skills", "/jobs", "Workflows, How it's done"),
     ("workflows", "/jobs", "Workflows"),
     ("guide", "/guide", "User guide"),
 )
