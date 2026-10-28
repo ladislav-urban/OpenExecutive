@@ -989,22 +989,62 @@ def archive_person(person_id: int, db_path: Path | None = None) -> bool:
     return archived
 
 
+# No principal yet: no non-archived row holds the flag (a suspended one counts).
+_NO_PRINCIPAL_SQL = "NOT EXISTS (SELECT 1 FROM people WHERE is_principal = 1 AND archived = 0)"
+
+
+def _grant_wildcard(conn: sqlite3.Connection, person_id: int) -> None:
+    conn.execute("DELETE FROM person_authority_scope WHERE person_id = ?", (person_id,))
+    conn.execute(
+        "INSERT INTO person_authority_scope (person_id, scope_token) VALUES (?, ?)",
+        (person_id, AuthorityScope.WILDCARD.value),
+    )
+
+
 def claim_principal(person_id: int, db_path: Path | None = None) -> bool:
-    """Make ``person_id`` the principal, only while there is none (any active
-    principal), and only an active team member who isn't a demo person. One
-    statement, so two claims at once can't both win. True when it changed;
-    False for anyone else, or once someone is the principal
+    """Make ``person_id`` the principal with WILDCARD, as onboarding does,
+    only while there is none, and only an active team member who isn't a
+    demo person. One transaction, guarded in its own UPDATE, so two claims (or
+    a claim and the People API) can't both win. True when it changed
     (``openexecutive principal``, people/principal.py)."""
     now = _now()
     with _get_conn(db_path) as conn:
         cursor = conn.execute(
             "UPDATE people SET is_principal = 1, updated_at = ?"
             " WHERE id = ? AND kind = 'team' AND is_principal = 0 AND directory_demo = 0 AND "
-            + ACTIVE_SQL
-            + " AND NOT EXISTS (SELECT 1 FROM people WHERE is_principal = 1 AND archived = 0)",
+            + ACTIVE_SQL + " AND " + _NO_PRINCIPAL_SQL,
             (now, person_id),
         )
-        return cursor.rowcount > 0
+        if cursor.rowcount != 1:
+            return False
+        _grant_wildcard(conn, person_id)
+        return True
+
+
+def add_principal(
+    *, full_name: str, role: str, email: str, db_path: Path | None = None
+) -> int | None:
+    """Add a new team Person as the principal with WILDCARD, only while there
+    is none and nobody holds ``email``: one INSERT guarded like
+    ``claim_principal``. The new id, or None when it couldn't be."""
+    now = _now()
+    norm = normalize_email(email)
+    with _get_conn(db_path) as conn:
+        cursor = conn.execute(
+            "INSERT INTO people (full_name, role, is_principal, department_slugs_json, email,"
+            " preferred_channel, kind, response_sla_hours, created_at, updated_at)"
+            " SELECT ?, ?, 1, '[]', ?, 'any', 'team', 24, ?, ?"
+            " WHERE " + _NO_PRINCIPAL_SQL
+            + " AND NOT EXISTS (SELECT 1 FROM people WHERE archived = 0 AND LOWER(TRIM(email)) = ?)"
+            " AND NOT EXISTS (SELECT 1 FROM person_emails pe JOIN people p ON p.id = pe.person_id"
+            " WHERE pe.email_norm = ? AND p.archived = 0)",
+            (full_name, role, norm, now, now, norm, norm),
+        )
+        if cursor.rowcount != 1 or cursor.lastrowid is None:
+            return None
+        person_id = int(cursor.lastrowid)
+        _grant_wildcard(conn, person_id)
+        return person_id
 
 
 class PrincipalSuspendError(ValueError):

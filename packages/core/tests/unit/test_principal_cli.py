@@ -67,10 +67,49 @@ def test_updates_the_principal_and_says_so_when_nothing_changes(db: Path) -> Non
 def test_a_directory_managed_person_keeps_the_directorys_name(db: Path) -> None:
     pid = store.upsert_person(full_name="Pat From Directory", email="pat@example.com", db_path=db)
     _mark(db, pid, directory_managed=1)
-    pr.set_principal("pat@example.com", name="Someone Else", role="Founder", db_path=db)
+    pr.set_principal("pat@example.com", role="Founder", db_path=db)
+    pr.set_principal("pat@example.com", name="Someone Else", db_path=db)
     principal = store.find_principal_person(db)
     assert principal is not None
     assert (principal.full_name, principal.role) == ("Pat From Directory", "Founder")
+
+
+def test_never_renames_someone_into_the_principal(db: Path) -> None:
+    store.upsert_person(full_name="Pat Owner", email="pat@example.com", db_path=db)
+    with pytest.raises(pr.PrincipalError, match="is Pat Owner's. Leave out --name"):
+        pr.set_principal("pat@example.com", name="Mallory", db_path=db)
+    # The same name, spelled with other spaces or case, is theirs.
+    pr.set_principal("pat@example.com", name="pat  owner", db_path=db)
+    assert store.find_principal_person(db) is not None
+
+
+@pytest.mark.parametrize(
+    "planted",
+    [{"telegram_chat_id": "999"}, {"slack_user_id": "U999"}, {"discord_user_id": "123"}, "alias", "scope"],
+)
+def test_a_row_carrying_someone_elses_way_in_is_refused(db: Path, planted: object) -> None:
+    # Until there is a principal, anyone signed in may edit People: a handle,
+    # alias or scope put on the owner's row would become the principal's.
+    kwargs = planted if isinstance(planted, dict) else {}
+    pid = store.upsert_person(full_name="Pat", email="pat@example.com", db_path=db, **kwargs)
+    if planted == "alias":
+        store.add_person_email(pid, "mallory@example.com", db_path=db)
+    if planted == "scope":
+        store.set_authority_scope(pid, [AuthorityScope("spend_lt_2k")], db_path=db)
+    with pytest.raises(pr.PrincipalError, match="which would become the principal's"):
+        pr.set_principal("pat@example.com", db_path=db)
+    assert store.find_principal_person(db) is None
+
+
+def test_a_suspended_principal_still_counts(db: Path) -> None:
+    pid = store.upsert_person(full_name="Old Owner", email="old@example.com", is_principal=True, db_path=db)
+    _mark(db, pid, suspended=1)
+    store.upsert_person(full_name="Pat", email="pat@example.com", db_path=db)
+    for email, name in (("pat@example.com", None), ("new@example.com", "New")):
+        with pytest.raises(pr.PrincipalError, match="there is a principal already"):
+            pr.set_principal(email, name=name, db_path=db)
+    with sqlite3.connect(str(db)) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM people WHERE is_principal = 1").fetchone()[0] == 1
 
 
 def test_never_replaces_another_principal(db: Path) -> None:
@@ -124,12 +163,22 @@ def test_bad_input_changes_nothing(db: Path, email: str, name: str | None, reaso
     assert store.find_principal_person(db) is None
 
 
-def test_claim_principal_wins_only_while_there_is_none(db: Path) -> None:
+def test_claiming_and_adding_win_only_while_there_is_none(db: Path) -> None:
     a = store.upsert_person(full_name="A", email="a@example.com", db_path=db)
     b = store.upsert_person(full_name="B", email="b@example.com", db_path=db)
     assert store.claim_principal(a, db) is True
     assert store.claim_principal(b, db) is False
     assert store.claim_principal(a, db) is False
+    assert store.add_principal(full_name="C", role="", email="c@example.com", db_path=db) is None
+    person = store.get_person(a, db)
+    assert person is not None and person.authority_scope == [AuthorityScope.WILDCARD]
+
+
+def test_adding_refuses_an_address_someone_holds(db: Path) -> None:
+    pid = store.upsert_person(full_name="Sam", email="sam@example.com", db_path=db)
+    store.add_person_email(pid, "pat@example.com", db_path=db)
+    assert store.add_principal(full_name="Pat", role="", email="pat@example.com", db_path=db) is None
+    assert store.add_principal(full_name="Pat", role="", email="SAM@example.com", db_path=db) is None
 
 
 def test_the_cli_exits_non_zero_on_a_refusal(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:

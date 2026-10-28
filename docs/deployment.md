@@ -169,7 +169,10 @@ principal from the API's container:
 `openexecutive principal --email <their sign-in address> --name "<full name>" [--role <role>]`.
 It adds them, or makes the team member with that address the principal, with
 the authority onboarding gives, and changes nothing while someone else is the
-principal.
+principal. Run it before anyone else can sign in: until there is a principal,
+anyone signed in may edit People. For the same reason it refuses a row that
+also carries chat ids, other addresses or approval scopes, or another name than
+`--name`: remove what isn't theirs on the People page, then run it again.
 
 ---
 

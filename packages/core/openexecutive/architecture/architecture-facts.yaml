@@ -4185,15 +4185,19 @@ people:
     `openexecutive principal --email <a> [--name] [--role]`
     (people/principal.py, added Oct 28, 2026): names the principal on an
     install that skips onboarding (the demo installation, whose company
-    comes from `demo-reset`). No principal yet: the team member holding the
-    address becomes it through store.claim_principal (one UPDATE guarded by
-    NOT EXISTS an active principal, team kind, active, not directory_demo),
-    or a new team Person is added with --name; either way WILDCARD, as
-    onboarding/commit.py gives. Refused, nothing changed: a contact, a
-    suspended or demo person, another person's alias, someone else already
-    principal (replacing stays on the People page). For the principal
+    comes from `demo-reset`); run before anyone else can sign in. No
+    principal yet: the holder of the address becomes it (store.claim_principal)
+    or a new team Person is added with --name (store.add_principal); each one
+    transaction guarded by NOT EXISTS a non-archived principal (suspended
+    counts) that also grants WILDCARD, as onboarding/commit.py does. Refused,
+    nothing changed: a contact, a suspended or demo person, another person's
+    alias, a --name other than the row's, a row that also carries chat ids,
+    aliases or scopes (security review Oct 28, 2026: while unclaimed, anyone
+    signed in may edit People, so they could be planted), someone else
+    already principal (replacing stays on the People page). For the principal
     itself it updates name and role, not a directory-managed name. Audited
-    principal_set; people.registry's 60 s TTL carries it to a running API.
+    principal_set (private); people.registry's 60 s TTL carries it to a
+    running API.
   kind: |
     `Person.kind` is "team" (the default) or "contact" — someone outside
     the team (a client, contractor, advisor) the Executive may need to
