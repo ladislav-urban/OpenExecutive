@@ -89,8 +89,9 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
         if principal_draft is not None:
             key = principal_draft.full_name.strip().lower()
             owner = existing.get(key)
-            if owner is not None and owner.suspended and owner.id is not None:
-                # The principal is never suspended: bring them back first.
+            if owner is not None and owner.suspended and not owner.demo and owner.id is not None:
+                # The principal is never suspended: bring them back first (a
+                # demo person can't be it, so they stay as they are).
                 restore_person(owner.id)
             if owner is None:
                 principal_id = upsert_person(full_name=principal_draft.full_name.strip(), role=principal_draft.role.strip())
