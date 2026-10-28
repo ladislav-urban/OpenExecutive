@@ -4198,6 +4198,24 @@ people:
     flag. onboarding/profile_builder.py (the form wizard) skips its principal
     record on PrincipalExistsError and still adds the team. A roster that
     holds two still resolves oldest-first (find_principal_person) until then.
+  demo_admin_console: |
+    oe_connector's demo admin console (its docs/demo/demo-admin-console-plan.md,
+    step 10; Oct 28, 2026): POST /webhook/erpnext/demo-people (every
+    non-archived Person.demo, suspended too: email, name, questions_today
+    from demo_questions, suspended; plus DEMO_DAILY_QUESTIONS) and POST
+    /webhook/erpnext/demo-people/archive {email} (store.archive_demo_person,
+    guarded in its UPDATE, for a demo, directory-managed, non-principal row;
+    the same bare 404 for anyone else, live or archived, so the route is no
+    roster oracle; {"archived": false, "reason": "already"} for an archived
+    demo row; audited demo_person_archived, refusals
+    demo_person_archive_refused / demo_admin_refused, ids only, private).
+    The console deletes the Keycloak user first, or the next directory sync
+    adds the person again. Signed like the panel
+    (ERPNEXT_PANEL_PUBLIC_KEYS) with audiences
+    openexecutive-erpnext-demo-people / -archive and
+    verify_panel_assertion(with_subject=True); sub must equal the
+    principal's email (403 otherwise). Exempt from BACKEND_SHARED_SECRET as
+    the other ERPNext webhooks are.
   unclaimed_scopes: |
     Approval scopes are the principal's to grant (Oct 28, 2026; follow-up
     from the single-principal guard's review). While no principal exists,

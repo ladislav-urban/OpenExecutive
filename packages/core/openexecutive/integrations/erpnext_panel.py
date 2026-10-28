@@ -149,14 +149,17 @@ def verify_panel_assertion(
     now: int,
     ledger: JtiLedger,
     audience: str = AUDIENCE,
+    with_subject: bool | None = None,
 ) -> str:
     """The ERPNext user's email ``token`` vouches for, for this one request
     ``body``; raises ``PanelRefused``. Its ``jti`` is spent only when every
     other check passes.
 
     With another ``audience`` (``integrations.erpnext_events``) the site
-    itself is speaking: ``sub`` must be "" and "" is returned. The audience
-    keeps one route's assertion from being replayed at the other."""
+    itself is speaking: ``sub`` must be "" and "" is returned, unless
+    ``with_subject`` says that audience names a user too, as the demo admin
+    console's do (``integrations.erpnext_demo_people``). The audience keeps
+    one route's assertion from being replayed at another."""
     if not token or len(token) > _MAX_ASSERTION_LEN or not token.isascii():
         raise PanelRefused("malformed")
     parts = token.split(".")
@@ -196,7 +199,8 @@ def verify_panel_assertion(
     jti, sub = claims.get("jti"), claims.get("sub")
     if not isinstance(jti, str) or not _JTI_RE.fullmatch(jti):
         raise PanelRefused("malformed")
-    if audience != AUDIENCE:
+    names_user = audience == AUDIENCE if with_subject is None else with_subject
+    if not names_user:
         if sub != "":
             raise PanelRefused("subject")
     elif (
