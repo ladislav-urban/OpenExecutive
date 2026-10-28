@@ -37,13 +37,18 @@ RUN npm ci --no-audit --no-fund \
 # type stripping only (navConfig.ts's imports are types), so it needs no npm
 # install. The API stage below adds openapi.json and keeps all three at
 # /opt/embed-outputs, so a server running the published images, with no
-# checkout, gets them from the image (docs/deployment.md, "Host apps' checks").
+# checkout, gets them from the image (docs/deployment.md, "Images").
+# .github/workflows/embed-outputs.yml builds this stage alone on every pull
+# request that changes its inputs, so a runtime import or syntax type
+# stripping can't handle fails there, not on main's publish.
 FROM node:22-alpine AS embed-outputs
 WORKDIR /ui
 COPY packages/ui/package.json ./
 COPY packages/ui/scripts/embed-outputs.mjs ./scripts/
 COPY packages/ui/src/ ./src/
-RUN node --no-warnings --experimental-strip-types scripts/embed-outputs.mjs /opt/embed-outputs     && test -s /opt/embed-outputs/embed-manifest.json     && test -s /opt/embed-outputs/host-list.json
+RUN node --no-warnings --experimental-strip-types scripts/embed-outputs.mjs /opt/embed-outputs \
+    && test -s /opt/embed-outputs/embed-manifest.json \
+    && test -s /opt/embed-outputs/host-list.json
 
 FROM python:3.11-slim AS api
 
@@ -228,7 +233,11 @@ RUN uv pip install --system --no-deps .
 # touches lands in /app. It needs no secrets; then all three must parse.
 COPY --from=embed-outputs /opt/embed-outputs /opt/embed-outputs
 COPY scripts/export-openapi.py /tmp/export-openapi.py
-RUN cd /tmp     && python /tmp/export-openapi.py /opt/embed-outputs/openapi.json     && rm -rf /tmp/export-openapi.py /tmp/*.db     && python -c "import json; [json.load(open('/opt/embed-outputs/' + n)) for n in ('embed-manifest.json', 'host-list.json', 'openapi.json')]"     && chmod -R a+rX /opt/embed-outputs
+RUN cd /tmp \
+    && python /tmp/export-openapi.py /opt/embed-outputs/openapi.json \
+    && rm -rf /tmp/export-openapi.py /tmp/*.db \
+    && python -c "import json; [json.load(open('/opt/embed-outputs/' + n)) for n in ('embed-manifest.json', 'host-list.json', 'openapi.json')]" \
+    && chmod -R a+rX /opt/embed-outputs
 
 RUN W=/app/openexecutive/workflows/python_job_worker.mjs \
     && WHEELS=$(ls /opt/pysandbox/wheels/*.whl | sed 's/.*/"&"/' | paste -sd, -) \
