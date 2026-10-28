@@ -7757,7 +7757,9 @@ auth:
         (see mcp_server).
       - Setup's api_secret check warns when a shared secret is set
         without the keys.
-      - scripts/make-caller-keys.py makes a pair, and
+      - scripts/make-caller-keys.py makes a pair (the API image runs the
+        same code, api/caller_keys.py, as `openexecutive make-caller-keys`,
+        so a server without a checkout makes its pairs in place), and
         scripts/mint-caller-assertion.py signs one request for curl.
       - Parity: packages/core/tests/unit/caller_assertion_vectors.json
         (the public RFC 8032 test key) is signed byte-identically by the

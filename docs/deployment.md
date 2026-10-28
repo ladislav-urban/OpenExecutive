@@ -628,10 +628,15 @@ their People entry, with their roles and user permissions:
 
 ```bash
 uv run --with cryptography python scripts/make-caller-keys.py --erpnext
+# or, from the API image without a checkout:
+docker compose run --rm api openexecutive make-caller-keys --erpnext
 ```
 
 It prints `ERPNEXT_CALLER_PRIVATE_KEY`, for the API's environment only, and a
-`bench set-config` line that gives oe_connector the public key. Make a pair of
+`bench set-config` line that gives oe_connector the public key. (From the
+image, on a Docker daemon that keeps container output in journald, syslog or a
+cloud log, add `--log-driver none` through `docker run --rm --log-driver none
+<api image> openexecutive make-caller-keys …`: see [auth.md](auth.md#signed-callers).) Make a pair of
 its own; never reuse the web app's. Then restart both. From then on:
 
 - The gateway signs who is asking into each call (Ed25519, one call, those
@@ -664,6 +669,8 @@ second pair of its own that signs the other way:
 
 ```bash
 uv run --with cryptography python scripts/make-caller-keys.py --erpnext-panel
+# or, from the API image without a checkout:
+docker compose run --rm api openexecutive make-caller-keys --erpnext-panel
 ```
 
 It prints a `bench set-config` line for the private key, which stays in

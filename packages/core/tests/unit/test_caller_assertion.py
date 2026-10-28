@@ -494,3 +494,27 @@ def test_the_scripts_make_a_pair_the_api_accepts_and_sign_with_it() -> None:
         token, keys=keys, method="GET", target="/today", now=int(time.time()), ledger=JtiLedger()
     )
     assert who == Caller("operator")
+
+
+@pytest.mark.parametrize(
+    ("flags", "secret", "public"),
+    [
+        ([], "CALLER_ASSERTION_PRIVATE_KEY=k7:", "CALLER_ASSERTION_PUBLIC_KEYS=k7:"),
+        (["--erpnext"], "ERPNEXT_CALLER_PRIVATE_KEY=k7:", "oe_connector_caller_public_keys 'k7:"),
+        (["--erpnext-panel"], "oe_connector_panel_private_key 'k7:", "ERPNEXT_PANEL_PUBLIC_KEYS=k7:"),
+    ],
+)
+def test_the_cli_makes_the_same_pairs_as_the_script(flags: list[str], secret: str, public: str) -> None:
+    """`openexecutive make-caller-keys` is the script for an image without a
+    checkout: same options, same output."""
+    from click.testing import CliRunner
+
+    from openexecutive.cli import cli
+
+    made = CliRunner().invoke(cli, ["make-caller-keys", "--kid", "k7", *flags])
+    assert made.exit_code == 0, made.output
+    assert secret in made.output and public in made.output
+    refused = CliRunner().invoke(cli, ["make-caller-keys", "--kid", "bad kid!"])
+    assert refused.exit_code == 2
+    shown = CliRunner().invoke(cli, ["make-caller-keys", "--help"])
+    assert shown.exit_code == 0 and "openexecutive make-caller-keys" in shown.output and "--erpnext" in shown.output

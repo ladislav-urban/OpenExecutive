@@ -650,6 +650,23 @@ async def _consolidate_initiatives(apply_changes: bool) -> None:
     )
 
 
+@cli.command(
+    "make-caller-keys",
+    context_settings={"ignore_unknown_options": True, "help_option_names": []},
+    add_help_option=False,
+)
+@click.argument("args", nargs=-1, type=click.UNPROCESSED)
+def make_caller_keys(args: tuple[str, ...]) -> None:
+    """Make a key pair for signed callers (--help for the kinds).
+
+    The same as scripts/make-caller-keys.py, for a server that runs the API
+    image without a checkout: the private half is made where it is used.
+    """
+    from openexecutive.api.caller_keys import main
+
+    raise SystemExit(main(list(args), prog="openexecutive make-caller-keys"))
+
+
 @cli.command()
 def onboard() -> None:
     """Set up or update your company profile."""
