@@ -109,6 +109,7 @@ EVENT_TYPES: tuple[str, ...] = (
     # People (people/store.py) — private to the principal.
     "person_suspended",  # someone was taken out of every access decision, reversibly (details.by: principal | directory)
     "person_restored",   # a suspended person was brought back with everything they had
+    "principal_set",     # `openexecutive principal` named the principal (people/principal.py)
     # The directory sync (integrations/directory_sync.py) — private, never the token.
     "directory_sync",              # a run that changed something or stopped: counts, and why it stopped
     "directory_person_created",    # a team Person made for a new member of the group
