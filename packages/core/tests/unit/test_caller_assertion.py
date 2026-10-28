@@ -518,3 +518,24 @@ def test_the_cli_makes_the_same_pairs_as_the_script(flags: list[str], secret: st
     assert refused.exit_code == 2
     shown = CliRunner().invoke(cli, ["make-caller-keys", "--help"])
     assert shown.exit_code == 0 and "openexecutive make-caller-keys" in shown.output and "--erpnext" in shown.output
+
+
+def test_the_cli_makes_a_suppliers_pair_and_refuses_a_bad_name() -> None:
+    """--erpnext-a2a-supplier through the CLI: the supplier's private key, and an
+    ERPNEXT_A2A_SUPPLIERS entry naming the Supplier exactly; a name that isn't
+    one (padded, empty) is refused like the script refuses it."""
+    from click.testing import CliRunner
+
+    from openexecutive.api.caller_signing import load_private_key
+    from openexecutive.cli import cli
+
+    made = CliRunner().invoke(cli, ["make-caller-keys", "--kid", "s7", "--erpnext-a2a-supplier", "Northwind Cables Ltd"])
+    assert made.exit_code == 0, made.output
+    lines = made.output.splitlines()
+    entry = json.loads(next(line for line in lines if line.startswith("{")))
+    assert set(entry) == {"s7"} and entry["s7"]["supplier"] == "Northwind Cables Ltd"
+    seed = next(line for line in lines if line.startswith("private key (s7): ")).split(": ", 1)[1]
+    assert load_private_key(f"s7:{seed}")[0] == "s7"
+    for bad in (" Northwind Cables Ltd", "Northwind Cables Ltd ", ""):
+        refused = CliRunner().invoke(cli, ["make-caller-keys", "--erpnext-a2a-supplier", bad])
+        assert refused.exit_code == 2, repr(bad)
