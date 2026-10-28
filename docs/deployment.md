@@ -47,8 +47,13 @@ so the UI origin is the only one that *needs* to be public. See [auth.md](auth.m
 
 [.github/workflows/release-images.yml](../.github/workflows/release-images.yml)
 builds both images from the Dockerfiles above, with the repo root as build
-context, and pushes them to GitHub Container Registry. Nothing is added or
-configured in CI. Note that `make docker` builds only the API image — the
+context, and pushes them to GitHub Container Registry as
+`ghcr.io/<owner>/openexecutive-api` and `-ui`, after the repository's owner
+(here `sentelabsai`). It runs in this repository, and in a copy whose
+repository variable `PUBLISH_IMAGES` is `true`, which then publishes its own
+packages, private like the copy. A pull request that changes the images'
+inputs (`docker/`, the workflow, the two output scripts) builds both without
+pushing. Note that `make docker` builds only the API image — the
 compose file runs the UI as a `next dev` server — so this workflow is the only
 thing that builds `Dockerfile.ui`.
 
@@ -98,6 +103,25 @@ with no `## [X.Y.Z]` section fails that job instead of publishing an empty
 release. If the images fail, no release is
 created; re-running the failed job from the Actions UI creates it once the
 images succeed. A release that already exists for the tag is left alone.
+
+**Pinning by digest.** Each run's summary (Actions → Publish images → the run)
+lists, per image, the digest to pin and the tags that point at it, e.g.
+`ghcr.io/sentelabsai/openexecutive-api@sha256:…` for commit `<sha>`. For a
+commit or release from an older run, read it from its tag:
+
+```bash
+docker buildx imagetools inspect ghcr.io/<owner>/openexecutive-api:sha-<short commit>   # or :X.Y.Z
+```
+
+**What a host checks against, from the image.** The API image holds the
+release's `embed-manifest.json`, `host-list.json` and `openapi.json` (what
+`make embed-outputs` writes) at `/opt/embed-outputs`, so a server with no
+checkout copies them out of the image it runs:
+
+```bash
+id=$(docker create ghcr.io/<owner>/openexecutive-api@sha256:…)
+docker cp "$id":/opt/embed-outputs ./embed-outputs && docker rm "$id"
+```
 
 The images are `linux/amd64` only. The API image bakes the embedding models at
 build time (see the Dockerfile), which makes an emulated arm64 build
@@ -1014,6 +1038,9 @@ them:
 make embed-outputs EMBED_OUT=dist/embed          # embed-manifest.json, host-list.json, openapi.json
 bench --site <site> oe-connector-check-ui --outputs <path to dist/embed>
 ```
+
+A server running the published images takes the same three files from the API
+image instead (`/opt/embed-outputs`, see [Images](#images)).
 
 Fix what the check names first: a changed contract, a navigation entry the
 desk lacks, or an endpoint a native screen reads that changed.

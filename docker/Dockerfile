@@ -31,6 +31,20 @@ RUN npm ci --no-audit --no-fund \
        "https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full" \
        numpy pandas matplotlib pillow lxml fonttools typing-extensions
 
+# The build outputs a host app checks this release against (`make
+# embed-outputs`; docs/auth.md, "Host origins"): the UI's embed manifest and
+# host list come from packages/ui's source, which this Node stage runs with
+# type stripping only (navConfig.ts's imports are types), so it needs no npm
+# install. The API stage below adds openapi.json and keeps all three at
+# /opt/embed-outputs, so a server running the published images, with no
+# checkout, gets them from the image (docs/deployment.md, "Host apps' checks").
+FROM node:22-alpine AS embed-outputs
+WORKDIR /ui
+COPY packages/ui/package.json ./
+COPY packages/ui/scripts/embed-outputs.mjs ./scripts/
+COPY packages/ui/src/ ./src/
+RUN node --no-warnings --experimental-strip-types scripts/embed-outputs.mjs /opt/embed-outputs     && test -s /opt/embed-outputs/embed-manifest.json     && test -s /opt/embed-outputs/host-list.json
+
 FROM python:3.11-slim AS api
 
 WORKDIR /app
@@ -208,6 +222,13 @@ COPY fixtures/ ./fixtures/
 # Dependencies were already installed in the earlier layer, so --no-deps
 # keeps this fast and cache-friendly.
 RUN uv pip install --system --no-deps .
+
+# openapi.json, next to the UI's two (the embed-outputs stage above): the same
+# scripts/export-openapi.py `make embed-outputs` runs, from /tmp so nothing it
+# touches lands in /app. It needs no secrets; then all three must parse.
+COPY --from=embed-outputs /opt/embed-outputs /opt/embed-outputs
+COPY scripts/export-openapi.py /tmp/export-openapi.py
+RUN cd /tmp     && python /tmp/export-openapi.py /opt/embed-outputs/openapi.json     && rm -rf /tmp/export-openapi.py /tmp/*.db     && python -c "import json; [json.load(open('/opt/embed-outputs/' + n)) for n in ('embed-manifest.json', 'host-list.json', 'openapi.json')]"     && chmod -R a+rX /opt/embed-outputs
 
 RUN W=/app/openexecutive/workflows/python_job_worker.mjs \
     && WHEELS=$(ls /opt/pysandbox/wheels/*.whl | sed 's/.*/"&"/' | paste -sd, -) \
