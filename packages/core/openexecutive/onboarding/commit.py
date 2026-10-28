@@ -108,6 +108,13 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
                     logger.warning("onboarding: person %s can't be the principal; it stays as it was", principal_id)
                     principal_id = None
                 existing = {p.full_name.strip().lower(): p for p in list_people(include_suspended=True)}
+                if principal_id is not None:
+                    # The drafted name is the row that now holds the flag, even
+                    # if another row shares the name (last-wins would pick the
+                    # other, and the loop would then update the wrong one).
+                    holder = get_person(principal_id)
+                    if holder is not None:
+                        existing[key] = holder
 
         ids: dict[str, int] = {}
         for draft in named:
@@ -150,8 +157,9 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
             # As onboarding always has, the principal holds WILDCARD alone.
             set_authority_scope(principal_id, [AuthorityScope.WILDCARD])
             # Only once the flag is on the roster's principal: otherwise this
-            # would demote the one there is, and leave none.
-            _demote_stale_principals(set(ids.values()))
+            # would demote the one there is, and leave none. The principal is
+            # always kept, whatever row the loop matched a name to.
+            _demote_stale_principals(set(ids.values()) | {principal_id})
         return ids
     except Exception as exc:
         logger.warning(

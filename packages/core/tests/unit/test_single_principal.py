@@ -178,3 +178,21 @@ def test_onboarding_saves_the_team_when_the_drafted_owner_cant_be_the_principal(
     )
     assert "Dana" in ids
     assert _principals(db) == [pat]
+
+
+def test_the_owners_rerun_with_a_namesake_row_keeps_one_principal(db: Path) -> None:
+    """An older roster can hold a second row with the owner's name (the form
+    wizard inserted without matching names): the owner's re-run must end with
+    them as the one principal, with WILDCARD (security review, Oct 28, 2026)."""
+    from openexecutive.onboarding.commit import save_onboarding_people
+    from openexecutive.onboarding.interview import PersonDraft
+
+    pat = store.upsert_person(full_name="Pat", is_principal=True, db_path=db)
+    store.set_authority_scope(pat, [AuthorityScope.WILDCARD], db_path=db)
+    namesake = store.upsert_person(full_name="Pat", role="Intern", db_path=db)
+    ids = save_onboarding_people([PersonDraft(full_name="Pat", role="Founder", is_principal=True)])
+    principals = _principals(db)
+    assert len(principals) == 1 and ids["Pat"] == principals[0]
+    holder = store.get_person(principals[0], db)
+    assert holder is not None and holder.authority_scope == [AuthorityScope.WILDCARD]
+    assert {pat, namesake} >= set(principals)
