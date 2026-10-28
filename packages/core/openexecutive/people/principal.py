@@ -120,8 +120,11 @@ def set_principal(
                 f"{holder.full_name}'s row also has {'; '.join(planted)}, which would become the principal's."
                 " Remove them on the People page if they aren't theirs, then run this again."
             )
-        if not store.claim_principal(holder.id, db_path):
-            raise PrincipalError("there is a principal already (it may be suspended). Nothing changed.")
+        if not store.claim_principal(holder.id, address, db_path):
+            raise PrincipalError(
+                "there is a principal already (it may be suspended), or their row changed meanwhile."
+                " Nothing changed."
+            )
         if role_text is not None:
             store.update_person(holder.id, role=role_text, db_path=db_path)
         return _done(f"{holder.full_name} <{address}> is now the principal.", holder.id, False)

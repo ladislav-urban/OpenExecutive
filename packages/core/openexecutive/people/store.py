@@ -1001,19 +1001,25 @@ def _grant_wildcard(conn: sqlite3.Connection, person_id: int) -> None:
     )
 
 
-def claim_principal(person_id: int, db_path: Path | None = None) -> bool:
+def claim_principal(person_id: int, email: str, db_path: Path | None = None) -> bool:
     """Make ``person_id`` the principal with WILDCARD, as onboarding does,
     only while there is none, and only an active team member who isn't a
-    demo person. One transaction, guarded in its own UPDATE, so two claims (or
-    a claim and the People API) can't both win. True when it changed
-    (``openexecutive principal``, people/principal.py)."""
+    demo person, whose own address is still ``email`` and whose row still
+    carries no chat id or alias (people/principal.py checked them; the UPDATE
+    asserts them again, so an edit in between can't ride along). One
+    transaction, so two claims (or a claim and the People API) can't both
+    win. True when it changed (``openexecutive principal``)."""
     now = _now()
     with _get_conn(db_path) as conn:
         cursor = conn.execute(
             "UPDATE people SET is_principal = 1, updated_at = ?"
             " WHERE id = ? AND kind = 'team' AND is_principal = 0 AND directory_demo = 0 AND "
-            + ACTIVE_SQL + " AND " + _NO_PRINCIPAL_SQL,
-            (now, person_id),
+            + ACTIVE_SQL + " AND " + _NO_PRINCIPAL_SQL
+            + " AND LOWER(TRIM(email)) = ?"
+            " AND COALESCE(slack_user_id, '') = '' AND COALESCE(telegram_chat_id, '') = ''"
+            " AND COALESCE(discord_user_id, '') = ''"
+            " AND NOT EXISTS (SELECT 1 FROM person_emails WHERE person_id = ?)",
+            (now, person_id, normalize_email(email), person_id),
         )
         if cursor.rowcount != 1:
             return False

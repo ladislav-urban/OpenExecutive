@@ -166,9 +166,14 @@ def test_bad_input_changes_nothing(db: Path, email: str, name: str | None, reaso
 def test_claiming_and_adding_win_only_while_there_is_none(db: Path) -> None:
     a = store.upsert_person(full_name="A", email="a@example.com", db_path=db)
     b = store.upsert_person(full_name="B", email="b@example.com", db_path=db)
-    assert store.claim_principal(a, db) is True
-    assert store.claim_principal(b, db) is False
-    assert store.claim_principal(a, db) is False
+    # The address it was checked for, and no handle put on in between.
+    assert store.claim_principal(a, "other@example.com", db) is False
+    store.update_person(a, telegram_chat_id="999", db_path=db)
+    assert store.claim_principal(a, "a@example.com", db) is False
+    store.update_person(a, telegram_chat_id="", db_path=db)
+    assert store.claim_principal(a, "a@example.com", db) is True
+    assert store.claim_principal(b, "b@example.com", db) is False
+    assert store.claim_principal(a, "a@example.com", db) is False
     assert store.add_principal(full_name="C", role="", email="c@example.com", db_path=db) is None
     person = store.get_person(a, db)
     assert person is not None and person.authority_scope == [AuthorityScope.WILDCARD]
