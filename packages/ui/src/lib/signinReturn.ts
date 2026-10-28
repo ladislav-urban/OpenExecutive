@@ -11,6 +11,11 @@
 // oe_embed.bundle.js). Anything else returns null and the tab goes to this
 // app's Home.
 //
+// The same check guards the way back from a card answered on this app's own
+// page, top level (components/embed/FrameConfirm.tsx, the card pages): the
+// host's return base (lib/embed.ts) plus that page's path, carried in
+// `?return=`, offered as a link and never followed on its own.
+//
 // No imports, so `npm test` can exercise this.
 
 // The host's desk routes, kept in step with lib/erpnextLinks.ts (its test reads both).
@@ -66,4 +71,29 @@ export function loginHint(raw: string | null | undefined): string | undefined {
   if (typeof raw !== "string") return undefined;
   const hint = raw.trim().toLowerCase();
   return hint.length <= MAX_HINT_CHARS && EMAIL_RE.test(hint) ? hint : undefined;
+}
+
+// A card page's way back to the host page it was opened from.
+export const RETURN_PARAM = "return";
+
+/** The host page for this app's `page` (its path only), or null when it isn't one. */
+export function hostReturn(base: string | null | undefined, page: string, origins: readonly string[]): string | null {
+  if (!base) return null;
+  const path = page.split(/[?#]/, 1)[0];
+  if (!path.startsWith("/") || path.startsWith("//")) return null;
+  return returnTarget(`${base}${path === "/" ? "" : path}`, origins);
+}
+
+/** `page` (a path on this app, maybe with a query) with the way back added. */
+export function withReturn(page: string, to: string | null): string {
+  if (!to) return page;
+  const [path, query = ""] = page.split("?", 2);
+  const params = new URLSearchParams(query);
+  params.set(RETURN_PARAM, to);
+  return `${path}?${params.toString()}`;
+}
+
+/** The way back a page's query carries, checked again, or null. */
+export function returnFromQuery(search: string, origins: readonly string[]): string | null {
+  return returnTarget(new URLSearchParams(search).get(RETURN_PARAM), origins);
 }

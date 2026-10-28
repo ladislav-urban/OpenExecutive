@@ -5,6 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import FrameConfirm from "@/components/embed/FrameConfirm";
 import { CardActionNotConfirmed, frameActionFor, type CardAction } from "@/lib/cardActions";
 import HOST_LIST from "@/lib/host-list.json";
+import { DEFAULT_PRODUCT_NAME } from "@/lib/productName";
 import {
   acceptsEvent,
   embedRequested,
@@ -58,6 +59,13 @@ export function useHostOrigins(): readonly string[] {
   return useContext(HostOriginsContext);
 }
 
+// What this app calls itself on its own pages (OE_PRODUCT_NAME, lib/productName.ts).
+const ProductNameContext = createContext<string>(DEFAULT_PRODUCT_NAME);
+
+export function useProductName(): string {
+  return useContext(ProductNameContext);
+}
+
 /** Whether a request is the very one passed: same method, same address. */
 function isPassed(pass: { method: string; url: string }, method: string, url: string): boolean {
   return pass.method === method.toUpperCase() && new URL(pass.url, location.href).href === new URL(url, location.href).href;
@@ -91,10 +99,12 @@ export function usePassOnce(): PassOnce {
 
 export default function EmbedProvider({
   hostOrigins,
+  productName,
   version,
   children,
 }: {
   hostOrigins: string[];
+  productName: string;
   version: string;
   children: React.ReactNode;
 }) {
@@ -118,10 +128,13 @@ export default function EmbedProvider({
       const message = parseHostMessage(event.data);
       if (!message) return;
       if (message.type === "init") {
+        // The way back must lead to the very host that framed this page.
+        const { returnBase, ...init } = message.init;
+        if (returnBase && new URL(returnBase).origin !== event.origin) return;
         lockedOrigin = event.origin;
-        font = message.init.font;
-        applyTheme(message.init.theme, font);
-        setState({ embedded: true, init: message.init, hostOrigin: event.origin });
+        font = init.font;
+        applyTheme(init.theme, font);
+        setState({ embedded: true, init: returnBase ? { ...init, returnBase } : init, hostOrigin: event.origin });
       } else if (lockedOrigin) {
         applyTheme(message.theme, font);
         setState((prev) => (prev.init ? { ...prev, init: { ...prev.init, theme: message.theme } } : prev));
@@ -182,12 +195,22 @@ export default function EmbedProvider({
 
   return (
     <HostOriginsContext.Provider value={hostOrigins}>
+      <ProductNameContext.Provider value={productName}>
       <PassOnceContext.Provider value={passOnce}>
         <EmbedContext.Provider value={state}>
           {children}
-          {pending && <FrameConfirm action={pending.action} onAnswer={answer} />}
+          {pending && (
+            <FrameConfirm
+              action={pending.action}
+              onAnswer={answer}
+              productName={productName}
+              returnBase={state.init?.returnBase ?? null}
+              hostOrigins={hostOrigins}
+            />
+          )}
         </EmbedContext.Provider>
       </PassOnceContext.Provider>
+      </ProductNameContext.Provider>
     </HostOriginsContext.Provider>
   );
 }

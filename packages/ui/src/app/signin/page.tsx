@@ -2,7 +2,9 @@ import { AuthError } from "next-auth";
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { GOOGLE_SIGN_IN, LOCAL_LOGIN, OIDC, auth, sessionStillAllowed, signIn } from "@/auth";
+import { PRODUCT_NAME } from "@/lib/hostConfig";
 import { LOCAL_LOGIN_PROVIDER_ID } from "@/lib/localLogin";
+import { DEFAULT_PRODUCT_NAME } from "@/lib/productName";
 import { OIDC_PROVIDER_ID } from "@/lib/oidc";
 import { RETURN_COOKIE } from "@/lib/signinReturn";
 import BrandMark from "@/components/BrandMark";
@@ -46,8 +48,9 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
       <div className="w-full max-w-sm rounded-2xl border border-line bg-surface/60 p-8 shadow-xl">
         <h1 className="flex items-center gap-2.5 font-display text-2xl font-extrabold tracking-tight text-fg">
           <EmbedProductName>
-            <BrandMark size="sm" />
-            Open Executive
+            {/* This app's own mark only under its own name (OE_PRODUCT_NAME). */}
+            {PRODUCT_NAME === DEFAULT_PRODUCT_NAME && <BrandMark size="sm" />}
+            {PRODUCT_NAME}
           </EmbedProductName>
         </h1>
         <p className="mt-2 text-sm text-fg-muted">
@@ -126,7 +129,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
               <div className="mt-6 rounded-xl border border-line bg-surface-elevated px-4 py-3">
                 <p className="text-sm font-medium text-fg">Sign-in isn’t set up here yet.</p>
                 <p className="mt-1 text-sm text-fg-muted">
-                  Ask whoever runs Open Executive for you to turn on Google or SSO sign-in.
+                  Ask whoever runs {PRODUCT_NAME} for you to turn on Google or SSO sign-in.
                 </p>
                 <p className="mt-2 text-xs text-fg-muted">If that’s you: see docs/auth.md.</p>
               </div>

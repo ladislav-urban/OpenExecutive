@@ -7,7 +7,7 @@ import { ExecutiveStatusProvider } from "@/components/executive/ExecutiveStatusC
 import { SessionsProvider } from "@/components/sessions/SessionsContext";
 import AppShell from "@/components/shell/AppShell";
 import { WorkspaceProvider } from "@/components/workspace/WorkspaceContext";
-import { HOST_ORIGINS } from "@/lib/hostConfig";
+import { HOST_ORIGINS, PRODUCT_NAME } from "@/lib/hostConfig";
 import packageJson from "../../package.json";
 import "./globals.css";
 
@@ -23,7 +23,7 @@ const bricolage = Bricolage_Grotesque({
 });
 
 export const metadata: Metadata = {
-  title: "Open Executive",
+  title: PRODUCT_NAME,
   description: "Your AI-powered virtual executive team",
 };
 
@@ -49,7 +49,7 @@ export default async function RootLayout({
     <html lang="en" className={`h-full ${geist.variable} ${bricolage.variable}`}>
       <body className="h-full antialiased bg-surface text-fg">
         <AuthProvider>
-          <EmbedProvider hostOrigins={[...HOST_ORIGINS.origins]} version={packageJson.version}>
+          <EmbedProvider hostOrigins={[...HOST_ORIGINS.origins]} productName={PRODUCT_NAME} version={packageJson.version}>
             <SessionsProvider>
               <ExecutiveStatusProvider>
                 <WorkspaceProvider>

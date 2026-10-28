@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ChatActionCards } from "@/components/ActionCards";
 import { ErpnextDraftCardItem, useErpnextDraftCards } from "@/components/ErpnextDraftCards";
 import { ReplyCardItem, useReplyCards } from "@/components/RepliesWaiting";
+import { BackToHost, useCardReturn } from "@/components/shell/CardReturn";
 import { usePageCrumb } from "@/components/shell/PageCrumb";
 import { getDecision, type DecisionInstance } from "@/lib/api";
 
@@ -20,6 +21,7 @@ export default function CardPage() {
   const params = useParams<{ id: string }>();
   const id = /^\d+$/.test(params?.id ?? "") ? Number(params.id) : null;
   usePageCrumb(id !== null ? `Card ${id}` : "Card");
+  const back = useCardReturn(usePathname() ?? "/");
   const [instance, setInstance] = useState<DecisionInstance | null | undefined>(undefined);
   const replies = useReplyCards();
   const reply = replies.cards.find((c) => c.decision_id === id);
@@ -66,9 +68,14 @@ export default function CardPage() {
       )}
       {replies.notice && <p className="text-sm text-fg-muted">{replies.notice}</p>}
       <p className="text-sm">
-        <Link href="/" className="text-accent hover:underline">
-          Everything waiting for you
-        </Link>
+        {/* Opened from a host's frame: back there, not into this app's Home. */}
+        {back ? (
+          <BackToHost to={back} />
+        ) : (
+          <Link href="/" className="text-accent hover:underline">
+            Everything waiting for you
+          </Link>
+        )}
       </p>
     </main>
   );

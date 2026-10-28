@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ArmingState, { READY_RING } from "@/components/embed/ArmingState";
 import { buttonClass } from "@/components/ui/Button";
 import { ownPageFor, type CardAction } from "@/lib/cardActions";
+import { hostReturn, withReturn } from "@/lib/signinReturn";
 import { SeenGate, tracksVisibility, watchPanel, type Watch } from "@/lib/seen";
 
 // In a frame, a card action, a chat message or another change asks here,
@@ -14,6 +15,8 @@ import { SeenGate, tracksVisibility, watchPanel, type Watch } from "@/lib/seen";
 // real, and still seen a moment later. A browser that can't report that
 // offers no Yes: the person opens this app's own page for it, top level in
 // the same tab, as can anyone who can't point (a keyboard, a touch screen).
+// When the host gave a return base (lib/embed.ts), that page carries the way
+// back to the host's own page for it (lib/signinReturn.ts, hostReturn).
 // The panel keeps this app's own colours and face (`.consent`, globals.css),
 // whatever the host's theme. Cancel is No.
 
@@ -35,9 +38,16 @@ const YES: Record<CardAction["verb"], string> = {
 export default function FrameConfirm({
   action,
   onAnswer,
+  productName,
+  returnBase = null,
+  hostOrigins = [],
 }: {
   action: CardAction;
   onAnswer: (ok: boolean) => void;
+  // What this app calls itself (OE_PRODUCT_NAME): its own page is named so.
+  productName: string;
+  returnBase?: string | null;
+  hostOrigins?: readonly string[];
 }) {
   const panel = useRef<HTMLDivElement | null>(null);
   const yes = useRef<HTMLButtonElement | null>(null);
@@ -47,7 +57,10 @@ export default function FrameConfirm({
   // Shown only in the browser (EmbedProvider asks from a request), so
   // `window` is there. False where the browser can't tell it is seen.
   const [supported] = useState(() => tracksVisibility(window));
-  const [ownPage] = useState(() => ownPageFor(action, window.location.pathname, window.location.search));
+  const [ownPage] = useState(() => {
+    const page = ownPageFor(action, window.location.pathname, window.location.search);
+    return withReturn(page, hostReturn(returnBase, page, hostOrigins));
+  });
   const [ready, setReady] = useState(false);
   // How far along arming is, for the bar only (ArmingState).
   const [progress, setProgress] = useState(0);
@@ -103,7 +116,7 @@ export default function FrameConfirm({
         {!supported && (
           <p className="mt-2 text-xs text-fg-subtle">
             This page is shown inside another one, and this browser can&rsquo;t tell whether this question is really
-            on screen, so answer it on Open Executive&rsquo;s own page. Your browser&rsquo;s Back brings you here again.
+            on screen, so answer it on {productName}&rsquo;s own page. Your browser&rsquo;s Back brings you here again.
           </p>
         )}
         <div className="mt-5 flex justify-end gap-2">

@@ -5,7 +5,7 @@
 // The frame and the host talk in `oe-embed/v1` postMessage messages:
 //
 //   frame → host  ready      { contract: 1, version }
-//   host → frame  init       { contract: 1, theme, font, productName, userHint, nativePaths }
+//   host → frame  init       { contract: 1, theme, font, productName, userHint, nativePaths, returnBase? }
 //   host → frame  theme      { theme }                  when the person switches theme
 //   frame → host  route      { path, query, title }     on every navigation
 //   frame → host  open       { kind: "host", route } | { kind: "native", path }
@@ -23,8 +23,10 @@
 // The frame takes a message only from its parent window and only from a
 // listed host origin, exactly, and validates every field: colours as
 // colours, the font stack against a short pattern, the product name as plain
-// text of bounded length, native paths against this app's own routes. A
-// message that fails any of it is dropped whole. Until a valid `init`
+// text of bounded length, native paths against this app's own routes, the
+// return base as one of the host's own desk addresses (parseReturnBase; its
+// origin must also be the message's, EmbedProvider). A message that fails
+// any of it is dropped whole. Until a valid `init`
 // arrives, the page renders as it would outside a frame.
 //
 // src/lib/embed-examples.json is a fixed set of example messages with what
@@ -68,6 +70,11 @@ export type EmbedInit = {
   // Paths the host shows natively; the frame asks the host to open those
   // instead of showing them itself.
   nativePaths: string[];
+  // Where the host shows this app's pages: its own address that a path of
+  // this app is appended to, e.g. https://erp.example.com/desk/x. Present
+  // only when the host sends it. A card answered on this app's own page, top
+  // level, offers the way back to it (lib/signinReturn.ts, hostReturn).
+  returnBase?: string;
 };
 
 export type HostMessage = { type: "init"; init: EmbedInit } | { type: "theme"; theme: EmbedTheme };
@@ -195,7 +202,35 @@ function parseInit(data: Record<string, unknown>): EmbedInit | null {
       if (!nativePaths.includes(path)) nativePaths.push(path);
     }
   }
-  return { theme, font, productName, userHint, nativePaths };
+  let returnBase: string | null = null;
+  if (data.returnBase !== undefined && data.returnBase !== null) {
+    returnBase = parseReturnBase(data.returnBase);
+    if (!returnBase) return null;
+  }
+  return { theme, font, productName, userHint, nativePaths, ...(returnBase ? { returnBase } : {}) };
+}
+
+// A return base's path: a host desk route of plain segments (lib/signinReturn.ts's
+// DESK_ROUTE_RE takes the address it makes), no query and no fragment.
+const RETURN_BASE_PATH_RE = /^\/(?:desk|app)(?:\/[A-Za-z0-9_.%-]+)*$/;
+const ENCODED_SEPARATOR_RE = /%(?:2e|2f|5c)/i;
+const MAX_RETURN_BASE = 512;
+
+/** A host's return base, rebuilt from its parts, or null when it isn't one. */
+export function parseReturnBase(value: unknown): string | null {
+  if (typeof value !== "string" || !value || value.length > MAX_RETURN_BASE) return null;
+  if (value.includes("?") || value.includes("#")) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username || url.password) return null;
+  const path = url.pathname;
+  if (!RETURN_BASE_PATH_RE.test(path) || path.includes("..") || ENCODED_SEPARATOR_RE.test(path)) return null;
+  return `${url.origin}${path}`;
 }
 
 /** A message from the host → what it says, or null to drop it. */

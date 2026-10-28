@@ -129,6 +129,31 @@
       "expect": null
     },
     {
+      "name": "an init with a return base",
+      "message": { "protocol": "oe-embed/v1", "type": "init", "contract": 1, "theme": { "mode": "light" }, "productName": "Northwind", "returnBase": "https://erp.example.com/desk/northwind" },
+      "expect": { "type": "init", "init": { "theme": { "mode": "light", "tokens": {} }, "font": null, "productName": "Northwind", "userHint": null, "nativePaths": [], "returnBase": "https://erp.example.com/desk/northwind" } }
+    },
+    {
+      "name": "a return base with a query",
+      "message": { "protocol": "oe-embed/v1", "type": "init", "contract": 1, "theme": { "mode": "light" }, "productName": "Northwind", "returnBase": "https://erp.example.com/desk/northwind?x=1" },
+      "expect": null
+    },
+    {
+      "name": "a return base off the host's desk routes",
+      "message": { "protocol": "oe-embed/v1", "type": "init", "contract": 1, "theme": { "mode": "light" }, "productName": "Northwind", "returnBase": "https://erp.example.com/login" },
+      "expect": null
+    },
+    {
+      "name": "a return base with user info",
+      "message": { "protocol": "oe-embed/v1", "type": "init", "contract": 1, "theme": { "mode": "light" }, "productName": "Northwind", "returnBase": "https://a:b@erp.example.com/desk/northwind" },
+      "expect": null
+    },
+    {
+      "name": "a return base with an encoded slash",
+      "message": { "protocol": "oe-embed/v1", "type": "init", "contract": 1, "theme": { "mode": "light" }, "productName": "Northwind", "returnBase": "https://erp.example.com/desk/%2fnorthwind" },
+      "expect": null
+    },
+    {
       "name": "a message type the frame doesn't take",
       "message": { "protocol": "oe-embed/v1", "type": "navigate", "path": "/settings" },
       "expect": null
