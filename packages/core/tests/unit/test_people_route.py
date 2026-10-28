@@ -330,3 +330,16 @@ def test_an_unreadable_roster_refuses(
 
     monkeypatch.setattr(people_store, "find_principal_person", locked)
     assert client.post("/people", json={"full_name": "Ann"}, headers=OWNER).status_code == 403
+
+
+def test_a_principal_added_here_gets_wildcard_and_a_second_is_refused(client: TestClient) -> None:
+    # As onboarding and `openexecutive principal` make the principal: WILDCARD,
+    # with whatever else was asked; and there is one principal (people/store.py).
+    first = client.post(
+        "/people", json={"full_name": "Olive", "is_principal": True, "authority_scope": ["spend_lt_2k"]}
+    )
+    assert first.status_code == 201
+    assert set(first.json()["authority_scope"]) == {"wildcard", "spend_lt_2k"}
+    second = client.post("/people", json={"full_name": "Mallory", "is_principal": True})
+    assert second.status_code == 409
+    assert [p["full_name"] for p in client.get("/people").json()] == ["Olive"]

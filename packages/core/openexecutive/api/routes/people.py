@@ -439,8 +439,13 @@ def create_person(body: PersonCreate, request: Request) -> Person:
         pid = _create(body)
     except people_store.PrincipalExistsError:
         raise HTTPException(status_code=409, detail=_PRINCIPAL_EXISTS) from None
-    if body.authority_scope:
-        people_store.set_authority_scope(pid, body.authority_scope)
+    scopes = list(body.authority_scope)
+    if body.is_principal and AuthorityScope.WILDCARD not in scopes:
+        # The principal approves anything, as onboarding and `openexecutive
+        # principal` make them: added here, whatever else was asked.
+        scopes.append(AuthorityScope.WILDCARD)
+    if scopes:
+        people_store.set_authority_scope(pid, scopes)
     if body.availability:
         people_store.set_availability(pid, body.availability)
     if aliases:
