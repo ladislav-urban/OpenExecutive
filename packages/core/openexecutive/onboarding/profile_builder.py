@@ -41,11 +41,12 @@ def _save_wizard_people(answers: dict) -> None:  # type: ignore[type-arg]
     try:
         from openexecutive.people.models import AuthorityScope
         from openexecutive.people.store import (
-            initialize_db as init_people_db,
-        )
-        from openexecutive.people.store import (
+            PrincipalExistsError,
             set_authority_scope,
             upsert_person,
+        )
+        from openexecutive.people.store import (
+            initialize_db as init_people_db,
         )
 
         records = build_people_from_answers(answers)
@@ -54,7 +55,12 @@ def _save_wizard_people(answers: dict) -> None:  # type: ignore[type-arg]
         init_people_db()
         for rec in records:
             raw_scopes: list[str] = rec.pop("authority_scope", [])
-            pid = upsert_person(**rec)
+            try:
+                pid = upsert_person(**rec)
+            except PrincipalExistsError:
+                # A re-run: there is a principal already (one only, the store
+                # refuses a second). Their row stays; the team is still added.
+                continue
             scopes = []
             for tok in raw_scopes:
                 with contextlib.suppress(ValueError):

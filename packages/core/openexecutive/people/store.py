@@ -93,7 +93,8 @@ ACTIVE_SQL = active_sql()
 
 # No principal yet: no non-archived row holds the flag (a suspended one counts).
 _NO_PRINCIPAL_SQL = "NOT EXISTS (SELECT 1 FROM people WHERE is_principal = 1 AND archived = 0)"
-# For an UPDATE of row ?: no one else holds it.
+# For an UPDATE making row ? the principal: it is active, and no one else holds it.
+_TARGET_ACTIVE_SQL = " AND " + ACTIVE_SQL
 _NOT_ANOTHER_PRINCIPAL_SQL = (
     " AND NOT EXISTS (SELECT 1 FROM people other"
     " WHERE other.is_principal = 1 AND other.archived = 0 AND other.id != ?)"
@@ -427,7 +428,7 @@ def upsert_person(
                     response_sla_hours=?, on_leave_until=?, reports_to_person_id=?,
                     updated_at=?
                 WHERE id=?
-                """ + (_NOT_ANOTHER_PRINCIPAL_SQL if is_principal else ""),
+                """ + (_TARGET_ACTIVE_SQL + _NOT_ANOTHER_PRINCIPAL_SQL if is_principal else ""),
                 (
                     full_name, role, int(is_principal), dept_json,
                     email, slack_user_id, telegram_chat_id, discord_user_id,
@@ -438,6 +439,10 @@ def upsert_person(
                 ),
             )
             if is_principal and row is not None and cursor.rowcount == 0:
+                # Suspended or archived since it was read, or someone else holds it.
+                now_row = conn.execute("SELECT suspended FROM people WHERE id = ?", (person_id,)).fetchone()
+                if now_row is not None and now_row["suspended"]:
+                    raise PrincipalSuspendError("restore this person before making them the principal")
                 raise PrincipalExistsError("someone else is the principal")
         else:
             new_kind: str = kind or "team"
@@ -1076,10 +1081,12 @@ def add_principal(
 def transfer_principal(person_id: int, db_path: Path | None = None) -> list[int]:
     """Make ``person_id`` the principal and everyone else not, in one UPDATE,
     so there is never a moment with two principals or none (onboarding's
-    re-run, onboarding/commit.py). Only an active team member who isn't a demo
-    person can take it. Returns who was the principal before (to lose
-    WILDCARD); raises ``PrincipalExistsError`` when ``person_id`` can't take it,
-    with nothing changed. Authority is the caller's to adjust."""
+    re-run, onboarding/commit.py); a roster holding two from before ends with
+    one. Only an active team member who isn't a demo person can take it. In
+    the same transaction, whoever had it loses WILDCARD (only that: other
+    scopes stay) and ``person_id`` gets it. Returns who had it; raises
+    ``PrincipalExistsError`` when ``person_id`` can't take it, with nothing
+    changed."""
     now = _now()
     with _get_conn(db_path) as conn:
         conn.execute("BEGIN IMMEDIATE")
@@ -1096,6 +1103,15 @@ def transfer_principal(person_id: int, db_path: Path | None = None) -> list[int]
         )
         if cursor.rowcount == 0:
             raise PrincipalExistsError("they can't be the principal")
+        for other in before:
+            conn.execute(
+                "DELETE FROM person_authority_scope WHERE person_id = ? AND scope_token = ?",
+                (other, AuthorityScope.WILDCARD.value),
+            )
+        conn.execute(
+            "INSERT OR IGNORE INTO person_authority_scope (person_id, scope_token) VALUES (?, ?)",
+            (person_id, AuthorityScope.WILDCARD.value),
+        )
     return before
 
 
