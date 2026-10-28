@@ -16,7 +16,7 @@ import yaml
 COMPOSE = Path(__file__).resolve().parents[4] / "docker" / "docker-compose.yml"
 # Secret-looking names the ui service sets that the API needs too.
 SHARED = {"BACKEND_SHARED_SECRET"}
-SECRET_NAME = re.compile(r"_(SECRET|PRIVATE_KEY)$")
+SECRET_NAME = re.compile(r"_(SECRET|PRIVATE_KEY|TOKEN)$")
 
 
 def _environment(service: dict) -> dict[str, str]:
@@ -28,7 +28,8 @@ def _services() -> dict:
 
 
 def ui_only_secrets() -> set[str]:
-    """Read from the ui service, so a secret added there is covered at once."""
+    """Read from the ui service, so a secret added there is covered at once
+    (*_SECRET, *_PRIVATE_KEY, *_TOKEN)."""
     return {name for name in _environment(_services()["ui"]) if SECRET_NAME.search(name)} - SHARED
 
 
@@ -50,3 +51,15 @@ def test_the_api_reads_none_of_them() -> None:
         text = path.read_text(encoding="utf-8")
         for name, read in reads.items():
             assert not read.search(text), f"{path} reads {name}"
+
+
+def test_no_setting_reads_one_either() -> None:
+    # Settings is a pydantic BaseSettings: a field reads the variable named
+    # after it (case-insensitively) or its alias, with no quoted name in sight.
+    from openexecutive.config import Settings
+
+    secrets = ui_only_secrets()
+    for name, field in Settings.model_fields.items():
+        names = {name, field.alias, field.validation_alias if isinstance(field.validation_alias, str) else None}
+        read = {n.upper() for n in names if n} & secrets
+        assert not read, f"Settings.{name} reads {read}"
