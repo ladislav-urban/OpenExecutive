@@ -13,10 +13,23 @@
 # on main that CI has passed. The two images are separate matrix jobs, so a
 # release is not atomic — if one job fails, the other's tags still exist.
 #
-# The job is guarded to this repository: a fork would otherwise run this on
-# every push to its own main and fail with a 403 pushing to the hardcoded
-# ghcr.io/sentelabsai/* names. A fork that wants its own images
-# changes the guard and the image names.
+# The jobs run in SenteLabsAI/OpenExecutive, and in any other copy whose
+# repository variable PUBLISH_IMAGES is `true` (Settings → Secrets and
+# variables → Actions → Variables). A fork without it never publishes. The
+# image names follow the repository's owner, ghcr.io/<owner>/openexecutive-api
+# and -ui, so upstream keeps ghcr.io/sentelabsai/* and a private copy gets its
+# own packages, private like the repository it is published from.
+#
+# Each run's summary lists every pushed tag with the image's digest, which is
+# what a server pins (`image: ghcr.io/<owner>/openexecutive-api@sha256:…`).
+# The `sha-<short commit>` tag names the commit; for one from an older run:
+#   docker buildx imagetools inspect ghcr.io/<owner>/openexecutive-api:sha-<short>
+#
+# The API image also holds the release's embed outputs (embed-manifest.json,
+# host-list.json, openapi.json) at /opt/embed-outputs; see docker/Dockerfile.
+#
+# A pull request that changes the images' inputs builds both without pushing,
+# so a broken Dockerfile shows there and not on main.
 #
 # Version tags normally come from merging the release PR that
 # release-please.yml maintains; that also creates the GitHub Release. For a
@@ -35,6 +48,13 @@ name: Publish images
 # named after whatever branch it was dispatched from. Re-run a failed run from
 # the Actions UI instead.
 on:
+  pull_request:
+    paths:
+      - docker/**
+      - .dockerignore
+      - .github/workflows/release-images.yml
+      - scripts/export-openapi.py
+      - packages/ui/scripts/embed-outputs.mjs
   push:
     branches: [main]
     # Semver only. A bare `v*` would accept `v0.2` or `vnext`, which
@@ -60,7 +80,7 @@ concurrency:
 jobs:
   publish:
     name: Publish ${{ matrix.name }}
-    if: github.repository == 'SenteLabsAI/OpenExecutive'
+    if: github.repository == 'SenteLabsAI/OpenExecutive' || vars.PUBLISH_IMAGES == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -68,16 +88,21 @@ jobs:
         include:
           - name: api
             dockerfile: docker/Dockerfile
-            image: ghcr.io/sentelabsai/openexecutive-api
           - name: ui
             dockerfile: docker/Dockerfile.ui
-            image: ghcr.io/sentelabsai/openexecutive-ui
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      # ghcr.io/<owner>/openexecutive-<name>; registry names are lowercase.
+      - id: image
+        env:
+          OWNER: ${{ github.repository_owner }}
+          NAME: ${{ matrix.name }}
+        run: echo "name=ghcr.io/${OWNER,,}/openexecutive-${NAME}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
@@ -94,7 +119,7 @@ jobs:
       - id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
-          images: ${{ matrix.image }}
+          images: ${{ steps.image.outputs.name }}
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
@@ -110,22 +135,42 @@ jobs:
       # provenance=false keeps each tag a plain single-platform image; the
       # default attestation manifest shows up as an `unknown/unknown` row on
       # the package page.
-      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+      # A pull request only builds (no push, no cache write).
+      - id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64
-          push: true
+          push: ${{ github.event_name != 'pull_request' }}
           provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=registry,ref=${{ matrix.image }}:buildcache
-          cache-to: type=registry,ref=${{ matrix.image }}:buildcache,mode=max
+          cache-from: type=registry,ref=${{ steps.image.outputs.name }}:buildcache
+          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache,mode=max', steps.image.outputs.name) || '' }}
+
+      # The digest a server pins, with every tag that now points at it.
+      - name: Digest to pin
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE: ${{ steps.image.outputs.name }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### ${IMAGE##*/}"
+            echo
+            echo "Pin: \`${IMAGE}@${DIGEST}\`"
+            echo
+            echo "Commit \`${GITHUB_SHA}\`, tags:"
+            echo
+            printf '%s\n' "$TAGS" | sed 's/^/- `/; s/$/`/'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   release:
     name: GitHub Release
     needs: publish
-    if: github.repository == 'SenteLabsAI/OpenExecutive' && startsWith(github.ref, 'refs/tags/v')
+    if: (github.repository == 'SenteLabsAI/OpenExecutive' || vars.PUBLISH_IMAGES == 'true') && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
