@@ -147,17 +147,32 @@ jobs:
       # TMPDIR on tmpfs: most tests build a fresh SQLite file under tmp_path,
       # and every CREATE/ALTER commits with a disk sync. In RAM those syncs are
       # free, which more than halves the run; each test still gets its own file.
+      # Each run gets its own pytest base dir: by default it is
+      # $TMPDIR/pytest-of-<user>/pytest-N, which every job of the same user
+      # shares. Two self-hosted runners on one machine (one user) then reuse and
+      # rotate each other's numbered dirs mid-run, and tests keyed on a temp
+      # path's mtime fail at random. Removed afterwards: /dev/shm is RAM.
       - name: Run unit tests
         env:
           TMPDIR: /dev/shm
-        run: cd packages/core && uv run pytest tests/unit/ -n auto --dist loadfile --tb=short
+        run: |
+          base="$TMPDIR/oe-pytest-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-unit"
+          cd packages/core && status=0
+          uv run pytest tests/unit/ -n auto --dist loadfile --tb=short --basetemp="$base" || status=$?
+          rm -rf "$base"
+          exit "$status"
 
       # Route-level tests against a temp SQLite DB, with the model calls
       # stubbed; no API key needed. Left out of CI, one rotted unnoticed.
       - name: Run integration tests
         env:
           TMPDIR: /dev/shm
-        run: cd packages/core && uv run pytest tests/integration/ -n auto --dist loadfile --tb=short
+        run: |
+          base="$TMPDIR/oe-pytest-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT-integration"
+          cd packages/core && status=0
+          uv run pytest tests/integration/ -n auto --dist loadfile --tb=short --basetemp="$base" || status=$?
+          rm -rf "$base"
+          exit "$status"
 
   ui-typecheck:
     name: UI type check

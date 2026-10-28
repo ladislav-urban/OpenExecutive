@@ -65,8 +65,10 @@ test-changed:
 	@files=$$(python3 scripts/changed_tests.py --base $(BASE)); \
 	if [ -z "$$files" ]; then echo "No changed code under packages/core maps to a test file."; exit 0; fi; \
 	echo "$$files"; \
+	base=$${TMPDIR:-/tmp}/oe-pytest-$$$$; status=0; \
 	cd packages/core && env -u BACKEND_SHARED_SECRET -u OE_PUBLIC_DEPLOYMENT -u SAAS_MODE \
-		uv run pytest $$files -n auto --dist loadfile -q
+		uv run pytest $$files -n auto --dist loadfile -q --basetemp="$$base" || status=$$?; \
+	rm -rf "$$base"; exit $$status
 
 lint:
 	cd packages/core && uv run ruff check openexecutive/ && uv run mypy openexecutive/
@@ -81,9 +83,14 @@ lint:
 BASE ?= origin/main
 TEST_TMPDIR ?= $(shell free=$$(df -Pk /dev/shm 2>/dev/null | awk 'NR==2 {print $$4}'); \
 	if [ "$${free:-0}" -ge 2097152 ]; then echo /dev/shm; else echo "$${TMPDIR:-/tmp}"; fi)
+# Each run gets its own pytest base dir (by process id), removed after: the
+# default, $TMPDIR/pytest-of-<user>, is shared with every other run by the same
+# user, such as a self-hosted CI runner on this machine (.github/workflows/ci.yml).
 check: lint
+	base=$(TEST_TMPDIR)/oe-pytest-$$$$; status=0; \
 	cd packages/core && env -u BACKEND_SHARED_SECRET -u OE_PUBLIC_DEPLOYMENT TMPDIR=$(TEST_TMPDIR) \
-		uv run pytest tests/unit/ tests/integration/ -n auto --dist loadfile -q
+		uv run pytest tests/unit/ tests/integration/ -n auto --dist loadfile -q --basetemp="$$base" || status=$$?; \
+	rm -rf "$$base"; exit $$status
 	@if ! git diff --quiet $$(git merge-base $(BASE) HEAD) -- packages/ui \
 		|| [ -n "$$(git ls-files --others --exclude-standard packages/ui)" ]; then \
 		cd packages/ui && npm run build; \
