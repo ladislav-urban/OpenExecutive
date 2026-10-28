@@ -163,3 +163,18 @@ def test_the_wizard_rerun_still_adds_the_team(db: Path, monkeypatch: pytest.Monk
     profile_builder._save_wizard_people({})
     assert _principals(db) == [pat]
     assert {p.full_name for p in store.list_people(db_path=db)} == {"Pat", "Dana"}
+
+
+def test_onboarding_saves_the_team_when_the_drafted_owner_cant_be_the_principal(db: Path) -> None:
+    from openexecutive.onboarding.commit import save_onboarding_people
+    from openexecutive.onboarding.interview import PersonDraft
+
+    pat = store.upsert_person(full_name="Pat", is_principal=True, db_path=db)
+    visitor = store.upsert_person(full_name="Vic", db_path=db)
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE people SET directory_managed = 1, directory_demo = 1 WHERE id = ?", (visitor,))
+    ids = save_onboarding_people(
+        [PersonDraft(full_name="Vic", is_principal=True), PersonDraft(full_name="Dana", role="Ops")]
+    )
+    assert "Dana" in ids
+    assert _principals(db) == [pat]

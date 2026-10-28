@@ -394,7 +394,9 @@ def upsert_person(
     ``PrincipalContactError`` for a principal contact, and
     ``PrincipalExistsError`` for ``is_principal`` while someone else is the
     principal: the guard is in the write itself, so two writers at once can't
-    both make one.
+    both make one. A caller rewriting an existing row passes its current
+    ``is_principal`` (``False`` on the principal's row would leave none):
+    only ``transfer_principal`` moves the flag.
     """
     now = _now()
     dept_json = json.dumps(department_slugs or [])

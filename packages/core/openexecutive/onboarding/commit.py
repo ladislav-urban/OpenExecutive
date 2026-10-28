@@ -61,6 +61,7 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
     try:
         from openexecutive.people.models import AuthorityScope
         from openexecutive.people.store import (
+            PrincipalExistsError,
             get_person,
             list_people,
             restore_person,
@@ -98,9 +99,14 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
             else:
                 principal_id = owner.id
             if principal_id is not None:
-                for demoted in transfer_principal(principal_id):
-                    # Kept as onboarding always has: only WILDCARD goes.
-                    logger.info("onboarding: the principal moved from person %s", demoted)
+                try:
+                    for demoted in transfer_principal(principal_id):
+                        logger.info("onboarding: the principal moved from person %s", demoted)
+                except PrincipalExistsError:
+                    # A demo person or a contact can't be the principal: the
+                    # flag stays where it is, and the rest of the team is saved.
+                    logger.warning("onboarding: person %s can't be the principal; it stays as it was", principal_id)
+                    principal_id = None
                 existing = {p.full_name.strip().lower(): p for p in list_people(include_suspended=True)}
 
         ids: dict[str, int] = {}
@@ -143,8 +149,9 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
         if principal_id is not None:
             # As onboarding always has, the principal holds WILDCARD alone.
             set_authority_scope(principal_id, [AuthorityScope.WILDCARD])
-
-        _demote_stale_principals(set(ids.values()))
+            # Only once the flag is on the roster's principal: otherwise this
+            # would demote the one there is, and leave none.
+            _demote_stale_principals(set(ids.values()))
         return ids
     except Exception as exc:
         logger.warning(

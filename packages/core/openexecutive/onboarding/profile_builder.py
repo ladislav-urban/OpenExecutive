@@ -60,6 +60,8 @@ def _save_wizard_people(answers: dict) -> None:  # type: ignore[type-arg]
             except PrincipalExistsError:
                 # A re-run: there is a principal already (one only, the store
                 # refuses a second). Their row stays; the team is still added.
+                # Changing who the principal is is done on the People page.
+                logger.info("_save_wizard_people: there is a principal already; their record is skipped")
                 continue
             scopes = []
             for tok in raw_scopes:
