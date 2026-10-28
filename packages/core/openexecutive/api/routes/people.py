@@ -435,21 +435,10 @@ def create_person(body: PersonCreate, request: Request) -> Person:
         people_store.alias_holder(body.email) is not None or _held_by_suspended(body.email, None)
     ):
         raise HTTPException(status_code=409, detail=_ADDRESS_IN_USE)
-    pid = people_store.upsert_person(
-        full_name=body.full_name,
-        role=body.role,
-        is_principal=body.is_principal,
-        department_slugs=body.department_slugs,
-        email=body.email,
-        slack_user_id=body.slack_user_id,
-        telegram_chat_id=body.telegram_chat_id,
-        discord_user_id=body.discord_user_id,
-        preferred_channel=body.preferred_channel,  # type: ignore[arg-type]
-        response_sla_hours=body.response_sla_hours,
-        on_leave_until=body.on_leave_until,
-        reports_to_person_id=body.reports_to_person_id,
-        kind=body.kind,
-    )
+    try:
+        pid = _create(body)
+    except people_store.PrincipalExistsError:
+        raise HTTPException(status_code=409, detail=_PRINCIPAL_EXISTS) from None
     if body.authority_scope:
         people_store.set_authority_scope(pid, body.authority_scope)
     if body.availability:
@@ -464,6 +453,25 @@ def create_person(body: PersonCreate, request: Request) -> Person:
     return person
 
 
+def _create(body: PersonCreate) -> int:
+    return people_store.upsert_person(
+        full_name=body.full_name,
+        role=body.role,
+        is_principal=body.is_principal,
+        department_slugs=body.department_slugs,
+        email=body.email,
+        slack_user_id=body.slack_user_id,
+        telegram_chat_id=body.telegram_chat_id,
+        discord_user_id=body.discord_user_id,
+        preferred_channel=body.preferred_channel,  # type: ignore[arg-type]
+        response_sla_hours=body.response_sla_hours,
+        on_leave_until=body.on_leave_until,
+        reports_to_person_id=body.reports_to_person_id,
+        kind=body.kind,
+    )
+
+
+_PRINCIPAL_EXISTS = "Someone else is the principal. There is one principal."
 _ADDRESS_IN_USE = "That address is already on another person."
 _MANAGED_IN_DIRECTORY = "Their name and email are managed in your identity provider."
 
