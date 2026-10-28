@@ -4181,6 +4181,23 @@ people:
   module: openexecutive.people
   store: openexecutive.people.store (SQLite)
   models: openexecutive.people.models — Person (name, role, department, principal flag, kind, contact channels, availability windows, on-leave date)
+  single_principal: |
+    One principal, enforced in the store (Oct 28, 2026; follow-up from the
+    principal CLI's security review): upsert_person(is_principal=True)
+    carries NOT EXISTS another non-archived principal in its INSERT … SELECT
+    or UPDATE … WHERE (suspended counts) and raises PrincipalExistsError,
+    so concurrent POST /people (open to anyone while unclaimed) can't make
+    two; the API answers 409. The UPDATE also requires the target active, so
+    a row suspended since it was read can't become the principal.
+    transfer_principal(id) moves the flag in one UPDATE (CASE WHEN id = ?),
+    refusing a contact, suspended, archived or demo target, and in the same
+    BEGIN IMMEDIATE transaction drops only WILDCARD from whoever had it and
+    grants it to id. onboarding/commit.py transfers to the drafted principal
+    (adding a plain row for a new owner) before the roster upsert, so a
+    roster holding two from before ends with one; the loop then keeps every
+    flag. onboarding/profile_builder.py (the form wizard) skips its principal
+    record on PrincipalExistsError and still adds the team. A roster that
+    holds two still resolves oldest-first (find_principal_person) until then.
   principal_cli: |
     `openexecutive principal --email <a> [--name] [--role]`
     (people/principal.py, added Oct 28, 2026): names the principal on an

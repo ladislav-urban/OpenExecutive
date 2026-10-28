@@ -173,8 +173,12 @@ def test_solo_passes_name_the_principal_by_the_shared_rule(
     _solo()
     pid = _principal()
     second = people_store.upsert_person(
-        full_name="Aaron Second", is_principal=True, email="a@example.com"
+        full_name="Aaron Second", email="a@example.com"
     )
+    # A second principal can't be written any more (the store refuses it);
+    # an older roster can still hold one, so it is put there by hand.
+    with people_store._get_conn() as conn:
+        conn.execute("UPDATE people SET is_principal = 1 WHERE id = ?", (second,))
     people = people_store.list_people()
     assert _find_principal().id == pid
     assert f"person_id={pid}" in _render_principal_line(_find_principal())

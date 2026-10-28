@@ -300,13 +300,15 @@ def test_upsert_with_bogus_person_id_returns_error() -> None:
 
 
 def test_upsert_preserves_is_principal_on_update() -> None:
-    # Create a principal directly in the store (bypassing the chat tool gate
-    # — this is what the HTTP API does behind BACKEND_SHARED_SECRET).
-    pid = people_store.upsert_person(full_name="Principal Pat", is_principal=True)
+    # The principal the fixture made directly in the store (bypassing the chat
+    # tool gate — this is what the HTTP API does behind BACKEND_SHARED_SECRET).
+    principal = people_store.find_principal_person()
+    assert principal is not None and principal.id is not None
+    pid = principal.id
     # Updating other fields via the chat tool must not flip the flag off.
     result = _call(
         handle_upsert_person,
-        {"person_id": pid, "full_name": "Principal Pat", "role": "Founder"},
+        {"person_id": pid, "full_name": principal.full_name, "role": "Founder"},
     )
     assert result.get("action") == "updated"
     refreshed = people_store.get_person(pid)

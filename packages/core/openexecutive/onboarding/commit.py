@@ -51,7 +51,9 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
     Slack / email / Telegram handles the user added on the People page.
 
     Anyone who was principal and is not the drafted principal is demoted and
-    loses WILDCARD (only WILDCARD — other scopes they were granted stay).
+    loses WILDCARD (only WILDCARD — other scopes they were granted stay), in
+    one ``transfer_principal`` before the roster upsert: the store refuses a
+    second principal, and a roster holding two from before ends with one.
 
     Best-effort: returns ``{}`` on failure and logs the exception TYPE only,
     because the traceback would carry the roster's names into the log stream.
@@ -59,10 +61,12 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
     try:
         from openexecutive.people.models import AuthorityScope
         from openexecutive.people.store import (
+            PrincipalExistsError,
             get_person,
             list_people,
             restore_person,
             set_authority_scope,
+            transfer_principal,
             upsert_person,
         )
         from openexecutive.people.store import (
@@ -76,28 +80,61 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
         init_people_db()
         existing = {p.full_name.strip().lower(): p for p in list_people(include_suspended=True)}
 
+        # The drafted principal takes the flag first, in one transfer from
+        # whoever had it (two, on a roster from before the store refused a
+        # second): never two, never none, and WILDCARD moves with it. A new
+        # owner gets a plain row to take it on; the loop below then fills it
+        # in like everyone else's, with every flag already final.
+        principal_draft = next((d for d in named if d.is_principal), None)
+        principal_id: int | None = None
+        if principal_draft is not None:
+            key = principal_draft.full_name.strip().lower()
+            owner = existing.get(key)
+            if owner is not None and owner.suspended and not owner.demo and owner.id is not None:
+                # The principal is never suspended: bring them back first (a
+                # demo person can't be it, so they stay as they are).
+                restore_person(owner.id)
+            if owner is None:
+                principal_id = upsert_person(full_name=principal_draft.full_name.strip(), role=principal_draft.role.strip())
+            else:
+                principal_id = owner.id
+            if principal_id is not None:
+                try:
+                    for demoted in transfer_principal(principal_id):
+                        logger.info("onboarding: the principal moved from person %s", demoted)
+                except PrincipalExistsError:
+                    # A demo person or a contact can't be the principal: the
+                    # flag stays where it is, and the rest of the team is saved.
+                    logger.warning("onboarding: person %s can't be the principal; it stays as it was", principal_id)
+                    principal_id = None
+                existing = {p.full_name.strip().lower(): p for p in list_people(include_suspended=True)}
+                if principal_id is not None:
+                    # The drafted name is the row that now holds the flag, even
+                    # if another row shares the name (last-wins would pick the
+                    # other, and the loop would then update the wrong one).
+                    holder = get_person(principal_id)
+                    if holder is not None:
+                        existing[key] = holder
+
         ids: dict[str, int] = {}
         for draft in named:
             name = draft.full_name.strip()
             prior = existing.get(name.lower())
+            # The flag is already final (above): every row keeps its own.
+            keep_flag = bool(prior is not None and prior.is_principal)
             if prior is None:
                 pid = upsert_person(
                     full_name=name,
                     role=draft.role.strip(),
-                    is_principal=draft.is_principal,
+                    is_principal=False,
                 )
             else:
-                if draft.is_principal and prior.suspended and prior.id is not None:
-                    # The owner named them as the principal, who is never
-                    # suspended: bring them back first (the store refuses
-                    # a suspended principal, which would leave none).
-                    restore_person(prior.id)
                 pid = upsert_person(
                     person_id=prior.id,
                     full_name=name,
                     # An empty drafted role means "not mentioned", not "clear it".
                     role=draft.role.strip() or prior.role,
-                    is_principal=draft.is_principal,
+                    is_principal=keep_flag,
                     # Carried across so the UPDATE does not null them out.
                     department_slugs=prior.department_slugs,
                     email=prior.email,
@@ -116,15 +153,13 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
             if refreshed is not None:
                 existing[name.lower()] = refreshed
 
-            if draft.is_principal:
-                set_authority_scope(pid, [AuthorityScope.WILDCARD])
-            elif prior is not None and prior.is_principal:
-                # Demoted but still on the roster — _demote_stale_principals
-                # skips them (they ARE in keep_ids), so strip WILDCARD here or
-                # they keep blanket approval authority.
-                _strip_wildcard(pid, prior.authority_scope)
-
-        _demote_stale_principals(set(ids.values()))
+        if principal_id is not None:
+            # As onboarding always has, the principal holds WILDCARD alone.
+            set_authority_scope(principal_id, [AuthorityScope.WILDCARD])
+            # Only once the flag is on the roster's principal: otherwise this
+            # would demote the one there is, and leave none. The principal is
+            # always kept, whatever row the loop matched a name to.
+            _demote_stale_principals(set(ids.values()) | {principal_id})
         return ids
     except Exception as exc:
         logger.warning(
