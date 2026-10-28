@@ -603,6 +603,24 @@ def find_person_by_email(
         return _row_to_person(row, conn)
 
 
+def find_person_by_own_address(email: str, db_path: Path | None = None) -> Person | None:
+    """The Person whose own address ``email`` is (not an alias), archived and
+    suspended ones too, a live row before an archived one; else None. For a
+    caller that must tell "nobody" from "archived already" (the demo admin
+    console, integrations/erpnext_demo_people.py)."""
+    norm = normalize_email(email)
+    if not norm or not _resolve_db_path(db_path).exists():
+        return None
+    with _get_conn(db_path) as conn:
+        if not _table_exists(conn, "people"):
+            return None
+        row = conn.execute(
+            "SELECT * FROM people WHERE LOWER(TRIM(email)) = ? ORDER BY archived ASC, id DESC LIMIT 1",
+            (norm,),
+        ).fetchone()
+        return _row_to_person(row, conn) if row is not None else None
+
+
 def find_person_by_address(
     email: str,
     db_path: Path | None = None,

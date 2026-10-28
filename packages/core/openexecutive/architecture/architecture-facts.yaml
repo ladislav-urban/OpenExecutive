@@ -4181,6 +4181,20 @@ people:
   module: openexecutive.people
   store: openexecutive.people.store (SQLite)
   models: openexecutive.people.models — Person (name, role, department, principal flag, kind, contact channels, availability windows, on-leave date)
+  demo_admin_console: |
+    oe_connector's demo admin console (its docs/demo/demo-admin-console-plan.md,
+    step 10; Oct 28, 2026): POST /webhook/erpnext/demo-people (every
+    non-archived Person.demo, suspended too: email, name, questions_today
+    from demo_questions, suspended; plus DEMO_DAILY_QUESTIONS) and POST
+    /webhook/erpnext/demo-people/archive {email} (archive_person for a demo,
+    directory-managed, non-principal row; 404 bare when no one has the
+    address; {"archived": false, "reason": "already"}; 409 otherwise;
+    audited demo_person_archived, private). Signed like the panel
+    (ERPNEXT_PANEL_PUBLIC_KEYS) with audiences
+    openexecutive-erpnext-demo-people / -archive and
+    verify_panel_assertion(with_subject=True); sub must equal the
+    principal's email (403 otherwise). Exempt from BACKEND_SHARED_SECRET as
+    the other ERPNext webhooks are.
   principal_cli: |
     `openexecutive principal --email <a> [--name] [--role]`
     (people/principal.py, added Oct 28, 2026): names the principal on an

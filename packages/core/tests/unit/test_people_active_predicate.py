@@ -23,6 +23,10 @@ _ARCHIVED_READ = re.compile(
 # module -> (how many reads it may keep, why)
 ALLOWED: dict[str, tuple[int, str]] = {
     "people/models.py": (1, "Person.active is defined from it"),
+    "integrations/erpnext_demo_people.py": (
+        1,
+        "the demo admin console's archive answers \"already\" for an archived demo person",
+    ),
     "people/store.py": (
         15,
         "active_sql itself; address_holder, alias_holder and chat_id_holder keep a "
