@@ -468,6 +468,13 @@ Make the pair once:
 uv run --with cryptography python scripts/make-caller-keys.py
 ```
 
+On a server that runs the published API image without a checkout, the image
+has the same command, with the same options and output:
+
+```bash
+docker compose run --rm api openexecutive make-caller-keys
+```
+
 It prints two lines. Put `CALLER_ASSERTION_PRIVATE_KEY` on the **UI** only and
 `CALLER_ASSERTION_PUBLIC_KEYS` on the **API** only, then restart both, UI first. The UI
 keeps sending `x-caller-email` as well, so it works against an API without the keys.

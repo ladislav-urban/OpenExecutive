@@ -628,6 +628,8 @@ their People entry, with their roles and user permissions:
 
 ```bash
 uv run --with cryptography python scripts/make-caller-keys.py --erpnext
+# or, from the API image without a checkout:
+docker compose run --rm api openexecutive make-caller-keys --erpnext
 ```
 
 It prints `ERPNEXT_CALLER_PRIVATE_KEY`, for the API's environment only, and a
@@ -664,6 +666,8 @@ second pair of its own that signs the other way:
 
 ```bash
 uv run --with cryptography python scripts/make-caller-keys.py --erpnext-panel
+# or, from the API image without a checkout:
+docker compose run --rm api openexecutive make-caller-keys --erpnext-panel
 ```
 
 It prints a `bench set-config` line for the private key, which stays in
