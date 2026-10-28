@@ -1782,6 +1782,9 @@ def _seed_people(people_path: Path) -> int:
             conn.close()
 
     name_to_id: dict[str, int] = {}
+    # The principal first: claiming the install strips every scope already on
+    # other rows (people/store.py), so theirs must come after.
+    rows = sorted(rows, key=lambda r: not (isinstance(r, dict) and r.get("is_principal")))
     for row in rows:
         full_name = row.get("full_name") or row.get("name")
         if not full_name:

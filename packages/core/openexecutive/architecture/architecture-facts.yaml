@@ -4198,6 +4198,19 @@ people:
     flag. onboarding/profile_builder.py (the form wizard) skips its principal
     record on PrincipalExistsError and still adds the team. A roster that
     holds two still resolves oldest-first (find_principal_person) until then.
+  unclaimed_scopes: |
+    Approval scopes are the principal's to grant (Oct 28, 2026; follow-up
+    from the single-principal guard's review). While no principal exists,
+    POST /people and PATCH /people/{id} answer 403 for authority_scope on a
+    non-principal row to a signed-in person (api.caller.signed_in; the
+    operator's own calls, the CLI or the shared secret with no signed-in
+    person, still may). Claiming the install (upsert_person's guarded INSERT
+    or a guarded UPDATE of a row that wasn't principal, claim_principal,
+    add_principal, transfer_principal from none) runs
+    _STRIP_OTHERS_SCOPES_SQL in the same transaction: every scope on every
+    non-principal row goes. Moving the seat between owners strips only the
+    old principal's WILDCARD. fixture_loader._seed_people seeds the
+    principal first, so the roster's own scopes come after the claim.
   principal_cli: |
     `openexecutive principal --email <a> [--name] [--role]`
     (people/principal.py, added Oct 28, 2026): names the principal on an

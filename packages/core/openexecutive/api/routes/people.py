@@ -430,6 +430,10 @@ def create_person(body: PersonCreate, request: Request) -> Person:
         # Before a principal exists anyone may add people, but not contacts:
         # a contact is private to a principal there is not yet.
         raise HTTPException(status_code=403, detail=_CONTACTS_ARE_PRIVATE)
+    if body.authority_scope and not body.is_principal and _signed_in_non_principal(request):
+        # Nor approval scopes: they are the principal's to grant, and claiming
+        # the install strips any put on before (people/store.py).
+        raise HTTPException(status_code=403, detail=_SCOPES_ARE_THE_PRINCIPALS)
     aliases = _checked_aliases(body.email_aliases, primary=body.email, person_id=None)
     if body.email and (
         people_store.alias_holder(body.email) is not None or _held_by_suspended(body.email, None)
@@ -477,6 +481,17 @@ def _create(body: PersonCreate) -> int:
 
 
 _PRINCIPAL_EXISTS = "Someone else is the principal. There is one principal."
+_SCOPES_ARE_THE_PRINCIPALS = "Only the principal grants approval scopes."
+
+
+def _signed_in_non_principal(request: Request) -> bool:
+    """A person signed in through the web app who isn't the principal: the one
+    who may edit People only because nobody is the principal yet. Not the
+    operator's own calls (the CLI, a backend call with the shared secret and
+    no signed-in person), which keep setting scopes as before."""
+    from openexecutive.api import caller as api_caller
+
+    return api_caller.signed_in(request) and not caller_is_principal(request)
 _ADDRESS_IN_USE = "That address is already on another person."
 _MANAGED_IN_DIRECTORY = "Their name and email are managed in your identity provider."
 
@@ -534,6 +549,10 @@ def patch_person(person_id: int, body: PersonPatch, request: Request) -> Person:
         raise HTTPException(status_code=403, detail=_CONTACTS_ARE_PRIVATE)
 
     raw = body.model_dump(exclude_unset=True)
+    if "authority_scope" in raw and _signed_in_non_principal(request):
+        # Before a principal exists anyone may edit People, but approval
+        # scopes are the principal's to grant (as in create_person).
+        raise HTTPException(status_code=403, detail=_SCOPES_ARE_THE_PRINCIPALS)
     if existing.directory_managed and (
         (body.full_name is not None and body.full_name != existing.full_name)
         or (body.email is not None and body.email != existing.email)

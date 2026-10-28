@@ -93,6 +93,15 @@ ACTIVE_SQL = active_sql()
 
 # No principal yet: no non-archived row holds the flag (a suspended one counts).
 _NO_PRINCIPAL_SQL = "NOT EXISTS (SELECT 1 FROM people WHERE is_principal = 1 AND archived = 0)"
+# When the install is claimed (a principal from none), every approval scope
+# another row holds goes: while nobody was the principal anyone signed in could
+# write the roster (api/routes/people.py, _require_roster_owner), so a scope
+# there wasn't granted by an owner. Scopes are the principal's to grant from
+# then on. Run in the claiming statement's own transaction.
+_STRIP_OTHERS_SCOPES_SQL = (
+    "DELETE FROM person_authority_scope WHERE person_id IN (SELECT id FROM people WHERE is_principal = 0)"
+)
+
 # For an UPDATE making row ? the principal: it is active, and no one else holds it.
 _TARGET_ACTIVE_SQL = " AND " + ACTIVE_SQL
 _NOT_ANOTHER_PRINCIPAL_SQL = (
@@ -440,6 +449,9 @@ def upsert_person(
                     *((person_id,) if is_principal else ()),
                 ),
             )
+            if is_principal and row is not None and cursor.rowcount == 1 and not row["is_principal"]:
+                # They took a seat nobody held (the guard above): claimed from none.
+                conn.execute(_STRIP_OTHERS_SCOPES_SQL)
             if is_principal and row is not None and cursor.rowcount == 0:
                 # Suspended or archived since it was read, or someone else holds it.
                 now_row = conn.execute("SELECT suspended FROM people WHERE id = ?", (person_id,)).fetchone()
@@ -469,6 +481,9 @@ def upsert_person(
             )
             if cursor.rowcount != 1:
                 raise PrincipalExistsError("someone else is the principal")
+            if is_principal:
+                # Inserted only while nobody was the principal: claimed from none.
+                conn.execute(_STRIP_OTHERS_SCOPES_SQL)
             return int(cursor.lastrowid or 0)
     assert person_id is not None  # the INSERT branch returned above
     # After the UPDATE has committed: the loop close writes the same file.
@@ -1050,6 +1065,7 @@ def claim_principal(person_id: int, email: str, db_path: Path | None = None) -> 
         )
         if cursor.rowcount != 1:
             return False
+        conn.execute(_STRIP_OTHERS_SCOPES_SQL)
         _grant_wildcard(conn, person_id)
         return True
 
@@ -1076,6 +1092,7 @@ def add_principal(
         if cursor.rowcount != 1 or cursor.lastrowid is None:
             return None
         person_id = int(cursor.lastrowid)
+        conn.execute(_STRIP_OTHERS_SCOPES_SQL)
         _grant_wildcard(conn, person_id)
         return person_id
 
@@ -1105,6 +1122,9 @@ def transfer_principal(person_id: int, db_path: Path | None = None) -> list[int]
         )
         if cursor.rowcount == 0:
             raise PrincipalExistsError("they can't be the principal")
+        if not before:
+            # Nobody held it: the install is claimed now.
+            conn.execute(_STRIP_OTHERS_SCOPES_SQL)
         for other in before:
             conn.execute(
                 "DELETE FROM person_authority_scope WHERE person_id = ? AND scope_token = ?",
