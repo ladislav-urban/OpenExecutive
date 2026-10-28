@@ -873,6 +873,32 @@ def test_a_teammates_card_waits_while_teammates_are_turned_off(
     assert still is not None and still.status == STATUS_PROPOSED
 
 
+def test_a_suspended_teammates_card_waits_until_they_are_restored(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Left the directory with a card waiting (docs/directory-sync-plan.md in
+    # oe_connector, step 9, "Remove"): nobody can carry it out while they're
+    # suspended, and it's theirs again once they're back.
+    monkeypatch.setenv("ERPNEXT_DRAFTS_TEAMMATES", "true")
+    erp.replies.append(json.dumps({"ok": True, "summary": {}}))
+    proposed = _propose(_teammate_turn(roster, monkeypatch), {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
+    card = get_decision_instance(proposed["decision_id"])
+    assert people_store.suspend_person(roster.teammate, by="directory")
+    people_registry.invalidate()
+    with pytest.raises(drafts.ApproveRefused) as gone:
+        _approve(card)
+    assert gone.value.code == "gone"
+    assert len(erp.calls) == 1
+    still = get_decision_instance(card.id)
+    assert still is not None and still.status == STATUS_PROPOSED
+
+    assert people_store.restore_person(roster.teammate)
+    people_registry.invalidate()
+    erp.replies.append(json.dumps({**CREATED, "doctype": "ToDo", "name": "abc123def"}))
+    assert _approve(still)["name"] == "abc123def"
+    assert erp.claims()["sub"] == TEAM
+
+
 def test_a_card_whose_asker_no_longer_matches_is_not_carried_out(
     erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
 ) -> None:
