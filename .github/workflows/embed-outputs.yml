@@ -1,0 +1,36 @@
+# Build the API image's embed-outputs stage (docker/Dockerfile) alone on a pull
+# request that changes its inputs. That stage runs packages/ui's
+# embed-outputs.mjs with type stripping only and no npm install, so a runtime
+# import of an npm package, or syntax type stripping can't handle (an enum, a
+# parameter property), in anything it imports would otherwise first fail on
+# main's image publish. Building the whole API image for every UI change would
+# cost far more; this stage takes seconds. release-images.yml builds the full
+# images when docker/ itself changes.
+name: Embed outputs
+
+on:
+  pull_request:
+    paths:
+      - docker/Dockerfile
+      - .dockerignore
+      - packages/ui/package.json
+      - packages/ui/scripts/embed-outputs.mjs
+      - packages/ui/src/**
+      - .github/workflows/embed-outputs.yml
+
+permissions:
+  contents: read
+
+jobs:
+  stage:
+    name: Embed outputs stage
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the stage and show what it wrote
+        run: |
+          docker build --target embed-outputs -f docker/Dockerfile -t embed-outputs-check .
+          docker run --rm embed-outputs-check ls -l /opt/embed-outputs
