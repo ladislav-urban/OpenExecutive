@@ -25,6 +25,17 @@ services:
       # root .env: it would make the API refuse the UI's requests, which
       # arrive as Host api:8000.
       - OE_LOCAL_LOGIN=
+      # The web app's own secrets, which the root .env holds for the ui
+      # service below: shadowed EMPTY so the API never has them. The API
+      # checks signed callers with CALLER_ASSERTION_PUBLIC_KEYS only; given
+      # the UI's signing key, or AUTH_SECRET (which signs the UI's sessions),
+      # anything that reads the API's environment could act as any user,
+      # the principal included (docs/auth.md, "Signed callers").
+      # tests/unit/test_compose_env.py keeps this list in step.
+      - CALLER_ASSERTION_PRIVATE_KEY=
+      - AUTH_SECRET=
+      - AUTH_GOOGLE_SECRET=
+      - AUTH_OIDC_SECRET=
       - VECTOR_STORE_PATH=/data/chroma_db
       - COMPANY_PROFILE_PATH=/data/company/profile.yaml
       - EPISODIC_DB_PATH=/data/episodic_memory.db
@@ -70,7 +81,8 @@ services:
       - ALLOWED_EMAILS=${ALLOWED_EMAILS:-}
       - BACKEND_SHARED_SECRET=${BACKEND_SHARED_SECRET:-}
       # Signed callers (docs/auth.md): the UI's signing key. The API reads
-      # CALLER_ASSERTION_PUBLIC_KEYS from the env_file above.
+      # CALLER_ASSERTION_PUBLIC_KEYS from the env_file above, with this key
+      # shadowed empty there.
       - CALLER_ASSERTION_PRIVATE_KEY=${CALLER_ASSERTION_PRIVATE_KEY:-}
       # Local login (no sign-in) is `make dev` only: this port is published
       # on every interface. Set explicitly EMPTY because Next.js never lets a
