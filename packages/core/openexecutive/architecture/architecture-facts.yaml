@@ -4181,6 +4181,19 @@ people:
   module: openexecutive.people
   store: openexecutive.people.store (SQLite)
   models: openexecutive.people.models — Person (name, role, department, principal flag, kind, contact channels, availability windows, on-leave date)
+  principal_cli: |
+    `openexecutive principal --email <a> [--name] [--role]`
+    (people/principal.py, added Oct 28, 2026): names the principal on an
+    install that skips onboarding (the demo installation, whose company
+    comes from `demo-reset`). No principal yet: the team member holding the
+    address becomes it through store.claim_principal (one UPDATE guarded by
+    NOT EXISTS an active principal, team kind, active, not directory_demo),
+    or a new team Person is added with --name; either way WILDCARD, as
+    onboarding/commit.py gives. Refused, nothing changed: a contact, a
+    suspended or demo person, another person's alias, someone else already
+    principal (replacing stays on the People page). For the principal
+    itself it updates name and role, not a directory-managed name. Audited
+    principal_set; people.registry's 60 s TTL carries it to a running API.
   kind: |
     `Person.kind` is "team" (the default) or "contact" — someone outside
     the team (a client, contractor, advisor) the Executive may need to

@@ -163,6 +163,14 @@ and the SQLite database is created on demand. The company profile stays empty
 until you run the onboarding wizard against the deployed URL — the wizard failing
 with "no company profile" on a fresh volume is expected, not a fault.
 
+An install that takes its company from elsewhere instead of onboarding (a demo
+installation loads it with `openexecutive demo-reset --bundle <dir>`) names its
+principal from the API's container:
+`openexecutive principal --email <their sign-in address> --name "<full name>" [--role <role>]`.
+It adds them, or makes the team member with that address the principal, with
+the authority onboarding gives, and changes nothing while someone else is the
+principal.
+
 ---
 
 ## Required configuration

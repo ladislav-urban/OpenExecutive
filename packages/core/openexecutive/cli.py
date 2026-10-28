@@ -505,6 +505,23 @@ def demo_reset_command(bundle_dir: Path) -> None:
     )
 
 
+@cli.command("principal")
+@click.option("--email", required=True, help="The principal's own address, as they sign in.")
+@click.option("--name", default=None, help="Their full name; needed when nobody has the address yet.")
+@click.option("--role", default=None, help="Their role, e.g. Founder.")
+def principal_command(email: str, name: str | None, role: str | None) -> None:
+    """Name the principal, who runs this install, without onboarding: the
+    team member with this address, or a new one. Changes nothing while
+    someone else is the principal."""
+    from openexecutive.people.principal import PrincipalError, set_principal
+
+    try:
+        console.print(set_principal(email, name=name, role=role), markup=False)
+    except PrincipalError as error:
+        console.print(f"Not set: {error}", markup=False)
+        raise SystemExit(1) from None
+
+
 @cli.command("directory-unlink")
 @click.option("--email", required=True, help="The address of the Person the directory manages.")
 def directory_unlink_command(email: str) -> None:

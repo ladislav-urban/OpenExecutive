@@ -989,6 +989,24 @@ def archive_person(person_id: int, db_path: Path | None = None) -> bool:
     return archived
 
 
+def claim_principal(person_id: int, db_path: Path | None = None) -> bool:
+    """Make ``person_id`` the principal, only while there is none (any active
+    principal), and only an active team member who isn't a demo person. One
+    statement, so two claims at once can't both win. True when it changed;
+    False for anyone else, or once someone is the principal
+    (``openexecutive principal``, people/principal.py)."""
+    now = _now()
+    with _get_conn(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE people SET is_principal = 1, updated_at = ?"
+            " WHERE id = ? AND kind = 'team' AND is_principal = 0 AND directory_demo = 0 AND "
+            + ACTIVE_SQL
+            + " AND NOT EXISTS (SELECT 1 FROM people WHERE is_principal = 1 AND archived = 0)",
+            (now, person_id),
+        )
+        return cursor.rowcount > 0
+
+
 class PrincipalSuspendError(ValueError):
     """Raised when asked to suspend the principal."""
 
