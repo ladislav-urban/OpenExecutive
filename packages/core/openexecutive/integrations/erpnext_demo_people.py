@@ -36,7 +36,7 @@ import logging
 import time
 from typing import Any
 
-from fastapi import APIRouter, Request, Response
+from fastapi import APIRouter, BackgroundTasks, Request, Response
 from fastapi.responses import JSONResponse
 
 from openexecutive.api.caller import CallerKeysError, JtiLedger
@@ -146,7 +146,7 @@ async def demo_people(request: Request) -> JSONResponse:
 
 
 @router.post(ARCHIVE_PATH, response_model=None)
-async def archive_demo_person(request: Request) -> Response:
+async def archive_demo_person(request: Request, background: BackgroundTasks) -> Response:
     body, refused = await _verified_principal(request, ARCHIVE_AUDIENCE)
     if refused is not None:
         return refused
@@ -168,7 +168,10 @@ async def archive_demo_person(request: Request) -> Response:
     # former member from nobody (security review, Oct 28, 2026).
     if person is None or person.id is None or person.is_principal or not person.demo or not person.directory_managed:
         if person is not None and person.id is not None:
-            log_event(
+            # Written after the response, so this 404 takes no longer than
+            # nobody's: its timing mustn't tell them apart either.
+            background.add_task(
+                log_event,
                 "demo_person_archive_refused",
                 f"the demo admin console asked to archive person #{person.id}, who isn't a demo person",
                 actor="erpnext_demo_admin",
