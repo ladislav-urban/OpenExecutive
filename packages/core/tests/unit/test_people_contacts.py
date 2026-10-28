@@ -24,6 +24,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 import openexecutive.orchestrator.mcp_gateway as gw_module
+from openexecutive.alerts import store as alerts_store
 from openexecutive.audit import logger as audit_logger
 from openexecutive.departments import registry as dept_registry
 from openexecutive.departments import store as dept_store
@@ -47,6 +48,11 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     monkeypatch.setattr(people_store, "DB_PATH", path)
     monkeypatch.setattr(episodic, "DB_PATH", path)
     monkeypatch.setattr(dept_store, "DB_PATH", path)
+    # The poller files an unanswered-mail card when the stubbed Executive
+    # doesn't reply (integrations/unanswered_mail.py): into this file, never
+    # the default ./episodic_memory.db, which other tests then read.
+    monkeypatch.setattr(alerts_store, "DB_PATH", path)
+    alerts_store.initialize_db(path)
     episodic.initialize_db(path)
     people_store.initialize_db()
     dept_store.initialize_db()
