@@ -7,12 +7,14 @@ from __future__ import annotations
 import base64
 import copy
 import json
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
 
+from openexecutive.attunement import open_loops, style
 from openexecutive.config import get_settings
 from openexecutive.integrations import directory_sync
 from openexecutive.memory import ended_sessions, episodic
@@ -240,6 +242,34 @@ def test_leaving_the_group_suspends_and_signs_them_out(kc: Keycloak, principal: 
     report = run(kc)
     assert [a for a, _, _ in report.changes] == ["restored"]
     assert people_store.get_person(accountant.id).active
+
+
+def test_their_open_loops_and_working_style_wait_for_their_return(kc: Keycloak, principal: int) -> None:
+    # Step 9's "Restore" on the local stack (oe_connector's
+    # docs/directory-sync-plan.md) couldn't show this: the test user had neither.
+    run(kc)
+    accountant = by_email("dir-accountant@example.com")
+    loop_id = open_loops.open_loop(
+        owner_person_id=accountant.id, description="Committed to: send the Q3 numbers",
+        due_at=datetime.now(UTC) + timedelta(days=3), db_path=episodic.DB_PATH,
+    )
+    assert loop_id is not None
+    style.save_profile(
+        accountant.id, [style.StyleRule("Keep it short", style.BASIS_CONVERSATION)],
+        locked=True, updated_by="principal",
+    )
+    before = open_loops.get_open_loop(loop_id)
+
+    kc.user("accountant")["groups"] = ["/erpnext/accounts"]
+    assert [a for a, _, _ in run(kc).changes] == ["suspended"]
+    assert open_loops.get_open_loop(loop_id) == before
+    kc.user("accountant")["groups"] = ["/dynocortex"]
+    assert [a for a, _, _ in run(kc).changes] == ["restored"]
+
+    assert people_store.get_person(accountant.id).active
+    assert open_loops.get_open_loop(loop_id) == before
+    profile = style.get_profile(accountant.id)
+    assert [r.text for r in profile.rules] == ["Keep it short"] and profile.locked
 
 
 def test_disabled_in_the_provider_counts_as_gone(kc: Keycloak, principal: int) -> None:

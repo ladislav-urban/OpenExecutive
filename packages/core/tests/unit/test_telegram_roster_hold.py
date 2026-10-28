@@ -8,6 +8,7 @@ stays silent, as before.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -110,3 +111,56 @@ def test_a_held_telegram_message_is_replayed_through_the_handler(monkeypatch: py
     kwargs = handled.await_args.kwargs
     assert kwargs["chat_id"] == 777
     assert kwargs["attachment_file_ids"] == [("f1", "a.pdf", "application/pdf", False)]
+
+
+def test_a_suspended_teammate_is_held_until_they_are_restored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Someone who left the directory (oe_connector's docs/directory-sync-plan.md,
+    # step 9, "Remove") writes on Telegram: held for the principal like a
+    # stranger, never a turn, until they're back.
+    from openexecutive.memory import episodic
+    from openexecutive.people import registry as people_registry
+    from openexecutive.people import store as people_store
+
+    db = tmp_path / "test.db"
+    monkeypatch.setattr(people_store, "DB_PATH", db)
+    monkeypatch.setattr(episodic, "DB_PATH", db)
+    episodic.initialize_db(db)
+    people_store.initialize_db(db)
+    monkeypatch.setattr("openexecutive.integrations.telegram_chats.record_from_update", lambda _body: None)
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "hook-secret")
+    people_store.upsert_person(full_name="Pat Principal", is_principal=True, email="pat@co.example")
+    sara = people_store.upsert_person(full_name="Sara Kim", email="sara@co.example", telegram_chat_id="777")
+    assert people_store.suspend_person(sara, by="directory")
+    people_registry.invalidate()
+
+    def post() -> tuple[AsyncMock, AsyncMock]:
+        hold, turn = AsyncMock(), AsyncMock()
+        app = FastAPI()
+        app.include_router(telegram_bot.router)
+        with (
+            patch.object(telegram_bot, "_hold_unknown_sender", new=hold),
+            patch.object(telegram_bot, "_process_and_reply", new=turn),
+        ):
+            response = TestClient(app).post("/webhook/telegram", json=_update(), headers={HEADER: "hook-secret"})
+            assert response.status_code == 200
+        return hold, turn
+
+    hold, turn = post()
+    hold.assert_awaited_once()
+    turn.assert_not_awaited()
+    intake = AsyncMock()
+    with (
+        patch("openexecutive.integrations.roster_intake.intake", new=intake),
+        patch.object(telegram_bot, "send_message", new=AsyncMock()),
+    ):
+        asyncio.run(telegram_bot._hold_unknown_sender(**hold.await_args.kwargs))
+    intake.assert_awaited_once()
+    assert intake.await_args.args == ("telegram", "777")
+
+    assert people_store.restore_person(sara)
+    people_registry.invalidate()
+    hold, turn = post()
+    hold.assert_not_awaited()
+    turn.assert_awaited_once()
