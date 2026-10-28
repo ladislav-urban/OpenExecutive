@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 
 import ApprovedRow from "@/components/briefing/ApprovedRow";
 import ProposalCard from "@/components/briefing/ProposalCard";
+import { BackToHost, useCardReturn } from "@/components/shell/CardReturn";
 import { usePageCrumb } from "@/components/shell/PageCrumb";
 import {
   ackAlert,
@@ -31,6 +32,7 @@ export default function AlertCardPage() {
   const params = useParams<{ id: string }>();
   const id = /^\d+$/.test(params?.id ?? "") ? Number(params.id) : null;
   usePageCrumb(id !== null ? `Card ${id}` : "Card");
+  const back = useCardReturn(usePathname() ?? "/");
   // undefined while loading, null when it isn't the caller's or isn't waiting.
   const [card, setCard] = useState<AlertCard | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
@@ -142,9 +144,14 @@ export default function AlertCardPage() {
         </p>
       )}
       <p className="text-sm">
-        <Link href="/" className="text-accent hover:underline">
-          Everything waiting for you
-        </Link>
+        {/* Opened from a host's frame: back there, not into this app's Home. */}
+        {back ? (
+          <BackToHost to={back} />
+        ) : (
+          <Link href="/" className="text-accent hover:underline">
+            Everything waiting for you
+          </Link>
+        )}
       </p>
     </main>
   );

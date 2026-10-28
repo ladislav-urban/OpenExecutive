@@ -78,3 +78,33 @@ test("the routes check `to` both ways and never trust the hop", () => {
   assert.match(sso, /httpOnly: true/);
   assert.match(read("../src/app/signin/page.tsx"), /redirect\("\/signin\/sso\?failed=1"\)/);
 });
+
+test("a card answered top level offers the way back to the host's own page for it", async () => {
+  const { hostReturn, withReturn, returnFromQuery, RETURN_PARAM } = await import("../src/lib/signinReturn.ts");
+  const base = "https://erp.example.com/desk/northwind";
+  // Only the page's path goes back: its query is this app's own.
+  assert.equal(hostReturn(base, "/cards/alert/58?embed=1", HOSTS), "https://erp.example.com/desk/northwind/cards/alert/58");
+  assert.equal(hostReturn(base, "/", HOSTS), "https://erp.example.com/desk/northwind");
+  // No base, a base on another origin, or a page that isn't a path: nothing.
+  assert.equal(hostReturn(null, "/cards/1", HOSTS), null);
+  assert.equal(hostReturn("https://evil.example/desk/x", "/cards/1", HOSTS), null);
+  assert.equal(hostReturn(base, "//evil.example/x", HOSTS), null);
+  assert.equal(hostReturn(base, "/cards/%2e%2e%2flogin", HOSTS), null);
+
+  const page = withReturn("/cards/1?x=2", "https://erp.example.com/desk/northwind/cards/1");
+  assert.equal(new URLSearchParams(page.split("?")[1]).get(RETURN_PARAM), "https://erp.example.com/desk/northwind/cards/1");
+  assert.ok(page.startsWith("/cards/1?x=2&"));
+  assert.equal(withReturn("/cards/1", null), "/cards/1");
+
+  // Read back, the way back is checked again: a hand-made link to anywhere else gets none.
+  assert.equal(returnFromQuery(`?${page.split("?")[1]}`, HOSTS), "https://erp.example.com/desk/northwind/cards/1");
+  assert.equal(returnFromQuery("?return=https%3A%2F%2Fevil.example%2Fdesk%2Fx", HOSTS), null);
+  assert.equal(returnFromQuery("?return=https%3A%2F%2Ferp.example.com%2Flogin", HOSTS), null);
+  assert.equal(returnFromQuery("?return=javascript%3Aalert(1)", HOSTS), null);
+  assert.equal(returnFromQuery("", HOSTS), null);
+});
+
+test("the frame takes a return base only from the very host that framed it", () => {
+  const provider = read("../src/components/embed/EmbedProvider.tsx");
+  assert.match(provider, /returnBase && new URL\(returnBase\)\.origin !== event\.origin\) return;/);
+});

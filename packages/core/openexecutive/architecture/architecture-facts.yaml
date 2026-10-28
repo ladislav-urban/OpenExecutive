@@ -7900,7 +7900,14 @@ auth:
     Embedded mode (lib/embed.ts, components/embed/): ?embed=1, a parent
     window, a listed origin and a valid oe-embed/v1 init (contract 1;
     colours, font pattern, bounded product name, email hint, native
-    paths under the app's routes). AppShell then drops AppSidebar,
+    paths under the app's routes, and an optional returnBase: the host's
+    own desk address for this app's pages, on the init's own origin).
+    A card answered top level (FrameConfirm's own-page link) carries
+    ?return=<returnBase><path>, re-checked by lib/signinReturn.ts; the card
+    pages then show bare (components/shell/CardReturn.tsx) with "Back to
+    <host>". OE_PRODUCT_NAME (lib/productName.ts, read in lib/hostConfig.ts)
+    names this app on its own pages: the tab title, /signin, the bare card
+    pages. AppShell then drops AppSidebar,
     TopBar, MobileBottomNav and AskOEPanel, keeping HubTabs,
     PausedBanner and the page. Messages ready/init/theme/route/open/
     badge/signed-in/approve-ready/approve-ask/size/card-done, examples in

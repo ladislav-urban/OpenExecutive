@@ -694,7 +694,15 @@ parent window, and every `init` field is validated. In a frame:
   A browser without v2 (Firefox, Safari) can't tell, so the panel offers no Yes there: it
   links to this app's own page for it, top level in the same tab (the card's page,
   `/cards/<id>` or `/cards/alert/<id>`, or else the page that asked), where nothing can
-  frame it; Back returns to the host. It never fails open. The answer stays in the
+  frame it; Back returns to the host. It never fails open. When the host's `init` gave a
+  `returnBase` (its own address for this app's pages, e.g.
+  `https://erp.example.com/desk/x`, on the very origin that sent `init`), the card's page
+  carries `?return=<returnBase><the page's path>`. Read back, that address is checked
+  again as the one-pass sign-in's is (exactly a host origin, a desk route, no encoded
+  separators; `lib/signinReturn.ts`), and the page then shows bare: the card, the
+  product name (`OE_PRODUCT_NAME`) and "Back to <host>", a link that is offered and never
+  followed on its own. Without it, or with one that fails, the page is this app's as
+  usual. The answer stays in the
   browser, as the window's did: what it guards against is code on the host's origin,
   which can't run in this app's origin, and the approval itself is still this app's
   same-origin request with its usual checks.

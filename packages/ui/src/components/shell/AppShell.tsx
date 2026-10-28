@@ -11,6 +11,7 @@ import { useEmbed } from "@/components/embed/EmbedProvider";
 import Icon from "@/components/Icon";
 import PausedBanner from "@/components/executive/PausedBanner";
 import AppSidebar from "@/components/shell/AppSidebar";
+import CardReturnShell, { useCardReturn } from "@/components/shell/CardReturn";
 import { PageCrumbProvider, usePageCrumbLabel } from "@/components/shell/PageCrumb";
 import {
   buildMobilePrimary,
@@ -122,6 +123,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { mode, role } = useWorkspace();
   const redirecting = useFirstRunGate(pathname);
   const { embedded } = useEmbed();
+  const cardReturn = useCardReturn(pathname);
 
   // In a host's frame (components/embed/EmbedProvider.tsx): the host has its
   // own navigation, header and help, so this shell's sidebar, top bar,
@@ -147,6 +149,11 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 
   if (isExempt(pathname)) {
     return <>{children}</>;
+  }
+  // A card's own page opened from a host's frame, with the way back to it
+  // (components/shell/CardReturn.tsx): part of the host's product, so bare.
+  if (cardReturn !== null) {
+    return <CardReturnShell to={cardReturn}>{children}</CardReturnShell>;
   }
   if (redirecting) {
     return <div className="h-full bg-surface" />;
