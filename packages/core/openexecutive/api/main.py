@@ -66,6 +66,7 @@ from openexecutive.api.routes import (
     auth as auth_route,
 )
 from openexecutive.integrations.erpnext_a2a import router as erpnext_a2a_router
+from openexecutive.integrations.erpnext_demo_people import router as erpnext_demo_people_router
 from openexecutive.integrations.erpnext_events import router as erpnext_events_router
 from openexecutive.integrations.erpnext_panel import router as erpnext_panel_router
 from openexecutive.integrations.google_chat import router as google_chat_router
@@ -174,6 +175,8 @@ _UNAUTHENTICATED_PATHS: frozenset[str] = frozenset(
         "/webhook/slack",
         "/webhook/erpnext/chat",
         "/webhook/erpnext/events",
+        "/webhook/erpnext/demo-people",
+        "/webhook/erpnext/demo-people/archive",
         "/a2a/suppliers",
         "/.well-known/agent-card.json",
     }
@@ -887,10 +890,15 @@ def _webhook_verifies_its_caller(path: str) -> bool:
     update."""
     if path in ("/webhook/google-chat", "/webhook/slack"):
         return True
-    if path in ("/webhook/erpnext/chat", "/webhook/erpnext/events"):
+    if path in (
+        "/webhook/erpnext/chat",
+        "/webhook/erpnext/events",
+        "/webhook/erpnext/demo-people",
+        "/webhook/erpnext/demo-people/archive",
+    ):
         # Every request needs oe_connector's Ed25519 signature over its body
-        # (integrations/erpnext_panel.py, erpnext_events.py); without the
-        # keys they answer 503.
+        # (integrations/erpnext_panel.py, erpnext_events.py,
+        # erpnext_demo_people.py); without the keys they answer 503.
         return True
     if path in ("/a2a/suppliers", "/.well-known/agent-card.json"):
         # Every A2A request needs a registered supplier's Ed25519 signature
@@ -1055,6 +1063,7 @@ def create_app() -> FastAPI:
     app.include_router(slack_events_router, tags=["slack"])
     app.include_router(erpnext_panel_router, tags=["erpnext"])
     app.include_router(erpnext_events_router, tags=["erpnext"])
+    app.include_router(erpnext_demo_people_router, tags=["erpnext"])
     app.include_router(erpnext_a2a_router, tags=["erpnext"])
     app.include_router(erpnext_drafts.router, tags=["erpnext"])
     app.include_router(architecture.router, tags=["architecture"])
