@@ -29,7 +29,6 @@ from openexecutive.orchestrator.schedule_tools import (
     tools_withheld_in_mode,
 )
 from openexecutive.orchestrator.session import Session
-from tests.unit.offered_tools import capture_offered
 from openexecutive.people import registry as people_registry
 from openexecutive.people import store as people_store
 from openexecutive.prompts.cache_manager import build_system_blocks
@@ -38,6 +37,7 @@ from openexecutive.prompts.executive_persona import (
     EXECUTIVE_PERSONA_SOLO_PROMPT,
     default_persona,
 )
+from tests.unit.offered_tools import capture_offered
 
 from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlock
 
@@ -548,8 +548,12 @@ def test_solo_org_block_names_the_same_principal_as_every_solo_check(
     from whichever principal-flagged row a cached roster lists first."""
     pid = _seed_principal_and_goals()
     second = people_store.upsert_person(
-        full_name="Aaron Second", role="Co-owner", is_principal=True, email="a@example.com"
+        full_name="Aaron Second", role="Co-owner", email="a@example.com"
     )
+    # A second principal can't be written any more (the store refuses it);
+    # an older roster can still hold one, so it is put there by hand.
+    with people_store._get_conn() as conn:
+        conn.execute("UPDATE people SET is_principal = 1 WHERE id = ?", (second,))
     people_registry.invalidate()
     found = people_store.find_principal_person()
     assert found is not None and found.id == pid  # the oldest principal

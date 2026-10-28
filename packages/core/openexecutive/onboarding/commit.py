@@ -51,7 +51,8 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
     Slack / email / Telegram handles the user added on the People page.
 
     Anyone who was principal and is not the drafted principal is demoted and
-    loses WILDCARD (only WILDCARD — other scopes they were granted stay).
+    loses WILDCARD (only WILDCARD — other scopes they were granted stay), in
+    one ``transfer_principal``: the store refuses a second principal.
 
     Best-effort: returns ``{}`` on failure and logs the exception TYPE only,
     because the traceback would carry the roster's names into the log stream.
@@ -63,6 +64,7 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
             list_people,
             restore_person,
             set_authority_scope,
+            transfer_principal,
             upsert_person,
         )
         from openexecutive.people.store import (
@@ -80,11 +82,15 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
         for draft in named:
             name = draft.full_name.strip()
             prior = existing.get(name.lower())
+            # Nobody's principal flag changes in this loop: the drafted
+            # principal takes it below in one transfer, so there is never a
+            # moment with two principals (the store refuses that) or none.
+            keep_flag = bool(prior is not None and prior.is_principal)
             if prior is None:
                 pid = upsert_person(
                     full_name=name,
                     role=draft.role.strip(),
-                    is_principal=draft.is_principal,
+                    is_principal=False,
                 )
             else:
                 if draft.is_principal and prior.suspended and prior.id is not None:
@@ -97,7 +103,7 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
                     full_name=name,
                     # An empty drafted role means "not mentioned", not "clear it".
                     role=draft.role.strip() or prior.role,
-                    is_principal=draft.is_principal,
+                    is_principal=keep_flag,
                     # Carried across so the UPDATE does not null them out.
                     department_slugs=prior.department_slugs,
                     email=prior.email,
@@ -116,13 +122,17 @@ def save_onboarding_people(drafts: list[PersonDraft]) -> dict[str, int]:
             if refreshed is not None:
                 existing[name.lower()] = refreshed
 
-            if draft.is_principal:
-                set_authority_scope(pid, [AuthorityScope.WILDCARD])
-            elif prior is not None and prior.is_principal:
-                # Demoted but still on the roster — _demote_stale_principals
-                # skips them (they ARE in keep_ids), so strip WILDCARD here or
-                # they keep blanket approval authority.
-                _strip_wildcard(pid, prior.authority_scope)
+
+        # The drafted principal takes the flag from whoever had it, in one
+        # UPDATE, and WILDCARD with it; whoever had it loses WILDCARD (only
+        # WILDCARD: other scopes they were granted stay), on the roster or not.
+        principal_id = next((ids[d.full_name.strip()] for d in named if d.is_principal), None)
+        if principal_id is not None:
+            for demoted in transfer_principal(principal_id):
+                before = get_person(demoted)
+                if before is not None:
+                    _strip_wildcard(demoted, before.authority_scope)
+            set_authority_scope(principal_id, [AuthorityScope.WILDCARD])
 
         _demote_stale_principals(set(ids.values()))
         return ids

@@ -105,7 +105,12 @@ def fetched(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 
 
 def _turn(*rounds: list[Any], message: str = "reply to Dana as me and Slack Bob") -> tuple[_TextProvider, list[Any]]:
-    principal = people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    existing = people_store.find_principal_person()
+    principal = (
+        existing.id
+        if existing is not None and existing.id is not None
+        else people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    )
     people_registry.invalidate()
     person = people_store.get_person(principal)
     session = Session(

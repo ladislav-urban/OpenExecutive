@@ -91,9 +91,23 @@ def active_sql(alias: str = "") -> str:
 
 ACTIVE_SQL = active_sql()
 
+# No principal yet: no non-archived row holds the flag (a suspended one counts).
+_NO_PRINCIPAL_SQL = "NOT EXISTS (SELECT 1 FROM people WHERE is_principal = 1 AND archived = 0)"
+# For an UPDATE of row ?: no one else holds it.
+_NOT_ANOTHER_PRINCIPAL_SQL = (
+    " AND NOT EXISTS (SELECT 1 FROM people other"
+    " WHERE other.is_principal = 1 AND other.archived = 0 AND other.id != ?)"
+)
+
 
 def _kind_filter(include_contacts: bool) -> str:
     return "" if include_contacts else _TEAM_ONLY
+
+
+class PrincipalExistsError(ValueError):
+    """Raised when a write would make a second principal: there is one, and it
+    is someone else (``upsert_person``). Moving the principal to someone else
+    is ``transfer_principal``."""
 
 
 class PrincipalContactError(ValueError):
@@ -376,7 +390,10 @@ def upsert_person(
     update: every other column is rewritten by the UPDATE, but a caller that
     does not mention kind must never turn a contact into a team member (that
     grants sign-in and inbound access) or the reverse. Raises
-    ``PrincipalContactError`` for a principal contact.
+    ``PrincipalContactError`` for a principal contact, and
+    ``PrincipalExistsError`` for ``is_principal`` while someone else is the
+    principal: the guard is in the write itself, so two writers at once can't
+    both make one.
     """
     now = _now()
     dept_json = json.dumps(department_slugs or [])
@@ -401,7 +418,7 @@ def upsert_person(
             effective_kind: str = kind or stored_kind or "team"
             _check_kind(effective_kind, is_principal)
             became_contact = stored_kind == "team" and effective_kind == "contact"
-            conn.execute(
+            cursor = conn.execute(
                 """
                 UPDATE people SET
                     full_name=?, role=?, is_principal=?, department_slugs_json=?,
@@ -410,15 +427,18 @@ def upsert_person(
                     response_sla_hours=?, on_leave_until=?, reports_to_person_id=?,
                     updated_at=?
                 WHERE id=?
-                """,
+                """ + (_NOT_ANOTHER_PRINCIPAL_SQL if is_principal else ""),
                 (
                     full_name, role, int(is_principal), dept_json,
                     email, slack_user_id, telegram_chat_id, discord_user_id,
                     preferred_channel, effective_kind,
                     response_sla_hours, leave_str, reports_to_person_id,
                     now, person_id,
+                    *((person_id,) if is_principal else ()),
                 ),
             )
+            if is_principal and row is not None and cursor.rowcount == 0:
+                raise PrincipalExistsError("someone else is the principal")
         else:
             new_kind: str = kind or "team"
             _check_kind(new_kind, is_principal)
@@ -430,8 +450,8 @@ def upsert_person(
                      preferred_channel, kind,
                      response_sla_hours, on_leave_until, reports_to_person_id,
                      created_at, updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-                """,
+                SELECT ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                """ + (" WHERE " + _NO_PRINCIPAL_SQL if is_principal else ""),
                 (
                     full_name, role, int(is_principal), dept_json,
                     email, slack_user_id, telegram_chat_id, discord_user_id,
@@ -440,6 +460,8 @@ def upsert_person(
                     now, now,
                 ),
             )
+            if cursor.rowcount != 1:
+                raise PrincipalExistsError("someone else is the principal")
             return int(cursor.lastrowid or 0)
     assert person_id is not None  # the INSERT branch returned above
     # After the UPDATE has committed: the loop close writes the same file.
@@ -989,8 +1011,6 @@ def archive_person(person_id: int, db_path: Path | None = None) -> bool:
     return archived
 
 
-# No principal yet: no non-archived row holds the flag (a suspended one counts).
-_NO_PRINCIPAL_SQL = "NOT EXISTS (SELECT 1 FROM people WHERE is_principal = 1 AND archived = 0)"
 
 
 def _grant_wildcard(conn: sqlite3.Connection, person_id: int) -> None:
@@ -1051,6 +1071,32 @@ def add_principal(
         person_id = int(cursor.lastrowid)
         _grant_wildcard(conn, person_id)
         return person_id
+
+
+def transfer_principal(person_id: int, db_path: Path | None = None) -> list[int]:
+    """Make ``person_id`` the principal and everyone else not, in one UPDATE,
+    so there is never a moment with two principals or none (onboarding's
+    re-run, onboarding/commit.py). Only an active team member who isn't a demo
+    person can take it. Returns who was the principal before (to lose
+    WILDCARD); raises ``PrincipalExistsError`` when ``person_id`` can't take it,
+    with nothing changed. Authority is the caller's to adjust."""
+    now = _now()
+    with _get_conn(db_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        before = [
+            int(r["id"])
+            for r in conn.execute("SELECT id FROM people WHERE is_principal = 1 AND id != ?", (person_id,))
+        ]
+        cursor = conn.execute(
+            "UPDATE people SET is_principal = CASE WHEN id = ? THEN 1 ELSE 0 END, updated_at = ?"
+            " WHERE (is_principal = 1 OR id = ?) AND EXISTS (SELECT 1 FROM people target WHERE target.id = ?"
+            " AND target.kind = 'team' AND target.archived = 0 AND target.suspended = 0"
+            " AND target.directory_demo = 0)",
+            (person_id, now, person_id, person_id),
+        )
+        if cursor.rowcount == 0:
+            raise PrincipalExistsError("they can't be the principal")
+    return before
 
 
 class PrincipalSuspendError(ValueError):
