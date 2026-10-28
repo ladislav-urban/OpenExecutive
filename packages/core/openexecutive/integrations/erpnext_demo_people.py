@@ -10,10 +10,14 @@ accounts (Keycloak, ERPNext, OpenExecutive). Two routes:
   ``questions_today`` (today's UTC count, ``people/demo.py``) and
   ``suspended``, with the day's ``limit`` (``DEMO_DAILY_QUESTIONS``).
 - ``POST /webhook/erpnext/demo-people/archive``, body ``{"email": ...}``: archive
-  the demo person with that address. 404, with no detail, when nobody has it;
-  ``{"archived": false, "reason": "already"}`` when they are archived already;
-  409 for anyone who isn't a demo person, isn't directory-managed, or is the
-  principal. Audited ``demo_person_archived``, private to the principal.
+  the demo person with that address. A bare 404 for anyone this route may not
+  touch (nobody, the principal, a teammate, a contact, a demo row the directory
+  doesn't manage, live or archived), so it tells no one apart from nobody;
+  ``{"archived": false, "reason": "already"}`` for an archived demo person.
+  Audited ``demo_person_archived``, a refusal ``demo_person_archive_refused``
+  (ids only), private to the principal. The console deletes the Keycloak user
+  first: while it still exists, the next directory sync would add the person
+  again, as a new row.
 
 **Who is asking.** oe_connector signs each request as it signs the panel's
 (``erpnext_panel.verify_panel_assertion``: the ``oe_connector_panel_private_key``
@@ -106,6 +110,15 @@ async def _verified_principal(request: Request, audience: str) -> tuple[bytes, N
     principal = find_principal_person()
     if principal is None or normalize_email(principal.email or "") != email:
         logger.warning("demo admin console refused: the signed user is not the principal")
+        from openexecutive.audit import log_event
+
+        log_event(
+            "demo_person_archive_refused" if audience == ARCHIVE_AUDIENCE else "demo_admin_refused",
+            "the ERPNext site signed a demo admin console request for someone other than the principal",
+            actor="erpnext_demo_admin",
+            details={"route": audience},
+            private=True,
+        )
         return None, _error(403, "forbidden", "Only the principal may use the demo admin console.")
     return body, None
 
@@ -145,22 +158,31 @@ async def archive_demo_person(request: Request) -> Response:
     raw = data.get("email") if isinstance(data, dict) else None
     if not isinstance(raw, str) or not raw.strip() or len(raw) > MAX_EMAIL_LEN:
         return _error(400, "bad_request", "The body must name an email.")
+    from openexecutive.audit import log_event
     from openexecutive.people import registry, store
 
     address = store.normalize_email(raw)
     person = store.find_person_by_own_address(address)
-    if person is None:
+    # One answer for everyone this route may not touch, live or archived: a
+    # bare 404, so it can't tell the principal, a teammate, a contact or a
+    # former member from nobody (security review, Oct 28, 2026).
+    if person is None or person.id is None or person.is_principal or not person.demo or not person.directory_managed:
+        if person is not None and person.id is not None:
+            log_event(
+                "demo_person_archive_refused",
+                f"the demo admin console asked to archive person #{person.id}, who isn't a demo person",
+                actor="erpnext_demo_admin",
+                details={"person_id": person.id},
+                private=True,
+            )
         return Response(status_code=404)
     if person.archived:
         return JSONResponse({"archived": False, "reason": "already"})
-    if person.is_principal or not person.demo or not person.directory_managed:
-        return _error(409, "not_a_demo_person", "Only a demo person the directory manages is archived here.")
-    assert person.id is not None
-    archived = store.archive_person(person.id)
+    archived = store.archive_demo_person(person.id)
     registry.invalidate()
     if not archived:
-        return JSONResponse({"archived": False, "reason": "already"})
-    from openexecutive.audit import log_event
+        # Changed since it was read: no longer a demo person, or archived meanwhile.
+        return Response(status_code=404)
 
     log_event(
         "demo_person_archived",

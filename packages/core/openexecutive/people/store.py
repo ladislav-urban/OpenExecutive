@@ -976,6 +976,24 @@ def _left_the_team(person_id: int) -> None:
         logger.warning("people: closing open loops for a new contact failed", exc_info=True)
 
 
+def archive_demo_person(person_id: int, db_path: Path | None = None) -> bool:
+    """Archive ``person_id`` only while they are a demo person the directory
+    manages and not the principal, asserted in the UPDATE itself, so a change
+    landing between a caller's read and this write can't archive a teammate
+    (the demo admin console, integrations/erpnext_demo_people.py). True when
+    archived; the rest is ``archive_person``'s."""
+    with _get_conn(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE people SET archived = 1, updated_at = ? WHERE id = ? AND archived = 0"
+            " AND directory_demo = 1 AND directory_managed = 1 AND is_principal = 0",
+            (_now(), person_id),
+        )
+        if cursor.rowcount == 0:
+            return False
+    _after_archive(person_id, db_path)
+    return True
+
+
 def archive_person(person_id: int, db_path: Path | None = None) -> bool:
     """Soft-delete a person. Returns True if a row was found and archived."""
     with _get_conn(db_path) as conn:
@@ -984,11 +1002,19 @@ def archive_person(person_id: int, db_path: Path | None = None) -> bool:
             (_now(), person_id),
         )
         archived = cursor.rowcount > 0
+    if archived:
+        _after_archive(person_id, db_path)
+    return archived
+
+
+def _after_archive(person_id: int, db_path: Path | None) -> None:
+    """What archiving someone frees: their aliases, open loops, working style."""
+    with _get_conn(db_path) as conn:
         # Free the aliases: the addresses are unique across the roster, and an
         # archived person must not keep someone else from using them.
-        if archived and _table_exists(conn, "person_emails"):
+        if _table_exists(conn, "person_emails"):
             conn.execute("DELETE FROM person_emails WHERE person_id = ?", (person_id,))
-    if archived and db_path is None:
+    if db_path is None:
         # An archived person can no longer be chased, so their open loops
         # would otherwise sit in /today forever. Only on the live store: a
         # caller passing its own db_path owns its own episodic DB too.
@@ -1004,7 +1030,6 @@ def archive_person(person_id: int, db_path: Path | None = None) -> bool:
             delete_profile(person_id)
         except Exception:
             logger.warning("archive_person: dropping working style failed", exc_info=True)
-    return archived
 
 
 # No principal yet: no non-archived row holds the flag (a suspended one counts).

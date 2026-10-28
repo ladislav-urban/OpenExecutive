@@ -134,10 +134,17 @@ def test_never_archives_anyone_but_a_managed_demo_person(site: SimpleNamespace, 
         pid = getattr(site, who)
         email = OWNER if who == "principal" else "tom@example.com"
     resp = _post(site, dp.ARCHIVE_PATH, {"email": email})
-    assert resp.status_code == 409
+    # The same bare 404 as for nobody: the route tells no one apart.
+    assert resp.status_code == 404 and resp.content == b""
     person = people_store.get_person(pid)
     assert person is not None and not person.archived
-    assert site.audited == []
+    assert site.audited == ["demo_person_archive_refused"]
+
+
+def test_an_archived_teammate_looks_like_nobody(site: SimpleNamespace) -> None:
+    people_store.archive_person(site.tom)
+    resp = _post(site, dp.ARCHIVE_PATH, {"email": "tom@example.com"})
+    assert resp.status_code == 404 and resp.content == b""
 
 
 @pytest.mark.parametrize("path", [dp.PATH, dp.ARCHIVE_PATH])
@@ -145,6 +152,15 @@ def test_only_the_principal_may_ask(site: SimpleNamespace, path: str) -> None:
     payload = {} if path == dp.PATH else {"email": "vic@example.com"}
     resp = _post(site, path, payload, sub="tom@example.com")
     assert resp.status_code == 403
+    person = people_store.get_person(site.vic)
+    assert person is not None and not person.archived
+    assert site.audited == ["demo_person_archive_refused" if path == dp.ARCHIVE_PATH else "demo_admin_refused"]
+
+
+def test_the_archive_reasserts_the_demo_person_in_the_write(site: SimpleNamespace) -> None:
+    # Made a teammate between the read and the write: the store refuses it.
+    _mark(site.vic, directory_demo=0)
+    assert people_store.archive_demo_person(site.vic) is False
     person = people_store.get_person(site.vic)
     assert person is not None and not person.archived
 
