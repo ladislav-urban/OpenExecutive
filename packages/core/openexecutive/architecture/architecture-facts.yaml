@@ -4216,6 +4216,24 @@ people:
     verify_panel_assertion(with_subject=True); sub must equal the
     principal's email (403 otherwise). Exempt from BACKEND_SHARED_SECRET as
     the other ERPNext webhooks are.
+  unclaimed_scopes: |
+    Approval scopes are the principal's to grant (Oct 28, 2026; follow-up
+    from the single-principal guard's review). While no principal exists,
+    POST /people and PATCH /people/{id} answer 403 for authority_scope on a
+    non-principal row to a signed-in person (api.caller.signed_in; the
+    operator's own calls, the CLI or the shared secret with no signed-in
+    person, still may). Claiming the install (upsert_person's guarded INSERT
+    or a guarded UPDATE of a row that wasn't principal, claim_principal,
+    add_principal, transfer_principal from none) runs
+    _STRIP_OTHERS_SCOPES_SQL in the same transaction: every scope on every
+    non-principal row goes. Moving the seat between owners strips only the
+    old principal's WILDCARD, and a "transfer" to the principal there already
+    is claims nothing (decided inside its BEGIN IMMEDIATE from whether any
+    principal existed, the target included). fixture_loader._seed_people
+    seeds the principal first, so the roster's own scopes come after the
+    claim; a demo install runs `openexecutive principal` before its first
+    demo-reset for the same reason. The form wizard (profile_builder) grants
+    no scopes to non-principal records in a save that claims the install.
   principal_cli: |
     `openexecutive principal --email <a> [--name] [--role]`
     (people/principal.py, added Oct 28, 2026): names the principal on an

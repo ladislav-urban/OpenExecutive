@@ -42,6 +42,7 @@ def _save_wizard_people(answers: dict) -> None:  # type: ignore[type-arg]
         from openexecutive.people.models import AuthorityScope
         from openexecutive.people.store import (
             PrincipalExistsError,
+            find_principal_person,
             set_authority_scope,
             upsert_person,
         )
@@ -53,8 +54,15 @@ def _save_wizard_people(answers: dict) -> None:  # type: ignore[type-arg]
         if not records:
             return
         init_people_db()
+        # While nobody is the principal, whoever saves this may not be the
+        # owner, and approval scopes are the principal's to grant
+        # (people/store.py): a save that claims the install grants none to
+        # anyone else; the owner grants them on the People page afterwards.
+        claims_install = find_principal_person() is None
         for rec in records:
             raw_scopes: list[str] = rec.pop("authority_scope", [])
+            if claims_install and not rec.get("is_principal"):
+                raw_scopes = []
             try:
                 pid = upsert_person(**rec)
             except PrincipalExistsError:

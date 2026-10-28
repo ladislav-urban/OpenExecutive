@@ -173,6 +173,10 @@ principal. Run it before anyone else can sign in: until there is a principal,
 anyone signed in may edit People. For the same reason it refuses a row that
 also carries chat ids, other addresses or approval scopes, or another name than
 `--name`: remove what isn't theirs on the People page, then run it again.
+Run it before the first `demo-reset` too: claiming the install strips every
+approval scope other rows hold (they could have been put there by anyone while
+nobody was the principal), the demo roster's included, so a roster loaded
+before the claim keeps its scopes only from the next reset on.
 
 ---
 
