@@ -4209,8 +4209,13 @@ people:
     add_principal, transfer_principal from none) runs
     _STRIP_OTHERS_SCOPES_SQL in the same transaction: every scope on every
     non-principal row goes. Moving the seat between owners strips only the
-    old principal's WILDCARD. fixture_loader._seed_people seeds the
-    principal first, so the roster's own scopes come after the claim.
+    old principal's WILDCARD, and a "transfer" to the principal there already
+    is claims nothing (decided inside its BEGIN IMMEDIATE from whether any
+    principal existed, the target included). fixture_loader._seed_people
+    seeds the principal first, so the roster's own scopes come after the
+    claim; a demo install runs `openexecutive principal` before its first
+    demo-reset for the same reason. The form wizard (profile_builder) grants
+    no scopes to non-principal records in a save that claims the install.
   principal_cli: |
     `openexecutive principal --email <a> [--name] [--role]`
     (people/principal.py, added Oct 28, 2026): names the principal on an

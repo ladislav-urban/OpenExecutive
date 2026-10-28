@@ -96,3 +96,29 @@ def test_while_unclaimed_the_api_refuses_scopes_on_anyone_but_the_principal(clie
     patched = client.patch(f"/people/{added.json()['id']}", json={"authority_scope": ["spend_lt_2k"]}, headers=SIGNED_IN)
     assert patched.status_code == 403
     assert _scopes(added.json()["id"], db) == []
+
+
+def test_a_transfer_to_the_current_principal_claims_nothing(db: Path) -> None:
+    """A setup re-run keeping the owner (open to anyone signed in) transfers to
+    the principal there already is: no claim, so the team keeps its scopes."""
+    owner = store.upsert_person(full_name="Pat", email="pat@example.com", is_principal=True, db_path=db)
+    teammate = store.upsert_person(full_name="Ann", email="ann@example.com", db_path=db)
+    store.set_authority_scope(teammate, [SPEND], db_path=db)
+    assert store.transfer_principal(owner, db) == []
+    assert _scopes(teammate, db) == [SPEND]
+
+
+def test_a_wizard_save_that_claims_the_install_grants_no_one_else_scopes(
+    db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.onboarding import profile_builder
+
+    records = [
+        {"full_name": "Pat", "is_principal": True, "authority_scope": ["wildcard"]},
+        {"full_name": "Mallory", "role": "Advisor", "authority_scope": ["wildcard"]},
+    ]
+    monkeypatch.setattr(profile_builder, "build_people_from_answers", lambda answers: [dict(r) for r in records])
+    profile_builder._save_wizard_people({})
+    by_name = {p.full_name: p for p in store.list_people(db_path=db)}
+    assert by_name["Pat"].is_principal and WILD in by_name["Pat"].authority_scope
+    assert by_name["Mallory"].authority_scope == []

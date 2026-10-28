@@ -414,6 +414,10 @@ def upsert_person(
     became_contact = False
     with _get_conn(db_path) as conn:
         if person_id is not None and person_id > 0:
+            if is_principal:
+                # Read and write in one transaction: whether this claims the
+                # install from none is decided from this read.
+                conn.execute("BEGIN IMMEDIATE")
             row = conn.execute(
                 "SELECT * FROM people WHERE id = ?", (person_id,)
             ).fetchone()
@@ -1113,6 +1117,9 @@ def transfer_principal(person_id: int, db_path: Path | None = None) -> list[int]
             int(r["id"])
             for r in conn.execute("SELECT id FROM people WHERE is_principal = 1 AND id != ?", (person_id,))
         ]
+        # A claim from none only if nobody held it, the target included: a
+        # "transfer" to the principal there already is claims nothing.
+        claimed_from_none = bool(conn.execute("SELECT " + _NO_PRINCIPAL_SQL).fetchone()[0])
         cursor = conn.execute(
             "UPDATE people SET is_principal = CASE WHEN id = ? THEN 1 ELSE 0 END, updated_at = ?"
             " WHERE (is_principal = 1 OR id = ?) AND EXISTS (SELECT 1 FROM people target WHERE target.id = ?"
@@ -1122,7 +1129,7 @@ def transfer_principal(person_id: int, db_path: Path | None = None) -> list[int]
         )
         if cursor.rowcount == 0:
             raise PrincipalExistsError("they can't be the principal")
-        if not before:
+        if claimed_from_none:
             # Nobody held it: the install is claimed now.
             conn.execute(_STRIP_OTHERS_SCOPES_SQL)
         for other in before:
