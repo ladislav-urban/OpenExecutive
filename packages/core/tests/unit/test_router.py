@@ -152,3 +152,30 @@ def test_the_specialist_options_keep_their_routing_cues(key: str, cue: str) -> N
     text = text.partition(": ")[2]
     option = next(part for part in text.split("; ") if part.startswith(f"{key} ("))
     assert cue in option
+
+
+def test_a_panel_turns_specialists_read_no_standing_facts(monkeypatch) -> None:
+    """The panel's own turn reads no standing facts (they carry teammates'
+    names); its specialists mustn't load them behind its back."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.orchestrator.session import Session
+
+    monkeypatch.setattr("openexecutive.orchestrator.router.load_company_stage", lambda: "")
+    monkeypatch.setattr("openexecutive.orchestrator.router.load_principal_role", lambda: "")
+    monkeypatch.setattr(
+        "openexecutive.memory.facts.render_facts_for_prompt", lambda: "runway: 4 months (per Sam Lee)"
+    )
+
+    def facts_seen(session: Session) -> str:
+        cfo_mock = AsyncMock(return_value="x")
+        token = current_session.set(session)
+        try:
+            with patch.object(SPECIALIST_REGISTRY["cfo"], "analyze", cfo_mock):
+                asyncio.run(route_parallel([{"specialist": "cfo", "query": "q"}], retrieved_knowledge_map={"cfo": ""}))
+        finally:
+            current_session.reset(token)
+        return cfo_mock.await_args.kwargs["standing_facts"]
+
+    panel = Session(session_id="erpnext:1:c1", erpnext_panel_email="dana@prospect.example")
+    assert facts_seen(panel) == ""
+    assert facts_seen(Session(session_id="web-1")) == "runway: 4 months (per Sam Lee)"
