@@ -188,6 +188,29 @@ _ERPNEXT_GUIDE = (
 )
 
 
+# Each read tool's arguments, as oe_connector's pinned definitions take them
+# (the model calls them with call_tool, so it never sees their schemas unless
+# it searched; on the pilot it guessed shapes and names, Oct 29, 2026).
+# Written for the pin below: a test fails when the pin moves, so a changed
+# definition gets these lines checked too. Process-constant.
+ERPNEXT_ARGS_WRITTEN_FOR = "c4260ee11e7833ee721b9ae13f9f102ae94a21526e02d09658f6b7d795d880ff"
+_ERPNEXT_ARGS = (
+    "  Their arguments, exactly these names, with objects and lists passed as JSON "
+    "values, never as quoted strings: "
+    "`search_catalog` {query, limit?}; "
+    "`describe_doctype` {doctype, parent_doctype? for a child table}; "
+    "`describe_report` {report_name}; "
+    "`get_record` {doctype, name, child_rows?}; "
+    "`list_records` {doctype, fields?: [\"fieldname\", ...], filters?: "
+    "{\"field\": value or [\"operator\", value]} or [[\"field\", \"operator\", value], ...], "
+    "group_by?, aggregates?: [{\"function\": \"SUM\", \"field\": ..., \"as\": ...}], "
+    "order_by?, limit?}; "
+    "`run_report` {report_name, filters?: {fieldname from describe_report: value}, limit?}. "
+    "An empty result means nothing matched: change the filter or the approach, "
+    "never the shape of the same call."
+)
+
+
 # Who ERPNext answers. Phase 1 reads as one service user, so only the
 # principal; phase 2 (ERPNEXT_CALLER_PRIVATE_KEY set) runs each call as the
 # asker's own ERPNext user (orchestrator.erpnext_caller). Process-constant.
@@ -425,6 +448,7 @@ def render_connected_systems(
             + "."
         )
         lines.append(_ERPNEXT_GUIDE)
+        lines.append(_ERPNEXT_ARGS)
         if (settings.erpnext_brief_company or "").strip():
             lines.append(_ERPNEXT_METRICS)
         if drafts:
