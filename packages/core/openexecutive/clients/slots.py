@@ -180,6 +180,9 @@ _BLANK_WIPE_TABLES = (
     # of who wrote to this company's bot, for its People pickers.
     "telegram_chats",
     "person_emails",
+    # Business profiles from the directory (people.profile): personal data
+    # of this company's people.
+    "person_profiles",
     "person_authority_scope",
     "person_availability",
     "people",

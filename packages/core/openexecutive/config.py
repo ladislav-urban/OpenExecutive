@@ -1509,6 +1509,20 @@ class Settings(BaseSettings):
     directory_sync_demo_role: str = Field("Demo user", max_length=80, alias="DIRECTORY_SYNC_DEMO_ROLE")
     directory_sync_demo_max_suspend: int = Field(50, ge=0, alias="DIRECTORY_SYNC_DEMO_MAX_SUSPEND")
     demo_daily_questions: int = Field(50, ge=0, alias="DEMO_DAILY_QUESTIONS")
+    # Business profiles from the directory (people/profile.py): off by
+    # default. On, the sync keeps each person's country, type of business,
+    # industry and jurisdiction from the provider's user attributes, named
+    # here, as codes from fixed lists. Personal data: only the principal and
+    # that person read them (GET /people/{id}/profile); no prompt uses them.
+    directory_profiles_enabled: bool = Field(False, alias="DIRECTORY_PROFILES_ENABLED")
+    directory_profile_attr_country: str = Field("country", max_length=80, alias="DIRECTORY_PROFILE_ATTR_COUNTRY")
+    directory_profile_attr_business_type: str = Field(
+        "businessType", max_length=80, alias="DIRECTORY_PROFILE_ATTR_BUSINESS_TYPE"
+    )
+    directory_profile_attr_industry: str = Field("industry", max_length=80, alias="DIRECTORY_PROFILE_ATTR_INDUSTRY")
+    directory_profile_attr_jurisdiction: str = Field(
+        "jurisdiction", max_length=80, alias="DIRECTORY_PROFILE_ATTR_JURISDICTION"
+    )
     # The demo company `openexecutive demo-reset --bundle <dir>` may load
     # (cli/demo_reset.py): its bundle must name exactly this company.
     # Empty (the default) refuses every bundle, so a real company is never

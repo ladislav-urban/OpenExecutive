@@ -1771,6 +1771,7 @@ def _seed_people(people_path: Path) -> int:
             # A fixture's people come with no aliases and nobody waiting.
             for table in (
                 "roster_ack_log", "roster_request_messages", "roster_requests", "person_emails",
+                "person_profiles",
             ):
                 if table in existing:
                     conn.execute(f"DELETE FROM {table}")  # noqa: S608 — fixed names
