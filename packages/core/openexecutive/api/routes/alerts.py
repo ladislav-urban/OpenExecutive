@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import unicodedata
@@ -70,6 +71,24 @@ def _caller_may_clear(alert: Alert, request: Request) -> bool:
 
 
 _NOT_YOURS = "Only items assigned to you can be cleared. Ask the owner to clear this one."
+_DEMO_LOOKS = "In the demo you can look at this card and discuss it, but not change it."
+
+
+def _refuse_demo_caller(request: Request, alert: Alert | None = None) -> None:
+    """403 for a demo person (people.demo) on any card that isn't routed to
+    them: the cards they see are the company's, shared with the principal,
+    so snoozing or reopening one would change it for everyone. Fails closed."""
+    if _caller_clears_anything(request):
+        return
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.people.demo import is_demo_person
+
+    caller = _resolve_caller_person_id(request)
+    if caller is None or not is_demo_person(caller):
+        return
+    if alert is not None and alert.routed_to_person_id == caller:
+        return
+    raise HTTPException(status_code=403, detail=_DEMO_LOOKS)
 
 
 class AckBody(BaseModel):
@@ -92,6 +111,9 @@ def ack_alert(alert_id: int, body: AckBody, request: Request) -> Alert:
         )
     if body.status != "read" and not _caller_may_clear(existing, request):
         raise HTTPException(status_code=403, detail=_NOT_YOURS)
+    # A demo person not even "read": it takes the card off the live board,
+    # which is the company's.
+    _refuse_demo_caller(request, existing)
     if not store.set_status(alert_id, body.status):
         raise HTTPException(status_code=404, detail="Alert not found")
     # Feedback loop: a dismiss on a watch-sourced alert lowers that watch's
@@ -122,6 +144,7 @@ def snooze_alert(alert_id: int, body: SnoozeBody, request: Request) -> Alert:
     """Hide a card from the live queue until ``until``; it comes back on its
     own then. ``until: null`` brings it back now."""
     existing = _visible_alert(alert_id, request)
+    _refuse_demo_caller(request, existing)
     if existing.source == "roster_request":
         raise HTTPException(
             status_code=409,
@@ -487,6 +510,7 @@ def bulk_ack_alerts(body: BulkAckBody, request: Request) -> BulkAckResponse:
 def reopen_alert(alert_id: int, request: Request) -> Alert:
     """Undo for a close / dismiss / expiry: back to ``unread``, verdict cleared."""
     existing = _visible_alert(alert_id, request)
+    _refuse_demo_caller(request, existing)
     prior = existing.status
     if not store.reopen_alert(
         alert_id, exclude_sources=tuple(lifecycle.TTL_EXEMPT_SOURCES)
@@ -523,15 +547,18 @@ class ReviewResponse(BaseModel):
 
 
 @router.post("/alerts/review", response_model=ReviewResponse)
-async def review_alerts() -> ReviewResponse:
+async def review_alerts(request: Request) -> ReviewResponse:
     """Run the Executive's relevance review on demand ("Re-check now").
 
     Ignores the per-alert review interval so every live alert past the
     minimum age is re-examined; the per-pass caps, the per-alert move
     idempotency, the single-flight lock and `ALERT_REVIEW_ENABLED` all
-    still apply (a disabled review returns zero counts).
+    still apply (a disabled review returns zero counts). Not a demo
+    person's: the review closes, routes and nudges the company's cards.
     """
     from openexecutive.alerts.review import run_alert_review
+
+    await asyncio.to_thread(_refuse_demo_caller, request)
 
     summary = await run_alert_review(reason="manual", ignore_interval=True)
     return ReviewResponse(**summary.as_dict())

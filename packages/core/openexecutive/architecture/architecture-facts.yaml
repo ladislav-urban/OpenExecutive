@@ -8129,7 +8129,15 @@ integrations:
     chat's org block is a third stable variant (render_org_block(
     demo_viewer=True): no demo person at all, no contacts, no addresses), so
     one prospect never learns who else is trying the product or how to reach
-    the team. And they change nothing of the company's: api/demo_gate.py, an
+    the team. Home: a card routed to no one is in a demo person's Needs you
+    (home_rules.lane caller_is_demo; the demo bundle's alerts load unrouted,
+    oe_connector#280) so there is something to see, but only to look at:
+    card_actions offers Discuss (and Open on a document) on any card not
+    routed to them, the older-than offer leaves those out, and snooze,
+    reopen and the manual review refuse them (403), as approve and dismiss
+    already did. Decided Oct 25: demo people never approve the Executive's
+    cards.
+    And they change nothing of the company's: api/demo_gate.py, an
     app-wide middleware after the caller gate, answers every non-GET of
     theirs 403 except under /chat, /sessions, /alerts, /decisions,
     /notifications/settings and /knowledge/search (whose routes keep their
