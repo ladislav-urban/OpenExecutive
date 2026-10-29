@@ -371,9 +371,11 @@ PANEL_CONTEXT_BLOCK = (
     "and that is you. "
     "Here you can only read ERPNext (its tools run as this person's own ERPNext "
     "user) and consult your specialists; you cannot send, schedule, save or "
-    "change anything, or reach any other system. Keep answers short enough for "
-    "a side panel. If they ask for something you cannot do here, say so and "
-    "suggest the OpenExecutive app. "
+    "change anything, or reach any other system. You cannot prepare ERPNext "
+    "drafts for this person either, so never offer to: when they want a "
+    "document, tell them how to create it in ERPNext themselves. Keep answers "
+    "short enough for a side panel. If they ask for something you cannot do "
+    "here, say so and suggest the OpenExecutive app. "
     + SCREEN_RULE
     + SHOW_RULE
 )
@@ -609,7 +611,10 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
         return _error(400, "bad_request", "The conversation id is not valid.")
     if email in _in_flight:
         return _error(429, "busy", "The Executive is still answering your last question.")
-    if not _rate.allow(email, time.monotonic()):
+    # A demo person's cap is the day's (people.demo, below), not the hour's: a
+    # prospect working through the guides asks many in a row (owner, Oct 29).
+    demo_asker = getattr(person, "demo", False) is True
+    if not demo_asker and not _rate.allow(email, time.monotonic()):
         return _error(429, "rate_limited", "You have asked a lot this hour; try again later.")
     if getattr(person, "demo", False) is True:
         # A demo person's questions a day count here as in the web chat (people.demo).

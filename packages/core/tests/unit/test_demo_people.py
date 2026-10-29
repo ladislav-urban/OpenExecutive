@@ -283,3 +283,50 @@ def test_a_demo_persons_panel_turn_is_a_demo_turn(monkeypatch: pytest.MonkeyPatc
         person = people_store.get_person(pid)
         asyncio.run(erpnext_panel._answer(person, email, "c1", "Who is on the team?", None))
     assert seen == [True, False]
+
+
+def test_a_demo_person_has_no_hourly_cap_in_the_panel_only_the_days(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from openexecutive.api.caller import JtiLedger
+    from openexecutive.integrations import erpnext_panel
+    from openexecutive.integrations.erpnext_panel import ASSERTION_HEADER, PATH
+
+    from .test_erpnext_panel import ASKER, _Signer
+
+    signer = _Signer()
+    monkeypatch.setenv("ERPNEXT_PANEL_PUBLIC_KEYS", signer.public_keys)
+    monkeypatch.setenv("DEMO_DAILY_QUESTIONS", "3")
+    monkeypatch.setattr(erpnext_panel, "_ledger", JtiLedger())
+    monkeypatch.setattr(erpnext_panel, "_rate", erpnext_panel._RateLimiter(1, 3600))
+    monkeypatch.setattr(erpnext_panel, "_ready", lambda: None)
+    pid = _demo(email=ASKER)
+    demo = {"value": True}
+    monkeypatch.setattr(
+        erpnext_panel, "_person_for", lambda email: SimpleNamespace(id=pid, full_name="D", demo=demo["value"])
+    )
+
+    async def answer(*_a: object) -> str:
+        return "Fine."
+
+    monkeypatch.setattr(erpnext_panel, "_answer", answer)
+    app = FastAPI()
+    app.include_router(erpnext_panel.router)
+    client = TestClient(app)
+
+    def ask(conversation: str) -> object:
+        body = json.dumps({"message": "hi", "conversation": conversation}).encode()
+        return client.post(
+            PATH, content=body,
+            headers={"content-type": "application/json", ASSERTION_HEADER: signer.sign(body, sub=ASKER)},
+        )
+
+    # An hourly limit of 1, a daily cap of 3: the demo person gets 3, then the day's 429.
+    assert [ask(f"c{i}").status_code for i in range(3)] == [200, 200, 200]  # type: ignore[attr-defined]
+    assert ask("c3").json()["error"] == "daily_limit"  # type: ignore[attr-defined]
+    # Anyone else still meets the hour's limit.
+    demo["value"] = False
+    monkeypatch.setattr(erpnext_panel, "_rate", erpnext_panel._RateLimiter(1, 3600))
+    assert ask("t1").status_code == 200  # type: ignore[attr-defined]
+    assert ask("t2").json()["error"] == "rate_limited"  # type: ignore[attr-defined]

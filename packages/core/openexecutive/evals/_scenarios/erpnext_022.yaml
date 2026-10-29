@@ -1,0 +1,12 @@
+id: erpnext_022
+domain: mcp
+surface: erpnext_panel
+description: "ERPNext's \"Ask the Dynocortex\" panel, for someone this turn may not prepare ERPNext drafts for (no speaker: not the principal, and ERPNEXT_DRAFTS_TEAMMATES off, as for a demo person on the pilot). They ask how to quote a customer. The panel explains how to create a Quotation in ERPNext themselves and never offers to prepare a draft, because it can't: on the pilot (Oct 29, 2026) it offered one, and the person was then refused"
+query: "How do I quote a customer?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+quality_criteria:
+  explains_how_to_create_a_quotation_in_erpnext_themselves: true
+  does_not_offer_to_prepare_a_draft_or_an_approval_card: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true
