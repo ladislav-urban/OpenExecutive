@@ -1,0 +1,19 @@
+id: erpnext_025
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+description: "The desk's own Chats (surface: host) on an install that names its product (OE_PRODUCT_NAME=Dynocortex, as the pilot does). The person asks how to quote a customer. Found on the pilot (Oct 29, 2026): the desk Chats reply said 'Rate: left to the ERPNext price list' and 'Raise it in ERPNext directly', words the prompt itself gave it. The reply explains how to make the quote, calls the system Dynocortex or its records 'the ERP', and never names ERPNext or Open Executive; it prepares no draft (a host turn can't)."
+query: "How do I quote a customer for 50 of our standard brackets?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - OpenExecutive
+  - Open Executive
+quality_criteria:
+  explains_how_to_create_the_quotation: true
+  prepares_or_offers_no_draft: true
+  calls_the_system_dynocortex_or_the_erp: true
+  does_not_name_internal_tool_names_to_the_user: true

@@ -620,6 +620,12 @@ def _make_chat_runner(
                         profile.financials.burn_rate_monthly = ctx["monthly_burn"]
                     if ctx.get("runway_months"):
                         profile.financials.runway_months = ctx["runway_months"]
+                    # The scenario's own product name (OE_PRODUCT_NAME), for
+                    # this task only (scenarios run side by side), before
+                    # anything below builds a prompt part from it.
+                    from openexecutive.utils.product_name import product_name_override
+
+                    product_name_override.set(scenario.get("product_name"))
                     # Act as me: a fresh in-memory mailbox for the asker,
                     # whose drafts the judge reads (nothing reaches Google).
                     delegation = scenario_delegation(scenario)
@@ -635,11 +641,6 @@ def _make_chat_runner(
                         **surface,
                     )
                     query = scenario_query(scenario)
-                    # The scenario's own product name (OE_PRODUCT_NAME), for
-                    # this task only: scenarios run side by side.
-                    from openexecutive.utils.product_name import product_name_override
-
-                    product_name_override.set(scenario.get("product_name"))
                     # Records which specialists the turn consulted, for
                     # the scenario's routing expectation (routing_check).
                     collector = DebugCollector()
