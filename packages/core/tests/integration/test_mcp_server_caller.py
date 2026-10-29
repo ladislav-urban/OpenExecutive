@@ -164,6 +164,15 @@ def test_a_demo_person_reads_no_other_demo_person_and_no_addresses(
     demo("Pete Prospect", "pete@other.example")
     people_registry.invalidate()
     app, endpoint = _app(monkeypatch, signed=True)
+    dana_signed = _signed_as("user", "dana@prospect.example")
+    # MCP is all POSTs, so the demo write gate (api/demo_gate.py) refuses a
+    # demo person the whole server.
+    from openexecutive.api import demo_gate
+
+    with pytest.raises(AssertionError, match=demo_gate.DEMO_REFUSED):
+        _read(app, endpoint, "oe://people/roster", dana_signed)
+    # And behind it the roster is filtered all the same.
+    monkeypatch.setattr(demo_gate, "demo_may_write", lambda *_a, **_k: True)
     out = _read(app, endpoint, "oe://people/roster", _signed_as("user", "dana@prospect.example"))
     rows = {p["full_name"]: p for p in json.loads(out["result"]["contents"][0]["text"])}
     assert set(rows) == {"Olivia Owner", "Ben Teammate", "Dana Demo"}

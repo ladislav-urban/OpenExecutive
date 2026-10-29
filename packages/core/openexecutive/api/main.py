@@ -943,6 +943,12 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    # A demo person changes nothing of the company's (api/demo_gate.py). Added
+    # first, so it runs last: after the caller gate has said who is calling.
+    from openexecutive.api.demo_gate import demo_write_gate
+
+    app.middleware("http")(demo_write_gate)
+
     # Signed callers (api/caller.py). With CALLER_ASSERTION_PUBLIC_KEYS set, who
     # is calling comes from an assertion the UI proxy signs, never from the
     # x-caller-email header alone. Added before the shared-secret gate so it

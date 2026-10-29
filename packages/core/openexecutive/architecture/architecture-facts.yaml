@@ -8137,6 +8137,18 @@ integrations:
     reopen and the manual review refuse them (403), as approve and dismiss
     already did. Decided Oct 25: demo people never approve the Executive's
     cards.
+    And they change nothing of the company's: api/demo_gate.py, an
+    app-wide middleware after the caller gate, answers every non-GET of
+    theirs 403 except under /chat, /sessions, /alerts, /decisions,
+    /notifications/settings, /memories/history/settings, /knowledge/search
+    and their own /people/{id}/attunement (whose routes keep their own
+    checks), because many write routes (departments, goals, knowledge,
+    watchlist, agents, personas, documents, fixtures, skills, workflow
+    designer, /mcp) take any signed-in caller. It looks the caller up by
+    email itself and fails closed (503 when the roster can't be read; the
+    caller-id helpers swallow that error). A request naming no one (operator,
+    service, signed webhook) passes; a webhook path carrying a signed-in
+    demo person doesn't.
 
     Recovery: link(email, relink=True) re-points a managed row only when its
     current subject is absent from the group read, and restores a directory
