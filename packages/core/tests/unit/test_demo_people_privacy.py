@@ -160,7 +160,7 @@ def test_homes_other_lists_name_no_other_demo_person(roster: SimpleNamespace) ->
     assert [a.person_id for a in response.awaiting] == [roster.teammate]
     assert [i.target for i in response.in_flight] == ["Tom Team", None]  # no raw address
     assert [h.target for h in response.handled_overnight] == [None]
-    assert [c.routed_to_person_id for c in response.proposals] == [None, roster.dana]
+    assert [c.routed_to_person_id for c in response.proposals] == [roster.dana]  # not Pete's own card
 
 
 def test_setup_status_is_refused_to_a_demo_person(roster: SimpleNamespace) -> None:
@@ -169,3 +169,30 @@ def test_setup_status_is_refused_to_a_demo_person(roster: SimpleNamespace) -> No
     app = FastAPI()
     app.include_router(setup_status.router)
     assert TestClient(app).get("/setup/status", headers=_as("dana@prospect.example")).status_code == 403
+
+
+def test_a_demo_person_cant_snooze_reopen_or_review_the_companys_cards(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.alerts import store as alerts_store
+    from openexecutive.api.routes import alerts as alerts_route
+
+    monkeypatch.setattr(alerts_store, "DB_PATH", episodic.DB_PATH)
+    alerts_store.initialize_db(episodic.DB_PATH)
+    shared = alerts_store.insert_alert(
+        source="demo", external_id="ar-1", headline="Overdue receivables",
+        body="Three invoices are past due.", severity="medium",
+    )
+    app = FastAPI()
+    app.include_router(alerts_route.router)
+    client = TestClient(app)
+    dana = _as("dana@prospect.example")
+    later = "2099-01-01T09:00:00+00:00"
+    assert client.post(f"/alerts/{shared}/snooze", json={"until": later}, headers=dana).status_code == 403
+    assert client.post(f"/alerts/{shared}/ack", json={"status": "dismissed"}, headers=dana).status_code == 403
+    # Nor mark it read, which takes it off the live board.
+    assert client.post(f"/alerts/{shared}/ack", json={"status": "read"}, headers=dana).status_code == 403
+    assert client.post(f"/alerts/{shared}/reopen", headers=dana).status_code == 403
+    assert client.post("/alerts/review", headers=dana).status_code == 403
+    # A teammate may still snooze it, as before.
+    assert client.post(f"/alerts/{shared}/snooze", json={"until": later}, headers=_as("tom@example.com")).status_code != 403

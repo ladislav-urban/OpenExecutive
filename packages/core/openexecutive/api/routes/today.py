@@ -2067,21 +2067,31 @@ def needs_you_count(caller: int | None, *, principal: bool, now: datetime) -> in
     from openexecutive.orchestrator.artifact_records import viewer_for_person
 
     solo = _workspace_solo()
+    demo = _demo_caller(caller, principal=principal)
     alerts = _board_alerts(now, include_private=principal, viewer=viewer_for_person(caller))
     trust_by_slug = _watch_trust_by_slug(alerts)
     mine = 0
     for alert in alerts:
         _, category, _ = score_and_categorize(alert, trust_by_slug=trust_by_slug, now=now)
         card = SimpleNamespace(category=category, routed_to_person_id=alert.routed_to_person_id)
-        if home_rules.lane(card, caller_id=caller, caller_is_principal=principal, solo=solo) == "needs_you":
+        if home_rules.lane(
+            card, caller_id=caller, caller_is_principal=principal, solo=solo, caller_is_demo=demo,
+        ) == "needs_you":
             mine += 1
     return mine + _waiting_cards(caller)
+
+
+def _demo_caller(caller: int | None, *, principal: bool) -> bool:
+    """Whether Home's caller is a demo person (people.demo; fails closed)."""
+    from openexecutive.people.demo import is_demo_person
+
+    return not principal and caller is not None and is_demo_person(caller)
 
 
 def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, principal: bool) -> None:
     """A demo caller's Home names no other demo person (people.demo): not in
     the team list, the people waited on, what is in flight or was handled
-    overnight, nor as a card's assignee. One prospect never learns who else
+    overnight, nor a card routed to them. One prospect never learns who else
     is trying the product."""
     from openexecutive.people.demo import is_demo_person
     from openexecutive.people.store import list_people
@@ -2096,9 +2106,7 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
         response.awaiting = [a for a in response.awaiting if a.person_id == caller]
         response.in_flight = []
         response.handled_overnight = []
-        for card in response.proposals:
-            if card.routed_to_person_id != caller:
-                card.routed_to_person_id = None
+        response.proposals = [c for c in response.proposals if c.routed_to_person_id in (None, caller)]
         return
     hidden_ids = {p.id for p in others}
     hidden_names = {p.full_name for p in others if p.full_name}
@@ -2115,9 +2123,9 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
     for handled in response.handled_overnight:
         if handled.target is not None and handled.target not in shown:
             handled.target = None
-    for card in response.proposals:
-        if card.routed_to_person_id in hidden_ids:
-            card.routed_to_person_id = None
+    # Another demo person's own card (their ERPNext draft) isn't shown at all:
+    # left unrouted it would land in this one's Needs you.
+    response.proposals = [c for c in response.proposals if c.routed_to_person_id not in hidden_ids]
 
 
 def _attach_home_rules(
@@ -2129,21 +2137,27 @@ def _attach_home_rules(
 
     _hide_other_demo_people(response, caller=caller, principal=principal)
     solo = _workspace_solo()
+    demo = _demo_caller(caller, principal=principal)
     response.snooze_choices = home_rules.snooze_choices(now, caller_zone(caller, tz))
     people_by_id = {p.id: p for p in response.people}
     for p in response.proposals:
-        p.lane = home_rules.lane(p, caller_id=caller, caller_is_principal=principal, solo=solo)
+        p.lane = home_rules.lane(
+            p, caller_id=caller, caller_is_principal=principal, solo=solo, caller_is_demo=demo,
+        )
         p.card_kind = home_rules.card_kind(p)
         p.actions = home_rules.card_actions(
             p, lane_=p.lane, caller_is_principal=principal, people_by_id=people_by_id,
-            snoozes=response.snooze_choices,
+            snoozes=response.snooze_choices, caller_is_demo=demo, caller_id=caller,
         )
     mine = [p for p in response.proposals if p.lane == "needs_you"]
     team = [p for p in response.proposals if p.lane == "team"]
     monitoring = [p for p in response.proposals if p.lane == "monitoring"]
     waiting = _waiting_cards(caller)
     response.needs_you_count = len(mine) + waiting
-    response.dismiss_older = home_rules.dismiss_offer(mine, now)
+    # A demo person's Needs you is mostly cards nobody owns: nothing to sweep.
+    response.dismiss_older = home_rules.dismiss_offer(
+        [p for p in mine if not demo or p.routed_to_person_id == caller], now,
+    )
     response.handled_rows = [
         HandledRow(item=item, also=also, folded_in=folded)
         for item, also, folded in home_rules.group_handled(response.handled_overnight)
@@ -2208,9 +2222,11 @@ async def get_alert_card(alert_id: int, request: Request, tz: TzQuery = None) ->
     principal = _is_principal(caller)
     response = _build_today(include_private=principal, viewer=viewer_for_person(caller))
     proposal = next((p for p in response.proposals if p.alert_id == alert_id), None)
+    # A demo person's Needs you holds the cards nobody owns (to look at only).
     if proposal is None or not (
         _caller_is_principal_or_unclaimed(request)
         or (caller is not None and proposal.routed_to_person_id == caller)
+        or (proposal.routed_to_person_id is None and _demo_caller(caller, principal=principal))
     ):
         raise HTTPException(status_code=404, detail="This card isn't waiting for you.")
     _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)

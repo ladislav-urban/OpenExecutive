@@ -366,7 +366,10 @@ member: Home's briefing and cards, the knowledge base, People. Put them only
 on an install whose company data is demo data. They never see another demo
 person, though, nor anyone's email or chat ids but their own: People, Home's
 team list and their chat's picture of the team leave the other demo people
-out and show the rest by name and role only.
+out and show the rest by name and role only. Home puts the cards nobody
+owns in their Needs you, so there is something to see, but they only look
+at them and discuss them: approving, dismissing, snoozing or reopening the
+company's cards is refused.
 
 **`ALLOWED_EMAILS` still lets people in by itself**, so a removed member
 listed there keeps access. With the directory on, keep it to one

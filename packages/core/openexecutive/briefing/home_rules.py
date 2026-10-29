@@ -159,17 +159,22 @@ def waiting_card_count(person: Any) -> int:
 # Lanes and card kinds
 # --------------------------------------------------------------------------- #
 
-def lane(proposal: Any, *, caller_id: int | None, caller_is_principal: bool, solo: bool) -> Lane:
+def lane(
+    proposal: Any, *, caller_id: int | None, caller_is_principal: bool, solo: bool,
+    caller_is_demo: bool = False,
+) -> Lane:
     """Monitoring signals have their own lane. Otherwise a card is the
     caller's when it is routed to them, or routed to no one and they are the
-    principal; the rest is the team's. Solo, and a caller nobody resolved
-    (a direct call), see every card as their own."""
+    principal or a demo person (people.demo: on a demo install the cards
+    nobody owns are what there is to show them, to look at only); the rest
+    is the team's. Solo, and a caller nobody resolved (a direct call), see
+    every card as their own."""
     if proposal.category == "monitoring":
         return "monitoring"
     if caller_id is None or solo:
         return "needs_you"
     routed = proposal.routed_to_person_id
-    if routed == caller_id or (routed is None and caller_is_principal):
+    if routed == caller_id or (routed is None and (caller_is_principal or caller_is_demo)):
         return "needs_you"
     return "team"
 
@@ -328,6 +333,8 @@ def card_actions(
     caller_is_principal: bool,
     people_by_id: dict[int, Any],
     snoozes: Sequence[SnoozeChoice],
+    caller_is_demo: bool = False,
+    caller_id: int | None = None,
 ) -> list[CardAction]:
     """What a proposal card offers, primary first, then Discuss, then its
     menu. A card of another kind (roster request, training, held action) is
@@ -338,6 +345,13 @@ def card_actions(
     thinks the card is stale; Open for a document; nothing for a monitoring
     signal (Discuss leads); otherwise Approve. Approve is the card's own
     person's, or the principal's on a teammate's card, as the server allows.
+
+    A demo person (``caller_is_demo``) only looks at a card that isn't
+    routed to them (``caller_id``): Discuss, and Open on a document. On
+    their own card they approve only a decision (their ERPNext draft), as
+    the approval routes allow. Approving, dismissing, snoozing,
+    nudging or running something would act on the company's shared card for
+    the principal, and the server refuses it too.
     """
     if card_kind(proposal) != "proposal":
         return []
@@ -422,6 +436,19 @@ def card_actions(
         a for a in (rerun, open_run, nudge, workflow, approve, edit_approve, *snooze_actions, dismiss, open_in_app, person_page)
         if a is not None and a is not primary
     ]
+    # Theirs alone: routed to them (an ERPNext draft they asked for).
+    # Anything else they only look at.
+    if caller_is_demo and (routed is None or routed != caller_id):
+        looks = [a for a in (open_doc, open_in_app) if a is not None]
+        if looks:
+            return [looks[0].model_copy(update={"primary": True}), discuss, *looks[1:]]
+        return [discuss]
+    if caller_is_demo and not is_decision:
+        # /alerts/{id}/approve refuses every demo person; only a decision of
+        # theirs is answered (/decisions/{id}/approve).
+        menu = [a for a in menu if a is not approve and a is not edit_approve]
+        if primary is approve:
+            primary = None
     out: list[CardAction] = []
     if primary is not None:
         out.append(primary.model_copy(update={"primary": True}))
