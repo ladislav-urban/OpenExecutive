@@ -132,6 +132,23 @@ def build_system_blocks(
         "from a specific human, surface that to the user via an alert or ask them to send it "
         f"themselves — do not author it under their name. You always communicate as {exec_name}."
     )
+    # What the people it works for call the system (OE_PRODUCT_NAME, as the
+    # web app's pages do): one product, not its parts. Only when the install
+    # names one, so block 0 is byte-identical without it; process-stable, so
+    # the 1h cache stays warm.
+    from openexecutive.utils.product_name import configured_product_name
+
+    product = configured_product_name()
+    if product is not None:
+        identity_addendum += (
+            "\n\n## What to call things\n\n"
+            f"The people you work for use one product, **{product}**: you, their records "
+            f"and every screen they see are part of it. In anything you say or write to "
+            f"them, call it {product}, and its records \"the ERP\" when you need to say "
+            "where a figure comes from. Never name the parts it is built from, such as "
+            "ERPNext or Open Executive, to them, even when a tool, a document or an error "
+            "does: tool names are for your calls only."
+        )
 
     base_persona = (
         persona_override if persona_override is not None else default_persona(workspace_mode)

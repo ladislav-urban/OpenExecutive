@@ -77,6 +77,7 @@ from openexecutive.evals.judges import (
 )
 from openexecutive.evals.scenarios import (
     SupplierCase,
+    forbidden_words_in,
     load_scenarios,
     routing_check,
     scenario_delegation,
@@ -634,6 +635,11 @@ def _make_chat_runner(
                         **surface,
                     )
                     query = scenario_query(scenario)
+                    # The scenario's own product name (OE_PRODUCT_NAME), for
+                    # this task only: scenarios run side by side.
+                    from openexecutive.utils.product_name import product_name_override
+
+                    product_name_override.set(scenario.get("product_name"))
                     # Records which specialists the turn consulted, for
                     # the scenario's routing expectation (routing_check).
                     collector = DebugCollector()
@@ -662,6 +668,10 @@ def _make_chat_runner(
                     else:
                         scores = await judge_chat(scenario, response)
                     ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD
+                    said = forbidden_words_in(scenario, response)
+                    if said:
+                        scores["forbidden_reply_words"] = said
+                        ok = False
                     routing = routing_check(
                         scenario,
                         [
