@@ -183,16 +183,21 @@ def test_email_poller_skips_gmail_while_paused(monkeypatch: pytest.MonkeyPatch) 
     assert polled == ["discover", "poll"]
 
 
-def test_email_poller_logs_a_missing_server_once_per_outage(
-    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_email_poller_logs_a_missing_server_once_per_outage(monkeypatch: pytest.MonkeyPatch) -> None:
     """A deployment with no mail server gets one ERROR, not one per cycle,
     and one INFO when the server is defined again."""
-    import logging
-
     from openexecutive.integrations import email_poller
 
     polled: list[str] = []
+    # The poller's own logger, recorded: the app's logging setup may not
+    # propagate to pytest's capture.
+    logged: list[tuple[str, str]] = []
+
+    class _Logger:
+        def __getattr__(self, level: str) -> Any:
+            return lambda msg, *args, **_k: logged.append((level, msg % args))
+
+    monkeypatch.setattr(email_poller, "logger", _Logger())
 
     async def _discover(gateway: Any, provider: Any) -> None:
         pass
@@ -207,13 +212,12 @@ def test_email_poller_logs_a_missing_server_once_per_outage(
     states = iter([True, True, True, False, False, True, True])
     monkeypatch.setattr(email_poller, "provider_server_missing", lambda *_a: next(states, False))
 
-    with caplog.at_level(logging.INFO, logger=email_poller.__name__):
-        asyncio.run(_run_briefly(email_poller.run_email_poller(object())))  # type: ignore[arg-type]
+    asyncio.run(_run_briefly(email_poller.run_email_poller(object())))  # type: ignore[arg-type]
 
-    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
-    back = [r for r in caplog.records if "is defined again" in r.getMessage()]
+    errors = [msg for level, msg in logged if level == "error"]
+    back = [msg for _, msg in logged if "is defined again" in msg]
     assert len(errors) == 2  # once per outage
-    assert "not polling until it is" in errors[0].getMessage()
+    assert "not polling until it is" in errors[0]
     assert len(back) == 2
     assert len(polled) >= 3  # it polls whenever the server is there
 
