@@ -390,3 +390,37 @@ def test_waiting_cards_add_up_and_a_failing_counter_counts_nothing(monkeypatch: 
     hr.register_waiting_cards("c", lambda _p: 1)
     assert hr.waiting_card_count(SimpleNamespace(id=1)) == 3
     assert hr.waiting_card_count(None) == 0
+
+
+# --------------------------------------------------------------------------- #
+# A demo person (people.demo): the cards nobody owns are theirs to look at
+# --------------------------------------------------------------------------- #
+
+def test_a_card_nobody_owns_is_in_a_demo_persons_needs_you() -> None:
+    unrouted = proposal()
+    assert hr.lane(unrouted, caller_id=7, caller_is_principal=False, solo=False, caller_is_demo=True) == "needs_you"
+    assert hr.lane(unrouted, caller_id=7, caller_is_principal=False, solo=False) == "team"
+    # Someone else's card stays the team's.
+    theirs = proposal(routed_to_person_id=3)
+    assert hr.lane(theirs, caller_id=7, caller_is_principal=False, solo=False, caller_is_demo=True) == "team"
+
+
+def test_a_demo_person_only_looks_at_a_card_that_isnt_theirs() -> None:
+    def demo_actions(p: SimpleNamespace, lane: str) -> list[str]:
+        return keys(hr.card_actions(
+            p, lane_=lane, caller_is_principal=False, people_by_id={3: person(3, "Ben Teammate")},  # type: ignore[arg-type]
+            snoozes=hr.snooze_choices(NOW, ZoneInfo("UTC")), caller_is_demo=True, caller_id=7,
+        ))
+
+    assert demo_actions(proposal(recommended_move="nudge"), "needs_you") == ["discuss"]
+    assert demo_actions(proposal(routed_to_person_id=3), "team") == ["discuss"]
+    assert demo_actions(proposal(category="monitoring"), "monitoring") == ["discuss"]
+    doc = proposal(topic_tags=["artifact"], artifact_format="link", artifact_url="https://docs.example/x")
+    assert demo_actions(doc, "needs_you") == ["open_document", "discuss", "open_in_app"]
+    # Their own card is theirs to answer, but they approve only a decision of
+    # theirs (an ERPNext draft), as the approval routes allow.
+    own = demo_actions(proposal(routed_to_person_id=7), "needs_you")
+    assert "dismiss" in own and "approve" not in own and "approve_with_edits" not in own
+    assert "approve" in demo_actions(proposal(routed_to_person_id=7, decision_instance_id=5), "needs_you")
+    # Solo puts every card in Needs you: someone else's is still only looked at.
+    assert demo_actions(proposal(routed_to_person_id=3), "needs_you") == ["discuss"]
