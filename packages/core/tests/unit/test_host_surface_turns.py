@@ -22,9 +22,9 @@ from openexecutive.departments import store as dept_store
 from openexecutive.memory import episodic
 from openexecutive.orchestrator.content_trust import PRINCIPAL_ONLY_TOOLS, principal_only_withheld
 from openexecutive.orchestrator.schedule_tools import (
-    HOST_REFUSAL,
     MCP_CLIENT_WITHHELD_TOOLS,
     current_session,
+    host_refusal,
     host_turn,
     mcp_rules_turn,
     read_only_turn,
@@ -122,7 +122,7 @@ def test_a_host_turn_refuses_what_would_act(principal: int, tool: str) -> None:
         provider = _run_loop(_web_turn(principal, host=True), [tool_use])
     handler.assert_not_awaited()
     error = json.loads(_results(provider)["tu-1"])["error"]
-    assert tool in error and HOST_REFUSAL in error
+    assert tool in error and host_refusal() in error
 
 
 def test_a_host_turn_gets_no_act_as_me(principal: int) -> None:
@@ -175,3 +175,88 @@ def test_a_host_page_stops_and_adds_to_its_own_turns_only() -> None:
     assert chat_route._stop_owner_key(own, 7) == "person:7"
     assert chat_route._stop_owner_key(host, 7) == "person:7|host"
     assert chat_route._stop_owner_key(host, None) == f"email:{OWNER_EMAIL}|host"
+
+
+
+# ── ERPNext reads on a host turn (the owner's choice, Oct 29, 2026) ─────────
+
+ERP_READS = ("erpnext__list_records", "erpnext__run_report", "erpnext__describe_report", "erpnext__get_record")
+
+
+def _signed(monkeypatch: pytest.MonkeyPatch, on: bool = True) -> None:
+    monkeypatch.setattr(api_caller, "signing_on", lambda: on)
+
+
+def test_a_host_turn_may_read_erpnext_and_nothing_else_of_it(principal: int) -> None:
+    from openexecutive.orchestrator.schedule_tools import mcp_client_withholds
+
+    host, own_app = _web_turn(principal, host=True), Session(from_mcp_client=True)
+    for turn, reads in ((host, True), (own_app, False)):
+        token = current_session.set(turn)
+        try:
+            for name in ERP_READS:
+                assert mcp_client_withholds("call_tool", {"name": name}) is not reads, name
+            # Never a draft, the panel's show tool, a supplier's or the audit one.
+            for name in ("erpnext__draft_todo", "erpnext__draft_check", "erpnext__show_in_erpnext",
+                         "erpnext__supplier_orders", "erpnext__audit_drafts"):
+                assert mcp_client_withholds("call_tool", {"name": name}), name
+        finally:
+            current_session.reset(token)
+
+
+def test_a_host_turn_asks_erpnext_as_the_signed_in_person_only(
+    principal: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.orchestrator.erpnext_caller import CallerRefused, caller_for
+
+    _signed(monkeypatch)
+    teammate = people_store.upsert_person(full_name="Ben Teammate", email="ben@co.example")
+    people_registry.invalidate()
+    assert caller_for(_web_turn(teammate, host=True)).email == "ben@co.example"
+    assert caller_for(_web_turn(principal, host=True)).email == OWNER_EMAIL
+    # Nothing but the session names the person: no signed caller, no person.
+    for turn in (
+        Session(from_web_chat=True, from_host=True, caller_person_id=teammate),  # not signed in
+        Session(from_web_chat=True, from_host=True, web_caller_signed_in=True),  # no person
+        Session(from_host=True, web_caller_signed_in=True, caller_person_id=teammate),  # not the web chat
+    ):
+        with pytest.raises(CallerRefused):
+            caller_for(turn)
+    _signed(monkeypatch, on=False)
+    with pytest.raises(CallerRefused) as refused:
+        caller_for(_web_turn(teammate, host=True))
+    assert refused.value.reason == "host_unsigned"
+
+
+def test_a_host_turn_in_a_shared_chat_reads_no_erpnext(principal: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator.erpnext_caller import CallerRefused, caller_for
+
+    _signed(monkeypatch)
+    shared = _web_turn(principal, host=True)
+    shared.shared_chat = True
+    with pytest.raises(CallerRefused) as refused:
+        caller_for(shared)
+    assert refused.value.reason == "shared_conversation"
+
+
+def test_a_demo_persons_host_turn_reads_erpnext_as_them(principal: int, monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator.erpnext_caller import caller_for
+
+    _signed(monkeypatch)
+    dana = people_store.upsert_person(full_name="Dana Demo", email="dana@prospect.example", role="Demo user")
+    people_store.link_directory(dana, "kc-dana")
+    assert people_store.set_directory_demo(dana, True)
+    people_registry.invalidate()
+    turn = _web_turn(dana, host=True)
+    turn.demo_caller = True
+    assert caller_for(turn).email == "dana@prospect.example"
+
+
+def test_the_host_refusal_names_the_product_not_its_parts(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator.erpnext_caller import _HOST_LOOKUP_REFUSED
+    from openexecutive.utils import product_name as product
+
+    monkeypatch.setattr(product, "product_name", lambda raw=None: "Dynocortex")
+    assert "in Dynocortex itself" in host_refusal()
+    for text in (host_refusal(), _HOST_LOOKUP_REFUSED):
+        assert "Open Executive" not in text and "OpenExecutive" not in text and "ERPNext" not in text

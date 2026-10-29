@@ -627,7 +627,14 @@ that surface (`Session.from_host`) only reads and advises: it is offered the spe
 the read tools and the gateway's reads, never anything that sends, posts, books,
 schedules, runs or changes stored state (`MCP_CLIENT_WITHHELD_TOOLS`), the principal-only
 tools, Act as me, `recall_history`, scripts or extension tools. A call the model makes
-anyway is refused, telling the person to start a new chat in Open Executive itself. Its
+anyway is refused, telling the person to start a new chat in the product itself (named by
+`OE_PRODUCT_NAME` on the API too). Of an ERP's tools it may call only ERPNext's reads
+(never a draft), signed as the person signed in here, from their verified sign-in alone,
+under signed callers and only in a chat nobody else reads, so ERPNext answers it with
+what that person may see. A script on the host's page already runs as that ERPNext user,
+so the reads expose nothing new; what it may still steer into a reply is this app's own
+context (specialists, knowledge, a teammate's standing facts), which the owner accepted
+for the desk's Chats. Its
 words are never taken as the person's own: no memory extraction, open loop, working
 style, History note, conversation review or peer memory learns from it, and it is never
 a verified speaker. It can stop or add to its own turns only.

@@ -173,13 +173,13 @@ from openexecutive.orchestrator.schedule_tools import (
     erpnext_panel_withholds,
     filter_tools_for_workspace_mode,
     mcp_client_acting,
-    mcp_client_allows_mcp_tool,
     mcp_client_withheld_error,
     mcp_client_withholds,
     mcp_rules_turn,
     private_turn_allows_mcp_tool,
     private_turn_withheld_error,
     private_turn_withholds,
+    read_only_allows_mcp_tool,
     shared_chat_withheld_error,
     shared_chat_withholds,
     tools_withheld_in_mode,
@@ -3351,8 +3351,9 @@ class Executive:
                         # Offer a private turn PRIVATE_TURN_MCP_TOOLS only.
                         result = filter_search_results(result, private_turn_allows_mcp_tool)
                     if mcp_client and tu["name"] == "search_tools":
-                        # And a turn from another AI app MCP_CLIENT_MCP_TOOLS.
-                        result = filter_search_results(result, mcp_client_allows_mcp_tool)
+                        # And a turn from another AI app MCP_CLIENT_MCP_TOOLS,
+                        # plus ERPNext's reads on a host origin's turn.
+                        result = filter_search_results(result, read_only_allows_mcp_tool)
                     logger.info("← %s  result=%s", tool_label, _log_value(tool_label, result))
                     results_by_id[tu["id"]] = result
                     # MCP chip emission. search_tools is read-only (gets

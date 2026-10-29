@@ -175,6 +175,11 @@ def scenario_principal_role(scenario: dict[str, Any]) -> PrincipalRole | None:
 
 # Where a chat scenario's turn comes from, besides the web app (no `surface`).
 SURFACE_ERPNEXT_PANEL = "erpnext_panel"
+# A web chat turn a host origin's page sent (Session.from_host): the desk's
+# own Chats. It reads and advises, and reads ERPNext only as a signed-in
+# caller, which an eval run has none of (no CALLER_ASSERTION_PUBLIC_KEYS).
+SURFACE_HOST = "host"
+_SURFACES = (SURFACE_ERPNEXT_PANEL, SURFACE_HOST)
 # The ERPNext user a panel scenario's turn is from. Only marks the turn as the
 # panel's (schedule_tools.erpnext_panel_turn); nothing is signed or sent.
 EVAL_PANEL_EMAIL = "principal@eval.example"
@@ -204,6 +209,7 @@ def _principal() -> Any:
 
 def scenario_surface(scenario: dict[str, Any]) -> str | None:
     """The scenario's ``surface``: None for the web app (the default), or
+    ``host`` for a web chat turn a host origin's page sent (the desk's Chats),
     ``erpnext_panel`` for a turn from ERPNext's "Ask the Dynocortex" panel,
     which the runner runs as ``integrations.erpnext_panel`` does (its session
     marks and ``erpnext_panel.context_block``). Anything else raises ValueError, so a
@@ -211,9 +217,9 @@ def scenario_surface(scenario: dict[str, Any]) -> str | None:
     surface = scenario.get("surface")
     if surface is None:
         return None
-    if surface != SURFACE_ERPNEXT_PANEL:
-        raise ValueError(f"surface must be {SURFACE_ERPNEXT_PANEL!r}, got {surface!r}")
-    return SURFACE_ERPNEXT_PANEL
+    if surface not in _SURFACES:
+        raise ValueError(f"surface must be one of {_SURFACES!r}, got {surface!r}")
+    return str(surface)
 
 
 def scenario_turn_surface(scenario: dict[str, Any]) -> tuple[dict[str, Any], str]:
@@ -228,6 +234,13 @@ def scenario_turn_surface(scenario: dict[str, Any]) -> tuple[dict[str, Any], str
     from openexecutive.orchestrator.session import Session
 
     principal = _principal() if scenario_speaker(scenario) else None
+    if scenario_surface(scenario) == SURFACE_HOST:
+        return {
+            "from_web_chat": True,
+            "from_host": True,
+            "caller_person_id": principal.id if principal is not None else None,
+            "web_caller_signed_in": principal is not None,
+        }, ""
     if scenario_surface(scenario) != SURFACE_ERPNEXT_PANEL:
         if not scenario_speaker(scenario):
             return {}, ""
