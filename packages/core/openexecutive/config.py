@@ -517,6 +517,10 @@ class Settings(BaseSettings):
     # identity addendum so the model has a concrete self-name and never
     # falls back to signing as a person from the company People roster.
     exec_display_name: str = Field("Open Executive", alias="EXEC_DISPLAY_NAME")
+    # What the app calls itself to people (utils.product_name), the same
+    # setting as the web app's: a refusal tells them to ask "in <product>
+    # itself", never in a component's name. Unset: Open Executive.
+    oe_product_name: str = Field("", alias="OE_PRODUCT_NAME")
     # AI disclosure (orchestrator.disclosure): a line on the mail and chat
     # messages the Executive sends saying it is an AI assistant. On unless
     # turned off. The texts replace the built-in wording; one that doesn't

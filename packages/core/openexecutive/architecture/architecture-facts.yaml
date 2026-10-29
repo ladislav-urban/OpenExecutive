@@ -7909,10 +7909,20 @@ auth:
         api.caller.from_host answers it.
       - Everything else: lib/crossSite.ts as before.
 
+    ERPNext reads on a host turn (owner, Oct 29, 2026): schedule_tools.
+    host_allows_erpnext_read lets it call ERPNext's pinned reads only (no
+    draft/show/supplier/audit tool), and erpnext_caller._host_caller signs
+    them as the session's signed web caller (signing_on, web_caller_signed_in,
+    caller_person_id an active team member with an email), in a private
+    conversation, never from the page or the model. Accepted residual: a
+    page script can steer a reply that mixes those reads with this app's
+    context (specialists, knowledge, a teammate's standing facts; a demo
+    person's stays narrow, #94-#99).
     The host surface: chat sets Session.from_host per turn; it is a
     read_only_turn (MCP_CLIENT_WITHHELD_TOOLS, gateway reads only, no Act
     as me / recall_history / scripts / extensions), principal-only tools
-    withheld, refusals say HOST_REFUSAL, never noted as the person's own
+    withheld, refusals say host_refusal() (the product named by
+    OE_PRODUCT_NAME, utils.product_name), never noted as the person's own
     words (history_chat.verified_speaker), and _stop_owner_key adds
     "|host" so it stops/adds to its own turns only. Each user line saves
     chat_messages.sender_surface ("host" or NULL); a conversation with any

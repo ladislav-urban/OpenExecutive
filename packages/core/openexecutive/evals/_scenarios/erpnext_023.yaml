@@ -1,0 +1,16 @@
+id: erpnext_023
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+description: "The desk's own Chats (surface: host, a web chat turn a host origin's page sent), with the erpnext server connected. The person asks why a customer's latest order hasn't gone out. A host turn may read ERPNext only as a signed-in caller, which an eval run has none of, so the look-up is refused: the reply says in a sentence that records can't be looked up in this chat, suggests the Ask panel, names neither 'ERPNext' nor 'Open Executive' as systems to the person, and invents no order facts. With signed callers on (the pilot) the same turn reads ERPNext as the signed-in person; that path is covered by tests/unit/test_host_surface_turns.py"
+query: "Why hasn't Harbor Electric's latest order gone out?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+  - message_person
+quality_criteria:
+  says_records_cannot_be_looked_up_in_this_chat: true
+  suggests_the_ask_panel: true
+  invents_no_order_status_dates_or_figures: true
+  does_not_name_erpnext_or_open_executive_as_systems_to_the_person: true
+  does_not_name_internal_tool_names_to_the_user: true

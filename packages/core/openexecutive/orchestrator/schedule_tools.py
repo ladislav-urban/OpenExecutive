@@ -2168,12 +2168,18 @@ MCP_CLIENT_RUNS_WHEN_ACTING: frozenset[str] = frozenset({
 })
 MCP_CLIENT_ACTING_WITHHELD_TOOLS: frozenset[str] = MCP_CLIENT_WITHHELD_TOOLS - MCP_CLIENT_RUNS_WHEN_ACTING
 
-HOST_REFUSAL = (
-    "This conversation was written in, at least in part, from a page another "
-    "app shows, so in it you can read and advise but can't send, post, book or "
-    "change anything. Tell the person to start a new chat in Open Executive "
-    "itself and ask there."
-)
+def host_refusal() -> str:
+    """What a host origin's turn says it can't do (``Session.from_host``),
+    naming the product the person uses (``utils.product_name``), never one of
+    its parts. It can still look records up as them (``host_allows_erpnext_read``)."""
+    from openexecutive.utils.product_name import product_name
+
+    return (
+        "This conversation was written in, at least in part, from a page another "
+        "app shows, so in it you can look things up for the person and advise, but "
+        "can't send, post, book or change anything. Tell the person to start a new "
+        f"chat in {product_name()} itself and ask there."
+    )
 
 MCP_CLIENT_ACTING_REFUSAL = (
     "This conversation comes from another AI app. From here you can make "
@@ -2232,6 +2238,32 @@ def mcp_client_allows_mcp_tool(tool_name: object) -> bool:
     return isinstance(tool_name, str) and tool_name in MCP_CLIENT_MCP_TOOLS
 
 
+def host_allows_erpnext_read(tool_name: object, session: Any = None) -> bool:
+    """Whether a host origin's turn (``host_turn``; default: the bound one)
+    may call ``tool_name``: one of ERPNext's pinned read tools
+    (``connected_systems.PINNED_ERPNEXT_TOOLS``), never a draft, show or
+    supplier tool. The owner's choice (Oct 29, 2026): the desk's Chats answer
+    ERPNext questions, and ``erpnext_caller.caller_for`` signs each call as
+    the person signed in to this app, from the session alone. A script on
+    the page already runs as that ERPNext user and reads the same records.
+    What it may also steer into a reply is this app's context (specialists,
+    knowledge, a teammate's standing facts); the rest stays read-only."""
+    from openexecutive.prompts.connected_systems import PINNED_ERPNEXT_TOOLS
+
+    turn = session if session is not None else current_session.get()
+    return (
+        host_turn(turn)
+        and isinstance(tool_name, str)
+        and tool_name.strip().lower().replace("-", "_") in PINNED_ERPNEXT_TOOLS
+    )
+
+
+def read_only_allows_mcp_tool(tool_name: object) -> bool:
+    """The gateway tools a turn under the MCP-client rules may call:
+    ``MCP_CLIENT_MCP_TOOLS``, and on a host origin's turn ERPNext's reads too."""
+    return mcp_client_allows_mcp_tool(tool_name) or host_allows_erpnext_read(tool_name)
+
+
 def mcp_client_withholds(tool_name: str, tool_input: Any, *, acting: bool = False) -> bool:
     """Whether a turn from another AI app may not run this tool use: a tool
     in ``MCP_CLIENT_WITHHELD_TOOLS`` (``MCP_CLIENT_ACTING_WITHHELD_TOOLS``
@@ -2242,14 +2274,14 @@ def mcp_client_withholds(tool_name: str, tool_input: Any, *, acting: bool = Fals
     if tool_name != "call_tool":
         return False
     named = tool_input.get("name") if isinstance(tool_input, dict) else None
-    return not (mcp_client_allows_mcp_tool(named) or is_onedrive_file_read(tool_input))
+    return not (read_only_allows_mcp_tool(named) or is_onedrive_file_read(tool_input))
 
 
 def mcp_client_withheld_error(tool_name: str, *, acting: bool = False) -> str:
     """The JSON error tool_result for a call a turn from another AI app may
     not make (``acting``: one that may act), or a host origin's turn."""
     if host_turn(current_session.get()):
-        refusal = HOST_REFUSAL
+        refusal = host_refusal()
     else:
         refusal = MCP_CLIENT_ACTING_REFUSAL if acting else MCP_CLIENT_REFUSAL
     return json.dumps({

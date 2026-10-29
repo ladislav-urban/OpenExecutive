@@ -21,6 +21,12 @@ anything the model or the message says:
   in a shared thread; in the web chat only under signed callers
   (``api.caller.signing_on``), since without them the signed-in email is
   whatever the holder of the shared secret sends;
+- on a turn a host origin's page sent (``Session.from_host``, the desk's
+  own Chats), the person signed in to this app, under signed callers only,
+  in a conversation nobody else reads: from the session's signed caller,
+  never from anything the page or the model says (``_host_caller``; the
+  owner's choice, Oct 29, 2026). Only ERPNext's reads reach this
+  (``schedule_tools.host_allows_erpnext_read``);
 - the person in ERPNext's own "Ask the Dynocortex" panel
   (``Session.erpnext_panel_email``, set only by integrations/erpnext_panel.py
   from an assertion oe_connector signed): asked as that same ERPNext user,
@@ -264,6 +270,54 @@ def _email_of(person: Any) -> str:
     return email.strip().lower() if isinstance(email, str) and "@" in email else ""
 
 
+# A host turn's refusals (``_host_caller``) point to what works instead,
+# naming neither this app nor ERPNext: the person sees one product.
+_HOST_LOOKUP_REFUSED = (
+    "Records can't be looked up in this chat right now. Say so in a sentence, "
+    "without naming systems, and suggest asking in the Ask panel instead. Do "
+    "not retry."
+)
+
+
+def _host_caller(session: Any) -> ErpnextCaller:
+    """Who a host origin's turn asks ERPNext as: the person signed in to this
+    app, and only them. The page proves nothing about who wrote the turn, so
+    nothing it sends names anyone; the session's signed caller does
+    (``api.caller``, verified per request), and the conversation must be
+    private to them."""
+    from openexecutive.api.caller import signing_on
+    from openexecutive.memory.history_chat import private_chat
+    from openexecutive.people.store import get_person
+
+    if not (
+        getattr(session, "from_web_chat", False) is True
+        and getattr(session, "web_caller_signed_in", False) is True
+        and signing_on()
+    ):
+        raise CallerRefused(_HOST_LOOKUP_REFUSED, "host_unsigned")
+    pid = getattr(session, "caller_person_id", None)
+    if not isinstance(pid, int) or isinstance(pid, bool):
+        raise CallerRefused(_HOST_LOOKUP_REFUSED, "host_no_person")
+    try:
+        person = get_person(pid)
+        private = private_chat(session)
+    except Exception:
+        logger.warning("erpnext_caller: host caller lookup failed — refusing", exc_info=True)
+        raise CallerRefused(_HOST_LOOKUP_REFUSED, "lookup_failed") from None
+    if person is None or not person.active or person.kind != "team":
+        raise CallerRefused(_HOST_LOOKUP_REFUSED, "host_no_person")
+    if not private:
+        raise CallerRefused(
+            "Figures are only given in a private conversation with the person who "
+            "asked, and others can read this one. Say so without naming systems.",
+            "shared_conversation",
+        )
+    email = _email_of(person)
+    if not email:
+        raise CallerRefused(_HOST_LOOKUP_REFUSED, "host_no_email")
+    return ErpnextCaller("user", email)
+
+
 def caller_for(session: Any) -> ErpnextCaller:
     """Who this turn asks ERPNext as; raises ``CallerRefused`` when no one
     may. Fails closed: no session or a failed roster read refuses."""
@@ -286,6 +340,8 @@ def caller_for(session: Any) -> ErpnextCaller:
             "scheduled follow-up. Say so; the person can ask again in a chat.",
             "unattended",
         )
+    if getattr(session, "from_host", False) is True:
+        return _host_caller(session)
     try:
         if principal_speaking(session):
             from openexecutive.people.store import find_principal_person
