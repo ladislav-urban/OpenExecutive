@@ -196,7 +196,10 @@ See `.env.example`. Required: `ANTHROPIC_API_KEY`, `EXEC_EMAIL_ADDRESS` (no defa
 > `openexecutive.audit.log_event` (or the audit logger's DB) leaks rows that
 > break *other* modules' assertions only in a full run (e.g. the brief's
 > "handled overnight" block). Patch it in an autouse fixture, and delete a
-> stray `packages/core/episodic_memory.db` (gitignored) if one appears.
+> stray `packages/core/episodic_memory.db` (gitignored) if one appears. The
+> run's summary says when it created one ("stray episodic_memory.db"), and
+> `tests/conftest.py` drops an inherited `EPISODIC_DB_PATH`, so a leak never
+> reaches a deployment's real DB.
 
 > **Patching `episodic.DB_PATH` isn't enough:** `memory/episodic.py` reads it
 > at call time, but the audit logger keeps its own path, and modules that bind
