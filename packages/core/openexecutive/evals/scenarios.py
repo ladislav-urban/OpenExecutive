@@ -523,6 +523,15 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             raise ValueError(f"`principal_role`: {e}") from e
     if s.get("voice_persona") is not None:
         scenario_voice_persona(s)
+    if s.get("product_name") is not None:
+        from openexecutive.utils.product_name import _clean
+
+        if not isinstance(s["product_name"], str) or _clean(s["product_name"]) is None:
+            raise ValueError("`product_name`: a plain name of up to 40 characters")
+    if s.get("forbidden_reply_words") is not None:
+        words = s["forbidden_reply_words"]
+        if not isinstance(words, list) or not words or not all(isinstance(w, str) and w.strip() for w in words):
+            raise ValueError("`forbidden_reply_words`: a list of non-empty strings")
     if s.get("speaker") is not None:
         try:
             scenario_speaker(s)
@@ -573,3 +582,15 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         raise ValueError("triage scenarios require an `event` field")
 
     return s
+
+
+def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
+    """The scenario's ``forbidden_reply_words`` the reply says, whole words and
+    any case: a deterministic check the judge's score can't outvote."""
+    import re
+
+    found = []
+    for word in scenario.get("forbidden_reply_words") or []:
+        if re.search(r"(?<![A-Za-z0-9])" + re.escape(word.strip()) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE):
+            found.append(word.strip())
+    return found

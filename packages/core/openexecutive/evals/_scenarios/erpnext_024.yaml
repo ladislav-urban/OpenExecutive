@@ -1,0 +1,17 @@
+id: erpnext_024
+domain: mcp
+speaker: principal
+surface: erpnext_panel
+requires_mcp: true
+product_name: Dynocortex
+description: "An install that names its product (OE_PRODUCT_NAME=Dynocortex, as the pilot does): ERPNext's panel, with the erpnext server connected and oe_connector's demo dataset loaded. The person asks whether everything delivered for a project was installed, a question whose honest answer must say what the records can't show. The reply calls the system Dynocortex (or its records 'the ERP') and never names its parts, ERPNext or Open Executive, even though every tool it calls is an erpnext__ tool. Found on the pilot (Oct 29, 2026): 'ERPNext only records what was entered.'"
+query: "Was everything we delivered for project PROJ-0025 installed?"
+forbidden_reply_words:
+  - ERPNext
+  - OpenExecutive
+  - Open Executive
+quality_criteria:
+  answers_from_the_projects_deliveries_and_records: true
+  says_what_the_records_cannot_show_without_naming_the_erp_software: true
+  calls_the_system_dynocortex_or_the_erp: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
