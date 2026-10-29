@@ -25,6 +25,14 @@ os.environ.pop("CALLER_ASSERTION_PUBLIC_KEYS", None)
 os.environ.pop("KNOWLEDGE_DISTANCE_THRESHOLD", None)
 os.environ.pop("KNOWLEDGE_BUILTIN_DISTANCE_THRESHOLD", None)
 
+# Every store's default DB is EPISODIC_DB_PATH, read when its module is
+# imported, else ./episodic_memory.db. A deployment's shell names its real DB
+# there (/data/episodic_memory.db), and a test that forgets to point a store
+# at its own DB would write into it. Drop it before anything imports a store,
+# so a leak lands in ./episodic_memory.db, which tests that chdir to tmp_path
+# rely on, and which the summary below reports.
+os.environ.pop("EPISODIC_DB_PATH", None)
+
 # The same trap, one layer down. `Settings` reads the deployment's `.env`, so
 # the suite inherits whatever the developer's machine happens to be running.
 #
@@ -162,3 +170,29 @@ def _chat_topics_title_only(monkeypatch: pytest.MonkeyPatch):
         return await session_title.generate_session_title(user_msg, assistant_msg), None
 
     monkeypatch.setattr(chat_topics, "_title_and_topic", _title_only)
+
+
+# The stray DB a test writes when it forgets to isolate a store (CLAUDE.md,
+# Testing: "Audit-log test pollution"). Resolved once, from where the run
+# started, so a test that chdirs doesn't move it.
+_STRAY_DB = os.path.abspath("episodic_memory.db")
+_stray_db_existed = False
+
+
+def pytest_sessionstart(session: pytest.Session) -> None:
+    global _stray_db_existed
+    _stray_db_existed = os.path.exists(_STRAY_DB)
+
+
+def pytest_terminal_summary(terminalreporter) -> None:  # type: ignore[no-untyped-def]
+    """Say so when this run created ./episodic_memory.db: some test wrote to a
+    store it didn't point at its own DB. A warning, not a failure, because a
+    full run under xdist can't say which test it was."""
+    if _stray_db_existed or not os.path.exists(_STRAY_DB):
+        return
+    terminalreporter.write_sep("-", "stray episodic_memory.db", yellow=True)
+    terminalreporter.write_line(
+        f"This run created {_STRAY_DB}: a test wrote to a store it didn't point at "
+        "its own DB. Its rows can break other modules' tests in a full run. Find it "
+        "with a serial run of the modules you changed, then delete the file."
+    )
