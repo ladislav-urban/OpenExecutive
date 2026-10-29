@@ -34,15 +34,15 @@ ERPNEXT_PREFIX = "erpnext__"
 TOOL_DIGESTS: dict[str, str] = {
     "audit_drafts": "086c6aaa377a06f3104d176d57cd9201ff14ab9e0f510a059e373df67d992149",
     "describe_doctype": "857eb11de056c01ca1a85be1552e22e04068b63bf37ccdf7de15edfc99cc13a3",
-    "describe_report": "96e41240bb81346cb0d0d471b288ee7fe3a1b3153db4822eb016991c2f4b1775",
+    "describe_report": "1fa2a5e43466dac51346394bb4aa205f71171fe253e73681c7dc0835b0053753",
     "draft_check": "c97ed34120d93ce74bc8097e89416c98d19f59988ecd6fd812d36dc3e475e795",
     "draft_material_request": "30e1ed9c99e8c1b8823bcb977dbc7198916092c9fbc36198859e213439ac4d9e",
     "draft_purchase_order": "04132a8a2ffc64c3ad021756e2083a223fd74db977ba6bf379213fa68d0ee965",
     "draft_quotation": "9fca468a1a9b942281037d47451a81693bdded098ee1d12b9bf16135df47f2ee",
     "draft_todo": "4afb6078ba4a01690ffdad47fed610e0afd2112a8b6b00e19773a901e418b19b",
     "get_record": "4d486bf8e9cc6afce155b722b3565f4908563b4580838722a3ee7d28841c3698",
-    "list_records": "feb7e5c9a0874aaca6090996eb6d6cac4b596b7c14e4b664167d8c3ee19dbaed",
-    "run_report": "670989a5acd0ff7b66d21473996505813f9a7e2247ed102136e0aff7c32d5ea7",
+    "list_records": "11b5293628e6c26937a4b8c568231f1bec8e41b977de0a05675fa492aa34f387",
+    "run_report": "43fc20d9c48e80bd64df2c16530ad84d6d30083fc6972d0f51cecd1bd218acb4",
     "search_catalog": "dbe9c1e72588824ebed3dcbfc01e0d90b39d4ad82ab0168d9cc6c0756b0f137c",
     "show_in_erpnext": "452e566099dc6f060ab030200314885afc0d248e84560854ef131a3424a4a115",
     "supplier_invoices": "f11300d594d4c9dd89e0f02e6fc23e1bda522fef3259ba3fb62321b5b83b0875",
@@ -50,7 +50,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "supplier_orders": "abfa94e11de532f9cf1531c221dd4f8e8120816c215fb4b2780fd2edc338c1f8",
 }
 # oe_connector's protocol.TOOLS_DIGEST for the definitions pinned above.
-TOOLS_DIGEST = "d81527bc38866c52dce46e2bd31160f749b086d188fc1d54432b1b823bf41b17"
+TOOLS_DIGEST = "c4260ee11e7833ee721b9ae13f9f102ae94a21526e02d09658f6b7d795d880ff"
 
 # The supplier tools as oe_connector serves them (its mcp/protocol.py
 # SUPPLIER_TOOLS), offered to the A2A agent from this copy rather than from
