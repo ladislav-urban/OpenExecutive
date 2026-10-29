@@ -1534,8 +1534,9 @@ async def run_email_poller(gateway: MCPGateway, provider: MailProvider | None = 
     """Async polling loop. Run as a background task; cancelled on shutdown.
 
     Fail-soft on a misconfigured switch: when the chosen backend's MCP server
-    is not in the config, every cycle logs one ERROR and skips instead of
-    spraying tool-not-found errors (and the API keeps serving).
+    is not in the config, the loop logs one ERROR and skips its cycles until
+    the server is defined, instead of spraying tool-not-found errors (and the
+    API keeps serving).
     """
     from openexecutive.scheduler.pause import is_paused
 
@@ -1547,6 +1548,7 @@ async def run_email_poller(gateway: MCPGateway, provider: MailProvider | None = 
     # Held mail goes back to whatever read it: this poller, or a mail source.
     register_replayer("email", replay_held_mail)
     holding_for_pause = False
+    holding_for_server = False
     while True:
         try:
             # Operator pause: leave the inbox untouched. Unread mail stays
@@ -1561,12 +1563,22 @@ async def run_email_poller(gateway: MCPGateway, provider: MailProvider | None = 
                 logger.info("executive resumed — polling the %s mailbox again", provider.name)
                 holding_for_pause = False
             if config_path is not None and provider_server_missing(provider.server_name, config_path):
-                logger.error(
-                    "email poller: EMAIL_PROVIDER=%s but MCP server '%s' is not defined in %s "
-                    "— skipping this cycle",
-                    provider.name, provider.server_name, config_path,
-                )
+                # Once per outage, like the pause message: an install with no
+                # mail server would otherwise log the same ERROR every cycle.
+                if not holding_for_server:
+                    logger.error(
+                        "email poller: EMAIL_PROVIDER=%s but MCP server '%s' is not defined "
+                        "in %s — not polling until it is",
+                        provider.name, provider.server_name, config_path,
+                    )
+                    holding_for_server = True
             else:
+                if holding_for_server:
+                    logger.info(
+                        "MCP server '%s' is defined again — polling the %s mailbox",
+                        provider.server_name, provider.name,
+                    )
+                    holding_for_server = False
                 await _discover_mail_tools(gateway, provider)
                 await poll_once(gateway, provider)
         except asyncio.CancelledError:
