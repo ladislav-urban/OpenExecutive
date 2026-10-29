@@ -365,7 +365,9 @@ A demo person still reaches what the shared workspace shows every team
 member: Home's briefing and cards, the knowledge base, People. Put them only
 on an install whose company data is demo data. They read it but change
 none of it: every write of theirs is refused (403) except their chat, their
-own chats and answering a card routed to them (`api/demo_gate.py`), so
+own chats, answering a card routed to them, and their own notification,
+history and working-style settings (`api/demo_gate.py`; a roster that can't
+be read refuses the write with 503), so
 departments, goals, the knowledge base, monitors, the Executive's persona
 and company documents stay as the team left them. They never see another demo
 person, though, nor anyone's email or chat ids but their own: People, Home's

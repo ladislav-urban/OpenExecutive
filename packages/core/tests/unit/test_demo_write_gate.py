@@ -78,7 +78,11 @@ def test_the_team_still_writes() -> None:
         ("/decisions/2/approve", True),
         ("/notifications/settings", True),
         ("/knowledge/search", True),
-        ("/webhook/erpnext/chat", True),
+        ("/memories/history/settings", True),
+        ("/people/3/attunement", True),
+        ("/people/4/attunement", False),
+        ("/webhook/telegram", False),
+        ("/auth/ended-sessions", False),
         ("/chatter", False),
         ("/knowledge/builtin", False),
         ("/departments", False),
@@ -90,11 +94,34 @@ def test_the_team_still_writes() -> None:
     ],
 )
 def test_which_writes_a_demo_person_may_make(path: str, allowed: bool) -> None:
-    assert demo_gate.demo_may_write(path) is allowed
+    assert demo_gate.demo_may_write(path, person_id=3) is allowed
 
 
-def test_the_app_runs_the_gate() -> None:
+def test_a_roster_that_cant_be_read_refuses_the_write(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail closed: never let a write through on the chance the caller isn't
+    a demo person."""
+    def broken(_email: str) -> None:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(demo_gate, "_person", broken)
+    client = _client()
+    for who in (DEMO, TEAM):
+        assert client.post("/departments", json={"title": "Skunkworks"}, headers=who).status_code == 503
+    assert client.post("/chat", headers=DEMO).status_code == 200  # the list needs no lookup
+    # A request that names no one (the operator, a service) needs none either.
+    assert client.post("/departments", json={"title": "Ops"}).status_code == 201
+
+
+def test_the_gate_runs_after_the_caller_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Inside every other gate, so it reads the caller the signed-caller gate
+    verified (``user_middleware[0]`` runs first)."""
+    import json
+
     from openexecutive.api.main import create_app
 
-    app = create_app()
-    assert any(getattr(m, "kwargs", {}).get("dispatch") is demo_gate.demo_write_gate for m in app.user_middleware)
+    vectors = json.loads((Path(__file__).parent / "caller_assertion_vectors.json").read_text())
+    monkeypatch.setenv("CALLER_ASSERTION_PUBLIC_KEYS", vectors["public_keys"])
+    gates = [m.kwargs.get("dispatch") for m in create_app().user_middleware]
+    at = gates.index(demo_gate.demo_write_gate)
+    assert all(g is None for g in gates[at + 1:])  # only CORS (no dispatch) inside it
+    assert at > 0 and all(callable(g) for g in gates[:at])
