@@ -356,6 +356,37 @@ def _on(flag: bool) -> str:
     return "on" if flag else "off"
 
 
+# The lines above that tell the model what to say to people, reworded for an
+# install that names its product (OE_PRODUCT_NAME): "the ERP" for ERPNext and
+# the product for the web app, as the identity's "What to call things" asks.
+# Exact phrases, so a test can check each still appears in the plain text.
+def _people_words(product: str) -> tuple[tuple[str, str], ...]:
+    return (
+        ("tell them you cannot share ERPNext data", "tell them you cannot share those figures"),
+        ("leave it to ERPNext's price list", "leave it to the ERP's price list"),
+        (
+            "OpenExecutive sends nothing to the customer or supplier (only ERPNext's own notifications",
+            "nothing is sent to the customer or supplier (only the ERP's own notifications",
+        ),
+        ("submit it in ERPNext", "submit it in the ERP"),
+        ("approval card on Today in the OpenExecutive web app", f"approval card on Today in {product}"),
+        ("review and submit in ERPNext", "review and submit in the ERP"),
+    )
+
+
+def in_product_words(text: str) -> str:
+    """``text`` with what it tells the model to say to people in the product's
+    words, when the install names one; unchanged otherwise."""
+    from openexecutive.utils.product_name import configured_product_name
+
+    product = configured_product_name()
+    if product is None:
+        return text
+    for plain, named in _people_words(product):
+        text = text.replace(plain, named)
+    return text
+
+
 def render_connected_systems(
     *,
     mcp_servers: Sequence[str],
@@ -503,4 +534,4 @@ def render_connected_systems(
         "\nEvery send, share and invite still passes the usual checks; a refused "
         "call means that action is not allowed, not that the system is down."
     )
-    return "\n".join(lines)
+    return in_product_words("\n".join(lines))
