@@ -55,6 +55,25 @@ Settings.model_config["env_file"] = None
 
 
 @pytest.fixture(autouse=True)
+def _own_default_db(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
+    """Run every test in a folder of its own, so a store it didn't point at
+    its own DB opens a fresh ./episodic_memory.db there, not the shared one.
+
+    Every store defaults to the relative ./episodic_memory.db, resolved
+    against the working directory when it connects, including those that
+    bind the path as a default argument at import. A full run on Oct 29
+    found 1,648 unit tests in 174 files opening the shared file, whose rows
+    then broke other modules' assertions (CLAUDE.md, Testing). A test that
+    chdirs to its own tmp_path still does so, after this."""
+    monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))
+    # The audit logger is a process-wide singleton that makes its table where
+    # it was first built: a fresh one per test makes it in this folder.
+    from openexecutive.audit import logger as audit_logger
+
+    monkeypatch.setattr(audit_logger, "_default_logger", None)
+
+
+@pytest.fixture(autouse=True)
 def _no_ai_disclosure(monkeypatch: pytest.MonkeyPatch):
     """Leave the AI disclosure line (orchestrator.disclosure) off what tests
     send, so a test's exact-text assertions don't depend on it, and forget

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -25,7 +26,7 @@ MEMORY = "Subject: Q3 appraisal\n\nHere you go."
 
 
 @pytest.fixture(autouse=True)
-def _no_audit_writes(monkeypatch: pytest.MonkeyPatch) -> None:
+def _no_audit_writes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Keep this module's audit rows out of the default episodic DB (the
     audit-log pollution trap in CLAUDE.md)."""
     monkeypatch.setattr(
@@ -36,6 +37,14 @@ def _no_audit_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "openexecutive.orchestrator.executive.audit_log", lambda *a, **kw: None
     )
+    # A roster of its own, empty: person 42 is no one on it. Without one the
+    # turn's roster reads fail, and the demo check fails closed into a demo
+    # turn, which skips every pass this tests.
+    from openexecutive.people import store as people_store
+
+    db = tmp_path / "people.db"
+    monkeypatch.setattr(people_store, "DB_PATH", db)
+    people_store.initialize_db(db)
 
 
 def _make_stream_cm(final_msg: object) -> MagicMock:
