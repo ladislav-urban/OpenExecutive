@@ -523,3 +523,11 @@ def test_a_panel_turn_lists_records_it_never_searched_for(monkeypatch: pytest.Mo
     assert ran["tool_name"] == "erpnext__list_records"
     sent = dict(ran["arguments"])
     assert sent.pop(ASSERTION_ARG).startswith("v1.") and sent == arguments
+
+
+def test_the_panel_without_drafts_says_never_to_offer_one() -> None:
+    """On the pilot a demo person was offered a draft the panel then refused:
+    the block a turn without drafts gets says so outright."""
+    assert "never offer to" in erpnext_panel.PANEL_CONTEXT_BLOCK
+    assert "create it in ERPNext themselves" in erpnext_panel.PANEL_CONTEXT_BLOCK
+    assert "never offer to" not in erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK
