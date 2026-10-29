@@ -179,3 +179,23 @@ def test_a_panel_turns_specialists_read_no_standing_facts(monkeypatch) -> None:
     panel = Session(session_id="erpnext:1:c1", erpnext_panel_email="dana@prospect.example")
     assert facts_seen(panel) == ""
     assert facts_seen(Session(session_id="web-1")) == "runway: 4 months (per Sam Lee)"
+
+
+def test_a_demo_turns_specialists_read_the_facts_without_who_said_them(monkeypatch) -> None:
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.orchestrator.session import Session
+
+    monkeypatch.setattr("openexecutive.orchestrator.router.load_company_stage", lambda: "")
+    monkeypatch.setattr("openexecutive.orchestrator.router.load_principal_role", lambda: "")
+    monkeypatch.setattr(
+        "openexecutive.memory.facts.render_facts_for_prompt",
+        lambda attributed=True: "runway: 4 months" + (" (per Sam Lee)" if attributed else ""),
+    )
+    cfo_mock = AsyncMock(return_value="x")
+    token = current_session.set(Session(session_id="web-1", demo_caller=True))
+    try:
+        with patch.object(SPECIALIST_REGISTRY["cfo"], "analyze", cfo_mock):
+            asyncio.run(route_parallel([{"specialist": "cfo", "query": "q"}], retrieved_knowledge_map={"cfo": ""}))
+    finally:
+        current_session.reset(token)
+    assert cfo_mock.await_args.kwargs["standing_facts"] == "runway: 4 months"

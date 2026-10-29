@@ -1472,7 +1472,10 @@ class Executive:
             )
             if standing_facts is None:
                 # A SQLite read: off the event loop, like the other context.
-                standing_facts = await asyncio.to_thread(render_facts_for_prompt)
+                # A demo person reads what the company knows, not who said it.
+                standing_facts = await asyncio.to_thread(
+                    lambda: render_facts_for_prompt(attributed=not demo_turn(session))
+                )
             messages = self._build_messages(
                 session,
                 user_message,
@@ -1847,7 +1850,9 @@ class Executive:
             build_lessons_block, person_id, user_message, count=not chat_replay.is_replay(session)
         )
         if standing_facts is None:
-            standing_facts = await asyncio.to_thread(render_facts_for_prompt)
+            standing_facts = await asyncio.to_thread(
+                lambda: render_facts_for_prompt(attributed=not demo_turn(session))
+            )
         messages = self._build_messages(
             session,
             user_message,

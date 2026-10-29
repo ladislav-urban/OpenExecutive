@@ -507,9 +507,18 @@ async def route_parallel(
         )
     )
     from openexecutive.orchestrator.schedule_tools import current_session, erpnext_panel_turn
+    from openexecutive.people.demo import demo_turn
 
-    # "" is no facts; None lets route_to_specialist load them.
-    standing_facts: str | None = "" if erpnext_panel_turn(current_session.get()) else None
+    # "" is no facts; None lets route_to_specialist load them. A demo
+    # person's specialists read them without who said each.
+    turn = current_session.get()
+    standing_facts: str | None = None
+    if erpnext_panel_turn(turn):
+        standing_facts = ""
+    elif demo_turn(turn):
+        from openexecutive.memory.facts import render_facts_for_prompt
+
+        standing_facts = await asyncio.to_thread(lambda: render_facts_for_prompt(attributed=False))
 
     failed: set[int] = set()
 

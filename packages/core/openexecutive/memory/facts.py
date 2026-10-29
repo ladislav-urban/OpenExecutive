@@ -581,11 +581,13 @@ def render_facts_for_prompt(
     max_facts: int = PROMPT_MAX_FACTS,
     max_chars: int = PROMPT_MAX_CHARS,
     db_path: Path | None = None,
+    attributed: bool = True,
 ) -> str:
     """The active facts as prompt lines under ``FACTS_BLOCK_HEADER``, or "" when
-    there are none; a teammate's ends "(per <name>)". Never raises: a store
-    failure leaves the prompt without the block rather than failing the brief,
-    run or turn that asked."""
+    there are none; a teammate's ends "(per <name>)", unless ``attributed`` is
+    False (a demo person's turn: what the company knows, not who said it).
+    Never raises: a store failure leaves the prompt without the block rather
+    than failing the brief, run or turn that asked."""
     rows = _read_only_rows(
         "SELECT * FROM facts WHERE status='active' AND kind!='profile' "
         "ORDER BY created_at DESC, id DESC LIMIT ?",
@@ -605,7 +607,8 @@ def render_facts_for_prompt(
         line = f"- [fact {f.id}] {_safe(f.subject, SUBJECT_MAX)}: {_safe(f.statement, STATEMENT_MAX)}"
         if f.kind == "correction" and f.previous_statement:
             line += f" (corrects: {_safe(f.previous_statement, 160)})"
-        line += _attribution(f)
+        if attributed:
+            line += _attribution(f)
         line += f" — {f.created_at[:10]}"
         if used + len(line) + 1 > max_chars:
             break

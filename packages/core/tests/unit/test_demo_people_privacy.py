@@ -196,3 +196,47 @@ def test_a_demo_person_cant_snooze_reopen_or_review_the_companys_cards(
     assert client.post("/alerts/review", headers=dana).status_code == 403
     # A teammate may still snooze it, as before.
     assert client.post(f"/alerts/{shared}/snooze", json={"until": later}, headers=_as("tom@example.com")).status_code != 403
+
+
+def _teammate_fact() -> object:
+    from openexecutive.memory.facts import Fact
+
+    return Fact(
+        id=1, kind="fact", subject="Runway", statement="Runway is 4 months.",
+        created_at="2026-10-28T09:00:00+00:00", recorded_by_role="teammate", recorded_by_name="Sam Lee",
+    )
+
+
+def test_pulse_shows_a_demo_person_no_one_who_said_a_fact(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.api.routes import episodic as episodic_route
+
+    monkeypatch.setattr(episodic_route, "list_facts", lambda **_k: [_teammate_fact()])
+    app = FastAPI()
+    app.include_router(episodic_route.router)
+    client = TestClient(app)
+    demo = client.get("/memories/facts", headers=_as("dana@prospect.example")).json()["facts"]
+    assert demo[0]["statement"] == "Runway is 4 months." and demo[0]["recorded_by_name"] == ""
+    team = client.get("/memories/facts", headers=_as("tom@example.com")).json()["facts"]
+    assert team[0]["recorded_by_name"] == "Sam Lee"
+
+
+def test_a_demo_persons_home_header_is_written_from_unattributed_facts(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.api.routes import today
+    from openexecutive.briefing import narrative
+    from openexecutive.memory import facts
+
+    seen: list[str | None] = []
+    monkeypatch.setattr(
+        facts, "render_facts_for_prompt", lambda attributed=True: "runway" + (" (per Sam Lee)" if attributed else ""),
+    )
+    monkeypatch.setattr(narrative, "render_briefing_context", lambda **k: seen.append(k["standing_facts"]) or "ctx")
+    monkeypatch.setattr(today, "_nothing_needs_attention", lambda *_a: False)
+    monkeypatch.setattr(today, "_narrative_activity", lambda *_a: [])
+    monkeypatch.setattr(today, "_with_due_soon", lambda data, *_a: data)
+    for pid in (roster.dana, roster.teammate):
+        today._narrative_context({}, SimpleNamespace(id=pid), {"name": "x"}, reader=None)  # type: ignore[arg-type]
+    assert seen == ["runway", None]  # None: the renderer loads them, attributed, as before

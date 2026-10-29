@@ -91,6 +91,9 @@ def test_a_teammate_records_an_attributed_fact(roster: SimpleNamespace) -> None:
     assert fact.recorded_by_person_id == roster.sam and fact.source_channel == "web"
     rendered = facts.render_facts_for_prompt()
     assert "Cedar Court has 38 units. (per Sam Lee) —" in rendered
+    # A demo person's turn reads what the company knows, not who said it.
+    unnamed = facts.render_facts_for_prompt(attributed=False).split("\n", 1)[1]  # past the header
+    assert "Cedar Court has 38 units. —" in unnamed and "Sam Lee" not in unnamed
 
 
 def test_the_principals_fact_renders_unattributed(roster: SimpleNamespace) -> None:
