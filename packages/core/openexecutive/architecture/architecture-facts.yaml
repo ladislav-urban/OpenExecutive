@@ -8379,7 +8379,9 @@ integrations:
     in the user turn, which is what lets the cached persona say "use the
     reply tool in the REPLY block" instead of naming a vendor tool.
     Fail-soft: EMAIL_PROVIDER naming a server absent from mcp_servers.json
-    logs one ERROR per cycle and skips, never crashes the loop. While the
+    logs one ERROR when it goes missing (not one per cycle), skips its
+    cycles until it is defined again (one INFO then), and never crashes
+    the loop. While the
     Executive is paused (scheduler.pause) each poll is skipped and the
     inbox left unread, so held mail is processed after resume. INBOUND
     is NOT roster-gated — see ``channel_access`` for the split. When
