@@ -8129,7 +8129,14 @@ integrations:
     chat's org block is a third stable variant (render_org_block(
     demo_viewer=True): no demo person at all, no contacts, no addresses), so
     one prospect never learns who else is trying the product or how to reach
-    the team.
+    the team. And they change nothing of the company's: api/demo_gate.py, an
+    app-wide middleware after the caller gate, answers every non-GET of
+    theirs 403 except under /chat, /sessions, /alerts, /decisions,
+    /notifications/settings and /knowledge/search (whose routes keep their
+    own checks), because many write routes (departments, goals, knowledge,
+    watchlist, agents, personas, documents, fixtures, skills, workflow
+    designer, /mcp) take any signed-in caller. Webhooks, /a2a and /auth
+    aren't a signed-in person's and pass.
 
     Recovery: link(email, relink=True) re-points a managed row only when its
     current subject is absent from the group read, and restores a directory
