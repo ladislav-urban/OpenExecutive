@@ -229,11 +229,16 @@ def get_facts(
     the principal.
 
     The facts themselves are company knowledge every conversation already
-    sees, and so is who stated a teammate's (it renders "(per <name>)"); the
-    rest of the provenance (the quote, a retire reason, and the session, turn
-    and person id it came from) is shown to the principal only."""
+    sees, and so is who stated a teammate's (it renders "(per <name>)"),
+    except to a demo person, whose turns read the facts without it
+    (people.demo); the rest of the provenance (the quote, a retire reason,
+    and the session, turn and person id it came from) is shown to the
+    principal only."""
     principal = _caller_is_principal(request)
     caller = None if principal else _caller_id(request)
+    from openexecutive.people.demo import is_demo_person
+
+    demo = not principal and caller is not None and is_demo_person(caller)
     # A teammate sees only what is in force: a fact the principal retired or
     # replaced (perhaps because it was wrong or too sensitive) no longer
     # renders anywhere, so its text is not theirs to read either.
@@ -254,6 +259,7 @@ def get_facts(
                 "source_quote": f.source_quote if _is_own_quote(f, caller) else "",
                 "retired_reason": "",
                 "session_id": None, "turn_id": None, "recorded_by_person_id": None,
+                **({"recorded_by_name": ""} if demo else {}),
             })
             for f in rows
         ]

@@ -1413,10 +1413,11 @@ def test_a_team_member_clears_only_alerts_assigned_to_them(
         assert refused.status_code == 403
         row = alert_store.get_alert(other)
         assert row is not None and row.status == "unread"
-    # Marking one read is not clearing it.
+    # Nor marking one read: the live board shows unread cards only, so that
+    # would take it off everyone's Home for good.
     assert client.post(
         f"/alerts/{unassigned}/ack", json={"status": "read"}, headers=teammate
-    ).status_code == 200
+    ).status_code == 403
 
     swept = client.post(
         "/alerts/bulk-ack", json={"status": "dismissed", "alert_ids": [owners]}, headers=teammate,

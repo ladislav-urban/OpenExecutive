@@ -1730,6 +1730,14 @@ def _narrative_context(
     if _nothing_needs_attention(today_data, mode) and (live is None or live.is_empty()):
         return narrative_cache.QUIET_CONTEXT, None
     activity = _narrative_activity(viewer, viewer_desc)
+    # A demo person's header is written from what the company knows, not who
+    # said it (people.demo; memory.facts attributed=False). Inside the
+    # context, so the cache key differs from a teammate's.
+    unattributed: str | None = None
+    if viewer is not None and _demo_caller(viewer.id, principal=False):
+        from openexecutive.memory.facts import render_facts_for_prompt
+
+        unattributed = render_facts_for_prompt(attributed=False)
     context = render_briefing_context(
         period_label=narrative_cache.local_today(),
         today_data=today_data,
@@ -1740,6 +1748,7 @@ def _narrative_context(
         now_label=now_label,
         brief_requests=viewer_desc is None and scope == narrative_cache.DEFAULT_SCOPE,
         reader=_narrative_reader(scope, viewer) if reader is _LOOKUP else reader,  # type: ignore[arg-type]
+        standing_facts=unattributed,
     )
     return context, activity
 

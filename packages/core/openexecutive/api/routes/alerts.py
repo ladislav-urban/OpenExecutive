@@ -109,11 +109,12 @@ def ack_alert(alert_id: int, body: AckBody, request: Request) -> Alert:
             status_code=409,
             detail="Answer this one from its card: add them, say who they are, or ignore them.",
         )
-    if body.status != "read" and not _caller_may_clear(existing, request):
-        raise HTTPException(status_code=403, detail=_NOT_YOURS)
-    # A demo person not even "read": it takes the card off the live board,
-    # which is the company's.
+    # A demo person first, so they hear why (people.demo).
     _refuse_demo_caller(request, existing)
+    # "read" too: the live board shows unread cards only, so marking a card
+    # read takes it off everyone's Home, and reopen can't bring it back.
+    if not _caller_may_clear(existing, request):
+        raise HTTPException(status_code=403, detail=_NOT_YOURS)
     if not store.set_status(alert_id, body.status):
         raise HTTPException(status_code=404, detail="Alert not found")
     # Feedback loop: a dismiss on a watch-sourced alert lowers that watch's

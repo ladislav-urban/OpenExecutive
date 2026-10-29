@@ -2640,6 +2640,11 @@ memory:
     chars, `<`/`>` defanged. Opens the DB read-only (`mode=ro`) and returns
     "" for a missing file or table — it never creates either, because it runs
     on every prompt, including test-built ones. Never raises.
+    `attributed=False` leaves out every "(per <name>)": a demo person's chat
+    turn, the specialists it consults (router.route_parallel), their Home
+    header (today._narrative_context) and GET /memories/facts (blank
+    recorded_by_name) show what the company knows, not who said it (owner,
+    Oct 29). An ERPNext panel turn and its specialists read none.
     WHERE IT IS INJECTED (always a user turn, never a cached system block):
       - chat: `Executive._build_messages` `<standing_facts>` (stream_chat /
         committee / chat take `standing_facts: str | None`; None reads the
