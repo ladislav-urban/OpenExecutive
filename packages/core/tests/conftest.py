@@ -66,6 +66,11 @@ def _own_default_db(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytes
     then broke other modules' assertions (CLAUDE.md, Testing). A test that
     chdirs to its own tmp_path still does so, after this."""
     monkeypatch.chdir(tmp_path_factory.mktemp("cwd"))
+    # The audit logger is a process-wide singleton that makes its table where
+    # it was first built: a fresh one per test makes it in this folder.
+    from openexecutive.audit import logger as audit_logger
+
+    monkeypatch.setattr(audit_logger, "_default_logger", None)
 
 
 @pytest.fixture(autouse=True)

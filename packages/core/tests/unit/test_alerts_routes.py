@@ -14,6 +14,7 @@ from openexecutive.alerts import store as alert_store
 from openexecutive.api.routes import alerts as alerts_route
 from openexecutive.memory import episodic
 from openexecutive.monitoring import store as monitoring_store
+from openexecutive.people import store as people_store
 
 
 @pytest.fixture()
@@ -25,6 +26,10 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     alert_store.initialize_db(db_path)
     episodic.initialize_db(db_path)
     monitoring_store.initialize_db(db_path)
+    # The principal checks read the roster: an empty one is a first run, on
+    # which anyone may clear a card (_caller_clears_anything).
+    monkeypatch.setattr(people_store, "DB_PATH", db_path)
+    people_store.initialize_db(db_path)
     return db_path
 
 
