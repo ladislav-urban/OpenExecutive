@@ -480,11 +480,48 @@ def note_panel_card(decision_id: int) -> None:
     turn.cards.append(decision_id)
 
 
+def _not_set_up() -> str:
+    """The panel's "not set up" message, in the product's name when the
+    install has one (OE_PRODUCT_NAME): the person in ERPNext sees one product."""
+    from openexecutive.utils.product_name import configured_product_name
+
+    product = configured_product_name()
+    if product is None:
+        return "The ERPNext panel is not set up on OpenExecutive."
+    return f"{product}'s answers are not set up here yet."
+
+
+def _not_on_roster() -> str:
+    """Why someone off the People list gets no answer, likewise."""
+    from openexecutive.utils.product_name import configured_product_name
+
+    product = configured_product_name()
+    if product is None:
+        return (
+            "Your ERPNext email is not on OpenExecutive's People page, so the Executive "
+            "cannot answer you here. Ask the person who runs OpenExecutive to add you."
+        )
+    return (
+        f"Your account isn't set up for answers in {product} yet. Ask the person "
+        f"who runs {product} to add you."
+    )
+
+
+def _in_product_words(block: str) -> str:
+    """A panel block naming the product where it names the web app, when the
+    install has a name (OE_PRODUCT_NAME): "suggest the Dynocortex app"."""
+    from openexecutive.utils.product_name import configured_product_name
+
+    product = configured_product_name()
+    return block if product is None else block.replace("OpenExecutive", product)
+
+
 def context_block(session: Any) -> str:
     """The panel's channel block: with drafts for this person, or without."""
     from openexecutive.integrations.erpnext_drafts import offered
 
-    return PANEL_DRAFTS_CONTEXT_BLOCK if offered(session) else PANEL_CONTEXT_BLOCK
+    block = PANEL_DRAFTS_CONTEXT_BLOCK if offered(session) else PANEL_CONTEXT_BLOCK
+    return _in_product_words(block)
 
 
 def _person_for(email: str) -> Any:
@@ -566,9 +603,9 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
         keys = panel_keys()
     except CallerKeysError:
         logger.error("ERPNEXT_PANEL_PUBLIC_KEYS is malformed; refusing the ERPNext panel")
-        return _error(503, "not_configured", "The ERPNext panel is not set up on OpenExecutive.")
+        return _error(503, "not_configured", _not_set_up())
     if not keys:
-        return _error(503, "not_configured", "The ERPNext panel is not set up on OpenExecutive.")
+        return _error(503, "not_configured", _not_set_up())
     body = await _read_capped(request)
     if body is None:
         return _error(413, "too_large", "That message is too long.")
@@ -591,14 +628,13 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
     unready = _ready()
     if unready is not None:
         logger.warning("erpnext panel unavailable: %s", unready)
-        return _error(503, "not_configured", "The ERPNext panel is not set up on OpenExecutive.")
+        return _error(503, "not_configured", _not_set_up())
     person = await asyncio.to_thread(_person_for, email)
     if person is None:
         return _error(
             403,
             "not_on_roster",
-            "Your ERPNext email is not on OpenExecutive's People page, so the Executive "
-            "cannot answer you here. Ask the person who runs OpenExecutive to add you.",
+            _not_on_roster(),
         )
     if data.get("check") is True:
         return JSONResponse({"enabled": True, "name": person.full_name})

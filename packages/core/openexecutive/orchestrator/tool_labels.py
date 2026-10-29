@@ -106,7 +106,23 @@ _SERVICES: dict[str, str] = {
     "google_workspace": "Google",
     "microsoft_365": "Microsoft 365",
     "oe": "Open Executive",
+    "erpnext": "ERPNext",
 }
+# The product's own parts: named by the product when the install has a name
+# (OE_PRODUCT_NAME), as everything said to people is.
+_OWN_PARTS = frozenset({"oe", "erpnext"})
+
+
+def _service(server: str) -> str:
+    """The server's name on a chip: the product's for its own parts when the
+    install names one (utils.product_name), else its own."""
+    if server in _OWN_PARTS:
+        from openexecutive.utils.product_name import configured_product_name
+
+        product = configured_product_name()
+        if product is not None:
+            return product
+    return _SERVICES.get(server) or _clean(server.replace("_", " ").title(), 24)
 
 # First word of an unlisted tool -> (done, doing) verb for the fallback.
 _VERBS: dict[str, tuple[str, str]] = {
@@ -198,7 +214,7 @@ def labels_for(raw_name: Any, arguments: Any = None) -> tuple[str, str]:
     verb = _VERBS.get(words[0])
     rest = " ".join(words[1:] if verb else words)
     rest = _clean(rest, _WORDS_MAX)
-    service = _SERVICES.get(server) or _clean(server.replace("_", " ").title(), 24)
+    service = _service(server)
     suffix = f" · {service}" if service else ""
     if verb and rest:
         return f"{verb[0]} {rest}{suffix}", f"{verb[1]} {rest}{suffix}"
