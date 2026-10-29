@@ -2078,6 +2078,48 @@ def needs_you_count(caller: int | None, *, principal: bool, now: datetime) -> in
     return mine + _waiting_cards(caller)
 
 
+def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, principal: bool) -> None:
+    """A demo caller's Home names no other demo person (people.demo): not in
+    the team list, the people waited on, what is in flight or was handled
+    overnight, nor as a card's assignee. One prospect never learns who else
+    is trying the product."""
+    from openexecutive.people.demo import is_demo_person
+    from openexecutive.people.store import list_people
+
+    if principal or caller is None or not is_demo_person(caller):
+        return
+    try:
+        others = [p for p in list_people(include_archived=True) if p.demo and p.id != caller]
+    except Exception:
+        logger.warning("today: reading the demo people failed — showing only the caller", exc_info=True)
+        response.people = [p for p in response.people if p.id == caller]
+        response.awaiting = [a for a in response.awaiting if a.person_id == caller]
+        response.in_flight = []
+        response.handled_overnight = []
+        for card in response.proposals:
+            if card.routed_to_person_id != caller:
+                card.routed_to_person_id = None
+        return
+    hidden_ids = {p.id for p in others}
+    hidden_names = {p.full_name for p in others if p.full_name}
+    response.people = [p for p in response.people if p.id not in hidden_ids]
+    response.awaiting = [a for a in response.awaiting if a.person_id not in hidden_ids]
+    response.in_flight = [i for i in response.in_flight if i.target not in hidden_names]
+    response.handled_overnight = [h for h in response.handled_overnight if h.target not in hidden_names]
+    # A target that isn't a name they may see (a raw address or chat id,
+    # someone since renamed) is left out too.
+    shown = {p.full_name for p in response.people if getattr(p, "full_name", None)}
+    for flight in response.in_flight:
+        if flight.target is not None and flight.target not in shown:
+            flight.target = None
+    for handled in response.handled_overnight:
+        if handled.target is not None and handled.target not in shown:
+            handled.target = None
+    for card in response.proposals:
+        if card.routed_to_person_id in hidden_ids:
+            card.routed_to_person_id = None
+
+
 def _attach_home_rules(
     response: TodayResponse, *, caller: int | None, principal: bool, now: datetime, tz: str | None = None,
 ) -> None:
@@ -2085,6 +2127,7 @@ def _attach_home_rules(
     ``tz`` is the zone their client shows times in, when it says."""
     from openexecutive.briefing import home_rules
 
+    _hide_other_demo_people(response, caller=caller, principal=principal)
     solo = _workspace_solo()
     response.snooze_choices = home_rules.snooze_choices(now, caller_zone(caller, tz))
     people_by_id = {p.id: p for p in response.people}

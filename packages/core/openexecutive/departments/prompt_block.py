@@ -31,6 +31,11 @@ Key invariants:
   contacts are private to the principal. Every other turn gets the block
   byte-identical to one with no contacts at all, so per mode the 5m cache
   holds at most two stable variants, never a per-request one.
+- A demo person's turn (``demo_viewer``, people.demo) gets a third stable
+  variant: no other demo person, no contacts, and nobody's email or chat
+  ids, so one prospect never learns another's address or the team's. It
+  leaves out every demo person, the viewer too, so it stays one variant for
+  all of them.
 
 Security note: Goal text fields (key_result, current, target, mission) are
 user-controlled strings that land inside the system prompt. All values are
@@ -182,7 +187,7 @@ def _render_department_section(state: DepartmentState, head_name: str | None = N
     return "\n".join(lines)
 
 
-def _render_people_section(people: list | None = None) -> str:
+def _render_people_section(people: list | None = None, *, with_reach: bool = True) -> str:
     """Render a compact ## People You Coordinate With section.
 
     Returns "" when the people table is empty or unavailable. Each person
@@ -190,6 +195,7 @@ def _render_people_section(people: list | None = None) -> str:
 
     Accepts an optional pre-fetched people list to avoid a second DB call
     when render_org_block() has already loaded people for head-name lookup.
+    ``with_reach=False`` leaves out every email and chat id (a demo turn).
     """
     try:
         if people is None:
@@ -221,13 +227,15 @@ def _render_people_section(people: list | None = None) -> str:
             # know about me". All values are sanitized — they originate from
             # user input via the API and land in the cached system prompt.
             extras: list[str] = []
-            if person.email:
+            if not with_reach:
+                pass
+            elif person.email:
                 extras.append(f"email: {_safe(person.email, 120)}")
-            if person.slack_user_id:
+            if with_reach and person.slack_user_id:
                 extras.append(f"slack: {_safe(person.slack_user_id, 64)}")
-            if person.telegram_chat_id:
+            if with_reach and person.telegram_chat_id:
                 extras.append(f"telegram: {_safe(person.telegram_chat_id, 64)}")
-            if person.discord_user_id:
+            if with_reach and person.discord_user_id:
                 extras.append(f"discord: {_safe(person.discord_user_id, 64)}")
             if person.department_slugs:
                 slugs = ", ".join(_safe(s, 40) for s in person.department_slugs)
@@ -329,7 +337,7 @@ def _render_solo_role(role: PrincipalRole | None) -> list[str]:
     return [_SOLO_ROLE_LEAD_IN, *lines] if lines else []
 
 
-def _render_solo_principal(role: PrincipalRole | None = None) -> str:
+def _render_solo_principal(role: PrincipalRole | None = None, *, with_reach: bool = True) -> str:
     """The principal's own line: name and the channels they can be reached on,
     then their role lines (``_render_solo_role``) when a role is set.
 
@@ -357,13 +365,13 @@ def _render_solo_principal(role: PrincipalRole | None = None) -> str:
             return ""
         return f"{_SOLO_PRINCIPAL_HEADER}\n\n" + "\n".join(role_lines)
     reach: list[str] = []
-    if principal.email:
+    if with_reach and principal.email:
         reach.append(f"email {_safe(principal.email, 120)}")
-    if principal.slack_user_id:
+    if with_reach and principal.slack_user_id:
         reach.append(f"slack {_safe(principal.slack_user_id, 64)}")
-    if principal.telegram_chat_id:
+    if with_reach and principal.telegram_chat_id:
         reach.append(f"telegram {_safe(principal.telegram_chat_id, 64)}")
-    if principal.discord_user_id:
+    if with_reach and principal.discord_user_id:
         reach.append(f"discord {_safe(principal.discord_user_id, 64)}")
     line = f"- {_safe(principal.full_name, 80)} (principal)"
     if principal.id is not None:
@@ -400,9 +408,13 @@ def _render_solo_goals(states: list[DepartmentState]) -> str:
     ])
 
 
-def _render_solo_block(states: list[DepartmentState], role: PrincipalRole | None) -> str:
+def _render_solo_block(
+    states: list[DepartmentState], role: PrincipalRole | None, *, with_reach: bool = True
+) -> str:
     return "\n\n".join(
-        part for part in (_render_solo_principal(role), _render_solo_goals(states)) if part
+        part
+        for part in (_render_solo_principal(role, with_reach=with_reach), _render_solo_goals(states))
+        if part
     )
 
 
@@ -433,13 +445,15 @@ def render_org_block(
     principal_role: PrincipalRole | None = None,
     *,
     include_contacts: bool = False,
+    demo_viewer: bool = False,
 ) -> str:
     """Return a Markdown block of all department states + People roster.
 
     Capped at 4000 chars total. Returns "" only when both departments and
     people are absent (fresh install / test env). ``include_contacts`` adds
     the principal's private ``## Contacts`` section — pass it only for the
-    principal's own verified turn.
+    principal's own verified turn. ``demo_viewer`` renders the demo turn's
+    variant (module docstring) and overrides it.
 
     ``mode="solo"`` renders the solo block instead (see the module docstring);
     any other value renders the team block, unchanged. ``principal_role`` is
@@ -459,11 +473,13 @@ def render_org_block(
         # Fetch people once — used both for the head-name lookup per
         # department and for the People section below. Team only; contacts
         # get their own section and never head a department.
+        if demo_viewer:
+            include_contacts = False
         try:
             everyone = list_people(include_contacts=include_contacts)
         except Exception:
             everyone = []
-        people = [p for p in everyone if p.kind == "team"]
+        people = [p for p in everyone if p.kind == "team" and not (demo_viewer and p.demo)]
         contacts = [p for p in everyone if p.kind != "team"] if include_contacts else []
 
         # The principal's private contacts: only on their own verified turn
@@ -475,7 +491,7 @@ def render_org_block(
             role = principal_role if principal_role is not None else _workspace_role()
             return _cap("\n\n".join(
                 part
-                for part in (_render_solo_block(states, role).strip(), contacts_section)
+                for part in (_render_solo_block(states, role, with_reach=not demo_viewer).strip(), contacts_section)
                 if part
             ).strip())
 
@@ -498,7 +514,7 @@ def render_org_block(
 
         # Build people section — pass the already-fetched list to avoid a
         # second DB call.
-        people_section = _render_people_section(people)
+        people_section = _render_people_section(people, with_reach=not demo_viewer)
 
         if not dept_sections and not people_section and not contacts_section:
             return ""

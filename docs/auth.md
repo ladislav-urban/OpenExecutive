@@ -363,7 +363,10 @@ the row is unlinked. The demo group can't be the team's group or hold it.
 
 A demo person still reaches what the shared workspace shows every team
 member: Home's briefing and cards, the knowledge base, People. Put them only
-on an install whose company data is demo data.
+on an install whose company data is demo data. They never see another demo
+person, though, nor anyone's email or chat ids but their own: People, Home's
+team list and their chat's picture of the team leave the other demo people
+out and show the rest by name and role only.
 
 **`ALLOWED_EMAILS` still lets people in by itself**, so a removed member
 listed there keeps access. With the directory on, keep it to one

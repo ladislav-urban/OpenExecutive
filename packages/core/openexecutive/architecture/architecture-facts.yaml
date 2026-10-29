@@ -8121,7 +8121,15 @@ integrations:
     never "new from the directory". Not built: per-person AI cost totals in
     Setup status. A demo person still sees what the shared workspace shows
     every team member (Home, knowledge, People), so they belong only on an
-    install whose company data is demo data.
+    install whose company data is demo data. But never another demo person,
+    nor anyone's email or chat ids but their own (people.demo.
+    shown_to_demo_viewer): GET /people and /people/by-scope leave the other
+    demo people out and blank the rest's addresses, GET /people/{id} is a 404
+    for another demo person, Home's team list leaves them out, and their
+    chat's org block is a third stable variant (render_org_block(
+    demo_viewer=True): no demo person at all, no contacts, no addresses), so
+    one prospect never learns who else is trying the product or how to reach
+    the team.
 
     Recovery: link(email, relink=True) re-points a managed row only when its
     current subject is absent from the group read, and restores a directory

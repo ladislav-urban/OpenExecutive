@@ -151,6 +151,29 @@ def test_a_signed_in_teammate_reads_the_roster_and_a_service_does_not(
     assert "Only someone on the team can read this." in refused["error"]["message"]
 
 
+def test_a_demo_person_reads_no_other_demo_person_and_no_addresses(
+    roster: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def demo(name: str, email: str) -> int:
+        pid = people_store.upsert_person(full_name=name, email=email, role="Demo user")
+        people_store.link_directory(pid, f"kc-{email}")
+        assert people_store.set_directory_demo(pid, True)
+        return pid
+
+    dana = demo("Dana Demo", "dana@prospect.example")
+    demo("Pete Prospect", "pete@other.example")
+    people_registry.invalidate()
+    app, endpoint = _app(monkeypatch, signed=True)
+    out = _read(app, endpoint, "oe://people/roster", _signed_as("user", "dana@prospect.example"))
+    rows = {p["full_name"]: p for p in json.loads(out["result"]["contents"][0]["text"])}
+    assert set(rows) == {"Olivia Owner", "Ben Teammate", "Dana Demo"}
+    assert rows["Olivia Owner"]["email"] is None and rows["Ben Teammate"]["email"] is None
+    assert rows["Dana Demo"]["id"] == dana and rows["Dana Demo"]["email"] == "dana@prospect.example"
+    # The team still reads everyone.
+    team = _read(app, endpoint, "oe://people/roster", _signed_as("user", TEAMMATE))
+    assert "Pete Prospect" in {p["full_name"] for p in json.loads(team["result"]["contents"][0]["text"])}
+
+
 def test_open_mode_takes_the_caller_header_at_its_word(
     roster: dict[str, int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
