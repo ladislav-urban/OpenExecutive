@@ -2109,9 +2109,12 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
     # A target that isn't a name they may see (a raw address or chat id,
     # someone since renamed) is left out too.
     shown = {p.full_name for p in response.people if getattr(p, "full_name", None)}
-    for row in (*response.in_flight, *response.handled_overnight):
-        if row.target is not None and row.target not in shown:
-            row.target = None
+    for flight in response.in_flight:
+        if flight.target is not None and flight.target not in shown:
+            flight.target = None
+    for handled in response.handled_overnight:
+        if handled.target is not None and handled.target not in shown:
+            handled.target = None
     for card in response.proposals:
         if card.routed_to_person_id in hidden_ids:
             card.routed_to_person_id = None
