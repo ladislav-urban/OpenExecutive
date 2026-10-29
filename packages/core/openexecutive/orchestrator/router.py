@@ -426,6 +426,11 @@ async def route_parallel(
 ) -> list[str]:
     """Execute multiple specialist calls concurrently.
 
+    On a turn from ERPNext's panel the specialists read no standing facts,
+    as the panel's own turn reads none (``integrations.erpnext_panel``: the
+    facts carry teammates' names, and ERPNext's word is all that names the
+    asker); every other turn's specialists load them as before.
+
     Each specialist receives its own domain-filtered RAG context, fetched
     in parallel before the LLM calls fire. Callers may still supply a
     pre-built ``retrieved_knowledge_map`` (keyed by specialist name) to
@@ -501,6 +506,10 @@ async def route_parallel(
             *(_prefetch_department_for_call(c, session_id) for c in calls)
         )
     )
+    from openexecutive.orchestrator.schedule_tools import current_session, erpnext_panel_turn
+
+    # "" is no facts; None lets route_to_specialist load them.
+    standing_facts: str | None = "" if erpnext_panel_turn(current_session.get()) else None
 
     failed: set[int] = set()
 
@@ -539,6 +548,7 @@ async def route_parallel(
                 actor="specialist",
                 company_stage=company_stage,
                 principal_role=principal_role,
+                standing_facts=standing_facts,
             )
         except Exception as exc:
             logger.warning(
