@@ -10,7 +10,7 @@ import time
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from openexecutive.api.setup_checks import (
@@ -56,8 +56,19 @@ async def _run_all(app_state: Any) -> SetupStatusResponse:
     return SetupStatusResponse(checked_at=snap.now.isoformat(), checks=checks)
 
 
+def _demo_caller(request: Request) -> bool:
+    from openexecutive.api.routes.people import _demo_viewer
+
+    return _demo_viewer(request)[0]
+
+
 @router.get("/setup/status", response_model=SetupStatusResponse)
 async def setup_status(request: Request) -> SetupStatusResponse:
+    # The checks name the owner's and the Executive's addresses, which a
+    # demo person never sees (people.demo); the app treats a refusal as no
+    # status, as for a failed run.
+    if await asyncio.to_thread(_demo_caller, request):
+        raise HTTPException(status_code=403, detail="Setup status is the team's.")
     state = request.app.state
     runs: _Runs | None = getattr(state, "setup_status_runs", None)
     if runs is None:

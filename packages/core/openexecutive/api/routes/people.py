@@ -106,15 +106,37 @@ def caller_is_principal(request: Request) -> bool:
         return False
 
 
+def _demo_viewer(request: Request) -> tuple[bool, int | None]:
+    """Whether the caller is a demo person (people.demo), and their id. The
+    principal never is; a roster that can't be read answers yes."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.people.demo import is_demo_person
+
+    if caller_is_principal(request):
+        return False, None
+    viewer = _resolve_caller_person_id(request)
+    return (viewer is not None and is_demo_person(viewer)), viewer
+
+
 def _visible_person(person_id: int, request: Request) -> Person:
     """The person, or 404 — also for a contact or a suspended person when
     the caller is not the principal, exactly as for an id that does not
-    exist: who is suspended is the principal's business alone."""
+    exist: who is suspended is the principal's business alone. A demo
+    caller gets the same 404 for another demo person, and sees nobody's
+    email or chat ids but their own (people.demo)."""
+    from openexecutive.people.demo import shown_to_demo_viewer
+
     person = people_store.get_person(person_id)
     if person is None or (
         (person.kind != "team" or person.suspended) and not caller_is_principal(request)
     ):
         raise HTTPException(status_code=404, detail="Person not found")
+    demo, viewer = _demo_viewer(request)
+    if demo:
+        shown = shown_to_demo_viewer([person], viewer)
+        if not shown:
+            raise HTTPException(status_code=404, detail="Person not found")
+        return shown[0]
     return person
 
 
@@ -142,7 +164,15 @@ def list_people(
         include_contacts=include_contacts and principal,
         include_suspended=include_suspended and principal,
     )
-    return people if principal else [p for p in people if not p.suspended]
+    if principal:
+        return people
+    people = [p for p in people if not p.suspended]
+    demo, viewer = _demo_viewer(request)
+    if demo:
+        from openexecutive.people.demo import shown_to_demo_viewer
+
+        return shown_to_demo_viewer(people, viewer)
+    return people
 
 
 @router.get("/people/me", response_model=PeopleViewer)
@@ -158,7 +188,7 @@ def people_viewer(request: Request) -> PeopleViewer:
 
 
 @router.get("/people/by-scope/{token}", response_model=list[Person])
-def people_by_scope(token: str) -> list[Person]:
+def people_by_scope(token: str, request: Request) -> list[Person]:
     """Return active people who can approve the given scope token."""
     try:
         scope = AuthorityScope(token)
@@ -167,7 +197,13 @@ def people_by_scope(token: str) -> list[Person]:
             status_code=400,
             detail=f"Unknown scope token: {token!r}. Valid tokens: {[s.value for s in AuthorityScope]}",
         ) from exc
-    return people_store.find_approvers(scope)
+    approvers = people_store.find_approvers(scope)
+    demo, viewer = _demo_viewer(request)
+    if demo:
+        from openexecutive.people.demo import shown_to_demo_viewer
+
+        return shown_to_demo_viewer(approvers, viewer)
+    return approvers
 
 
 # --------------------------------------------------------------------------- #

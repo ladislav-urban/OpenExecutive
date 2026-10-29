@@ -304,14 +304,18 @@ async def company_profile() -> str:
 )
 async def today_briefing() -> str:
     """As ``GET /today`` gives it: the principal's private rows for the
-    principal alone, a drafted artifact's card for its owner."""
-    from openexecutive.api.routes.today import _build_today
+    principal alone, a drafted artifact's card for its owner, and to a demo
+    person no other demo person (people.demo)."""
+    from openexecutive.api.routes.today import _build_today, _hide_other_demo_people
     from openexecutive.orchestrator.artifact_records import viewer_for_person
 
     who = await _require_person()
     viewer = await asyncio.to_thread(viewer_for_person, who.person_id)
     today = await asyncio.to_thread(
         _build_today, include_private=who.is_principal, viewer=viewer
+    )
+    await asyncio.to_thread(
+        _hide_other_demo_people, today, caller=who.person_id, principal=who.is_principal
     )
     today.caller_person_id = who.person_id
     return _json(today.model_dump(mode="json"))
@@ -338,11 +342,15 @@ async def today_activity() -> str:
     mime_type="application/json",
 )
 async def people_roster() -> str:
+    from openexecutive.people.demo import is_demo_person, shown_to_demo_viewer
     from openexecutive.people.store import list_people
 
-    # The team, never the principal's contacts (as GET /people gives it).
-    await _require_person()
+    # The team, never the principal's contacts (as GET /people gives it),
+    # and to a demo person no other demo person and nobody's addresses.
+    who = await _require_person()
     people = await asyncio.to_thread(list_people)
+    if not who.is_principal and await asyncio.to_thread(is_demo_person, who.person_id):
+        people = shown_to_demo_viewer(people, who.person_id)
     return _json([p.model_dump(mode="json") for p in people])
 
 

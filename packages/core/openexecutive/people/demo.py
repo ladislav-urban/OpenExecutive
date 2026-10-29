@@ -13,6 +13,10 @@ Executive can do on demo data, so:
 - they may ask ``DEMO_DAILY_QUESTIONS`` questions a day, across the web chat
   and ERPNext's panel (``take_question``), so one registrant can't run up the
   AI bill.
+- they never see another demo person, nor anyone's email or chat ids but
+  their own (``shown_to_demo_viewer``; the org prompt block's demo variant),
+  so one prospect never learns who else is trying the product or how to
+  reach the team.
 
 docs/auth.md, "Demo people", has the whole picture.
 """
@@ -52,6 +56,26 @@ def is_demo_person(person_id: int | None) -> bool:
     """Whether ``person_id`` is a demo person. Fails closed: a roster that
     can't be read answers yes, so a demo turn is never given more."""
     return demo_state(person_id) is not False
+
+
+# What reaches a person: hidden from a demo viewer on everyone but themselves.
+_REACH_FIELDS: dict[str, Any] = {
+    "email": None,
+    "email_aliases": [],
+    "slack_user_id": None,
+    "telegram_chat_id": None,
+    "discord_user_id": None,
+}
+
+
+def shown_to_demo_viewer(people: list[Any], viewer_id: int | None) -> list[Any]:
+    """``people`` as a demo person ``viewer_id`` may see them: no other demo
+    person, and nobody's email or chat ids but their own."""
+    return [
+        p if p.id == viewer_id else p.model_copy(update=_REACH_FIELDS)
+        for p in people
+        if p.id == viewer_id or not p.demo
+    ]
 
 
 def demo_turn(session: Any) -> bool:

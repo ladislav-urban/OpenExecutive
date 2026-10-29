@@ -38,6 +38,7 @@ def build_system_blocks(
     principal_role: PrincipalRole | None = None,
     *,
     include_contacts: bool = False,
+    demo_viewer: bool = False,
     delegation: bool = False,
     mcp_servers: Sequence[str] = (),
     needs_reconnect: Sequence[str] = (),
@@ -77,8 +78,9 @@ def build_system_blocks(
 
     include_contacts adds the principal's private Contacts section to block 1.
     The caller passes it only for the principal's own verified turn, so per
-    mode block 1 has exactly two stable variants (with and without contacts)
-    — never anything per-request.
+    mode block 1 has two stable variants (with and without contacts), plus
+    one for every demo person's turn (``demo_viewer``: no demo people, no
+    emails or chat ids) — never anything per-request.
 
     delegation appends the constant DELEGATION_ADDENDUM (Act as me) after the
     identity addendum, which stays exactly as it is. The caller passes the
@@ -190,6 +192,7 @@ def build_system_blocks(
         mode=workspace_mode,
         principal_role=principal_role,
         include_contacts=include_contacts,
+        demo_viewer=demo_viewer,
     )
     if org_text:
         context_parts.append(org_text)

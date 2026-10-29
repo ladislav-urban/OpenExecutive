@@ -386,3 +386,21 @@ def test_the_principal_cant_take_over_an_ownerless_chat_someone_is_in(
     assert client.patch("/sessions/legacy", json={"pinned": True}, headers=ALEX).status_code == 200
     chat_route._session_starters[sid] = frozenset({"email:someone@example.com"})
     assert client.patch("/sessions/legacy", json={"pinned": True}, headers=ALEX).status_code == 404
+
+
+def test_a_demo_person_cant_find_another_demo_person_by_sharing(client: TestClient, people: dict[str, int]) -> None:
+    def demo(name: str, email: str) -> int:
+        pid = people_store.upsert_person(full_name=name, email=email, role="Demo user")
+        people_store.link_directory(pid, f"kc-{email}")
+        assert people_store.set_directory_demo(pid, True)
+        return pid
+
+    dana = demo("Dana", "dana@prospect.example")
+    pete = demo("Pete", "pete@other.example")
+    sid = _chat_of(dana, "dana-1")
+    dana_h = {"x-caller-email": "dana@prospect.example"}
+    refused = client.put(f"/sessions/{sid}/shares", json={"person_ids": [pete]}, headers=dana_h)
+    assert refused.status_code == 422 and refused.json()["detail"] == f"Can't share with person {pete}"
+    # Same answer as an id that doesn't exist; a teammate is still fine.
+    assert client.put(f"/sessions/{sid}/shares", json={"person_ids": [9999]}, headers=dana_h).status_code == 422
+    assert client.put(f"/sessions/{sid}/shares", json={"person_ids": [people["sabin"]]}, headers=dana_h).status_code == 200
