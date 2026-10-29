@@ -522,6 +522,15 @@ async def _answer(person: Any, email: str, conversation_id: str, message: str, p
         raise PanelRefused("conversation_busy")
     async with conversation.lock:
         session = conversation.session
+        # A demo person's turn (people.demo): the narrow tools, and the org
+        # block's demo variant, with no other demo person and nobody's
+        # addresses. The panel names its asker by email only, so the turn
+        # can't take it from a bound speaker as the web chat's does. Fails
+        # closed, and never turns back off for a cached conversation.
+        from openexecutive.people.demo import is_demo_person
+
+        if getattr(person, "demo", False) is True or await asyncio.to_thread(is_demo_person, person.id):
+            session.demo_caller = True
         audit_log(
             "integration_inbound",
             f"Inbound erpnext panel from person {person.id}: {message[:160]}",

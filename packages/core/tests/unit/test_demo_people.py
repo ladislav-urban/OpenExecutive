@@ -252,3 +252,34 @@ def test_the_panel_caps_a_demo_persons_questions_too(monkeypatch: pytest.MonkeyP
     assert ask("c1").status_code == 200  # type: ignore[attr-defined]
     refused = ask("c2")
     assert refused.status_code == 429 and refused.json()["error"] == "daily_limit"  # type: ignore[attr-defined]
+
+
+def test_a_demo_persons_panel_turn_is_a_demo_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The panel names its asker by email only, so it marks the turn itself:
+    otherwise the org block lists the whole team with their addresses."""
+    import asyncio
+
+    from openexecutive.integrations import erpnext_panel
+    from openexecutive.onboarding import profile_builder
+    from openexecutive.orchestrator import executive as executive_mod
+
+    seen: list[bool] = []
+
+    class _Executive:
+        def __init__(self, **_k: object) -> None:
+            pass
+
+        async def chat(self, *, session: Session, **_k: object) -> str:
+            seen.append(people_demo.demo_turn(session))
+            return "Fine."
+
+    monkeypatch.setattr(executive_mod, "Executive", _Executive)
+    monkeypatch.setattr(profile_builder, "load_or_create_profile", lambda: SimpleNamespace(is_empty=lambda: True))
+    monkeypatch.setattr("openexecutive.knowledge.retriever.retrieve", lambda **_k: "")
+    monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **k: None)
+    demo = _demo(email="dana@prospect.example")
+    teammate = people_store.upsert_person(full_name="Tom Team", email="tom@example.com")
+    for pid, email in ((demo, "dana@prospect.example"), (teammate, "tom@example.com")):
+        person = people_store.get_person(pid)
+        asyncio.run(erpnext_panel._answer(person, email, "c1", "Who is on the team?", None))
+    assert seen == [True, False]
