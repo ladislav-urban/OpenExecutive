@@ -1,0 +1,20 @@
+id: erpnext_026
+domain: mcp
+speaker: principal
+surface: erpnext_panel
+requires_mcp: true
+product_name: Dynocortex
+page:
+  doctype: Delivery Note
+  name: MAT-DN-2026-01072
+description: "ERPNext's panel beside a Delivery Note, on an install that names its product (OE_PRODUCT_NAME=Dynocortex). The person asks whether everything delivered for the job was installed. Found on the pilot (Oct 29, 2026): a correct answer ending 'The installed quantities are as recorded in ERPNext.' The panel's own block and its tools name ERPNext throughout; the reply still calls the system Dynocortex or its records 'the ERP', and never names ERPNext or Open Executive."
+query: "Was everything we delivered for this job installed?"
+forbidden_reply_words:
+  - ERPNext
+  - OpenExecutive
+  - Open Executive
+quality_criteria:
+  answers_from_the_delivery_note_and_its_installation_records: true
+  says_what_the_records_cannot_show: true
+  calls_the_system_dynocortex_or_the_erp: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

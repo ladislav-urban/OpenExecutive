@@ -1,7 +1,9 @@
 """A turn's text across tool rounds (orchestrator/executive.py): each round's
 text starts a new paragraph, so the model's words before a tool call and its
-answer never run together ("...stock.Yes. ITEM-1..."), and nothing it wrote is
-dropped. Found by the ERPNext evals against a live bench (2026-10-19)."""
+answer never run together ("...stock.Yes. ITEM-1..."). Found by the ERPNext
+evals against a live bench (2026-10-19). A short one-line note before a tool
+call is the model's own between calls and stays out of the reply ("Need the
+company name.", pilot, 2026-10-29); longer text before a call is kept."""
 from __future__ import annotations
 
 import asyncio
@@ -75,11 +77,20 @@ def test_a_new_round_starts_a_new_paragraph(tail: str, text: str, separator: str
 
 
 def test_a_turn_keeps_every_round_in_its_own_paragraph() -> None:
+    before = "I will check actual stock in every warehouse first, then compare it with the reorder level."
+    reply = _reply([
+        FinalMsg([TextBlock(before), ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([TextBlock("Yes. ITEM-1 has 12 in Stores.")], "end_turn"),
+    ])
+    assert reply == before + "\n\nYes. ITEM-1 has 12 in Stores."
+
+
+def test_a_short_note_before_a_tool_call_is_not_part_of_the_reply() -> None:
     reply = _reply([
         FinalMsg([TextBlock("Check actual stock."), ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
         FinalMsg([TextBlock("Yes. ITEM-1 has 12 in Stores.")], "end_turn"),
     ])
-    assert reply == "Check actual stock.\n\nYes. ITEM-1 has 12 in Stores."
+    assert reply == "Yes. ITEM-1 has 12 in Stores."
 
 
 def test_one_round_is_untouched_and_a_silent_round_adds_nothing() -> None:

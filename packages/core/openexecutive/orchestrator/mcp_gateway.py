@@ -732,6 +732,54 @@ def _token_names(config_path: Path | None) -> frozenset[str]:
     )
 
 
+def _schema_types(prop: Any) -> set[str]:
+    """The JSON types a property's schema allows (its ``type``, or its
+    ``anyOf``'s)."""
+    if not isinstance(prop, dict):
+        return set()
+    kind = prop.get("type")
+    kinds = set(kind) if isinstance(kind, list) else ({kind} if isinstance(kind, str) else set())
+    for alt in prop.get("anyOf") or []:
+        kinds |= _schema_types(alt)
+    return kinds
+
+
+def _erpnext_arguments(arguments: dict[str, Any], schema: dict[str, Any] | None) -> dict[str, Any]:
+    """An ERPNext call's top-level arguments, with a value the tool's pinned
+    ``inputSchema`` types as an object, array or integer but that came as a
+    string turned into that type: JSON (``'{"docstatus": 1}'``), a
+    comma-separated list for an array of strings, digits for an integer.
+    Models often quote them, and oe_connector refuses the shape, which spent
+    whole turns retrying on the pilot (Oct 29, 2026). Nothing else changes:
+    no key is renamed, added or dropped, and a value that doesn't parse to an
+    allowed type is passed as it came, for oe_connector to refuse."""
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if not isinstance(props, dict):
+        return arguments
+    out = dict(arguments)
+    for key, value in arguments.items():
+        if not isinstance(value, str):
+            continue
+        kinds = _schema_types(props.get(key))
+        text = value.strip()
+        if kinds & {"object", "array"} and text[:1] in ("{", "["):
+            try:
+                parsed = json.loads(text)
+            except (json.JSONDecodeError, RecursionError):
+                parsed = None
+            if (isinstance(parsed, dict) and "object" in kinds) or (isinstance(parsed, list) and "array" in kinds):
+                out[key] = parsed
+                continue
+        if "array" in kinds and text and text[:1] not in ("{", "["):
+            items = (props.get(key) or {}).get("items") if isinstance(props.get(key), dict) else None
+            if isinstance(items, dict) and items.get("type") == "string":
+                out[key] = [part.strip() for part in text.split(",") if part.strip()]
+                continue
+        if "integer" in kinds and text.isascii() and text.isdigit():
+            out[key] = int(text)
+    return out
+
+
 def _refuse_erpnext_call(tool_name: str, reason: str, message: str) -> str:
     from openexecutive.audit import log_event as audit_log
 
@@ -3626,6 +3674,9 @@ class MCPGateway:
         # every search passes ``_search``.
         self._erpnext_verified: set[str] = set()
         self._erpnext_changed: dict[str, str] = {}
+        # Each verified tool's inputSchema, as pinned: what `_erpnext_arguments`
+        # reads a call's argument types from.
+        self._erpnext_schemas: dict[str, dict[str, Any]] = {}
 
     def _call_timeout(self, settings: Settings | None = None) -> float:
         """The per-call ceiling, read once per gateway (from ``settings``
@@ -3726,8 +3777,11 @@ class MCPGateway:
             if why is None:
                 self._erpnext_verified.add(name)
                 self._erpnext_changed.pop(name, None)
+                if isinstance(info.input_schema, dict):
+                    self._erpnext_schemas[name] = info.input_schema
                 continue
             self._erpnext_verified.discard(name)
+            self._erpnext_schemas.pop(name, None)
             if self._erpnext_changed.get(name) != why:
                 logger.warning(
                     "MCPGateway: dropped %s: its definition doesn't match the pin (%s); "
@@ -3911,6 +3965,9 @@ class MCPGateway:
                     tool_name, "arguments", "<non-object>",
                     reason="arguments must be a JSON object — refusing.",
                 )
+            # Before every gate and the caller's signature, so both see the
+            # call as it will run.
+            arguments = _erpnext_arguments(arguments, self._erpnext_schemas.get(normalized))
             from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL
 
             # The oversight tool runs only inside the export's own marker, and

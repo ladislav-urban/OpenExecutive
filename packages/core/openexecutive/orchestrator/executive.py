@@ -1099,6 +1099,38 @@ def _emit_cache_event(
     )
 
 
+# Longest opening text a round holds back as a possible note before a tool
+# call. A real answer passes it within its first sentence and streams on.
+_NOTE_MAX_CHARS = 80
+_FINAL_ROUND_NOTE = (
+    "You have used every look-up this question allows. Answer now from what you "
+    "found, and say plainly what you could not check. Do not call a tool."
+)
+
+
+def _is_note(text: str) -> bool:
+    """Whether a round's opening ``text`` may still be a note before a tool
+    call: short, one line."""
+    return len(text) <= _NOTE_MAX_CHARS and "\n" not in text.strip()
+
+
+def _flush_held(held: str, streamed_tail: str) -> list[str]:
+    """The held opening of a round, after the separator from earlier rounds."""
+    separator = _round_separator(streamed_tail, held) if streamed_tail else ""
+    return [c for c in (separator, held) if c]
+
+
+def _ask_for_final_answer(messages: list[dict[str, Any]], caller_message_count: int) -> None:
+    """Tell the model, in the turn's own last user message (the tool results it
+    just got), that this round must answer. Only a message this loop added."""
+    if len(messages) <= caller_message_count:
+        return
+    last = messages[-1]
+    content = last.get("content") if last.get("role") == "user" else None
+    if isinstance(content, list):
+        content.append({"type": "text", "text": _FINAL_ROUND_NOTE})
+
+
 def _round_separator(tail: str, text: str) -> str:
     """What goes between the text already streamed (its last characters,
     ``tail``) and a new round's first ``text``: a paragraph break, less what
@@ -2512,12 +2544,24 @@ class Executive:
             if web_search_tool is not None:
                 tools_with_cache.append(web_search_tool)
             stream_model = model or self._settings.default_model
+            # The last round answers with what it has (as the supplier agent's
+            # does): no tool, and told so, rather than ending on "unable to
+            # complete" after the model already found most of the answer.
+            final_round = iteration == max_iterations
+            if final_round:
+                _ask_for_final_answer(current_messages, caller_message_count)
+            # A round's opening text is held while it is a short note: one that
+            # ends in a tool call ("Need the company name.") is the model's own
+            # note between calls, never part of the reply. Longer text streams.
+            held = ""
+            flushed = False
             async with get_provider(stream_model).messages_stream(
                 model=stream_model,
                 max_tokens=8192,
                 system=system_blocks,  # type: ignore[arg-type]
                 tools=tools_with_cache,  # type: ignore[arg-type,list-item]
                 messages=current_messages,  # type: ignore[arg-type]
+                **({"tool_choice": {"type": "none"}} if final_round else {}),
             ) as stream:
                 async for event in stream:
                     if (
@@ -2527,16 +2571,25 @@ class Executive:
                         and hasattr(event.delta, "type")
                         and event.delta.type == "text_delta"
                     ):
-                        if not full_text and streamed_tail and event.delta.text:
-                            separator = _round_separator(streamed_tail, event.delta.text)
-                            if separator:
-                                yield separator
-                                streamed_tail = separator
                         full_text += event.delta.text
-                        streamed_tail = (streamed_tail + event.delta.text)[-2:]
-                        yield event.delta.text
+                        if flushed:
+                            streamed_tail = (streamed_tail + event.delta.text)[-2:]
+                            yield event.delta.text
+                            continue
+                        held += event.delta.text
+                        if not _is_note(held):
+                            for chunk in _flush_held(held, streamed_tail):
+                                yield chunk
+                            streamed_tail = (streamed_tail + held)[-2:]
+                            held, flushed = "", True
 
                 final_msg = await stream.get_final_message()
+            if held and final_msg.stop_reason != "tool_use":
+                for chunk in _flush_held(held, streamed_tail):
+                    yield chunk
+                streamed_tail = (streamed_tail + held)[-2:]
+            elif held:
+                logger.info("held back a note before a tool call: %s", _trunc(held, 80))
 
             # cache_event: capture per-iteration token + cache stats so the
             # flow chart can show "this turn used N cache hits at iter K".
