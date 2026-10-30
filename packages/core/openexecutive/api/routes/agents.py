@@ -715,6 +715,12 @@ async def test_agent(agent_id: str, req: AgentTestRequest) -> AgentTestResponse:
         if req.instructions is not None
         else (ov.instructions if ov is not None else None),
     )
+    # The install's advice policy, as a live call adds it (BaseAgent.
+    # effective_system_prompt), so the test box answers as the agent will.
+    if agent.visibility == "core":
+        from openexecutive.prompts.advice_policy import specialist_addendum
+
+        system_prompt += specialist_addendum()
     try:
         response = await agent.analyze(
             query=req.query,

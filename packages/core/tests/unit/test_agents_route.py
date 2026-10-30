@@ -331,6 +331,22 @@ def test_test_endpoint_appends_draft_instructions(client: TestClient) -> None:
     assert client.get("/agents/cso").json()["has_override"] is False
 
 
+def test_test_endpoint_adds_the_advice_policy_as_a_live_call_does(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.prompts.advice_policy import SPECIALIST_ADVICE_ADDENDUM
+
+    monkeypatch.setenv("ADVICE_POLICY", "explain")
+    create_mock = AsyncMock(
+        return_value=SimpleNamespace(content=[SimpleNamespace(type="text", text="ok")])
+    )
+    fake_provider = SimpleNamespace(messages_create=create_mock)
+    with patch("openexecutive.agents.base.get_provider", return_value=fake_provider):
+        res = client.post("/agents/cso/test", json={"query": "Hi", "prompt": "P"})
+    assert res.status_code == 200, res.text
+    assert create_mock.await_args.kwargs["system"][0]["text"] == "P" + SPECIALIST_ADVICE_ADDENDUM
+
+
 def test_test_endpoint_uses_saved_instructions_when_draft_omits_them(
     client: TestClient,
 ) -> None:

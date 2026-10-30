@@ -57,6 +57,21 @@ def test_a_custom_persona_keeps_it(monkeypatch: pytest.MonkeyPatch) -> None:
     assert HEADING in build_system_blocks(persona_override="CUSTOM EXEC PERSONA")[0]["text"]
 
 
+def test_who_decides_is_named_only_inside_the_company(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ADVICE_POLICY", "explain")
+    text = build_system_blocks()[0]["text"]
+    assert "Only to someone inside the company" in text
+    assert "never name who decides or anyone's approval scope" in text
+
+
+def test_an_override_that_is_not_text_leaves_it_off() -> None:
+    token = advice_policy.advice_policy_override.set(True)  # type: ignore[arg-type]
+    try:
+        assert not advice_policy.advice_policy_on()
+    finally:
+        advice_policy.advice_policy_override.reset(token)
+
+
 def test_an_evals_override_is_its_own() -> None:
     token = advice_policy.advice_policy_override.set("explain")
     try:
