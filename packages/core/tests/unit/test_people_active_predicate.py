@@ -47,6 +47,11 @@ ALLOWED: dict[str, tuple[int, str]] = {
     "orchestrator/people_tools.py": (1, "an output field of list_people, not a check"),
     "fixtures/store.py": (3, "the generated_fixtures table, not People"),
     "integrations/discord_bot.py": (1, "a Discord thread's archived flag, not a Person"),
+    "people/profile.py": (
+        1,
+        "set_profile keeps a business profile only for a row not archived; a suspended "
+        "person keeps theirs (the directory sync restores them), so it means \"still on the roster\"",
+    ),
 }
 
 # Modules the plan names as deciding access; each must read the predicate.
