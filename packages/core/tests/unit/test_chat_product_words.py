@@ -51,13 +51,15 @@ def test_code_urls_and_breaks_stay(monkeypatch: pytest.MonkeyPatch, reply: str, 
 def test_a_long_reply_in_tiny_chunks_keeps_a_bounded_buffer() -> None:
     from openexecutive.prompts import connected_systems as cs
 
-    # What keeps it linear: the text held never grows with the reply.
+    # What keeps it linear: the text held never grows with the reply. At
+    # most the kept window, the held tail, and a word straddling the cut
+    # held back whole (no longer than the tail), plus the new character.
     reply = "Some ordinary text, with ERPNext now and then. " * 600
     stream = ProductReplyStream("Dynocortex")
     out = []
     for ch in reply:
         out.append(stream.feed(ch))
-        assert len(stream._raw) <= cs._STREAM_KEEP + cs._STREAM_HOLD + 1
+        assert len(stream._raw) <= cs._STREAM_KEEP + 2 * cs._STREAM_HOLD + 1
     out.append(stream.flush())
     assert "".join(out).count("with the ERP now") == 600
 
