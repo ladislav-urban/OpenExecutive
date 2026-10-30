@@ -16,7 +16,10 @@ Executive can do on demo data, so:
 - they never see another demo person, nor anyone's email or chat ids but
   their own (``shown_to_demo_viewer``; the org prompt block's demo variant),
   so one prospect never learns who else is trying the product or how to
-  reach the team.
+  reach the team;
+- they never see the principal's name, only their role (``PRINCIPAL_LABEL``,
+  ``by_role``): the install's owner is a real person, the demo company is not
+  (owner's decision, Oct 30, 2026).
 
 docs/auth.md, "Demo people", has the whole picture.
 """
@@ -68,11 +71,31 @@ _REACH_FIELDS: dict[str, Any] = {
 }
 
 
+# What a demo viewer reads in place of the principal's name.
+PRINCIPAL_LABEL = "The principal"
+
+
+def by_role(person: Any) -> Any:
+    """``person`` with the principal's name replaced by ``PRINCIPAL_LABEL``;
+    anyone else as they are."""
+    if getattr(person, "is_principal", False) is not True:
+        return person
+    return person.model_copy(update={"full_name": PRINCIPAL_LABEL})
+
+
+def without_principal_name(text: str | None, name: str | None) -> str | None:
+    """``text`` with the principal's ``name`` replaced by ``PRINCIPAL_LABEL``."""
+    if not text or not name:
+        return text
+    return text.replace(name, PRINCIPAL_LABEL)
+
+
 def shown_to_demo_viewer(people: list[Any], viewer_id: int | None) -> list[Any]:
     """``people`` as a demo person ``viewer_id`` may see them: no other demo
-    person, and nobody's email or chat ids but their own."""
+    person, nobody's email or chat ids but their own, and the principal by
+    role only."""
     return [
-        p if p.id == viewer_id else p.model_copy(update=_REACH_FIELDS)
+        p if p.id == viewer_id else by_role(p.model_copy(update=_REACH_FIELDS))
         for p in people
         if p.id == viewer_id or not p.demo
     ]

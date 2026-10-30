@@ -77,7 +77,9 @@ def test_a_demo_person_lists_no_other_demo_person_and_no_ones_reach(roster: Simp
         row = by_id[pid]
         assert row["email"] is None and row["email_aliases"] == []
         assert row["slack_user_id"] is None and row["telegram_chat_id"] is None
-        assert row["full_name"]  # still named, so the team is there to see
+    # The team by name; the principal by role only.
+    assert by_id[roster.teammate]["full_name"] == "Tom Team"
+    assert by_id[roster.principal]["full_name"] == "The principal"
 
 
 def test_a_demo_person_gets_a_404_for_another_demo_person(roster: SimpleNamespace) -> None:
@@ -125,8 +127,8 @@ def test_a_demo_turns_org_block_names_no_demo_person_and_no_reach(roster: Simple
     assert "pete@other.example" in team and "olivia@example.com" in team
 
     demo = render_org_block(demo_viewer=True)
-    assert "Olivia Owner" in demo and "Tom Team" in demo
-    for hidden in ("Dana Demo", "Pete Prospect", "@", "U-OLIVIA", "777"):
+    assert "The principal" in demo and "Tom Team" in demo
+    for hidden in ("Olivia Owner", "Dana Demo", "Pete Prospect", "@", "U-OLIVIA", "777"):
         assert hidden not in demo
     # One stable variant for every demo person, so the 5m cache stays warm.
     assert render_org_block(demo_viewer=True) == demo
@@ -240,3 +242,91 @@ def test_a_demo_persons_home_header_is_written_from_unattributed_facts(
     for pid in (roster.dana, roster.teammate):
         today._narrative_context({}, SimpleNamespace(id=pid), {"name": "x"}, reader=None)  # type: ignore[arg-type]
     assert seen == ["runway", None]  # None: the renderer loads them, attributed, as before
+
+
+# ── The principal by role only (owner's decision, Oct 30, 2026) ──────────────
+
+
+def test_a_demo_turn_never_reads_the_principals_name(roster: SimpleNamespace) -> None:
+    from openexecutive.departments.prompt_block import render_org_block
+
+    people_store.update_person(roster.teammate, reports_to_person_id=roster.principal)
+    people_registry.invalidate()
+    team = render_org_block()
+    assert "Olivia Owner" in team and "reports to: Olivia Owner" in team
+    for mode in ("team", "solo"):
+        demo = render_org_block(mode, demo_viewer=True)
+        assert "Olivia Owner" not in demo and "Olivia" not in demo, mode
+        assert "The principal" in demo, mode
+        assert render_org_block(mode, demo_viewer=True) == demo  # one constant variant
+    assert "reports to: The principal" in render_org_block(demo_viewer=True)
+    assert "Olivia Owner" in render_org_block("solo")
+
+
+def test_people_and_approvers_name_the_principal_by_role_to_a_demo_person(roster: SimpleNamespace) -> None:
+    client = _client()
+    dana = _as("dana@prospect.example")
+    assert client.get(f"/people/{roster.principal}", headers=dana).json()["full_name"] == "The principal"
+    approvers = client.get("/people/by-scope/spend_lt_2k", headers=dana).json()
+    assert [a["full_name"] for a in approvers] == ["The principal"]
+    # Everyone else still sees the name.
+    team = {r["id"]: r for r in client.get("/people", headers=_as("tom@example.com")).json()}
+    assert team[roster.principal]["full_name"] == "Olivia Owner"
+
+
+def test_the_mcp_servers_people_name_the_principal_by_role(roster: SimpleNamespace) -> None:
+    from openexecutive.people.demo import shown_to_demo_viewer
+
+    people = people_store.list_people()
+    principal = next(p for p in people if p.is_principal)
+    demo = next(p for p in people if p.demo)
+    shown = {p.id: p.full_name for p in shown_to_demo_viewer(people, demo.id)}
+    assert shown[principal.id] == "The principal"
+    assert shown[demo.id] == demo.full_name  # their own name stays
+
+
+def test_homes_lists_name_the_principal_by_role_to_a_demo_person(roster: SimpleNamespace) -> None:
+    from openexecutive.api.routes import today
+
+    def home() -> SimpleNamespace:
+        return SimpleNamespace(
+            people=[
+                SimpleNamespace(id=roster.principal, full_name="Olivia Owner", is_principal=True),
+                SimpleNamespace(id=roster.teammate, full_name="Tom Team", is_principal=False),
+            ],
+            awaiting=[SimpleNamespace(person_id=roster.principal, full_name="Olivia Owner")],
+            in_flight=[SimpleNamespace(target="Olivia Owner", intent="Remind Olivia Owner about the quote")],
+            handled_overnight=[
+                SimpleNamespace(target="Olivia Owner", headline=None, summary="Routed the card to Olivia Owner")
+            ],
+            proposals=[],
+        )
+
+    response = home()
+    today._hide_other_demo_people(response, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert [p.full_name for p in response.people] == ["The principal", "Tom Team"]
+    assert response.awaiting[0].full_name == "The principal"
+    assert response.in_flight[0].target == "The principal"
+    assert response.in_flight[0].intent == "Remind The principal about the quote"
+    assert response.handled_overnight[0].summary == "Routed the card to The principal"
+    teammate_view = home()
+    today._hide_other_demo_people(teammate_view, caller=roster.teammate, principal=False)  # type: ignore[arg-type]
+    assert teammate_view.people[0].full_name == "Olivia Owner"
+
+
+def test_the_eval_marks_a_demo_turn_and_fails_on_the_principals_name(roster: SimpleNamespace) -> None:
+    from openexecutive.evals.scenarios import (
+        forbidden_words_in,
+        load_scenarios,
+        scenario_turn_surface,
+        validate_scenario_yaml,
+    )
+
+    scenario = next(s for s in load_scenarios() if s["id"] == "demo_principal_001")
+    fields, _ = scenario_turn_surface(scenario)
+    assert fields == {"demo_caller": True}
+    assert forbidden_words_in(scenario, "Olivia Owner approves it.") == ["Olivia Owner", "Olivia"]
+    assert forbidden_words_in(scenario, "Diane Whitaker, the founder, approves anything above $10,000.") == []
+    assert forbidden_words_in(scenario, "The principal approves it.") == []
+    with pytest.raises(ValueError, match="demo_viewer"):
+        validate_scenario_yaml("id: x\ndomain: operations\nquery: q\ndemo_viewer: yes please\n")

@@ -32,10 +32,11 @@ Key invariants:
   byte-identical to one with no contacts at all, so per mode the 5m cache
   holds at most two stable variants, never a per-request one.
 - A demo person's turn (``demo_viewer``, people.demo) gets a third stable
-  variant: no other demo person, no contacts, and nobody's email or chat
-  ids, so one prospect never learns another's address or the team's. It
-  leaves out every demo person, the viewer too, so it stays one variant for
-  all of them.
+  variant: no other demo person, no contacts, nobody's email or chat ids,
+  and the principal by role only (``people.demo.PRINCIPAL_LABEL``), so one
+  prospect never learns another's address, the team's or the owner's name.
+  It leaves out every demo person, the viewer too, so it stays one variant
+  for all of them.
 
 Security note: Goal text fields (key_result, current, target, mission) are
 user-controlled strings that land inside the system prompt. All values are
@@ -337,9 +338,13 @@ def _render_solo_role(role: PrincipalRole | None) -> list[str]:
     return [_SOLO_ROLE_LEAD_IN, *lines] if lines else []
 
 
-def _render_solo_principal(role: PrincipalRole | None = None, *, with_reach: bool = True) -> str:
+def _render_solo_principal(
+    role: PrincipalRole | None = None, *, with_reach: bool = True, named: bool = True
+) -> str:
     """The principal's own line: name and the channels they can be reached on,
-    then their role lines (``_render_solo_role``) when a role is set.
+    then their role lines (``_render_solo_role``) when a role is set. Not
+    ``named`` (a demo turn): ``people.demo.PRINCIPAL_LABEL`` in place of the
+    name.
 
     The principal is ``people.store.find_principal_person`` — the oldest
     non-archived principal, the same rule every solo check uses (the
@@ -373,6 +378,10 @@ def _render_solo_principal(role: PrincipalRole | None = None, *, with_reach: boo
         reach.append(f"telegram {_safe(principal.telegram_chat_id, 64)}")
     if with_reach and principal.discord_user_id:
         reach.append(f"discord {_safe(principal.discord_user_id, 64)}")
+    if not named:
+        from openexecutive.people.demo import by_role
+
+        principal = by_role(principal)
     line = f"- {_safe(principal.full_name, 80)} (principal)"
     if principal.id is not None:
         line += f" — person_id {principal.id}"
@@ -409,11 +418,14 @@ def _render_solo_goals(states: list[DepartmentState]) -> str:
 
 
 def _render_solo_block(
-    states: list[DepartmentState], role: PrincipalRole | None, *, with_reach: bool = True
+    states: list[DepartmentState], role: PrincipalRole | None, *, with_reach: bool = True, named: bool = True
 ) -> str:
     return "\n\n".join(
         part
-        for part in (_render_solo_principal(role, with_reach=with_reach), _render_solo_goals(states))
+        for part in (
+            _render_solo_principal(role, with_reach=with_reach, named=named),
+            _render_solo_goals(states),
+        )
         if part
     )
 
@@ -480,6 +492,12 @@ def render_org_block(
         except Exception:
             everyone = []
         people = [p for p in everyone if p.kind == "team" and not (demo_viewer and p.demo)]
+        if demo_viewer:
+            # The principal by role only: their name never reaches a demo turn,
+            # as a department head or someone's manager either.
+            from openexecutive.people.demo import by_role
+
+            people = [by_role(p) for p in people]
         contacts = [p for p in everyone if p.kind != "team"] if include_contacts else []
 
         # The principal's private contacts: only on their own verified turn
@@ -491,7 +509,10 @@ def render_org_block(
             role = principal_role if principal_role is not None else _workspace_role()
             return _cap("\n\n".join(
                 part
-                for part in (_render_solo_block(states, role, with_reach=not demo_viewer).strip(), contacts_section)
+                for part in (
+                    _render_solo_block(states, role, with_reach=not demo_viewer, named=not demo_viewer).strip(),
+                    contacts_section,
+                )
                 if part
             ).strip())
 

@@ -223,6 +223,16 @@ def scenario_surface(scenario: dict[str, Any]) -> str | None:
 
 
 def scenario_turn_surface(scenario: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """``_surface_fields``, plus the demo mark (``Session.demo_caller``) when
+    the scenario is a demo person's turn (``demo_viewer: true``): the narrow
+    tools and the org block's demo variant, as people.demo gives one."""
+    fields, block = _surface_fields(scenario)
+    if scenario.get("demo_viewer") is True:
+        fields = {**fields, "demo_caller": True}
+    return fields, block
+
+
+def _surface_fields(scenario: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """What the scenario's ``surface`` adds to its turn, for both eval runners
     (``evals.runner`` and ``evals/run_evals.py``): extra ``Session`` fields and
     the ``channel_context_block`` for ``Executive.chat``. The web app adds
@@ -544,6 +554,9 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_surface(s)
         except ValueError as e:
             raise ValueError(f"`surface`: {e}") from e
+    for flag in ("demo_viewer", "forbid_principal_name"):
+        if s.get(flag) is not None and not isinstance(s[flag], bool):
+            raise ValueError(f"`{flag}` must be true or false")
     if s.get("page") is not None:
         if scenario_surface(s) != SURFACE_ERPNEXT_PANEL:
             raise ValueError("`page`: only a scenario with surface: erpnext_panel has a page")
@@ -591,8 +604,16 @@ def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
     any case: a deterministic check the judge's score can't outvote."""
     import re
 
+    words = [w.strip() for w in scenario.get("forbidden_reply_words") or []]
+    if scenario.get("forbid_principal_name") is True:
+        # The install's own principal, read at run time: no fixture can name
+        # the real person a demo must never reveal.
+        principal = _principal()
+        name = (getattr(principal, "full_name", None) or "").strip()
+        if name:
+            words += [name, name.split()[0]]
     found = []
-    for word in scenario.get("forbidden_reply_words") or []:
-        if re.search(r"(?<![A-Za-z0-9])" + re.escape(word.strip()) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE):
-            found.append(word.strip())
+    for word in words:
+        if word and re.search(r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE):
+            found.append(word)
     return found

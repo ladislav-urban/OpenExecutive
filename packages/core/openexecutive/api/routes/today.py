@@ -2101,14 +2101,15 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
     """A demo caller's Home names no other demo person (people.demo): not in
     the team list, the people waited on, what is in flight or was handled
     overnight, nor a card routed to them. One prospect never learns who else
-    is trying the product."""
+    is trying the product. The principal is named by role only."""
     from openexecutive.people.demo import is_demo_person
     from openexecutive.people.store import list_people
 
     if principal or caller is None or not is_demo_person(caller):
         return
     try:
-        others = [p for p in list_people(include_archived=True) if p.demo and p.id != caller]
+        everyone = list_people(include_archived=True)
+        others = [p for p in everyone if p.demo and p.id != caller]
     except Exception:
         logger.warning("today: reading the demo people failed — showing only the caller", exc_info=True)
         response.people = [p for p in response.people if p.id == caller]
@@ -2135,6 +2136,31 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
     # Another demo person's own card (their ERPNext draft) isn't shown at all:
     # left unrouted it would land in this one's Needs you.
     response.proposals = [c for c in response.proposals if c.routed_to_person_id not in hidden_ids]
+    _principal_by_role(response, everyone)
+
+
+def _principal_by_role(response: TodayResponse, everyone: list[Any]) -> None:
+    """A demo caller's Home names the principal by role only
+    (``people.demo.PRINCIPAL_LABEL``): on the team list, the people waited
+    on, and wherever what is in flight or was handled names them."""
+    from openexecutive.people.demo import PRINCIPAL_LABEL, without_principal_name
+
+    principals = {p.id: p.full_name for p in everyone if p.is_principal and p.full_name}
+    for person in response.people:
+        if person.id in principals or getattr(person, "is_principal", False) is True:
+            person.full_name = PRINCIPAL_LABEL
+    for waiting in response.awaiting:
+        if waiting.person_id in principals:
+            waiting.full_name = PRINCIPAL_LABEL
+    texts = (
+        [(item, field) for item in response.in_flight for field in ("target", "intent")]
+        + [(item, field) for item in response.handled_overnight for field in ("target", "headline", "summary")]
+    )
+    for name in principals.values():
+        for item, field in texts:
+            value = getattr(item, field, None)
+            if isinstance(value, str):
+                setattr(item, field, without_principal_name(value, name))
 
 
 def _attach_home_rules(
