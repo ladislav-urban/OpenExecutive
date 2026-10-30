@@ -26,6 +26,7 @@ docs/auth.md, "Demo people", has the whole picture.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -83,11 +84,58 @@ def by_role(person: Any) -> Any:
     return person.model_copy(update={"full_name": PRINCIPAL_LABEL})
 
 
-def without_principal_name(text: str | None, name: str | None) -> str | None:
-    """``text`` with the principal's ``name`` replaced by ``PRINCIPAL_LABEL``."""
-    if not text or not name:
-        return text
-    return text.replace(name, PRINCIPAL_LABEL)
+# What a demo turn's tool result says when the principal's name couldn't be
+# checked (the roster unread): the result is withheld, never sent unchecked.
+DEMO_PRINCIPAL_WITHHELD = "That result isn't available just now. Answer from what you already have."
+
+
+def principal_name_pattern(names: list[str] | None = None) -> re.Pattern[str] | None:
+    """A whole-word pattern for each principal's full name and first name
+    (``names``, else the roster's principals, archived ones too, since old
+    texts still name them); None when there is no name to hide. Fails closed:
+    a roster that can't be read raises, so the caller shows nothing rather
+    than the name."""
+    if names is None:
+        from openexecutive.people.store import list_people
+
+        names = [p.full_name for p in list_people(include_archived=True) if p.is_principal and p.full_name]
+    words: set[str] = set()
+    for name in names:
+        full = " ".join(name.split())
+        if full:
+            words.add(full)
+            words.add(full.split()[0])
+    if not words:
+        return None
+    alternation = "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
+    return re.compile(rf"(?<!\w)(?:{alternation})(?!\w)")
+
+
+def scrub_principal_name(value: Any, pattern: re.Pattern[str] | None) -> Any:
+    """``value`` with every mention of the principal's name replaced by
+    ``PRINCIPAL_LABEL``: a string, or each string inside a list, dict or
+    pydantic model, which is changed in place (a response built for this
+    request, never a stored record) and returned."""
+    if pattern is None or value is None:
+        return value
+    if isinstance(value, str):
+        return pattern.sub(lambda _m: PRINCIPAL_LABEL, value)
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            value[i] = scrub_principal_name(item, pattern)
+        return value
+    if isinstance(value, dict):
+        for key, item in value.items():
+            value[key] = scrub_principal_name(item, pattern)
+        return value
+    if hasattr(value, "model_fields"):
+        for field in type(value).model_fields:
+            setattr(value, field, scrub_principal_name(getattr(value, field), pattern))
+        return value
+    if hasattr(value, "__dict__"):
+        for field, item in vars(value).items():
+            setattr(value, field, scrub_principal_name(item, pattern))
+    return value
 
 
 def shown_to_demo_viewer(people: list[Any], viewer_id: int | None) -> list[Any]:

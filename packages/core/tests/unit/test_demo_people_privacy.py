@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -330,3 +331,141 @@ def test_the_eval_marks_a_demo_turn_and_fails_on_the_principals_name(roster: Sim
     assert forbidden_words_in(scenario, "The principal approves it.") == []
     with pytest.raises(ValueError, match="demo_viewer"):
         validate_scenario_yaml("id: x\ndomain: operations\nquery: q\ndemo_viewer: yes please\n")
+
+
+def test_the_scrubber_replaces_the_full_and_first_name_in_any_text() -> None:
+    from openexecutive.people.demo import principal_name_pattern, scrub_principal_name
+
+    pattern = principal_name_pattern(["Olivia Owner"])
+    nested = {"a": ["Routed to Olivia Owner", SimpleNamespace(note="Ask Olivia first")], "b": "Olivias stays"}
+    scrub_principal_name(nested, pattern)
+    assert nested["a"][0] == "Routed to The principal"
+    assert nested["a"][1].note == "Ask The principal first"
+    assert nested["b"] == "Olivias stays"  # whole words only
+    assert principal_name_pattern([]) is None
+
+
+def test_the_activity_feed_names_the_principal_by_role_to_a_demo_person(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.api.routes import today
+
+    def feed(_limit: int) -> today.ActivityResponse:
+        return today.ActivityResponse.model_validate({
+            "items": [
+                {"kind": "nudge", "actor": "executive", "summary": "Follow up with Olivia Owner about the quote", "at": "2026-10-30T09:00:00Z",
+                 "target": "Olivia Owner", "department": None},
+                {"kind": "nudge", "actor": "executive", "summary": "Remind Pete Prospect", "at": "2026-10-30T08:00:00Z", "target": "Pete Prospect", "department": None},
+            ]
+        })
+
+    monkeypatch.setattr(today, "_build_activity", feed)
+    app = FastAPI()
+    app.include_router(today.router)
+    client = TestClient(app)
+    items = client.get("/today/activity", headers=_as("dana@prospect.example")).json()["items"]
+    assert [i["summary"] for i in items] == ["Follow up with The principal about the quote"]
+    assert items[0]["target"] == "The principal"
+    team = client.get("/today/activity", headers=_as("tom@example.com")).json()["items"]
+    assert len(team) == 2 and "Olivia Owner" in team[0]["summary"]
+
+
+def test_a_demo_turns_context_blocks_name_the_principal_by_role(roster: SimpleNamespace) -> None:
+    import inspect
+
+    from openexecutive.api.routes import chat
+
+    source = inspect.getsource(chat)
+    assert "if people_demo.demo_turn(session):" in source
+    assert "people_demo.scrub_principal_name(text, principal_names)" in source
+
+
+def test_no_one_shares_a_chat_with_a_demo_person(roster: SimpleNamespace) -> None:
+    import inspect
+
+    from openexecutive.api.routes import sessions
+
+    source = inspect.getsource(sessions.put_session_shares)
+    assert "or person.demo:" in source
+
+
+def _tool_round(name: str) -> SimpleNamespace:
+    from unittest.mock import MagicMock
+
+    block = MagicMock()
+    block.type = "tool_use"
+    block.id = "toolu_demo_1"
+    block.name = name
+    block.input = {}
+    block.model_dump.return_value = {"type": "tool_use", "id": "toolu_demo_1", "name": name, "input": {}}
+    return SimpleNamespace(content=[block], stop_reason="tool_use")
+
+
+def _stream_of(final_msg: object) -> Any:
+    from unittest.mock import AsyncMock, MagicMock
+
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=cm)
+    cm.__aexit__ = AsyncMock(return_value=None)
+
+    async def _no_deltas() -> Any:
+        if False:
+            yield None  # pragma: no cover
+
+    cm.__aiter__ = lambda self=cm: _no_deltas()
+    cm.get_final_message = AsyncMock(return_value=final_msg)
+    return cm
+
+
+def _tool_results_after_one_call(monkeypatch: pytest.MonkeyPatch, *, demo: bool, unread: bool = False) -> list[str]:
+    """Drive two model rounds: the model calls a tool whose result names the
+    principal (its name is the tool's, which the result echoes), then
+    answers. What the second round was sent as tool results comes back."""
+    import asyncio
+
+    from openexecutive.orchestrator import executive as executive_mod
+    from openexecutive.orchestrator.session import Session
+    from openexecutive.people.demo import principal_name_pattern
+
+    if unread:
+        def broken() -> None:
+            raise RuntimeError("people.db locked")
+
+        monkeypatch.setattr(executive_mod, "principal_name_pattern", broken)
+    else:
+        monkeypatch.setattr(executive_mod, "principal_name_pattern", lambda: principal_name_pattern(["Olivia Owner"]))
+    rounds = [_tool_round("Olivia Owner"), SimpleNamespace(content=[SimpleNamespace(type="text", text="done")], stop_reason="end_turn")]
+    sent: list[list[dict[str, Any]]] = []
+
+    def fake_stream(**kwargs: Any) -> Any:
+        sent.append(kwargs["messages"])
+        return _stream_of(rounds[len(sent) - 1])
+
+    monkeypatch.setattr(executive_mod, "get_provider", lambda *a, **k: SimpleNamespace(messages_stream=fake_stream))
+    asyncio.run(executive_mod.Executive().chat("who approves a $12,000 order?", Session(session_id="demo-t", demo_caller=demo)))
+    assert len(sent) == 2
+    return [
+        str(block.get("content"))
+        for message in sent[1]
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "tool_result"
+    ]
+
+
+def test_a_demo_turns_tool_results_name_the_principal_by_role(monkeypatch: pytest.MonkeyPatch) -> None:
+    results = _tool_results_after_one_call(monkeypatch, demo=True)
+    assert results and all("Olivia" not in r for r in results)
+    assert any("The principal" in r for r in results)
+
+
+def test_anyone_elses_tool_results_are_left_as_they_are(monkeypatch: pytest.MonkeyPatch) -> None:
+    results = _tool_results_after_one_call(monkeypatch, demo=False)
+    assert any("Olivia Owner" in r for r in results)
+
+
+def test_a_demo_turn_withholds_tool_results_when_the_roster_cant_be_read(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.people.demo import DEMO_PRINCIPAL_WITHHELD
+
+    results = _tool_results_after_one_call(monkeypatch, demo=True, unread=True)
+    assert results == [DEMO_PRINCIPAL_WITHHELD]

@@ -1464,6 +1464,19 @@ async def _run_chat_turn(
                 _do_prefetch(),
                 _do_briefing(),
             )
+        if people_demo.demo_turn(session):
+            # A demo person's turn reads the principal by role only: in the
+            # alerts digest, past decisions and the knowledge it found too.
+            # Fails closed: what can't be checked isn't sent.
+            try:
+                principal_names = people_demo.principal_name_pattern()
+                retrieved_context, episodic_context, briefing_context = (
+                    people_demo.scrub_principal_name(text, principal_names)
+                    for text in (retrieved_context, episodic_context, briefing_context)
+                )
+            except Exception:
+                logger.warning("chat.demo_principal_scrub_failed turn_id=%s", turn_id, exc_info=True)
+                retrieved_context = episodic_context = briefing_context = ""
         sources = _extract_sources(retrieved_context)
         collector.emit("knowledge_retrieved", {
             "query": message,

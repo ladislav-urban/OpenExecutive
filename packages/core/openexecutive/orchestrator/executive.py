@@ -210,7 +210,13 @@ from openexecutive.orchestrator.workflow_run_tools import (
     WORKFLOW_RUN_TOOL_HANDLERS,
     WORKFLOW_RUN_TOOLS,
 )
-from openexecutive.people.demo import demo_turn, is_demo_person
+from openexecutive.people.demo import (
+    DEMO_PRINCIPAL_WITHHELD,
+    demo_turn,
+    is_demo_person,
+    principal_name_pattern,
+    scrub_principal_name,
+)
 from openexecutive.prompts.cache_manager import build_system_blocks
 from openexecutive.providers import get_provider
 from openexecutive.providers.translator import reasoning_replay_block
@@ -2348,6 +2354,17 @@ class Executive:
         # person's turn in the web chat gets the same (people.demo).
         demo_speaker = demo_turn(current_session.get())
         panel_turn = erpnext_panel_turn(current_session.get()) or demo_speaker
+        # A demo person reads the principal by role only, in every tool result
+        # too (people.demo): the roster's names, read once per turn. A roster
+        # that can't be read withholds the results rather than risk the name.
+        demo_names: Any = None
+        demo_names_unread = False
+        if demo_speaker:
+            try:
+                demo_names = await asyncio.to_thread(principal_name_pattern)
+            except Exception:
+                logger.warning("executive.demo_principal_names_unread", exc_info=True)
+                demo_names_unread = True
         # Python jobs need the sandbox the API image installs: without it the
         # tool is not offered (fixed per process, so the prefix stays stable).
         sandbox_missing = frozenset() if python_job.available() else frozenset({python_job.TOOL_NAME})
@@ -3771,6 +3788,11 @@ class Executive:
                     results_by_id.get(tu["id"], f"Unknown tool: {tu['name']}"),
                     tu["id"],
                 )
+                if demo_speaker:
+                    content = (
+                        DEMO_PRINCIPAL_WITHHELD if demo_names_unread
+                        else scrub_principal_name(content, demo_names)
+                    )
                 tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": content})
             # Messages the person sent since the last round ride in this
             # round's user message, after the tool results (which must come

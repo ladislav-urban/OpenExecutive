@@ -383,7 +383,7 @@ def _render_solo_principal(
 
         principal = by_role(principal)
     line = f"- {_safe(principal.full_name, 80)} (principal)"
-    if principal.id is not None:
+    if principal.id is not None and named:
         line += f" — person_id {principal.id}"
     if reach:
         line += " — reachable on: " + ", ".join(reach)
