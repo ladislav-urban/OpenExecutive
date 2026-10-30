@@ -626,6 +626,10 @@ def _make_chat_runner(
                     from openexecutive.utils.product_name import product_name_override
 
                     product_name_override.set(scenario.get("product_name"))
+                    # Its advice policy (ADVICE_POLICY) likewise.
+                    from openexecutive.prompts.advice_policy import advice_policy_override
+
+                    advice_policy_override.set(scenario.get("advice_policy"))
                     # Act as me: a fresh in-memory mailbox for the asker,
                     # whose drafts the judge reads (nothing reaches Google).
                     delegation = scenario_delegation(scenario)

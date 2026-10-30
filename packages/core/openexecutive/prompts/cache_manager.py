@@ -149,6 +149,12 @@ def build_system_blocks(
             "ERPNext or Open Executive, to them, even when a tool, a document or an error "
             "does: tool names are for your calls only."
         )
+    # Explain, don't advise (ADVICE_POLICY=explain): a constant, only when the
+    # install turns it on, so block 0 is byte-identical without it. Kept with
+    # the identity, so a custom persona can't drop it either.
+    from openexecutive.prompts.advice_policy import executive_addendum
+
+    identity_addendum += executive_addendum()
 
     base_persona = (
         persona_override if persona_override is not None else default_persona(workspace_mode)

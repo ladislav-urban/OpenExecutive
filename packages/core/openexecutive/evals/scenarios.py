@@ -528,6 +528,8 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
 
         if not isinstance(s["product_name"], str) or _clean(s["product_name"]) is None:
             raise ValueError("`product_name`: a plain name of up to 40 characters")
+    if s.get("advice_policy") is not None and s["advice_policy"] != "explain":
+        raise ValueError("`advice_policy` must be 'explain' (or absent)")
     if s.get("forbidden_reply_words") is not None:
         words = s["forbidden_reply_words"]
         if not isinstance(words, list) or not words or not all(isinstance(w, str) and w.strip() for w in words):

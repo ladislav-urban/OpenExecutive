@@ -209,6 +209,15 @@ caching:
         install-level setting (or an eval session's override), never a
         per-turn or per-speaker value — so switching it misses the 1h block
         once. Off, block 0 is byte-identical to an install without it.
+        Explain, don't advise works the same way: ADVICE_POLICY=explain
+        (a deployment setting, or an eval scenario's advice_policy through
+        a ContextVar) appends the constant prompts.advice_policy.
+        EXECUTIVE_ADVICE_ADDENDUM after the identity, and every core
+        specialist's prompt ends with SPECIALIST_ADVICE_ADDENDUM (never
+        the internal helpers). On money, tax, law and credit: figures,
+        arithmetic, options and who decides (inside the company only), no
+        tax/legal/credit/investment recommendation, "outlook from today's
+        records". Evals finance_advice_001-005. Off, nothing changes.
     - id: company_and_org
       ttl: 5m
       what: |
