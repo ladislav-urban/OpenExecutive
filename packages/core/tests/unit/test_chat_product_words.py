@@ -48,13 +48,18 @@ def test_code_urls_and_breaks_stay(monkeypatch: pytest.MonkeyPatch, reply: str, 
     assert in_product_reply(reply) == shown
 
 
-def test_a_long_reply_in_tiny_chunks_stays_linear() -> None:
-    import time
+def test_a_long_reply_in_tiny_chunks_keeps_a_bounded_buffer() -> None:
+    from openexecutive.prompts import connected_systems as cs
 
-    reply = "Some ordinary text, with ERPNext now and then. " * 6000
-    t0 = time.monotonic()
-    _streamed(list(reply))
-    assert time.monotonic() - t0 < 3.0
+    # What keeps it linear: the text held never grows with the reply.
+    reply = "Some ordinary text, with ERPNext now and then. " * 600
+    stream = ProductReplyStream("Dynocortex")
+    out = []
+    for ch in reply:
+        out.append(stream.feed(ch))
+        assert len(stream._raw) <= cs._STREAM_KEEP + cs._STREAM_HOLD + 1
+    out.append(stream.flush())
+    assert "".join(out).count("with the ERP now") == 600
 
 
 def _named(monkeypatch: pytest.MonkeyPatch, name: str | None) -> None:
