@@ -394,7 +394,7 @@ def in_product_words(text: str) -> str:
 # or digit, . @ / - _ = # ? & or a quote, so docs.erpnext.com, ?q=ERPNext,
 # ERPNEXT-01 and 'ERPNext Services Ltd' stay as written.
 _ERPNEXT_WORD = re.compile(
-    r"(?<![\w.@/\-=#?&'\"`])(?:the[ \t]{1,3})?ERPNext(?![\w\"`]|[.@/\-_=#?&][\w])"
+    r"(?<![\w.@/\-=#?&'\"`])(?:[Tt]he[ \t]{1,3})?ERPNext(?![\w\"`]|[.@/\-_=#?&][\w])"
 )
 _OE_WORD = re.compile(r"(?<![\w.@/\-=#?&])Open ?Executive(?![\w]|[.@/\-_=#?&][\w])")
 # A sentence starts at the reply's start, or after . ! ? or a line break; read

@@ -37,6 +37,8 @@ REPLIES = [
         ("pip install erpnext; docker exec erpnext bash", "pip install erpnext; docker exec erpnext bash"),
         ("See https://x.example/search?q=ERPNext&scope=all.", "See https://x.example/search?q=ERPNext&scope=all."),
         ("See https://x.example/#ERPNext now.", "See https://x.example/#ERPNext now."),
+        # "The" at a sentence's start joins the word, as "the" does.
+        ("The ERPNext records show two. The ERPNext list too.", "The ERP records show two. The ERP list too."),
         # A paragraph break before the word is kept.
         ("Read it in the\n\nERPNext screens.", "Read it in the\n\nThe ERP screens."),
     ],
