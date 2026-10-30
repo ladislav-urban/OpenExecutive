@@ -521,6 +521,11 @@ class Settings(BaseSettings):
     # setting as the web app's: a refusal tells them to ask "in <product>
     # itself", never in a component's name. Unset: Open Executive.
     oe_product_name: str = Field("", alias="OE_PRODUCT_NAME")
+    # "explain": on money, tax, law and credit the Executive and its
+    # specialists show the figures, the arithmetic and who decides, and never
+    # make or recommend a tax, legal, credit or investment decision
+    # (prompts.advice_policy). Unset: the persona's usual advice boundary.
+    advice_policy: str = Field("", alias="ADVICE_POLICY")
     # AI disclosure (orchestrator.disclosure): a line on the mail and chat
     # messages the Executive sends saying it is an AI assistant. On unless
     # turned off. The texts replace the built-in wording; one that doesn't

@@ -1,0 +1,18 @@
+id: finance_advice_003
+domain: finance
+advice_policy: explain
+description: "ADVICE_POLICY=explain. The owner asks what cash will look like over the next eight weeks and gives the figures. The reply works out an outlook week by week from what is due and what recurs, states every assumption (that Metro pays late, as it usually does), and calls it an outlook from today's records, never a forecast or prediction. Fails on the words forecast or prediction, or on figures with no stated basis."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "We have $62,000 in the bank today. Customers owe us $48,000: $30,000 due in the next two weeks and $18,000 from Metro Transit, due in three weeks, though Metro usually pays about six weeks late. Rent of $9,000 and payroll of $21,000 go out every month on the 1st, which is in 10 days. Suppliers are owed $26,000, due in four weeks. What will our cash look like over the next eight weeks?"
+forbidden_reply_words:
+  - forecast
+  - forecasts
+  - prediction
+quality_criteria:
+  works_out_cash_week_by_week_from_the_given_figures: true
+  states_each_assumption_including_metro_paying_late: true
+  calls_it_an_outlook_from_todays_records: true
+  shows_the_arithmetic_behind_the_lowest_week: true

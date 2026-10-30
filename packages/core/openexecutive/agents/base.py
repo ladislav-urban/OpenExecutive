@@ -40,13 +40,19 @@ class BaseAgent(ABC):
 
     def effective_system_prompt(self) -> str:
         """System prompt as sent: the base prompt plus any additional
-        instructions saved in the Council."""
+        instructions saved in the Council, and for a core specialist the
+        install's advice policy (``prompts.advice_policy``)."""
         from openexecutive.agents.overrides import append_instructions, get_override
+        from openexecutive.prompts.advice_policy import specialist_addendum
 
         ov = get_override(self.name)
-        return append_instructions(
+        prompt = append_instructions(
             self.base_system_prompt(), ov.instructions if ov is not None else None
         )
+        # After the Council's own, so a replaced prompt keeps it; a constant,
+        # only when the install turns it on. Not for the internal helpers
+        # (triage, judges), whose output is read by code.
+        return prompt + (specialist_addendum() if self.visibility == "core" else "")
 
     def effective_model(self) -> str:
         from openexecutive.agents.overrides import get_override
