@@ -1022,6 +1022,14 @@ def _left_the_team(person_id: int) -> None:
         close_loops_for_person(person_id, reason="moved_to_contacts")
     except Exception:
         logger.warning("people: closing open loops for a new contact failed", exc_info=True)
+    # Their business profile was the team's directory data; a contact is no
+    # longer synced, so it would only sit there (people.profile).
+    try:
+        from openexecutive.people.profile import delete_profile
+
+        delete_profile(person_id)
+    except Exception:
+        logger.warning("people: deleting a new contact's business profile failed", exc_info=True)
 
 
 def archive_demo_person(person_id: int, db_path: Path | None = None) -> bool:
@@ -1062,6 +1070,10 @@ def _after_archive(person_id: int, db_path: Path | None) -> None:
         # archived person must not keep someone else from using them.
         if _table_exists(conn, "person_emails"):
             conn.execute("DELETE FROM person_emails WHERE person_id = ?", (person_id,))
+        # Their business profile is personal data with no use once they're
+        # gone (people.profile).
+        if _table_exists(conn, "person_profiles"):
+            conn.execute("DELETE FROM person_profiles WHERE person_id = ?", (person_id,))
     if db_path is None:
         # An archived person can no longer be chased, so their open loops
         # would otherwise sit in /today forever. Only on the live store: a

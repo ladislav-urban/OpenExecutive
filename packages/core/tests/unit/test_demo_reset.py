@@ -330,6 +330,18 @@ async def test_a_principal_marked_demo_keeps_their_chats(env: SimpleNamespace) -
     assert _count(env.db, "SELECT COUNT(*) FROM chat_messages WHERE session_id = 'principal-chat'") == 1
 
 
+async def test_a_demo_persons_business_profile_survives_the_reset(env: SimpleNamespace) -> None:
+    from openexecutive.people import profile
+
+    _person("Pat Principal", principal=True, directory=True)
+    visitor = _person("Vic Visitor", directory=True, demo=True)
+    kept = profile.PersonProfile(country="US", business_type="wholesale", industry="electrical", jurisdiction="US-TX")
+    assert profile.set_profile(visitor, kept)
+    await dr.demo_reset(_bundle(env.tmp), env.settings)
+    # It comes from the directory, like the person, so it stays with them.
+    assert profile.get_profile(visitor) == kept
+
+
 async def test_refused_while_the_api_holds_its_lock(env: SimpleNamespace) -> None:
     pytest.importorskip("fcntl")
     fictional = _person("Old Head")

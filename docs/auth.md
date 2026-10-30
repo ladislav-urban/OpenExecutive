@@ -308,6 +308,21 @@ refuses to start with settings it can't trust):
 | `DIRECTORY_SYNC_DEMO_ROLE` | The role a demo person is created with, default `Demo user` |
 | `DIRECTORY_SYNC_DEMO_MAX_SUSPEND` | The demo people's own brake, default 50 |
 | `DEMO_DAILY_QUESTIONS` | Questions a demo person may ask a day, default 50 (0: no limit) |
+| `DIRECTORY_PROFILES_ENABLED` | Keep each person's business profile from their user attributes (below), default off |
+| `DIRECTORY_PROFILE_ATTR_COUNTRY` / `_BUSINESS_TYPE` / `_INDUSTRY` / `_JURISDICTION` | The provider's attribute names for them, default `country`, `businessType`, `industry`, `jurisdiction` |
+
+#### Business profiles
+
+With `DIRECTORY_PROFILES_ENABLED` on, the sync keeps each person's country,
+type of business, industry and jurisdiction from the provider's user
+attributes (`people/profile.py`). Each is a code from a fixed list: the ISO
+country code; one of eight business types and fourteen industries; a US
+state or DC, a Canadian province or territory, an Australian state or
+territory, or a UK nation, as ISO 3166-2. Anything off-list is dropped, and
+so is a jurisdiction outside the person's country. They are personal data:
+kept in a table of their own, never on the person's roster entry or in a
+prompt, read only by the principal or that person
+(`GET /people/{id}/profile`), and deleted when the person is archived.
 
 #### Demo people
 

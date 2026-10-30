@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
@@ -744,6 +744,28 @@ def _require_principal_or(person_id: int, request: Request) -> int:
     if caller is None or not people_store.is_principal_or_self(caller, person_id):
         raise HTTPException(status_code=403, detail="Only the principal or the owner")
     return int(caller)
+
+
+@router.get("/people/{person_id}/profile")
+def get_person_profile(person_id: int, request: Request) -> dict[str, Any]:
+    """Their business profile from the directory (people.profile): country,
+    type of business, industry and jurisdiction, as codes. Personal data, so
+    the principal's or that person's own; anyone else, and every caller while
+    profiles are off (DIRECTORY_PROFILES_ENABLED), gets 404 as for an id that
+    does not exist."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.config import get_settings
+    from openexecutive.people.profile import get_profile
+
+    caller = _resolve_caller_person_id(request)
+    if (
+        not get_settings().directory_profiles_enabled
+        or caller is None
+        or not people_store.is_principal_or_self(caller, person_id)
+        or people_store.get_person(person_id) is None
+    ):
+        raise HTTPException(status_code=404, detail="Person not found")
+    return get_profile(person_id).model_dump()
 
 
 @router.get("/people/{person_id}/open-loops", response_model=list[OpenLoopOut])

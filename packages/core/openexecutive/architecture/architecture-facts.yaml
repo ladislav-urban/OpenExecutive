@@ -4665,6 +4665,10 @@ people:
     - Wiped on a company swap: `clients.slots._BLANK_WIPE_TABLES`,
       `fixture_loader.reset_all_state` and `_seed_people` (with
       `person_emails`, children first).
+    - `person_profiles` (people.profile, the directory's business
+      profiles) is per company too: in `_BLANK_WIPE_TABLES` and
+      `_seed_people`'s wipe; `openexecutive demo-reset` keeps it with
+      the directory's people.
   registry: openexecutive.people.registry — in-memory cache + lookup
   channel: |
     openexecutive.people.channel — resolves a person to a deliverable

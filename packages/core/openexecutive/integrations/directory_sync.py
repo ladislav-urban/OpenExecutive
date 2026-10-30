@@ -67,7 +67,7 @@ TIMEOUT_S = 20.0
 TOKEN_MARGIN_S = 30
 STATUS_TABLE = "directory_sync_status"
 # What a run reports that changes something, and so is audited.
-WRITES = ("created", "updated", "linked", "suspended", "restored")
+WRITES = ("created", "updated", "linked", "suspended", "restored", "profile updated")
 
 _run_lock = threading.Lock()
 _token_lock = threading.Lock()
@@ -86,6 +86,9 @@ class Member:
     active: bool
     # Also a member of DIRECTORY_SYNC_DEMO_GROUP.
     demo: bool = False
+    # The provider's user attributes, name -> first value, kept only for the
+    # business profile (people.profile), which checks every value itself.
+    attributes: tuple[tuple[str, str], ...] = ()
 
 
 class DirectoryReader(Protocol):
@@ -342,7 +345,51 @@ def _member(uid: str, user: dict[str, Any], *, demo: bool = False) -> Member:
         full_name=name or email.split("@", 1)[0],
         active=bool(user.get("enabled") is True and user.get("emailVerified") is True and email),
         demo=demo,
+        attributes=_attributes(user.get("attributes")),
     )
+
+
+# A profile value is a short code; anything longer is no code, and dropped.
+_ATTRIBUTE_MAX = 40
+
+
+def _attributes(raw: Any) -> tuple[tuple[str, str], ...]:
+    """A Keycloak user's ``attributes`` (name -> list of values) as name ->
+    first value, short strings only."""
+    if not isinstance(raw, dict):
+        return ()
+    out: list[tuple[str, str]] = []
+    for name, values in raw.items():
+        first = values[0] if isinstance(values, list) and values else values
+        if isinstance(name, str) and isinstance(first, str) and len(first) <= _ATTRIBUTE_MAX:
+            out.append((name, first))
+    return tuple(sorted(out))
+
+
+def _keep_profile(pid: int, member: Member, report: Report) -> None:
+    """Keep the member's business profile when profiles are on
+    (DIRECTORY_PROFILES_ENABLED; people.profile checks every value)."""
+    settings = get_settings()
+    if not settings.directory_profiles_enabled or report.dry_run:
+        return
+    from openexecutive.people import profile
+
+    names = {
+        "country": settings.directory_profile_attr_country,
+        "business_type": settings.directory_profile_attr_business_type,
+        "industry": settings.directory_profile_attr_industry,
+        "jurisdiction": settings.directory_profile_attr_jurisdiction,
+    }
+    # Its own failure never undoes what the run did for the person, nor stops
+    # what follows for them (a restore): only the profile is left as it was.
+    try:
+        changed = profile.set_profile(pid, profile.from_attributes(dict(member.attributes), names))
+    except Exception as error:
+        logger.warning("directory sync: keeping a profile failed for person %s", pid, exc_info=True)
+        report.add("warning", member.email, f"profile not kept ({type(error).__name__})")
+        return
+    if changed:
+        report.add("profile updated", member.email)
 
 
 # --------------------------------------------------------------------------- #
@@ -536,6 +583,7 @@ def _add(member: Member, report: Report) -> None:
         store.archive_person(pid)
         raise
     _audit("directory_person_created", f"person #{pid} created from the directory", {"person_id": pid})
+    _keep_profile(pid, member, report)
 
 
 def _update(person: Person, member: Member, report: Report) -> None:
@@ -567,6 +615,7 @@ def _update(person: Person, member: Member, report: Report) -> None:
     # their later suspension onto the demo brake, and unmarking a demo person
     # would hand a stranger the team's tools, uncapped. Either way one change
     # to a group's members (or a short answer for it) would do it.
+    _keep_profile(person.id, member, report)
     if person.demo and not member.demo:
         report.add("warning", member.email, "left the demo group; still a demo person (openexecutive directory-demo --off)")
     elif member.demo and not person.demo:
