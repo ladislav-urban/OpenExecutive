@@ -388,13 +388,15 @@ def in_product_words(text: str) -> str:
 
 
 # The backstop to the identity's "What to call things" rule, for a reply the
-# model already wrote. The word, never inside a URL, an email, an ID or a
-# quoted name: not next to a letter or digit, . @ / - _ or a quote, so
-# docs.erpnext.com, ERPNEXT-01 and 'ERPNext Services Ltd' stay as written.
+# model already wrote. The product's name as written (ERPNext, Open Executive),
+# so a path, a command or a query string in lower case stays as written; and
+# never inside a URL, an email, an ID or a quoted name: not next to a letter
+# or digit, . @ / - _ = # ? & or a quote, so docs.erpnext.com, ?q=ERPNext,
+# ERPNEXT-01 and 'ERPNext Services Ltd' stay as written.
 _ERPNEXT_WORD = re.compile(
-    r"(?<![\w.@/\-'\"`])(?:the\s{1,3})?ERPNext(?![\w\"`]|[.@/\-_][\w])", re.IGNORECASE
+    r"(?<![\w.@/\-=#?&'\"`])(?:the[ \t]{1,3})?ERPNext(?![\w\"`]|[.@/\-_=#?&][\w])"
 )
-_OE_WORD = re.compile(r"(?<![\w.@/\-])Open\s?Executive(?![\w]|[.@/\-_][\w])", re.IGNORECASE)
+_OE_WORD = re.compile(r"(?<![\w.@/\-=#?&])Open ?Executive(?![\w]|[.@/\-_=#?&][\w])")
 # A sentence starts at the reply's start, or after . ! ? or a line break; read
 # from a short window before each match, not the whole reply.
 _SENTENCE_END = re.compile(r"(?:[.!?]\s+|\n\s*)$")
@@ -402,6 +404,9 @@ _SENTENCE_WINDOW = 12
 # The longest a match and the two characters its lookahead reads can be
 # ("the   ERPNext" plus two), so a stream holds back no more than this.
 _STREAM_HOLD = 18
+# What a stream keeps of the text it has shown: context for the lookbehind
+# and the sentence window, so a long reply costs no more per chunk.
+_STREAM_KEEP = _SENTENCE_WINDOW + 4
 
 
 def _rewrite(text: str, product: str, start: int, end: int) -> str:
@@ -480,6 +485,13 @@ class ProductReplyStream:
         if cut <= self._shown:
             return ""
         shown = _rewrite(self._raw, self._product, self._shown, cut)
+        # Keep a short window of what was shown, never the whole reply. Once
+        # trimmed, every later match starts past index 0, so none is read as
+        # the reply's first word.
+        drop = cut - _STREAM_KEEP
+        if drop > 0:
+            self._raw = self._raw[drop:]
+            cut -= drop
         self._shown = cut
         return shown
 

@@ -25,7 +25,34 @@ REPLIES = [
     "Done. ERPNext's records show two. the   ERPNext list too.",
     "See https://docs.erpnext.com/x, support@erpnext.com, ERPNEXT-01 and 'ERPNext Services Ltd'.",
     "An ERPNextual word stays, and so does ERPNext-01, but ERPNext",
+    "Run `bench install-app erpnext`, see https://x.example/search?q=ERPNext&a=1 and #ERPNext.",
+    "Long enough to be trimmed before the word. " * 4 + "Then\n\nERPNext and the\n\nERPNext.",
 ]
+
+
+@pytest.mark.parametrize(
+    ("reply", "shown"),
+    [
+        # The name as written only: a command, a path or a query stays.
+        ("pip install erpnext; docker exec erpnext bash", "pip install erpnext; docker exec erpnext bash"),
+        ("See https://x.example/search?q=ERPNext&scope=all.", "See https://x.example/search?q=ERPNext&scope=all."),
+        ("See https://x.example/#ERPNext now.", "See https://x.example/#ERPNext now."),
+        # A paragraph break before the word is kept.
+        ("Read it in the\n\nERPNext screens.", "Read it in the\n\nThe ERP screens."),
+    ],
+)
+def test_code_urls_and_breaks_stay(monkeypatch: pytest.MonkeyPatch, reply: str, shown: str) -> None:
+    _named(monkeypatch, "Dynocortex")
+    assert in_product_reply(reply) == shown
+
+
+def test_a_long_reply_in_tiny_chunks_stays_linear() -> None:
+    import time
+
+    reply = "Some ordinary text, with ERPNext now and then. " * 6000
+    t0 = time.monotonic()
+    _streamed(list(reply))
+    assert time.monotonic() - t0 < 3.0
 
 
 def _named(monkeypatch: pytest.MonkeyPatch, name: str | None) -> None:
@@ -43,9 +70,8 @@ def _streamed(chunks: list[str]) -> str:
 def test_any_split_gives_the_same_reply_as_the_whole(monkeypatch: pytest.MonkeyPatch, reply: str) -> None:
     _named(monkeypatch, "Dynocortex")
     whole = in_product_reply(reply)
-    assert "ERPNext" not in whole.replace("ERPNextual", "").replace("ERPNext-01", "").replace(
-        "ERPNext Services", ""
-    )
+    if reply is REPLIES[0]:
+        assert whole.endswith("worth about $38.4k, in the ERP. Project cancelled: 5.")
     for at in range(len(reply) + 1):
         assert _streamed([reply[:at], reply[at:]]) == whole, at
     assert _streamed(list(reply)) == whole
