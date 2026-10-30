@@ -7926,7 +7926,10 @@ auth:
     read_only_turn (MCP_CLIENT_WITHHELD_TOOLS, gateway reads only, no Act
     as me / recall_history / scripts / extensions), principal-only tools
     withheld, refusals say host_refusal() (the product named by
-    OE_PRODUCT_NAME, utils.product_name), never noted as the person's own
+    OE_PRODUCT_NAME, utils.product_name; with it set, every /chat reply,
+    host or own page, streams and saves through connected_systems.
+    ProductReplyStream: ERPNext as "the ERP", Open Executive as the
+    product, the panel's through in_product_reply), never noted as the person's own
     words (history_chat.verified_speaker), and _stop_owner_key adds
     "|host" so it stops/adds to its own turns only. Each user line saves
     chat_messages.sender_surface ("host" or NULL); a conversation with any

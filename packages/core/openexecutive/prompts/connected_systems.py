@@ -387,6 +387,112 @@ def in_product_words(text: str) -> str:
     return text
 
 
+# The backstop to the identity's "What to call things" rule, for a reply the
+# model already wrote. The word, never inside a URL, an email, an ID or a
+# quoted name: not next to a letter or digit, . @ / - _ or a quote, so
+# docs.erpnext.com, ERPNEXT-01 and 'ERPNext Services Ltd' stay as written.
+_ERPNEXT_WORD = re.compile(
+    r"(?<![\w.@/\-'\"`])(?:the\s{1,3})?ERPNext(?![\w\"`]|[.@/\-_][\w])", re.IGNORECASE
+)
+_OE_WORD = re.compile(r"(?<![\w.@/\-])Open\s?Executive(?![\w]|[.@/\-_][\w])", re.IGNORECASE)
+# A sentence starts at the reply's start, or after . ! ? or a line break; read
+# from a short window before each match, not the whole reply.
+_SENTENCE_END = re.compile(r"(?:[.!?]\s+|\n\s*)$")
+_SENTENCE_WINDOW = 12
+# The longest a match and the two characters its lookahead reads can be
+# ("the   ERPNext" plus two), so a stream holds back no more than this.
+_STREAM_HOLD = 18
+
+
+def _rewrite(text: str, product: str, start: int, end: int) -> str:
+    """``text[start:end]`` in the product's words. Only matches inside that
+    range are replaced; the whole text is matched, so the text around the
+    range is context for the lookbehind, the lookahead and whether a match
+    starts a sentence."""
+    spans: list[tuple[int, int, str]] = []
+    for match in _ERPNEXT_WORD.finditer(text, start):
+        if match.end() > end:
+            break
+        at = match.start()
+        window = text[max(0, at - _SENTENCE_WINDOW):at]
+        starts = at == 0 or _SENTENCE_END.search(window) is not None
+        spans.append((at, match.end(), "The ERP" if starts else "the ERP"))
+    for match in _OE_WORD.finditer(text, start):
+        if match.end() > end:
+            break
+        spans.append((match.start(), match.end(), product))
+    out: list[str] = []
+    at = start
+    for begin, finish, word in sorted(spans):
+        if begin < at:
+            continue
+        out.append(text[at:begin])
+        out.append(word)
+        at = finish
+    out.append(text[at:end])
+    return "".join(out)
+
+
+def in_product_reply(reply: str) -> str:
+    """The reply with the product's parts called by the product's words, when
+    the install has a name: "the ERP" for ERPNext, the product for the web
+    app (pilot, Oct 29, 2026: "as recorded in ERPNext"). Whole words only,
+    "the ERPNext" and "ERPNext's" included; tool names never reach a reply."""
+    from openexecutive.utils.product_name import configured_product_name
+
+    product = configured_product_name()
+    if product is None or not isinstance(reply, str):
+        return reply
+    return _rewrite(reply, product, 0, len(reply))
+
+
+class ProductReplyStream:
+    """``in_product_reply`` for a reply that arrives in chunks: each ``feed``
+    returns what is safe to show, holding back the last few characters, which
+    a later chunk may finish into a word; ``flush`` returns the rest. What it
+    returns, joined, is ``in_product_reply`` of everything fed."""
+
+    def __init__(self, product: str) -> None:
+        self._product = product
+        self._raw = ""
+        self._shown = 0
+
+    def feed(self, chunk: str) -> str:
+        self._raw += chunk
+        cut = len(self._raw) - _STREAM_HOLD
+        if cut <= self._shown:
+            return ""
+        # Never through a match: one that starts before the cut and ends
+        # after it is held back whole.
+        for pattern in (_ERPNEXT_WORD, _OE_WORD):
+            for match in pattern.finditer(self._raw, self._shown):
+                if match.start() >= cut:
+                    break
+                if match.end() > cut:
+                    cut = match.start()
+                    break
+        return self._take(cut)
+
+    def flush(self) -> str:
+        return self._take(len(self._raw))
+
+    def _take(self, cut: int) -> str:
+        if cut <= self._shown:
+            return ""
+        shown = _rewrite(self._raw, self._product, self._shown, cut)
+        self._shown = cut
+        return shown
+
+
+def product_reply_stream() -> ProductReplyStream | None:
+    """A ``ProductReplyStream`` when the install names its product, else None
+    (the reply is shown as written)."""
+    from openexecutive.utils.product_name import configured_product_name
+
+    product = configured_product_name()
+    return ProductReplyStream(product) if product is not None else None
+
+
 def render_connected_systems(
     *,
     mcp_servers: Sequence[str],

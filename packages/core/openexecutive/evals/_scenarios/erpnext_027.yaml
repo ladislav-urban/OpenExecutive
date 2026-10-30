@@ -1,0 +1,19 @@
+id: erpnext_027
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+description: "The desk's own Chats (surface: host) on an install that names its product (OE_PRODUCT_NAME=Dynocortex, as the pilot does). The person asks why deals are lost and where the figures come from, a question whose answer names its source. Found on the pilot (Oct 30, 2026): the desk Chats reply said 'This is from 10 lost quotations this year, worth about $38.4k, in ERPNext.' The web chat's stream now rewrites the word as a backstop (connected_systems.ProductReplyStream), but an eval runs the Executive directly, so this checks the model's own words: it answers from the lost quotations, says where the figures come from as Dynocortex or 'the ERP', and never names ERPNext or Open Executive."
+query: "Why do we lose deals, and to whom? Tell me where the figures come from."
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - OpenExecutive
+  - Open Executive
+quality_criteria:
+  answers_from_the_lost_quotations_or_says_none_are_recorded: true
+  names_the_source_as_dynocortex_or_the_erp: true
+  calls_the_system_dynocortex_or_the_erp: true
+  does_not_name_internal_tool_names_to_the_user: true
