@@ -33,6 +33,7 @@ from openexecutive.orchestrator.answer_sources import TurnSources
 from openexecutive.orchestrator.debug_events import DebugCollector
 from openexecutive.orchestrator.turn_inbox import TurnInbox
 from openexecutive.people import demo as people_demo
+from openexecutive.prompts.connected_systems import product_reply_stream
 from openexecutive.workflows import turn_files
 from openexecutive.workflows.python_job import available as python_job_available
 from openexecutive.workflows.turn_files import bind as bind_turn_files
@@ -1606,6 +1607,12 @@ async def _run_chat_turn(
             action_chips: list[dict[str, Any]] = []
             # `turn_sources` as sent and saved once the reply is over.
             answer_sources: dict[str, Any] | None = None
+            # On an install that names its product, the reply as shown and
+            # saved calls ERPNext "the ERP" and the web app by that name,
+            # the backstop to the prompt's rule (pilot, Oct 30, 2026: "worth
+            # about $38.4k, in ERPNext" in the desk's Chats). It holds back a
+            # word's worth of text until the next chunk shows how it ends.
+            words = product_reply_stream()
 
             async def _persist_turn() -> None:
                 # Persist the turn on every terminal path — normal completion,
@@ -1766,24 +1773,33 @@ async def _run_chat_turn(
 
                     if step.produced:
                         item = step.item
-                        if isinstance(item, str):
-                            if item == Executive._THINKING:
-                                live_evt: dict[str, Any] = {
-                                    "type": "thinking",
-                                    "session_id": session.session_id,
-                                }
-                            else:
-                                full_response += item
-                                chunk_count += 1
-                                live_evt = {
-                                    "type": "chunk",
-                                    "content": item,
-                                    "session_id": session.session_id,
-                                }
+                        is_text = isinstance(item, str) and item != Executive._THINKING
+                        if words is None:
+                            text = item if is_text else ""
+                        else:
+                            # What is held back goes out before anything that
+                            # isn't the reply's text, so the order stays as sent.
+                            text = words.feed(item) if is_text else words.flush()
+                        if text:
+                            full_response += text
+                            chunk_count += 1
+                            text_evt: dict[str, Any] = {
+                                "type": "chunk",
+                                "content": text,
+                                "session_id": session.session_id,
+                            }
+                            if session.shared_chat:
+                                chat_live.turn_event(session.session_id, live_key, text_evt)
+                            yield f"data: {json.dumps(text_evt)}\n\n"
+                        if item == Executive._THINKING:
+                            live_evt: dict[str, Any] = {
+                                "type": "thinking",
+                                "session_id": session.session_id,
+                            }
                             if session.shared_chat:
                                 chat_live.turn_event(session.session_id, live_key, live_evt)
                             yield f"data: {json.dumps(live_evt)}\n\n"
-                        else:
+                        elif not is_text:
                             if isinstance(item, dict) and item.get("type") == "action_taken":
                                 action_chips.append(item)
                             if (
@@ -1822,6 +1838,18 @@ async def _run_chat_turn(
                 if stop_waiter is not None:
                     # Otherwise: "Task was destroyed but it is pending".
                     stop_waiter.cancel()
+
+            # The text the product's words held back, on every way out: saved
+            # with the reply, and shown unless the client has gone.
+            tail = words.flush() if words is not None else ""
+            if tail:
+                full_response += tail
+                if not client_disconnected:
+                    chunk_count += 1
+                    tail_evt = {"type": "chunk", "content": tail, "session_id": session.session_id}
+                    if session.shared_chat:
+                        chat_live.turn_event(session.session_id, live_key, tail_evt)
+                    yield f"data: {json.dumps(tail_evt)}\n\n"
 
             # Nothing more can reach this turn: anything still waiting in the
             # inbox was never seen, and the client sends it as the next turn.
