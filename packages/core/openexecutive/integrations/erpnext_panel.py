@@ -524,38 +524,12 @@ def _in_product_words(block: str) -> str:
     )
 
 
-# The word, never inside a URL, an email, an ID or a quoted name: not next to
-# a letter or digit, . @ / - _ or a quote, so docs.erpnext.com, ERPNEXT-01 and
-# 'ERPNext Services Ltd' stay as written.
-_ERPNEXT_WORD = re.compile(
-    r"(?<![\w.@/\-'\"`])(?:the\s+)?ERPNext(?![\w\"`]|[.@/\-_][\w])", re.IGNORECASE
-)
-_OE_WORD = re.compile(r"(?<![\w.@/\-])Open\s?Executive(?![\w]|[.@/\-_][\w])", re.IGNORECASE)
-# A sentence starts at the reply's start, or after . ! ? or a line break; read
-# from a short window before each match, not the whole reply.
-_SENTENCE_END = re.compile(r"(?:[.!?]\s+|\n\s*)$")
-_SENTENCE_WINDOW = 12
-
-
 def in_product_reply(reply: str) -> str:
-    """The panel's reply with the product's parts called by the product's
-    words, when the install has a name: the backstop to the prompt's rule
-    (pilot, Oct 29, 2026: "as recorded in ERPNext"). Whole words only, "the
-    ERPNext" and "ERPNext's" included; tool names never reach a reply."""
-    from openexecutive.utils.product_name import configured_product_name
+    """The panel's reply in the product's words, when the install has a name:
+    the same backstop the web chat's stream uses (``connected_systems``)."""
+    from openexecutive.prompts.connected_systems import in_product_reply as named
 
-    product = configured_product_name()
-    if product is None or not isinstance(reply, str):
-        return reply
-
-    def _erp(match: re.Match[str]) -> str:
-        at = match.start()
-        window = reply[max(0, at - _SENTENCE_WINDOW):at]
-        starts = at == 0 or _SENTENCE_END.search(window) is not None
-        return "The ERP" if starts else "the ERP"
-
-    # A function, so the name is never read as a replacement template.
-    return _OE_WORD.sub(lambda _m: product, _ERPNEXT_WORD.sub(_erp, reply))
+    return named(reply)
 
 
 def context_block(session: Any) -> str:
