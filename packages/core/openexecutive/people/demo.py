@@ -16,16 +16,23 @@ Executive can do on demo data, so:
 - they never see another demo person, nor anyone's email or chat ids but
   their own (``shown_to_demo_viewer``; the org prompt block's demo variant),
   so one prospect never learns who else is trying the product or how to
-  reach the team.
+  reach the team;
+- they never see the principal's name, only their role (``PRINCIPAL_LABEL``,
+  ``by_role``): the install's owner is a real person, the demo company is not
+  (owner's decision, Oct 30, 2026).
 
 docs/auth.md, "Demo people", has the whole picture.
 """
 from __future__ import annotations
 
 import logging
+import re
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -68,11 +75,86 @@ _REACH_FIELDS: dict[str, Any] = {
 }
 
 
+# What a demo viewer reads in place of the principal's name.
+PRINCIPAL_LABEL = "The principal"
+
+
+def by_role(person: Any) -> Any:
+    """``person`` with the principal's name replaced by ``PRINCIPAL_LABEL``;
+    anyone else as they are."""
+    if getattr(person, "is_principal", False) is not True:
+        return person
+    return person.model_copy(update={"full_name": PRINCIPAL_LABEL})
+
+
+# What a demo turn's tool result says when the principal's name couldn't be
+# checked (the roster unread): the result is withheld, never sent unchecked.
+DEMO_PRINCIPAL_WITHHELD = "That result isn't available just now. Answer from what you already have."
+
+
+def principal_name_pattern(
+    names: list[str] | None = None, addresses: list[str] | None = None
+) -> re.Pattern[str] | None:
+    """A whole-word pattern, any case, for each principal's full name, first
+    name and email addresses (``names`` and ``addresses``, else the roster's
+    principals, archived and suspended ones too, since old texts still name
+    them); None when there is nothing to hide. Fails closed: a roster that
+    can't be read raises, so the caller shows nothing rather than the name."""
+    if names is None:
+        from openexecutive.people.store import list_people
+
+        principals = [
+            p for p in list_people(include_archived=True, include_suspended=True) if p.is_principal
+        ]
+        names = [p.full_name for p in principals if p.full_name]
+        addresses = [a for p in principals for a in (p.email, *p.email_aliases) if a]
+    words: set[str] = {a.strip() for a in addresses or [] if a.strip()}
+    for name in names:
+        full = " ".join(name.split())
+        if full:
+            words.add(full)
+            words.add(full.split()[0])
+    if not words:
+        return None
+    alternation = "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
+    return re.compile(rf"(?<![\w.@])(?:{alternation})(?![\w@])", re.IGNORECASE)
+
+
+def scrub_principal_name(value: Any, pattern: re.Pattern[str] | None) -> Any:
+    """``value`` with every mention of the principal's name replaced by
+    ``PRINCIPAL_LABEL``: a string, or each string inside a list, dict,
+    pydantic model or SimpleNamespace, which is changed in place (a response
+    built for this request, never a stored record) and returned. Anything
+    else (numbers, enums, classes) is left as it is, so there is no graph to
+    walk into."""
+    if pattern is None or value is None:
+        return value
+    if isinstance(value, str):
+        return pattern.sub(lambda _m: PRINCIPAL_LABEL, value)
+    if isinstance(value, list):
+        for i, item in enumerate(value):
+            value[i] = scrub_principal_name(item, pattern)
+        return value
+    if isinstance(value, dict):
+        for key, item in value.items():
+            value[key] = scrub_principal_name(item, pattern)
+        return value
+    if isinstance(value, BaseModel):
+        for field in type(value).model_fields:
+            setattr(value, field, scrub_principal_name(getattr(value, field), pattern))
+        return value
+    if isinstance(value, SimpleNamespace):
+        for field, item in vars(value).items():
+            setattr(value, field, scrub_principal_name(item, pattern))
+    return value
+
+
 def shown_to_demo_viewer(people: list[Any], viewer_id: int | None) -> list[Any]:
     """``people`` as a demo person ``viewer_id`` may see them: no other demo
-    person, and nobody's email or chat ids but their own."""
+    person, nobody's email or chat ids but their own, and the principal by
+    role only."""
     return [
-        p if p.id == viewer_id else p.model_copy(update=_REACH_FIELDS)
+        p if p.id == viewer_id else by_role(p.model_copy(update=_REACH_FIELDS))
         for p in people
         if p.id == viewer_id or not p.demo
     ]

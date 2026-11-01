@@ -175,8 +175,9 @@ def test_a_demo_person_reads_no_other_demo_person_and_no_addresses(
     monkeypatch.setattr(demo_gate, "demo_may_write", lambda *_a, **_k: True)
     out = _read(app, endpoint, "oe://people/roster", _signed_as("user", "dana@prospect.example"))
     rows = {p["full_name"]: p for p in json.loads(out["result"]["contents"][0]["text"])}
-    assert set(rows) == {"Olivia Owner", "Ben Teammate", "Dana Demo"}
-    assert rows["Olivia Owner"]["email"] is None and rows["Ben Teammate"]["email"] is None
+    # The principal by role only (people.demo.PRINCIPAL_LABEL), never by name.
+    assert set(rows) == {"The principal", "Ben Teammate", "Dana Demo"}
+    assert rows["The principal"]["email"] is None and rows["Ben Teammate"]["email"] is None
     assert rows["Dana Demo"]["id"] == dana and rows["Dana Demo"]["email"] == "dana@prospect.example"
     # The team still reads everyone.
     team = _read(app, endpoint, "oe://people/roster", _signed_as("user", TEAMMATE))

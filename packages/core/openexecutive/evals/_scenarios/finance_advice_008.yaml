@@ -1,0 +1,23 @@
+id: finance_advice_008
+domain: finance
+advice_policy: explain
+description: "ADVICE_POLICY=explain. A short cash outlook and the choice of when to pay suppliers. The reply builds the weeks from the figures given, calls it an outlook from today's records without ever using the words forecast, prediction or projection (not even 'not a forecast'), lays out paying on time, late or early with what each does to the low point and who approves supplier payments, and gives no verdict of its own ('I wouldn't') and no disclaimer about advice. Found on the pilot (Nov 1, 2026, F2): 'It is built from today's books, not a forecast', 'moving them later would mean paying past terms. I wouldn't.', and 'This is the ERP's view of what is due, not a tax, credit or investment recommendation.'"
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "We have $41,000 in the bank today. Over the next four weeks customers owe us $18,000 in week 2 and $22,000 in week 4; Metro usually pays 30 days late and $9,000 of the week-2 money is theirs. Payroll is $15,000 in weeks 1 and 3, and supplier invoices of $12,000 fall due in week 2 and $8,000 in week 3, with a 2% discount on the $12,000 if paid this week. Morgan approves supplier payments. How does cash look week by week, and what are our choices on the supplier payments?"
+forbidden_reply_words:
+  - "forecast"
+  - "prediction"
+  - "projection"
+  - "I wouldn't"
+  - "I recommend"
+  - "My recommendation"
+  - "investment recommendation"
+quality_criteria:
+  shows_opening_in_out_and_closing_cash_for_each_week_with_the_arithmetic: true
+  states_the_metro_late_payment_assumption_and_where_it_moves_their_money: true
+  lays_out_paying_on_time_late_or_early_with_the_effect_on_the_low_point: true
+  names_morgan_as_approving_supplier_payments: true
+  gives_no_verdict_or_disclaimer_about_advice: true

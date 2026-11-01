@@ -2120,21 +2120,26 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
     """A demo caller's Home names no other demo person (people.demo): not in
     the team list, the people waited on, what is in flight or was handled
     overnight, nor a card routed to them. One prospect never learns who else
-    is trying the product."""
+    is trying the product. The principal is named by role only."""
     from openexecutive.people.demo import is_demo_person
     from openexecutive.people.store import list_people
 
     if principal or caller is None or not is_demo_person(caller):
         return
     try:
-        others = [p for p in list_people(include_archived=True) if p.demo and p.id != caller]
+        everyone = list_people(include_archived=True, include_suspended=True)
+        others = [p for p in everyone if p.demo and p.id != caller]
     except Exception:
         logger.warning("today: reading the demo people failed — showing only the caller", exc_info=True)
         response.people = [p for p in response.people if p.id == caller]
         response.awaiting = [a for a in response.awaiting if a.person_id == caller]
         response.in_flight = []
         response.handled_overnight = []
-        response.proposals = [c for c in response.proposals if c.routed_to_person_id in (None, caller)]
+        # Their texts could name the principal, which can't be checked now.
+        response.proposals = []
+        for field, empty in (("narrative", None), ("departments", []), ("held_back", []), ("practice_clients", [])):
+            if hasattr(response, field):
+                setattr(response, field, empty)
         return
     hidden_ids = {p.id for p in others}
     hidden_names = {p.full_name for p in others if p.full_name}
@@ -2154,6 +2159,61 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
     # Another demo person's own card (their ERPNext draft) isn't shown at all:
     # left unrouted it would land in this one's Needs you.
     response.proposals = [c for c in response.proposals if c.routed_to_person_id not in hidden_ids]
+    _principal_by_role(response, everyone)
+
+
+def _principal_by_role(response: Any, everyone: list[Any]) -> None:
+    """A demo caller's Home names the principal by role only
+    (``people.demo.PRINCIPAL_LABEL``): their own rows, and every text in the
+    response that names them (cards, the header, insights, what is in flight
+    or was handled), by full name or first name."""
+    from openexecutive.people.demo import (
+        PRINCIPAL_LABEL,
+        principal_name_pattern,
+        scrub_principal_name,
+    )
+
+    principals = [p for p in everyone if p.is_principal]
+    ids = {p.id for p in principals}
+    people = getattr(response, "people", None) or []
+    awaiting = getattr(response, "awaiting", None) or []
+    # Names on the roster are relabelled by id, so a teammate who shares the
+    # principal's first name keeps their own; the free text is scrubbed.
+    kept = [(row, row.full_name) for row in [*people, *awaiting] if hasattr(row, "full_name")]
+    pattern = principal_name_pattern(
+        [p.full_name for p in principals if p.full_name],
+        [a for p in principals for a in (p.email, *getattr(p, "email_aliases", [])) if a],
+    )
+    scrub_principal_name(response, pattern)
+    for row, name in kept:
+        row.full_name = name
+    for person in people:
+        if person.id in ids or getattr(person, "is_principal", False) is True:
+            person.full_name = PRINCIPAL_LABEL
+    for waiting in awaiting:
+        if waiting.person_id in ids:
+            waiting.full_name = PRINCIPAL_LABEL
+
+
+def principal_by_role_for(caller: int | None, value: Any) -> Any:
+    """``value`` (a response, a list or a text) as a demo caller may read it:
+    the principal's name replaced by their role. Anyone else gets it as it
+    is. Fails closed: a roster that can't be read hides nothing it could
+    check, so the value is withheld (None)."""
+    from openexecutive.people.demo import (
+        is_demo_person,
+        principal_name_pattern,
+        scrub_principal_name,
+    )
+
+    if caller is None or _is_principal(caller) or not is_demo_person(caller):
+        return value
+    try:
+        pattern = principal_name_pattern()
+    except Exception:
+        logger.warning("today: reading the principal's name failed — withholding it", exc_info=True)
+        return None
+    return scrub_principal_name(value, pattern)
 
 
 def _attach_home_rules(
@@ -2259,7 +2319,11 @@ async def get_alert_card(alert_id: int, request: Request, tz: TzQuery = None) ->
         raise HTTPException(status_code=404, detail="This card isn't waiting for you.")
     _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)
     routed = proposal.routed_to_person_id
-    return AlertCard(proposal=proposal, people=[p for p in response.people if p.id == routed])
+    card = AlertCard(proposal=proposal, people=[p for p in response.people if p.id == routed])
+    shown = principal_by_role_for(caller, card)
+    if shown is None:
+        raise HTTPException(status_code=404, detail="This card isn't waiting for you.")
+    return shown
 
 
 def _first_week_card() -> FirstWeekCardModel | None:
@@ -2304,10 +2368,34 @@ def get_today_activity(
         raise HTTPException(status_code=400, detail="limit must be in [1, 100]")
     built = _build_activity(limit)
     mine = _sent_as_caller(request)
-    if not mine:
+    if mine:
+        merged = sorted([*built.items, *mine], key=lambda i: i.at, reverse=True)
+        built = ActivityResponse(items=merged[:limit])
+    return _activity_for_demo(request, built)
+
+
+def _activity_for_demo(request: Request, built: ActivityResponse) -> ActivityResponse:
+    """The feed as a demo caller may read it: no row naming another demo
+    person, and the principal by role only. Fails closed to an empty feed."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.people.demo import is_demo_person
+    from openexecutive.people.store import list_people
+
+    caller = _resolve_caller_person_id(request)
+    if caller is None or _is_principal(caller) or not is_demo_person(caller):
         return built
-    merged = sorted([*built.items, *mine], key=lambda i: i.at, reverse=True)
-    return ActivityResponse(items=merged[:limit])
+    try:
+        others = {p.full_name for p in list_people(include_archived=True) if p.demo and p.id != caller and p.full_name}
+    except Exception:
+        logger.warning("today: reading the demo people failed — no activity for a demo caller", exc_info=True)
+        return ActivityResponse(items=[])
+    items = [
+        i
+        for i in built.items
+        if not any(name in f"{getattr(i, 'target', '') or ''} {getattr(i, 'summary', '') or ''} {getattr(i, 'detail', '') or ''}" for name in others)
+    ]
+    scrubbed = principal_by_role_for(caller, ActivityResponse(items=items))
+    return scrubbed if scrubbed is not None else ActivityResponse(items=[])
 
 
 def _sent_as_caller(request: Request) -> list[ActivityItem]:
