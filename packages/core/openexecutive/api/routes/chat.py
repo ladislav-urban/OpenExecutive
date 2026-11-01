@@ -686,7 +686,9 @@ def _shared_member(session_id: str, caller_person_id: int | None) -> bool:
     except Exception:
         logger.exception("chat: couldn't read who session %s is shared with", session_id)
         return False
-    if person is None or not person.active or person.kind != "team":
+    # Nor a demo person (people.demo): a chat shared before sharing with one
+    # was refused would show them the names the demo keeps from them.
+    if person is None or not person.active or person.kind != "team" or person.demo:
         return False
     return not _mail_private(session_id)
 
@@ -1464,6 +1466,8 @@ async def _run_chat_turn(
                 _do_prefetch(),
                 _do_briefing(),
             )
+        # A demo turn's context is read with the principal by role only in
+        # Executive.stream_chat (_for_demo_turn), for every surface.
         sources = _extract_sources(retrieved_context)
         collector.emit("knowledge_retrieved", {
             "query": message,
@@ -1555,8 +1559,13 @@ async def _run_chat_turn(
                     content=message,
                 )
             # Flush knowledge_retrieved (and any other pre-stream events) first.
+            # A demo person's turn streams no debug events: their previews are
+            # raw tool and specialist output, before the principal's name is
+            # replaced by their role (people.demo).
+            demo_sse = people_demo.demo_turn(session)
             for evt in collector._events:
-                yield f"data: {json.dumps(collector.to_sse_dict(evt))}\n\n"
+                if not demo_sse:
+                    yield f"data: {json.dumps(collector.to_sse_dict(evt))}\n\n"
 
             logger.info("chat.executive_start turn_id=%s", turn_id)
 
@@ -1808,7 +1817,8 @@ async def _run_chat_turn(
                                 and item.get("type") in _LIVE_STEPS
                             ):
                                 chat_live.turn_event(session.session_id, live_key, item)
-                            yield f"data: {json.dumps(item)}\n\n"
+                            if not (demo_sse and isinstance(item, dict) and item.get("type") == "debug_event"):
+                                yield f"data: {json.dumps(item)}\n\n"
 
                         if stop_event is not None and stop_event.is_set():
                             stopped = True
@@ -1888,6 +1898,16 @@ async def _run_chat_turn(
 
             if not turn_sources.is_empty():
                 answer_sources = turn_sources.payload()
+                if demo_sse:
+                    # A document title under a demo reply names the principal
+                    # by role only, or the list isn't shown (people.demo).
+                    try:
+                        answer_sources = people_demo.scrub_principal_name(
+                            answer_sources, people_demo.principal_name_pattern()
+                        )
+                    except Exception:
+                        logger.warning("chat.demo_sources_withheld turn_id=%s", turn_id, exc_info=True)
+                        answer_sources = None
 
             if client_disconnected:
                 # Connection is gone, so we can't yield anything more — but we

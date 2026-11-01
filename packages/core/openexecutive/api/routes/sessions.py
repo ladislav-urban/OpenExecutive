@@ -321,9 +321,12 @@ def ungroup_topic(topic_id: int, request: Request) -> Response:
 )
 def get_shared_sessions(request: Request, tz: TzQuery = None) -> list[SessionSummary]:
     """Chats other people shared with the caller, newest first, each with who
-    shared it (``shared_by``) and when (``shared_at``)."""
+    shared it (``shared_by``) and when (``shared_at``). None for a demo
+    person, whose shares (if any, from before they were refused) stay shut."""
+    from openexecutive.people.demo import is_demo_person
+
     caller = _resolve_caller_person_id(request)
-    if caller is None:
+    if caller is None or is_demo_person(caller):
         return []
     out: list[SessionSummary] = []
     for row in list_shared_with_person(caller):
@@ -577,18 +580,15 @@ def put_session_shares(session_id: str, body: SharesUpdate, request: Request) ->
             status_code=409,
             detail="This chat read your own mail, so it stays yours alone.",
         )
-    from openexecutive.people.demo import is_demo_person
     from openexecutive.people.store import get_person
 
-    # A demo owner can't find another demo person by id here either
-    # (people.demo): the same 422 as for an id that doesn't exist.
-    demo_owner = bool(person_ids) and is_demo_person(owner)
+    # No one shares a chat with a demo person (people.demo): it would show
+    # them the names the demo keeps from them, the principal's and other
+    # people's. The same 422 as for an id that doesn't exist, so a demo owner
+    # can't find another demo person by id here either.
     for pid in person_ids:
         person = get_person(pid)
-        if (
-            person is None or not person.active or person.kind != "team" or pid == owner
-            or (demo_owner and person.demo)
-        ):
+        if person is None or not person.active or person.kind != "team" or pid == owner or person.demo:
             raise HTTPException(status_code=422, detail=f"Can't share with person {pid}")
     added, removed = set_shares(session_id, person_ids, owner)
     if added or removed:

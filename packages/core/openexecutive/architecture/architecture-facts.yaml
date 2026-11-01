@@ -8167,7 +8167,11 @@ integrations:
     chat's org block is a third stable variant (render_org_block(
     demo_viewer=True): no demo person at all, no contacts, no addresses), so
     one prospect never learns who else is trying the product or how to reach
-    the team. Home: a card routed to no one is in a demo person's Needs you
+    the team. Nor the principal's name (owner, Oct 30, 2026): every one of
+    those, the solo variant and Home's free text (today._principal_by_role)
+    too, says "The principal" (people.demo.PRINCIPAL_LABEL, by_role); eval
+    demo_principal_001 (demo_viewer, forbid_principal_name, which reads the
+    install's own principal at run time). Home: a card routed to no one is in a demo person's Needs you
     (home_rules.lane caller_is_demo; the demo bundle's alerts load unrouted,
     oe_connector#280) so there is something to see, but only to look at:
     card_actions offers Discuss (and Open on a document) on any card not
