@@ -63,6 +63,7 @@ import json
 import logging
 import re
 import time
+import unicodedata
 from collections import OrderedDict, deque
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -371,10 +372,12 @@ _SORT_RE = re.compile(r"[a-z_][a-z0-9_]{0,63} (?:asc|desc)")
 
 def _printable(raw: Any, limit: int) -> str:
     """``raw`` with its whitespace collapsed, if it is printable text of at
-    most ``limit`` characters, else ""."""
-    if not isinstance(raw, str):
+    most ``limit`` characters, else "". Measured after the NFKC fold
+    ``wrap_untrusted`` applies, so a compatibility character that unfolds
+    into many (U+FDFA into 18) can't stretch what the model reads."""
+    if not isinstance(raw, str) or len(raw) > 4 * limit:
         return ""
-    text = " ".join(raw.split())
+    text = " ".join(unicodedata.normalize("NFKC", raw).split())
     return text if 0 < len(text) <= limit and text.isprintable() else ""
 
 

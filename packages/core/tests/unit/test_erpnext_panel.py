@@ -230,6 +230,14 @@ def test_homes_card_headline_is_text_only_beside_home() -> None:
         assert "Home card" not in page_block({"screen": "/", "card": odd}), odd
 
 
+def test_the_caps_hold_for_what_the_model_reads_after_the_fold() -> None:
+    # U+FDFA passes isprintable() and NFKC-folds into 18 characters.
+    wide = "ﷺ" * 140
+    assert "Filters on screen" not in page_block({"doctype": "Item", "filters": [["item_name", "=", wide]]})
+    assert "Home card" not in page_block({"screen": "/", "card": "ﷺ" * 12})
+    assert "Home card" in page_block({"screen": "/", "card": "ﷺ" * 11})
+
+
 def test_a_filter_value_cannot_close_the_untrusted_block() -> None:
     block = page_block({
         "doctype": "Item",
