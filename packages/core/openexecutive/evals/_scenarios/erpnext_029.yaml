@@ -1,0 +1,24 @@
+id: erpnext_029
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+description: "F3, what is blocking last month's close (knowledge/builtin/finance/month_end_close_checklist.md). The reply works through the checklist against the books and says what it checked and found clear, not only the blockers: how many bank lines are unmatched and who reconciles them (it can't read the statement lines themselves, by design, and says so), deliveries or receipts not yet invoiced, a supplier bill still in draft, last month's prepaid insurance released, a foreign-currency payable revalued or none open at the month's end, and whether last month can still be posted into. Each open item has an owner from the roster and its figures with the month and currency; options for an item that stays open come with who decides, no verdict and no disclaimer."
+query: "What's still blocking last month's close? Tell me what you checked."
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - I wouldn't
+  - I recommend
+  - My recommendation
+quality_criteria:
+  lists_what_it_checked_including_items_found_clear: true
+  finds_a_supplier_bill_still_in_draft_for_last_month: true
+  gives_the_count_of_unmatched_bank_lines_and_who_reconciles_them_and_says_it_cannot_read_the_lines: true
+  says_whether_last_month_can_still_be_posted_into: true
+  checks_prepaid_insurance_release_and_whether_a_foreign_currency_payable_needed_revaluing: true
+  gives_each_open_item_an_owner_with_its_figures_month_and_currency: true
+  gives_options_with_who_decides_and_no_verdict: true
