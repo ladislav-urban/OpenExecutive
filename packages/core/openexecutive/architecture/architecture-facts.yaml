@@ -214,10 +214,17 @@ caching:
         a ContextVar) appends the constant prompts.advice_policy.
         EXECUTIVE_ADVICE_ADDENDUM after the identity, and every core
         specialist's prompt ends with SPECIALIST_ADVICE_ADDENDUM (never
-        the internal helpers). On money, tax, law and credit: figures,
-        arithmetic, options and who decides (inside the company only), no
-        tax/legal/credit/investment recommendation, "outlook from today's
-        records". Evals finance_advice_001-005. Off, nothing changes.
+        the internal helpers). On money, tax, law and credit, and on
+        spending someone approves (supplier timing, a budget overrun,
+        repair or replace): figures, arithmetic, options and who decides
+        (inside the company only); no recommendation or verdict, softened
+        ones included ("I wouldn't", "worth watching"); no disclaimer or
+        line about advice (the canned line only when advice is asked for
+        outright); on these decisions it wins over the persona's
+        "recommendation first"; "outlook from today's records", never
+        forecast/prediction/projection even negated. The People roster
+        also says to name a scope in words, not by its key. Evals
+        finance_advice_001-009. Off, nothing changes but that roster line.
     - id: company_and_org
       ttl: 5m
       what: |
