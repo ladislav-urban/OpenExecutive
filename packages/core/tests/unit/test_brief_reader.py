@@ -154,7 +154,7 @@ def test_the_today_header_is_written_for_its_scope(monkeypatch: pytest.MonkeyPat
 
     monkeypatch.setattr(reader, "principal_reader", lambda: PAT)
     dana = Reader("Dana Lee")
-    monkeypatch.setattr(reader, "person_reader", lambda pid: dana if pid == 7 else None)
+    monkeypatch.setattr(reader, "person_reader", lambda pid, demo=False: dana if pid == 7 else None)
     viewer: Any = SimpleNamespace(id=7)
 
     assert today._narrative_reader(narrative_cache.DEFAULT_SCOPE, None) is PAT

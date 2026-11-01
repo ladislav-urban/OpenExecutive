@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
@@ -2026,6 +2027,64 @@ def test_viewer_slice_scopes_proposals_to_the_teammate(
 
     assert [p["headline"] for p in sliced["proposals"]] == ["Dan's item"]
     assert sliced["people"] == []  # the principal-only section is dropped
+
+
+def test_a_demo_persons_slice_holds_the_shared_cards_their_home_shows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A demo person's Needs you holds the cards routed to no one
+    (`home_rules.lane`), so their header is written from them too, not the
+    fixed quiet line; a card routed to someone else and a private one stay
+    out, and a teammate's slice is unchanged."""
+    db = tmp_path / "demo-slice.db"
+    _setup_isolated_db(db, monkeypatch)
+    dana = people_store.upsert_person(full_name="Dana", role="Demo user", email="dana@p.example", db_path=db)
+    people_store.link_directory(dana, "kc-dana", db_path=db)
+    assert people_store.set_directory_demo(dana, True, db_path=db)
+    tom = people_store.upsert_person(full_name="Tom", role="COO", email="tom@x.com", db_path=db)
+    alert_store.insert_alert(
+        source="erpnext", external_id="shared", severity="high",
+        headline="Metro is overdue", body="b", db_path=db,
+    )
+    alert_store.insert_alert(
+        source="system", external_id="for-tom", severity="high",
+        headline="Tom's item", body="b", routed_to_person_id=tom, db_path=db,
+    )
+    alert_store.insert_alert(
+        source="system", external_id="private", severity="high",
+        headline="Principal's contact wrote", body="b", topic_tags=["private:principal"], db_path=db,
+    )
+
+    snapshot = today_route._build_today()
+    scope, data, desc, viewer = today_route._narrative_inputs(snapshot, dana)
+    assert scope == f"person:{dana}" and desc is not None
+    assert [p["headline"] for p in data["proposals"]] == ["Metro is overdue"]
+    assert not today_route._nothing_needs_attention(data)
+
+    tom_view = next(p for p in snapshot.people if p.id == tom)
+    assert [p["headline"] for p in today_route._viewer_slice(snapshot, tom_view)["proposals"]] == ["Tom's item"]
+
+
+def test_the_morning_brief_alias_attaches_the_header_before_the_home_rules(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The home rules name the principal by role to a demo person in every
+    text of the response, the header included, so it must be on it first."""
+    from openexecutive.api.routes import chat as chat_route
+
+    order: list[str] = []
+    monkeypatch.setattr(chat_route, "_resolve_caller_person_id", lambda _r: 7)
+    monkeypatch.setattr(today_route, "_is_principal", lambda _c: False)
+    monkeypatch.setattr(today_route, "_build_today", lambda **_k: today_route.TodayResponse.model_construct())
+    monkeypatch.setattr(today_route, "_attach_narrative", lambda *_a, **_k: order.append("narrative"))
+    monkeypatch.setattr(today_route, "_attach_home_rules", lambda *_a, **_k: order.append("home_rules"))
+    monkeypatch.setattr(
+        "openexecutive.orchestrator.artifact_records.viewer_for_person", lambda _c: None
+    )
+    from starlette.responses import Response
+
+    today_route.get_morning_brief(SimpleNamespace(), Response())  # type: ignore[arg-type]
+    assert order == ["narrative", "home_rules"]
 
 
 def test_alert_raises_never_reach_the_synthesizer(

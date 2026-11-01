@@ -32,6 +32,7 @@ READER = "the reader"
 # the owner's own brief and the owner by name on a teammate's.
 _READER_LABELS = ("the reader",)
 _OWNER_LABEL = "the principal"
+OWNER_BY_ROLE = _OWNER_LABEL
 # The Executive writes every brief, so it is "I" / "me" / "my" in it.
 # Not a title ("the Executive Director") or a noun phrase ("the Executive
 # team"), where "I" would not read.
@@ -55,8 +56,13 @@ class Reader:
     name: str
     emails: tuple[str, ...] = ()
     # The owner's name when the reader is a teammate (None: the reader is
-    # the owner), for "the principal" in a teammate's brief.
+    # the owner), for "the principal" in a teammate's brief. A demo person's
+    # reader holds the role (``OWNER_BY_ROLE``): they never read the owner's
+    # name (people.demo), so "the principal" stays as it is.
     owner: str | None = None
+
+    def owner_by_role(self) -> bool:
+        return self.owner == OWNER_BY_ROLE
 
     def terms(self) -> list[str]:
         """The reader's full name and addresses, longest first. A bare first
@@ -87,8 +93,9 @@ def principal_reader() -> Reader | None:
         return None
 
 
-def person_reader(person_id: int) -> Reader | None:
-    """A teammate as a Reader, or None (also on a failed lookup)."""
+def person_reader(person_id: int, *, demo: bool = False) -> Reader | None:
+    """A teammate as a Reader, or None (also on a failed lookup). A demo
+    person's (``demo``) names the owner by role, never by name."""
     from openexecutive.people.store import get_person
 
     try:
@@ -96,6 +103,8 @@ def person_reader(person_id: int) -> Reader | None:
     except Exception:
         logger.exception("reader: person lookup failed")
         return None
+    if reader is not None and demo:
+        return Reader(name=reader.name, emails=reader.emails, owner=OWNER_BY_ROLE)
     owner = principal_reader()
     if reader is None or owner is None:
         return reader
@@ -135,7 +144,8 @@ def slips(text: str, reader: Reader | None) -> list[str]:
     anyone "the principal", or the Executive instead of saying "I"."""
     if reader is None:
         return []
-    pattern = _pattern([*reader.terms(), *_READER_LABELS, _OWNER_LABEL])
+    labels = [] if reader.owner_by_role() else [_OWNER_LABEL]
+    pattern = _pattern([*reader.terms(), *_READER_LABELS, *labels])
     found = {m.group(0).lower() for m in pattern.finditer(text)} if pattern else set()
     if _EXECUTIVE.search(text):
         found.add("the executive")
@@ -180,7 +190,7 @@ def fix_slips(text: str, reader: Reader | None) -> str:
     into "I" / "me" / "my"."""
     if reader is None:
         return text
-    if reader.owner:
+    if reader.owner and not reader.owner_by_role():
         owner = _pattern([_OWNER_LABEL])
         assert owner is not None
         text = _possessive(owner).sub(lambda m: f"{reader.owner}'s", text)
