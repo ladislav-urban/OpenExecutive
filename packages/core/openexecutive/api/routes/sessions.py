@@ -321,9 +321,12 @@ def ungroup_topic(topic_id: int, request: Request) -> Response:
 )
 def get_shared_sessions(request: Request, tz: TzQuery = None) -> list[SessionSummary]:
     """Chats other people shared with the caller, newest first, each with who
-    shared it (``shared_by``) and when (``shared_at``)."""
+    shared it (``shared_by``) and when (``shared_at``). None for a demo
+    person, whose shares (if any, from before they were refused) stay shut."""
+    from openexecutive.people.demo import is_demo_person
+
     caller = _resolve_caller_person_id(request)
-    if caller is None:
+    if caller is None or is_demo_person(caller):
         return []
     out: list[SessionSummary] = []
     for row in list_shared_with_person(caller):

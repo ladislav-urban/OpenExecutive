@@ -2118,8 +2118,9 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
         response.handled_overnight = []
         # Their texts could name the principal, which can't be checked now.
         response.proposals = []
-        if hasattr(response, "narrative"):
-            response.narrative = None
+        for field, empty in (("narrative", None), ("departments", []), ("held_back", []), ("practice_clients", [])):
+            if hasattr(response, field):
+                setattr(response, field, empty)
         return
     hidden_ids = {p.id for p in others}
     hidden_names = {p.full_name for p in others if p.full_name}
@@ -2153,16 +2154,26 @@ def _principal_by_role(response: Any, everyone: list[Any]) -> None:
         scrub_principal_name,
     )
 
-    principals = {p.id for p in everyone if p.is_principal}
-    for person in getattr(response, "people", None) or []:
-        if person.id in principals or getattr(person, "is_principal", False) is True:
-            person.full_name = PRINCIPAL_LABEL
-    for waiting in getattr(response, "awaiting", None) or []:
-        if waiting.person_id in principals:
-            waiting.full_name = PRINCIPAL_LABEL
-    scrub_principal_name(
-        response, principal_name_pattern([p.full_name for p in everyone if p.is_principal and p.full_name])
+    principals = [p for p in everyone if p.is_principal]
+    ids = {p.id for p in principals}
+    people = getattr(response, "people", None) or []
+    awaiting = getattr(response, "awaiting", None) or []
+    # Names on the roster are relabelled by id, so a teammate who shares the
+    # principal's first name keeps their own; the free text is scrubbed.
+    kept = [(row, row.full_name) for row in [*people, *awaiting] if hasattr(row, "full_name")]
+    pattern = principal_name_pattern(
+        [p.full_name for p in principals if p.full_name],
+        [a for p in principals for a in (p.email, *getattr(p, "email_aliases", [])) if a],
     )
+    scrub_principal_name(response, pattern)
+    for row, name in kept:
+        row.full_name = name
+    for person in people:
+        if person.id in ids or getattr(person, "is_principal", False) is True:
+            person.full_name = PRINCIPAL_LABEL
+    for waiting in awaiting:
+        if waiting.person_id in ids:
+            waiting.full_name = PRINCIPAL_LABEL
 
 
 def principal_by_role_for(caller: int | None, value: Any) -> Any:
@@ -2362,7 +2373,7 @@ def _activity_for_demo(request: Request, built: ActivityResponse) -> ActivityRes
     items = [
         i
         for i in built.items
-        if not any(name in f"{getattr(i, 'target', '') or ''} {getattr(i, 'summary', '') or ''}" for name in others)
+        if not any(name in f"{getattr(i, 'target', '') or ''} {getattr(i, 'summary', '') or ''} {getattr(i, 'detail', '') or ''}" for name in others)
     ]
     scrubbed = principal_by_role_for(caller, ActivityResponse(items=items))
     return scrubbed if scrubbed is not None else ActivityResponse(items=[])

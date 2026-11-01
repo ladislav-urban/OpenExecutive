@@ -29,7 +29,10 @@ import logging
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
+
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -89,17 +92,23 @@ def by_role(person: Any) -> Any:
 DEMO_PRINCIPAL_WITHHELD = "That result isn't available just now. Answer from what you already have."
 
 
-def principal_name_pattern(names: list[str] | None = None) -> re.Pattern[str] | None:
-    """A whole-word pattern for each principal's full name and first name
-    (``names``, else the roster's principals, archived ones too, since old
-    texts still name them); None when there is no name to hide. Fails closed:
-    a roster that can't be read raises, so the caller shows nothing rather
-    than the name."""
+def principal_name_pattern(
+    names: list[str] | None = None, addresses: list[str] | None = None
+) -> re.Pattern[str] | None:
+    """A whole-word pattern, any case, for each principal's full name, first
+    name and email addresses (``names`` and ``addresses``, else the roster's
+    principals, archived and suspended ones too, since old texts still name
+    them); None when there is nothing to hide. Fails closed: a roster that
+    can't be read raises, so the caller shows nothing rather than the name."""
     if names is None:
         from openexecutive.people.store import list_people
 
-        names = [p.full_name for p in list_people(include_archived=True) if p.is_principal and p.full_name]
-    words: set[str] = set()
+        principals = [
+            p for p in list_people(include_archived=True, include_suspended=True) if p.is_principal
+        ]
+        names = [p.full_name for p in principals if p.full_name]
+        addresses = [a for p in principals for a in (p.email, *p.email_aliases) if a]
+    words: set[str] = {a.strip() for a in addresses or [] if a.strip()}
     for name in names:
         full = " ".join(name.split())
         if full:
@@ -108,14 +117,16 @@ def principal_name_pattern(names: list[str] | None = None) -> re.Pattern[str] | 
     if not words:
         return None
     alternation = "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))
-    return re.compile(rf"(?<!\w)(?:{alternation})(?!\w)")
+    return re.compile(rf"(?<![\w.@])(?:{alternation})(?![\w@])", re.IGNORECASE)
 
 
 def scrub_principal_name(value: Any, pattern: re.Pattern[str] | None) -> Any:
     """``value`` with every mention of the principal's name replaced by
-    ``PRINCIPAL_LABEL``: a string, or each string inside a list, dict or
-    pydantic model, which is changed in place (a response built for this
-    request, never a stored record) and returned."""
+    ``PRINCIPAL_LABEL``: a string, or each string inside a list, dict,
+    pydantic model or SimpleNamespace, which is changed in place (a response
+    built for this request, never a stored record) and returned. Anything
+    else (numbers, enums, classes) is left as it is, so there is no graph to
+    walk into."""
     if pattern is None or value is None:
         return value
     if isinstance(value, str):
@@ -128,11 +139,11 @@ def scrub_principal_name(value: Any, pattern: re.Pattern[str] | None) -> Any:
         for key, item in value.items():
             value[key] = scrub_principal_name(item, pattern)
         return value
-    if hasattr(value, "model_fields"):
+    if isinstance(value, BaseModel):
         for field in type(value).model_fields:
             setattr(value, field, scrub_principal_name(getattr(value, field), pattern))
         return value
-    if hasattr(value, "__dict__"):
+    if isinstance(value, SimpleNamespace):
         for field, item in vars(value).items():
             setattr(value, field, scrub_principal_name(item, pattern))
     return value

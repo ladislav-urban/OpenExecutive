@@ -370,23 +370,92 @@ def test_the_activity_feed_names_the_principal_by_role_to_a_demo_person(
     assert len(team) == 2 and "Olivia Owner" in team[0]["summary"]
 
 
-def test_a_demo_turns_context_blocks_name_the_principal_by_role(roster: SimpleNamespace) -> None:
+def test_a_demo_turns_context_names_the_principal_by_role_on_every_surface(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import inspect
 
-    from openexecutive.api.routes import chat
+    from openexecutive.orchestrator import executive
 
-    source = inspect.getsource(chat)
-    assert "if people_demo.demo_turn(session):" in source
-    assert "people_demo.scrub_principal_name(text, principal_names)" in source
+    # The knowledge, past decisions, alerts digest, facts, lessons and page.
+    texts = ("Olivia Owner signs above $10k", "olivia@example.com wrote", None, "Ask olivia", "x", "y")
+    assert executive._for_demo_turn(*texts) == (
+        "The principal signs above $10k", "The principal wrote", None, "Ask The principal", "x", "y",
+    )
+    # In both turn paths (any surface: the web chat, the panel, MCP, chat apps).
+    source = inspect.getsource(executive.Executive)
+    assert source.count("= _for_demo_turn(") == 2
+
+    def broken(*_a: object, **_k: object) -> None:
+        raise RuntimeError("roster unreadable")
+
+    monkeypatch.setattr(people_store, "list_people", broken)
+    assert executive._for_demo_turn("Olivia Owner", None) == ("", None)  # fails closed
 
 
-def test_no_one_shares_a_chat_with_a_demo_person(roster: SimpleNamespace) -> None:
+def test_the_scrubber_covers_any_case_and_the_principals_email(roster: SimpleNamespace) -> None:
+    from openexecutive.people.demo import principal_name_pattern, scrub_principal_name
+
+    pattern = principal_name_pattern()
+    text = "OLIVIA OWNER (olivia@example.com) and olivia; not Olivias or bob.olivia.x"
+    assert scrub_principal_name(text, pattern) == (
+        "The principal (The principal) and The principal; not Olivias or bob.olivia.x"
+    )
+
+
+def test_a_demo_persons_audit_rows_name_the_principal_by_role(roster: SimpleNamespace) -> None:
+    from openexecutive.api.routes import audit as audit_route
+    from openexecutive.audit.logger import AuditLogger
+
+    logger = AuditLogger(db_path=people_store.DB_PATH)
+    row = logger.log(
+        "tool_invocation", "Read Olivia Owner's quote", details={"result_preview": "owner: olivia@example.com"},
+        full={"result": "Created by Olivia Owner"}, private_to_person=roster.dana,
+    )
+    app = FastAPI()
+    app.include_router(audit_route.router)
+    app.state.audit = logger
+    client = TestClient(app)
+    dana = _as("dana@prospect.example")
+    rows = client.get("/audit/logs", headers=dana).json()["items"]
+    assert [r["summary"] for r in rows] == ["Read The principal's quote"]
+    assert rows[0]["details"]["result_preview"] == "owner: The principal"
+    one = client.get(f"/audit/logs/{row}", headers=dana).json()
+    assert one["full"] == {"result": "Created by The principal"}
+    # A search can't confirm the name is in a row.
+    assert client.get("/audit/logs", params={"q": "Olivia"}, headers=dana).json()["items"] == []
+
+
+def test_no_one_shares_a_chat_with_a_demo_person(roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
     import inspect
 
-    from openexecutive.api.routes import sessions
+    from openexecutive.api.routes import chat, sessions
 
     source = inspect.getsource(sessions.put_session_shares)
     assert "or person.demo:" in source
+    # And a share made before that was refused stays shut to them.
+    from openexecutive.memory import session_store
+
+    monkeypatch.setattr(session_store, "is_shared_with", lambda *_a, **_k: True)
+    monkeypatch.setattr(chat, "_mail_private", lambda *_a: False)
+    assert not chat._shared_member("s-old", roster.dana)
+    assert chat._shared_member("s-old", roster.teammate)
+
+
+def test_a_teammate_who_shares_the_first_name_keeps_it_on_home(roster: SimpleNamespace) -> None:
+    from openexecutive.api.routes import today
+
+    namesake = people_store.upsert_person(full_name="Olivia Chen", email="ochen@example.com")
+    people_registry.invalidate()
+    response = SimpleNamespace(
+        people=[
+            SimpleNamespace(id=roster.principal, full_name="Olivia Owner", is_principal=True),
+            SimpleNamespace(id=namesake, full_name="Olivia Chen", is_principal=False),
+        ],
+        awaiting=[], in_flight=[], handled_overnight=[], proposals=[],
+    )
+    today._hide_other_demo_people(response, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert [p.full_name for p in response.people] == ["The principal", "Olivia Chen"]
 
 
 def _tool_round(name: str) -> SimpleNamespace:

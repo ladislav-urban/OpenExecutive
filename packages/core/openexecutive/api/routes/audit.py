@@ -23,6 +23,8 @@ never what was said, and a text search leaves them out.
 """
 from __future__ import annotations
 
+import copy
+import dataclasses
 import logging
 import re
 from typing import Any
@@ -305,7 +307,21 @@ def _view(request: Request) -> dict[str, Any]:
         logger.exception("audit: couldn't tell who is reading — showing nothing")
         caller = None
     # Their own rows are all private (to them), so only the owner filter applies.
-    return {"include_private": True, "owned_by": caller, "only_owned": True}
+    view: dict[str, Any] = {"include_private": True, "owned_by": caller, "only_owned": True}
+    # A demo person's own rows hold raw tool and specialist output, written
+    # before the principal's name is replaced by their role (people.demo):
+    # `_shown` replaces it there too.
+    from openexecutive.people.demo import is_demo_person
+
+    if caller is not None and is_demo_person(caller):
+        view["demo"] = True
+    return view
+
+
+def _filters(view: dict[str, Any]) -> dict[str, Any]:
+    """``view`` as ``AuditLogger.query`` / ``count`` filters: without the marks
+    only ``_shown`` reads."""
+    return {k: v for k, v in view.items() if k != "demo"}
 
 
 def _may_read(event: Any, view: dict[str, Any]) -> bool:
@@ -320,7 +336,10 @@ def _may_read(event: Any, view: dict[str, Any]) -> bool:
 
 def _searchable(view: dict[str, Any]) -> dict[str, Any]:
     """``view`` for a text search: a redacted row's own words must not decide
-    whether it matches, so a search leaves other people's rows out."""
+    whether it matches, so a search leaves other people's rows out. A demo
+    person's search finds nothing: it would match words `_shown` replaces."""
+    if view.get("demo"):
+        return {**view, "owned_by": None}
     return {k: v for k, v in view.items() if k != "all_owners"}
 
 
@@ -355,7 +374,6 @@ def _redact(event: Any, names: dict[int, str]) -> Any:
     in which conversation, with their words left out. The summary is rebuilt
     from the event type and a plain tool name; the details keep only
     ``_SAFE_DETAIL_KEYS``; ``full`` is dropped."""
-    import dataclasses
 
     details = {
         k: v for k, v in (event.details or {}).items()
@@ -388,11 +406,37 @@ def _redact(event: Any, names: dict[int, str]) -> Any:
 
 
 def _shown(events: list[Any], view: dict[str, Any]) -> list[Any]:
-    """``events`` as the caller reads them: someone else's own rows redacted."""
+    """``events`` as the caller reads them: someone else's own rows redacted,
+    and for a demo person the principal named by role only (none at all when
+    that can't be checked)."""
+    if view.get("demo"):
+        return _by_role(events)
     if not view.get("all_owners") or not any(e.private_to_person is not None for e in events):
         return events
     names = _owner_names()
     return [_redact(e, names) if e.private_to_person is not None else e for e in events]
+
+
+def _by_role(events: list[Any]) -> list[Any]:
+    """A demo person's own rows with the principal's name replaced by their
+    role in the summary, details and full text. Fails closed: none."""
+    from openexecutive.people.demo import principal_name_pattern, scrub_principal_name
+
+    try:
+        pattern = principal_name_pattern()
+    except Exception:
+        logger.warning("audit: reading the principal's name failed — showing a demo person nothing", exc_info=True)
+        return []
+    shown = []
+    for event in events:
+        replace: dict[str, Any] = {
+            "summary": scrub_principal_name(event.summary, pattern),
+            "details": scrub_principal_name(copy.deepcopy(event.details), pattern),
+        }
+        if hasattr(event, "full"):
+            replace["full"] = scrub_principal_name(copy.deepcopy(event.full), pattern)
+        shown.append(dataclasses.replace(event, **replace))
+    return shown
 
 
 class AuditLogRequest(BaseModel):
@@ -428,7 +472,10 @@ def get_audit_log(event_id: int, request: Request) -> AuditEventDetailOut:
     # A row the caller may not read answers exactly like a missing one.
     if event is None or not _may_read(event, view):
         raise HTTPException(status_code=404, detail="audit event not found")
-    [event] = _shown([event], view)
+    shown = _shown([event], view)
+    if not shown:
+        raise HTTPException(status_code=404, detail="audit event not found")
+    [event] = shown
     return AuditEventDetailOut(
         id=event.id,
         ts=event.ts,
@@ -709,7 +756,7 @@ def get_audit_session(session_id: str, request: Request) -> AuditSessionResponse
         raise HTTPException(status_code=400, detail="invalid session_id format")
     audit = _resolve_logger(request)
     view = _view(request)
-    events = _shown(audit.query(session_id=session_id, limit=1000, **view), view)
+    events = _shown(audit.query(session_id=session_id, limit=1000, **_filters(view)), view)
     if not events:
         raise HTTPException(status_code=404, detail="no events for session_id")
     graph, channel = _build_session_graph(events)
@@ -760,7 +807,7 @@ def list_audit_logs(
         until=until,
         limit=limit,
         offset=offset,
-        **view,
+        **_filters(view),
     )
     total = audit.count(
         event_type=event_type,
@@ -769,7 +816,7 @@ def list_audit_logs(
         q=q,
         since=since,
         until=until,
-        **view,
+        **_filters(view),
     )
     events = _shown(events, view)
     return AuditListResponse(

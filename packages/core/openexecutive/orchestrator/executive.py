@@ -234,6 +234,18 @@ def _private_to_principal(session: Any) -> bool:
     return getattr(session, "private_to_principal", False) is True
 
 
+def _for_demo_turn(*texts: Any) -> tuple[Any, ...]:
+    """A demo turn's context texts with the principal's name replaced by their
+    role (people.demo), for every surface that runs a turn. Fails closed: a
+    roster that can't be read sends none of them."""
+    try:
+        pattern = principal_name_pattern()
+    except Exception:
+        logger.warning("demo turn: reading the principal's name failed — withholding the context", exc_info=True)
+        return tuple("" if text is not None else None for text in texts)
+    return tuple(scrub_principal_name(text, pattern) for text in texts)
+
+
 def _contacts_in_prompt(session: Any) -> bool:
     """Whether this turn's system prompt lists the principal's contacts.
 
@@ -1514,6 +1526,14 @@ class Executive:
                 standing_facts = await asyncio.to_thread(
                     lambda: render_facts_for_prompt(attributed=not demo_turn(session))
                 )
+            if demo_turn(session):
+                (
+                    retrieved_context, episodic_context, briefing_context, standing_facts, lessons,
+                    page_context_block,
+                ) = _for_demo_turn(
+                    retrieved_context, episodic_context, briefing_context, standing_facts, lessons,
+                    page_context_block,
+                )
             messages = self._build_messages(
                 session,
                 user_message,
@@ -1890,6 +1910,14 @@ class Executive:
         if standing_facts is None:
             standing_facts = await asyncio.to_thread(
                 lambda: render_facts_for_prompt(attributed=not demo_turn(session))
+            )
+        if demo_turn(session):
+            (
+                retrieved_context, episodic_context, briefing_context, standing_facts, lessons,
+                page_context_block,
+            ) = _for_demo_turn(
+                retrieved_context, episodic_context, briefing_context, standing_facts, lessons,
+                page_context_block,
             )
         messages = self._build_messages(
             session,
