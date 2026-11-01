@@ -1,0 +1,21 @@
+id: finance_advice_006
+domain: finance
+advice_policy: explain
+description: "ADVICE_POLICY=explain. A held order: what releases it and who can. The reply shows the figures and names who decides in a sentence about the decision ('that's Rachel's call; she holds customer credit'), names any approval scope in plain words, and neither recommends releasing it nor describes its own rule. Found on the pilot (Oct 30, 2026, S4): 'Rachel holds customer credit (customer_credit)' and 'I explain the figures and don't recommend a credit decision'."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Harbor Electric's new order for $3,200 is on credit hold. Their limit is $6,000 and they owe $4,656 on open invoices, $1,900 of it over 30 days late. Rachel holds customer credit. What would they need to pay to release it, and who can release it?"
+forbidden_reply_words:
+  - "customer_credit"
+  - "My recommendation"
+  - "I recommend"
+  - "don't recommend"
+  - "decides nothing"
+quality_criteria:
+  shows_the_arithmetic_of_what_the_order_takes_them_to_against_the_limit: true
+  says_who_decides_in_a_sentence_about_the_decision: true
+  names_scopes_in_plain_words_never_by_key: true
+  makes_no_recommendation_on_releasing_the_order: true
+  does_not_describe_its_own_advice_rule: true

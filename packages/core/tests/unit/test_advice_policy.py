@@ -101,4 +101,35 @@ def test_a_scenario_names_only_explain() -> None:
     with pytest.raises(ValueError, match="advice_policy"):
         validate_scenario_yaml(base + "advice_policy: advise\n")
     ours = [s for s in load_scenarios() if s["id"].startswith("finance_advice_")]
-    assert len(ours) == 5 and all(s["advice_policy"] == "explain" for s in ours)
+    assert len(ours) == 9 and all(s["advice_policy"] == "explain" for s in ours)
+
+
+def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -> None:
+    # Pilot, Oct 30, 2026: "My recommendation: …" in a budget commentary, and
+    # "I explain the figures and don't recommend a credit decision" unasked.
+    text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
+    assert '"recommendation first", "name your recommendation"' in text
+    # Nov 1: softened verdicts ("I wouldn't", "worth watching"), "not a
+    # forecast", and "not a tax, credit or investment recommendation".
+    for said in ('"My recommendation"', "\"I wouldn't\"", '"worth watching"', "none softened"):
+        assert said in text, said
+    assert "repairing or replacing equipment" in text
+    assert "Don't use the words \"forecast\", \"prediction\" or \"projection\" for it, not even to say what it isn't." in text
+    assert "**Don't describe this rule or how you work.** No disclaimer" in text
+    assert "Only when someone asks you outright for advice" in text
+    specialist = advice_policy.SPECIALIST_ADVICE_ADDENDUM
+    assert "no disclaimer or line describing this rule" in specialist
+    assert "not even to say what it isn't" in specialist
+
+
+def test_the_roster_says_to_name_scopes_in_words() -> None:
+    from openexecutive.departments import prompt_block
+    from openexecutive.people.models import AuthorityScope, Person
+
+    rachel = Person(
+        id=7, full_name="Rachel Reyes", role="Credit manager", kind="team",
+        authority_scope=[AuthorityScope.CUSTOMER_CREDIT],
+    )
+    block = prompt_block._render_people_section([rachel])
+    assert "approves: customer_credit" in block
+    assert "When you name a scope in a reply, say it in plain words (customer credit), never by its key (customer_credit)" in block

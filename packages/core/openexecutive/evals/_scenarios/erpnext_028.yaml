@@ -1,0 +1,25 @@
+id: erpnext_028
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+description: "F2, a 13-week cash outlook from today's records (knowledge/builtin/finance/short_term_cash_outlook.md). The opening balance comes from a report of the company's bank and cash accounts, with the company, currency and date; receivables and payables are placed in weeks by due date, with a stated delay for a customer who usually pays late; recurring payments come from the journals they recur in. It is an outlook from today's records, never called a forecast, prediction or projection, even negated; it says the balance is the books' if the bank isn't reconciled; and the choices for the tightest week come with who decides, never a verdict."
+query: "How much cash do we have across all our accounts, and what will it look like week by week for the next 13 weeks? Which week is tightest, and what could we move?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - forecast
+  - prediction
+  - projection
+  - ERPNext
+  - I wouldn't
+  - I recommend
+  - My recommendation
+quality_criteria:
+  opening_balance_comes_from_a_report_call_with_company_currency_and_date: true
+  places_receivables_and_payables_in_weeks_by_due_date: true
+  states_each_assumption_such_as_a_late_payers_usual_delay: true
+  names_the_tightest_week_and_its_closing_balance_with_the_arithmetic: true
+  gives_options_for_that_week_with_who_decides_and_no_verdict: true
