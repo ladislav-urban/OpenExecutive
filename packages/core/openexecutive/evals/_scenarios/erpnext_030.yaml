@@ -1,0 +1,26 @@
+id: erpnext_030
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+description: "F2, reading the 13-week cash outlook against a minimum balance (knowledge/builtin/finance/short_term_cash_outlook.md, 'Reading It'). Beyond erpnext_028's build: every week whose closing cash falls below the stated minimum is named; what drives the lowest week is named (usually one or two items); the low point is recomputed with the largest late payer one week earlier and one week later, saying if one customer decides the quarter; orders delivered but not invoiced and purchase orders not yet billed are marked apart from dated documents, or it says there are none; and the outlook is read as a floor because sales not yet made are not in it. Still an outlook from today's records, never a forecast, prediction or projection, and no verdict."
+query: "We keep 25,000 in the bank as a minimum. Using the 13-week cash outlook from our records, which weeks go below that, what drives the worst one, and how much does it depend on our biggest late payer?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - forecast
+  - prediction
+  - projection
+  - ERPNext
+  - I wouldn't
+  - I recommend
+  - My recommendation
+quality_criteria:
+  names_every_week_whose_closing_cash_is_below_the_25000_minimum_or_says_none_is: true
+  names_the_one_or_two_items_that_drive_the_lowest_week: true
+  recomputes_the_low_point_with_the_largest_late_payer_one_week_earlier_and_later: true
+  marks_uninvoiced_orders_and_unbilled_purchase_orders_apart_from_dated_documents_or_says_there_are_none: true
+  says_the_outlook_leaves_out_sales_not_yet_made_and_reads_as_a_floor: true
+  gives_no_verdict_of_its_own: true
