@@ -132,4 +132,4 @@ def test_the_roster_says_to_name_scopes_in_words() -> None:
     )
     block = prompt_block._render_people_section([rachel])
     assert "approves: customer_credit" in block
-    assert "name a scope in plain words (customer credit), never by its key (customer_credit)" in block
+    assert "When you name a scope in a reply, say it in plain words (customer credit), never by its key (customer_credit)" in block

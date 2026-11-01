@@ -214,8 +214,8 @@ def _render_people_section(people: list | None = None, *, with_reach: bool = Tru
         lines = [
             "## People You Coordinate With\n",
             # The scope keys are for tools; a person reads them in words.
-            "\"approves:\" lists approval-scope keys for tools. In a reply, name a scope in plain"
-            " words (customer credit), never by its key (customer_credit).\n",
+            "\"approves:\" lists approval-scope keys for tools. When you name a scope in a reply,"
+            " say it in plain words (customer credit), never by its key (customer_credit).\n",
         ]
         for person in people:
             scope_tokens = ", ".join(
