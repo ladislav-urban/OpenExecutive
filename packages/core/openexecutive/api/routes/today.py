@@ -1757,6 +1757,10 @@ def _narrative_context(
     if _nothing_needs_attention(today_data, mode) and (live is None or live.is_empty()):
         return narrative_cache.QUIET_CONTEXT, None
     activity = _narrative_activity(viewer, viewer_desc)
+    if viewer is not None and _demo_caller(viewer.id, principal=False):
+        # Never a row naming another demo person, as on their activity rail.
+        others = _other_demo_names(viewer.id)
+        activity = [] if others is None else [a for a in activity if not _names_any(a, others)]
     # A demo person's header is written from what the company knows, not who
     # said it (people.demo; memory.facts attributed=False). Inside the
     # context, so the cache key differs from a teammate's.
@@ -1788,7 +1792,9 @@ def _narrative_reader(scope: str | None, viewer: PersonBriefItem | None) -> Read
     from openexecutive.briefing.reader import person_reader, principal_reader
 
     if viewer is not None and scope is not None and scope.startswith("person:"):
-        return person_reader(viewer.id)
+        # A demo person reads the principal by role (people.demo), so the
+        # model is never handed the name to write.
+        return person_reader(viewer.id, demo=_demo_caller(viewer.id, principal=False))
     return principal_reader()
 
 
@@ -2151,6 +2157,11 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
         return
     hidden_ids = {p.id for p in others}
     hidden_names = {p.full_name for p in others if p.full_name}
+    # The header is model-written: one that names another demo person isn't
+    # shown at all.
+    narrative = getattr(response, "narrative", None)
+    if isinstance(narrative, str) and any(name in narrative for name in hidden_names):
+        response.narrative = None
     response.people = [p for p in response.people if p.id not in hidden_ids]
     response.awaiting = [a for a in response.awaiting if a.person_id not in hidden_ids]
     response.in_flight = [i for i in response.in_flight if i.target not in hidden_names]
@@ -2382,26 +2393,38 @@ def get_today_activity(
     return _activity_for_demo(request, built)
 
 
+def _other_demo_names(caller: int) -> set[str] | None:
+    """The full names of every demo person but ``caller``; None when the
+    roster can't be read (the caller then shows nothing)."""
+    from openexecutive.people.store import list_people
+
+    try:
+        return {p.full_name for p in list_people(include_archived=True) if p.demo and p.id != caller and p.full_name}
+    except Exception:
+        logger.warning("today: reading the demo people failed", exc_info=True)
+        return None
+
+
+def _names_any(row: Any, names: set[str]) -> bool:
+    """Whether an activity row (an item or its dict) names any of ``names``."""
+    get = row.get if isinstance(row, dict) else lambda k: getattr(row, k, None)
+    text = " ".join(str(get(k) or "") for k in ("target", "summary", "detail"))
+    return any(name in text for name in names)
+
+
 def _activity_for_demo(request: Request, built: ActivityResponse) -> ActivityResponse:
     """The feed as a demo caller may read it: no row naming another demo
     person, and the principal by role only. Fails closed to an empty feed."""
     from openexecutive.api.routes.chat import _resolve_caller_person_id
     from openexecutive.people.demo import is_demo_person
-    from openexecutive.people.store import list_people
 
     caller = _resolve_caller_person_id(request)
     if caller is None or _is_principal(caller) or not is_demo_person(caller):
         return built
-    try:
-        others = {p.full_name for p in list_people(include_archived=True) if p.demo and p.id != caller and p.full_name}
-    except Exception:
-        logger.warning("today: reading the demo people failed — no activity for a demo caller", exc_info=True)
+    others = _other_demo_names(caller)
+    if others is None:
         return ActivityResponse(items=[])
-    items = [
-        i
-        for i in built.items
-        if not any(name in f"{getattr(i, 'target', '') or ''} {getattr(i, 'summary', '') or ''} {getattr(i, 'detail', '') or ''}" for name in others)
-    ]
+    items = [i for i in built.items if not _names_any(i, others)]
     scrubbed = principal_by_role_for(caller, ActivityResponse(items=items))
     return scrubbed if scrubbed is not None else ActivityResponse(items=[])
 

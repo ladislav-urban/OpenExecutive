@@ -538,3 +538,55 @@ def test_a_demo_turn_withholds_tool_results_when_the_roster_cant_be_read(monkeyp
 
     results = _tool_results_after_one_call(monkeypatch, demo=True, unread=True)
     assert results == [DEMO_PRINCIPAL_WITHHELD]
+
+
+def test_a_demo_persons_header_reader_names_the_principal_by_role(roster: SimpleNamespace) -> None:
+    """The model is never handed the principal's name to write into a demo
+    person's header: "the principal" stays as it is, not a slip, and isn't
+    turned into the name (or a surname the scrub wouldn't catch)."""
+    from openexecutive.api.routes import today
+    from openexecutive.briefing import reader as reader_mod
+
+    demo = today._narrative_reader(f"person:{roster.dana}", SimpleNamespace(id=roster.dana))  # type: ignore[arg-type]
+    team = today._narrative_reader(f"person:{roster.teammate}", SimpleNamespace(id=roster.teammate))  # type: ignore[arg-type]
+    assert demo is not None and demo.owner_by_role()
+    assert team is not None and team.owner == "Olivia Owner"
+    text = "The principal asked for the Metro invoice."
+    assert reader_mod.slips(text, demo) == []
+    assert reader_mod.fix_slips(text, demo) == text
+    assert reader_mod.fix_slips(text, team) == "Olivia Owner asked for the Metro invoice."
+
+
+def test_a_demo_persons_header_never_reads_another_demo_persons_activity(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.api.routes import today
+    from openexecutive.briefing import narrative
+
+    rows = [
+        {"kind": "advice_given", "summary": "Advised Pete Prospect on volume pricing", "department": "sales"},
+        {"kind": "decision", "summary": "Moved the Metro follow-up to Friday", "department": "sales"},
+    ]
+    seen: list[list[dict[str, str]]] = []
+    monkeypatch.setattr(narrative, "render_briefing_context", lambda **k: seen.append(k["activity"]) or "ctx")
+    monkeypatch.setattr(today, "_nothing_needs_attention", lambda *_a: False)
+    monkeypatch.setattr(today, "_narrative_activity", lambda *_a: list(rows))
+    monkeypatch.setattr(today, "_with_due_soon", lambda data, *_a: data)
+    for pid in (roster.dana, roster.teammate):
+        today._narrative_context({}, SimpleNamespace(id=pid), {"name": "x"}, reader=None)  # type: ignore[arg-type]
+    assert [r["summary"] for r in seen[0]] == ["Moved the Metro follow-up to Friday"]
+    assert len(seen[1]) == 2  # a teammate's is unchanged
+
+
+def test_a_header_naming_another_demo_person_is_not_shown(roster: SimpleNamespace) -> None:
+    from openexecutive.api.routes import today
+
+    def home(text: str) -> SimpleNamespace:
+        return SimpleNamespace(people=[], awaiting=[], in_flight=[], handled_overnight=[], proposals=[], narrative=text)
+
+    named = home("Pete Prospect asked about Metro.")
+    today._hide_other_demo_people(named, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert named.narrative is None
+    plain = home("Olivia Owner wants the Metro invoice chased.")
+    today._hide_other_demo_people(plain, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert plain.narrative == "The principal wants the Metro invoice chased."
