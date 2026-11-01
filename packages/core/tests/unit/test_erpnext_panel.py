@@ -236,6 +236,7 @@ def test_the_caps_hold_for_what_the_model_reads_after_the_fold() -> None:
     assert "Filters on screen" not in page_block({"doctype": "Item", "filters": [["item_name", "=", wide]]})
     assert "Home card" not in page_block({"screen": "/", "card": "ﷺ" * 12})
     assert "Home card" in page_block({"screen": "/", "card": "ﷺ" * 11})
+    assert page_block({"doctype": "ﷺ" * 140}) == ""
 
 
 def test_a_filter_value_cannot_close_the_untrusted_block() -> None:
