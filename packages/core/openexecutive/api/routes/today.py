@@ -2399,7 +2399,7 @@ def _other_demo_names(caller: int) -> set[str] | None:
     from openexecutive.people.store import list_people
 
     try:
-        return {p.full_name for p in list_people(include_archived=True) if p.demo and p.id != caller and p.full_name}
+        return {p.full_name for p in list_people(include_archived=True, include_suspended=True) if p.demo and p.id != caller and p.full_name}
     except Exception:
         logger.warning("today: reading the demo people failed", exc_info=True)
         return None
