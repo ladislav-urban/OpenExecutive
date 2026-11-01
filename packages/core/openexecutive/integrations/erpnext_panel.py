@@ -306,7 +306,10 @@ def page_block(page: Any) -> str:
     as an untrusted block for the user turn: document names can be written by
     outsiders (a web-form lead, a customer's name). Unknown or odd values are
     left out. ``screen`` names one of Dynocortex's own screens instead, by
-    this app's path for it (SCREEN_RULE says what the turn can't see there)."""
+    this app's path for it (SCREEN_RULE says what the turn can't see there).
+    Beside a list or a report, ``filters`` and (a list's) ``sort`` add what
+    narrows it; beside Home, ``card`` adds the headline of the card in focus,
+    as text the browser sent, never a card read from this app's store."""
     if not isinstance(page, dict):
         return ""
 
@@ -315,26 +318,85 @@ def page_block(page: Any) -> str:
         return raw.strip() if isinstance(raw, str) and _PAGE_VALUE_RE.fullmatch(raw.strip()) else ""
 
     doctype, name, report = value("doctype"), value("name"), value("report")
+    from openexecutive.orchestrator.content_trust import wrap_untrusted
+
+    lines: list[str] = []
     if report:
-        where = f"the report {report}"
+        lines.append(f"Open in ERPNext: the report {report}.")
     elif doctype and name:
-        where = f"{doctype} {name}"
+        lines.append(f"Open in ERPNext: {doctype} {name}.")
     elif doctype:
-        where = f"the {doctype} list"
+        lines.append(f"Open in ERPNext: the {doctype} list.")
     else:
         screen = page.get("screen")
         if not isinstance(screen, str) or not _SCREEN_RE.fullmatch(screen) or "//" in screen:
             return ""
-        from openexecutive.orchestrator.content_trust import wrap_untrusted
+        lines.append(f"Open in Dynocortex: its own screen {screen}, not an ERPNext page.")
+        card = _printable(page.get("card"), MAX_CARD_CHARS) if screen == HOME_SCREEN else ""
+        if card:
+            lines.append(f"Home card in focus (its headline as Home shows it): {card}")
+    # A list or a report, never a form: what narrows the rows on screen.
+    if report or (doctype and not name):
+        filters = page_filters(page.get("filters"))
+        if filters:
+            lines.append(
+                "Filters on screen: "
+                + "; ".join(f"{field} {op} {text}" for field, op, text in filters)
+                + "."
+            )
+        sort = page.get("sort")
+        if not report and isinstance(sort, str) and _SORT_RE.fullmatch(sort):
+            lines.append(f"Sorted by {sort}.")
+    return wrap_untrusted("\n".join(lines), source="erpnext", author="erpnext_page")
 
-        return wrap_untrusted(
-            f"Open in Dynocortex: its own screen {screen}, not an ERPNext page.",
-            source="erpnext",
-            author="erpnext_page",
-        )
-    from openexecutive.orchestrator.content_trust import wrap_untrusted
 
-    return wrap_untrusted(f"Open in ERPNext: {where}.", source="erpnext", author="erpnext_page")
+# The screen and the filters on it (oe_connector's panel-first plan, C): what
+# the person narrowed the list or report to, and on Home the card they clicked,
+# by its headline only. Agreed with oe_connector's `panel._page`, which checks
+# the same before it signs; anything that doesn't fit is dropped, one entry at
+# a time. All of it is the person's or the page's text, so untrusted.
+MAX_FILTERS = 10
+MAX_FILTER_VALUE_CHARS = 140
+MAX_CARD_CHARS = 200
+FILTER_OPS = frozenset({
+    "=", "!=", ">", "<", ">=", "<=", "like", "not like", "in", "not in",
+    "between", "is", "is not", "timespan",
+})
+# Home, by this app's path for it (oe_connector's NATIVE_SCREENS): the card
+# headline counts only beside it.
+HOME_SCREEN = "/"
+_FIELD_RE = re.compile(r"[a-z_][a-z0-9_]{0,63}")
+_SORT_RE = re.compile(r"[a-z_][a-z0-9_]{0,63} (?:asc|desc)")
+
+
+def _printable(raw: Any, limit: int) -> str:
+    """``raw`` with its whitespace collapsed, if it is printable text of at
+    most ``limit`` characters, else ""."""
+    if not isinstance(raw, str):
+        return ""
+    text = " ".join(raw.split())
+    return text if 0 < len(text) <= limit and text.isprintable() else ""
+
+
+def page_filters(raw: Any) -> list[tuple[str, str, str]]:
+    """The panel's ``filters``, ``[field, op, value]`` each, the first
+    ``MAX_FILTERS`` of them, keeping only the entries that fit."""
+    if not isinstance(raw, list):
+        return []
+    kept: list[tuple[str, str, str]] = []
+    for entry in raw[:MAX_FILTERS]:
+        if not isinstance(entry, list) or len(entry) != 3:
+            continue
+        field, op, value = entry
+        if not isinstance(field, str) or not _FIELD_RE.fullmatch(field):
+            continue
+        if not isinstance(op, str) or op not in FILTER_OPS:
+            continue
+        text = _printable(value, MAX_FILTER_VALUE_CHARS)
+        if not text or (op in ("is", "is not") and text not in ("set", "not set")):
+            continue
+        kept.append((field, op, text))
+    return kept
 
 
 # Both panel blocks end with it: the panel opens what the answer is about beside
@@ -363,7 +425,9 @@ SCREEN_RULE = (
     "specialists, and suggest Chats for the rest. They already have that "
     "screen open beside you, so never send them to it, or to the "
     "OpenExecutive app for it: say the screen beside the panel shows it. "
-    "Never guess what the screen shows. "
+    "Never guess what the screen shows. When the page block names the Home "
+    "card in focus, its headline is all you have of it: answer about what it "
+    "names from ERPNext and your specialists. "
 )
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "

@@ -740,6 +740,11 @@ bench --site <site> set-config oe_connector_openexecutive_url https://<api-host>
   standing facts or department memory, and nothing it says is mirrored
   anywhere; it does read the company knowledge base, as a teammate on any
   channel does.
+- The panel tells the turn what is open beside it: the document, list or
+  report, a list's or report's filters and a list's sort, or beside Home the
+  headline of the card in focus (text only; the turn never reads the card).
+  All of it is treated as untrusted text, and anything malformed is dropped.
+  Nothing to set up.
 - The site URL must be HTTPS (plain HTTP only to the same machine); replies
   are shown with no images or live links.
 - One question at a time per person, thirty an hour; conversations last an
