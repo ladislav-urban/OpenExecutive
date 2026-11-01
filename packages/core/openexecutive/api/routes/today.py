@@ -1538,15 +1538,20 @@ def _fresh_external(
     return fresh[:_EXTERNAL_MAX]
 
 
-def _viewer_slice(response: TodayResponse, viewer: PersonBriefItem) -> dict[str, Any]:
+def _viewer_slice(
+    response: TodayResponse, viewer: PersonBriefItem, *, demo: bool = False
+) -> dict[str, Any]:
     """A `today_data`-shaped dict scoped to one non-principal teammate:
-    the action items routed to THEM + their departments' goal health. Mirrors
-    the UI's 'routed to me' split; the principal-only 'people waiting on you'
+    the action items in their Needs you + their departments' goal health.
+    Mirrors Home's lane (``home_rules.lane``): the cards routed to them, and
+    for a demo person (``demo``) the cards routed to no one too, which are
+    what a demo install shows them; never a private one
+    (``_action_proposals``). The principal-only 'people waiting on you'
     section is dropped (empty people list)."""
     depts = set(viewer.department_slugs)
     proposals = [
         p for p in _action_proposals(response.proposals)
-        if p.routed_to_person_id == viewer.id
+        if p.routed_to_person_id == viewer.id or (demo and p.routed_to_person_id is None)
     ]
     departments = [d for d in response.departments if d.slug in depts]
     return {
@@ -1592,7 +1597,10 @@ def _narrative_inputs(
         return scope, data, None, viewer
     return (
         f"person:{caller_person_id}",
-        _viewer_slice(response, viewer),
+        # A demo person's header covers the shared cards their Home shows
+        # them; the served text names the principal by role
+        # (`_hide_other_demo_people`).
+        _viewer_slice(response, viewer, demo=_demo_caller(viewer.id, principal=False)),
         {"name": viewer.full_name, "role": viewer.role},
         viewer,
     )
@@ -2656,10 +2664,11 @@ def get_morning_brief(request: Request, response: Response) -> TodayResponse:
     principal = _is_principal(caller)
     payload = _build_today(include_private=principal, viewer=viewer_for_person(caller))
     payload.caller_person_id = caller
-    _attach_home_rules(payload, caller=caller, principal=principal, now=datetime.now(UTC))
     # Serve the viewer's cached narrative (cache-only — this deprecated alias
-    # has no BackgroundTasks to schedule a regen).
+    # has no BackgroundTasks to schedule a regen). Before the home rules, as
+    # GET /today does, so a demo person's header names the principal by role.
     _attach_narrative(
         payload, caller_person_id=payload.caller_person_id, background_tasks=None
     )
+    _attach_home_rules(payload, caller=caller, principal=principal, now=datetime.now(UTC))
     return payload
