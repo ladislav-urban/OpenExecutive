@@ -1898,6 +1898,16 @@ async def _run_chat_turn(
 
             if not turn_sources.is_empty():
                 answer_sources = turn_sources.payload()
+                if demo_sse:
+                    # A document title under a demo reply names the principal
+                    # by role only, or the list isn't shown (people.demo).
+                    try:
+                        answer_sources = people_demo.scrub_principal_name(
+                            answer_sources, people_demo.principal_name_pattern()
+                        )
+                    except Exception:
+                        logger.warning("chat.demo_sources_withheld turn_id=%s", turn_id, exc_info=True)
+                        answer_sources = None
 
             if client_disconnected:
                 # Connection is gone, so we can't yield anything more — but we

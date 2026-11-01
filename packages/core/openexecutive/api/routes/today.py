@@ -2108,7 +2108,7 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
     if principal or caller is None or not is_demo_person(caller):
         return
     try:
-        everyone = list_people(include_archived=True)
+        everyone = list_people(include_archived=True, include_suspended=True)
         others = [p for p in everyone if p.demo and p.id != caller]
     except Exception:
         logger.warning("today: reading the demo people failed — showing only the caller", exc_info=True)
