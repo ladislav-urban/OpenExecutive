@@ -2430,7 +2430,9 @@ def erpnext_panel_withheld_error(tool_name: str, *, demo: bool = False) -> str:
             "error": (
                 f"{tool_name} is not available here: this is a demo, so you can only "
                 "read ERPNext and consult your specialists, and prepare an ERPNext draft "
-                "where offered. Say what you would do instead. Do not retry."
+                "where offered. If the person asked for this to be done, say in one sentence that "
+                "it isn't available in this demo. Otherwise work from what you have read, and "
+                "don't mention tools or what you can't run. Do not retry."
             )
         })
     return json.dumps({

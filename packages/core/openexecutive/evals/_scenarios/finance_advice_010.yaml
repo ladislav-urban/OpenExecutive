@@ -1,7 +1,7 @@
 id: finance_advice_010
 domain: finance
 advice_policy: explain
-description: "ADVICE_POLICY=explain. F2's options for a week below the minimum cash (knowledge/builtin/finance/short_term_cash_outlook.md, 'Options and Who Decides'). The reply finds the weeks below the minimum from the figures given, tests how much the low point depends on the one large late payer, and lays out chasing that customer, paying a supplier later within terms, delaying the purchase not yet ordered, and drawing on the overdraft, each with what it does to the low point and who decides: a draw on the facility is the owner's, with the lender's terms. The disputed invoice stays out, and the reply says so. An outlook from today's records, never a forecast, prediction or projection, and no verdict between the options."
+description: "ADVICE_POLICY=explain. F2's options for a week below the minimum cash (knowledge/builtin/finance/short_term_cash_outlook.md, 'Options and Who Decides'). The reply finds the weeks below the minimum from the figures given, tests how much the low point depends on the one large late payer, and lays out chasing that customer, paying a supplier later within terms, delaying the purchase not yet ordered, and drawing on the overdraft, each with what it does to the low point and who decides: a draw on the facility is the owner's, with the lender's terms. The disputed invoice stays out, and the reply says so. An outlook from today's records, never a forecast, prediction or projection, and no verdict between the options. The weeks add up as written, with no visible check or correction and no talk of its own tools or limits (pilot, Nov 1, 2026, F2)."
 company_context:
   stage: "Established, profitable"
   industry: "Electrical wholesale"
@@ -14,6 +14,12 @@ forbidden_reply_words:
   - "I wouldn't"
   - "I recommend"
   - "My recommendation"
+  - "wait"
+  - "let me check"
+  - "by hand"
+  - "no tool"
+  - "read-only for me"
+  - "company documents"
 quality_criteria:
   shows_each_weeks_closing_cash_with_the_arithmetic_and_names_the_weeks_below_25000: true
   recomputes_the_low_point_with_halden_paying_on_time_and_a_week_late: true
@@ -21,3 +27,6 @@ quality_criteria:
   gives_each_option_with_its_effect_on_the_low_point: true
   names_priya_for_chasing_morgan_for_supplier_timing_and_the_purchase_and_diane_for_the_overdraft: true
   gives_no_verdict_between_the_options: true
+  every_weeks_closing_cash_is_the_week_before_plus_in_less_out_and_rises_or_falls_as_written: true
+  shows_no_check_or_correction_in_the_reply: true
+  does_not_talk_about_its_own_tools_or_limits: true

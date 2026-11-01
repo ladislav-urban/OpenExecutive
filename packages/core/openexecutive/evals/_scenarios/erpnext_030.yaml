@@ -5,7 +5,7 @@ surface: host
 requires_mcp: true
 product_name: Dynocortex
 advice_policy: explain
-description: "F2, reading the 13-week cash outlook against a minimum balance (knowledge/builtin/finance/short_term_cash_outlook.md, 'Reading It'). Beyond erpnext_028's build: every week whose closing cash falls below the stated minimum is named; what drives the lowest week is named (usually one or two items); the low point is recomputed with the largest late payer one week earlier and one week later, saying if one customer decides the quarter; orders delivered but not invoiced and purchase orders not yet billed are marked apart from dated documents, or it says there are none; and the outlook is read as a floor because sales not yet made are not in it. Still an outlook from today's records, never a forecast, prediction or projection, and no verdict."
+description: "F2, reading the 13-week cash outlook against a minimum balance (knowledge/builtin/finance/short_term_cash_outlook.md, 'Reading It'). Beyond erpnext_028's build: every week whose closing cash falls below the stated minimum is named; what drives the lowest week is named (usually one or two items); the low point is recomputed with the largest late payer one week earlier and one week later, saying if one customer decides the quarter; orders delivered but not invoiced and purchase orders not yet billed are marked apart from dated documents, or it says there are none; and the outlook is read as a floor because sales not yet made are not in it. Still an outlook from today's records, never a forecast, prediction or projection, and no verdict. Found on the pilot (Nov 1, 2026, F2, a demo person in Chats): figures copied \"from the cash outlook in the company documents\" instead of the books, a balance said to fall when it rose, a visible \"wait, check\", and \"no tool could do it… I worked it by hand\"."
 query: "We keep 25,000 in the bank as a minimum. Using the 13-week cash outlook from our records, which weeks go below that, what drives the worst one, and how much does it depend on our biggest late payer?"
 forbidden_tool_calls:
   - propose_erpnext_draft
@@ -17,6 +17,12 @@ forbidden_reply_words:
   - I wouldn't
   - I recommend
   - My recommendation
+  - wait
+  - let me check
+  - by hand
+  - no tool
+  - read-only for me
+  - company documents
 quality_criteria:
   names_every_week_whose_closing_cash_is_below_the_25000_minimum_or_says_none_is: true
   names_the_one_or_two_items_that_drive_the_lowest_week: true
@@ -24,3 +30,7 @@ quality_criteria:
   marks_uninvoiced_orders_and_unbilled_purchase_orders_apart_from_dated_documents_or_says_there_are_none: true
   says_the_outlook_leaves_out_sales_not_yet_made_and_reads_as_a_floor: true
   gives_no_verdict_of_its_own: true
+  takes_todays_figures_from_the_books_not_a_company_documents_table: true
+  every_weeks_closing_cash_is_the_week_before_plus_in_less_out_and_rises_or_falls_as_written: true
+  shows_no_check_or_correction_in_the_reply: true
+  does_not_talk_about_its_own_tools_or_limits: true

@@ -1,0 +1,34 @@
+id: erpnext_034
+domain: mcp
+surface: host
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+description: "F2's second step as a demo person asks it in Chats (Session.demo_caller: the narrow tools, read ERPNext and consult specialists). The 13-week outlook with the usual late payer moved to its habit: the reply reads the balance and the open invoices from the books, not a company document's table; moves the late payer's invoices by its usual delay with the dates; and shows the weeks that change with their arithmetic, each closing balance rising or falling as written. It never shows a check or a correction, and never talks about its tools or limits, since nothing was asked to be done. Found on the pilot (Nov 1, 2026, F2 step 2): 'It isn't done, and no tool could do it… the ERP is read-only for me… I worked the Metro re-dating by hand'."
+query: "Using our 13-week cash outlook from the books, what if our latest-paying customer pays as late as it usually does?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - forecast
+  - prediction
+  - projection
+  - ERPNext
+  - I wouldn't
+  - I recommend
+  - My recommendation
+  - wait
+  - let me check
+  - by hand
+  - no tool
+  - read-only for me
+  - company documents
+quality_criteria:
+  takes_todays_figures_from_the_books_not_a_company_documents_table: true
+  moves_the_late_payers_invoices_by_its_usual_delay_with_the_dates: true
+  shows_the_weeks_that_change_with_their_arithmetic: true
+  every_weeks_closing_cash_is_the_week_before_plus_in_less_out_and_rises_or_falls_as_written: true
+  shows_no_check_or_correction_in_the_reply: true
+  does_not_talk_about_its_own_tools_or_limits: true
+  gives_no_verdict_of_its_own: true

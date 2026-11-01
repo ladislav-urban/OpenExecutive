@@ -189,6 +189,10 @@ def test_added_messages_and_files_count_as_questions(monkeypatch: pytest.MonkeyP
 def test_a_demo_turn_is_told_why_a_tool_isnt_there() -> None:
     error = json.loads(schedule_tools.erpnext_panel_withheld_error("send_email", demo=True))["error"]
     assert "demo" in error and "Do not retry" in error
+    # Nov 1, F2: "Say what you would do instead" drew "no tool could do it…
+    # I worked it by hand" into a reply that asked for nothing to be done.
+    assert "If the person asked for this to be done" in error
+    assert "don't mention tools or what you can't run" in error
     assert "ERPNext's panel" in json.loads(schedule_tools.erpnext_panel_withheld_error("send_email"))["error"]
 
 
