@@ -1,0 +1,15 @@
+id: erpnext_033
+domain: mcp
+description: "ERPNext's \"Ask the Dynocortex\" panel beside Dynocortex's Home with a card in focus (surface: erpnext_panel, page screen / with card; oe_connector's panel-first plan, C). The page block gives only the card's headline, as text the browser sent. The reply takes \"this\" as what the headline names, looks into it in ERPNext (the gross margin by week and what moved it), and doesn't claim to see the card's own figures, other cards or the briefing. It invents no card content beyond the headline. Short enough for a side panel"
+surface: erpnext_panel
+requires_mcp: true
+page:
+  screen: /
+  card: "Gross margin fell 4 points this week"
+query: "What's behind this?"
+quality_criteria:
+  takes_this_as_the_margin_drop_the_headline_names: true
+  looks_into_the_margin_in_erpnext_rather_than_quoting_the_card: true
+  does_not_claim_to_see_the_cards_figures_other_cards_or_the_briefing: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true

@@ -10274,7 +10274,18 @@ integrations:
     channel. The open page's name is wrapped as untrusted content. Beside
     one of Dynocortex's own screens (Home, the Watch list, a hosted page)
     the host sends that screen's path as `screen` instead (`/watchlist`),
-    matched against a plain path pattern and wrapped the same way. The
+    matched against a plain path pattern and wrapped the same way.
+    Beside a list or a report the page may add `filters` (the first 10
+    `[field, op, value]`, each kept only if the field is an ERPNext
+    fieldname, the op one of Frappe's, the value printable and at most 140
+    characters; `is` takes set or not set) and, for a list, `sort`
+    (`<field> asc|desc`); beside Home (screen `/`) it may add `card`, the
+    focused card's headline as Home showed it (printable, at most 200),
+    text only, never a card read by id: ERPNext's word only names the
+    asker (oe_connector's panel-first plan, C; erpnext_panel.page_filters,
+    evals erpnext_032, erpnext_033). They follow the page line inside the
+    same untrusted block, and SCREEN_RULE says the headline is all the turn
+    has of the card. The
     turn's channel block is erpnext_panel.PANEL_CONTEXT_BLOCK (user turn,
     not cached): it names the panel "Ask the Dynocortex", says people there
     call the Executive Dynocortex, and states the read-only limits (suggest

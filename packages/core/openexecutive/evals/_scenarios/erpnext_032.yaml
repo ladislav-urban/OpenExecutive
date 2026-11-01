@@ -1,0 +1,17 @@
+id: erpnext_032
+domain: mcp
+description: "ERPNext's \"Ask the Dynocortex\" panel beside a filtered list (surface: erpnext_panel; oe_connector's panel-first plan, C). The page block names the Sales Invoice list with its filters (status Overdue) and sort (due date, oldest first), so \"these\" means the overdue invoices on screen. The reply reads them from ERPNext with the same filter, says why each is late as far as the records show (how far past due, the customer's usual payment pattern), and doesn't ask which invoices are meant. Short enough for a side panel"
+surface: erpnext_panel
+requires_mcp: true
+page:
+  doctype: Sales Invoice
+  filters:
+    - [status, "=", Overdue]
+  sort: due_date asc
+query: "Why are these overdue?"
+quality_criteria:
+  takes_these_as_the_overdue_sales_invoices_on_screen_without_asking: true
+  reads_the_overdue_invoices_from_erpnext_with_the_status_filter: true
+  gives_how_far_past_due_each_is_and_what_the_records_show_about_the_customer: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true
