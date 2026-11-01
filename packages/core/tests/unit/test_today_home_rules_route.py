@@ -139,3 +139,21 @@ def test_the_page_does_not_reveal_a_private_alert_to_a_teammate(board: dict[str,
     client = _make_client()
     assert client.get(f"/alerts/{private}/card", headers=_as("pat@example.com")).status_code == 200
     assert client.get(f"/alerts/{private}/card", headers=_as("dana@example.com")).status_code == 404
+
+
+def test_an_erp_alerts_card_carries_its_record_and_open(board: dict[str, Any]) -> None:
+    # As a demo bundle loads it: source erpnext, the event's ref as dedup_key.
+    erp = alert_store.insert_alert(
+        source="erpnext", external_id="demo-overdue-ACC-SINV-2026-00042", severity="high",
+        headline="ACC-SINV-2026-00042 is 41 days overdue", body="Metro owes $9,140.",
+        dedup_key="erpnext:overdue_receivable:ACC-SINV-2026-00042", db_path=board["db"],
+    )
+    body = _make_client().get("/today", headers=_as("pat@example.com")).json()
+    by_id = {p["alert_id"]: p for p in body["proposals"]}
+    card = by_id[erp]
+    assert card["record"] == {"doctype": "Sales Invoice", "name": "ACC-SINV-2026-00042"}
+    opened = [a for a in card["actions"] if a["key"] == "open_record"]
+    assert opened == [{**opened[0], "label": "Open", "primary": False, "href": None}]
+    # Every other card: no record, no Open.
+    other = by_id[board["unrouted"]]
+    assert other["record"] is None and "open_record" not in [a["key"] for a in other["actions"]]

@@ -146,3 +146,44 @@ def test_events_are_capped_per_hour(site: SimpleNamespace, monkeypatch: pytest.M
     assert _post(site, {"events": batch}).status_code == 200
     assert _post(site, {"events": batch}).status_code == 429
     assert len(site.scheduled) == 2
+
+
+def _alert(**over: object) -> object:
+    from types import SimpleNamespace
+
+    base = {"source": "erpnext", "dedup_key": "", "external_id": "", "topic_tags": []}
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+@pytest.mark.parametrize(
+    ("dedup_key", "expected"),
+    [
+        # As this module's events are stored (private to the principal).
+        ("private:erpnext:overdue_receivable:ACC-SINV-2026-00042", {"doctype": "Sales Invoice", "name": "ACC-SINV-2026-00042"}),
+        ("private:erpnext:large_purchase_invoice:ACC-PINV-2026-00007", {"doctype": "Purchase Invoice", "name": "ACC-PINV-2026-00007"}),
+        ("private:erpnext:stock_below_reorder:BRK-16@Stores - AC", {"doctype": "Item", "name": "BRK-16"}),
+        ("private:erpnext:stalled_repost:Aurora Components (Demo):REPOST-ITEM-VAL-000123", {"doctype": "Repost Item Valuation", "name": "REPOST-ITEM-VAL-000123"}),
+        # As a demo bundle writes them (shown to demo people, not private).
+        ("erpnext:overdue_receivable:ACC-SINV-2026-00042", {"doctype": "Sales Invoice", "name": "ACC-SINV-2026-00042"}),
+        ("erpnext:stock_below_reorder:BRK-16", {"doctype": "Item", "name": "BRK-16"}),
+        # A report, not a document; anything else.
+        ("private:erpnext:budget_exceeded:Co:Dept:Freight:2026", None),
+        ("private:erpnext:weekly_margin_drop:Co:2026-W43", None),
+        ("demo-overdue-ACC-SINV-2026-00042", None),
+        ("erpnext:overdue_receivable:", None),
+        ("erpnext:overdue_receivable:bad\nname", None),
+        ("", None),
+    ],
+)
+def test_record_for_names_the_document_an_erp_alert_is_about(dedup_key: str, expected: object) -> None:
+    from openexecutive.integrations.erpnext_events import record_for
+
+    assert record_for(_alert(dedup_key=dedup_key)) == expected
+
+
+def test_record_for_trusts_only_the_erpnext_source() -> None:
+    from openexecutive.integrations.erpnext_events import record_for
+
+    # The model's create_alert can't use the source erpnext (RESERVED_SOURCES).
+    assert record_for(_alert(source="executive_erpnext", dedup_key="erpnext:overdue_receivable:X-1")) is None

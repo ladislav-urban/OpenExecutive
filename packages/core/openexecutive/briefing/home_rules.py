@@ -61,6 +61,7 @@ ActionKey = Literal[
     "open_document",
     "open_in_app",
     "open_person",
+    "open_record",
     "discuss",
 ]
 Tone = Literal["amber", "emerald", "rose"]
@@ -346,8 +347,12 @@ def card_actions(
     signal (Discuss leads); otherwise Approve. Approve is the card's own
     person's, or the principal's on a teammate's card, as the server allows.
 
+    An ERP alert's card (``proposal.record``) offers Open to everyone who
+    sees it, first in the menu: the host opens the record as the person.
+
     A demo person (``caller_is_demo``) only looks at a card that isn't
-    routed to them (``caller_id``): Discuss, and Open on a document. On
+    routed to them (``caller_id``): Discuss, Open on a document, and Open
+    on an ERP alert's record (never its primary). On
     their own card they approve only a decision (their ERPNext draft), as
     the approval routes allow. Approving, dismissing, snoozing,
     nudging or running something would act on the company's shared card for
@@ -412,6 +417,12 @@ def card_actions(
         CardAction(key="open_person", label=f"Open {first_name or assignee.full_name}'s page", href=f"/people/{assignee.id}")
         if assignee is not None else None
     )
+    # The ERPNext document an ERP alert is about (proposal.record). The host
+    # (ERPNext's desk) opens it as the person, so ERPNext decides whether
+    # they may: no href, and the web app on its own doesn't show it.
+    open_record = (
+        CardAction(key="open_record", label="Open") if getattr(proposal, "record", None) is not None else None
+    )
 
     primary: CardAction | None
     if is_artifact:
@@ -433,16 +444,21 @@ def card_actions(
         CardAction(key="snooze", label=c.label, until=c.until, short=c.short) for c in snoozes
     ]
     menu = [
-        a for a in (rerun, open_run, nudge, workflow, approve, edit_approve, *snooze_actions, dismiss, open_in_app, person_page)
+        a for a in (
+            open_record, rerun, open_run, nudge, workflow, approve, edit_approve, *snooze_actions, dismiss,
+            open_in_app, person_page,
+        )
         if a is not None and a is not primary
     ]
     # Theirs alone: routed to them (an ERPNext draft they asked for).
     # Anything else they only look at.
     if caller_is_demo and (routed is None or routed != caller_id):
         looks = [a for a in (open_doc, open_in_app) if a is not None]
+        # Open on an ERP alert too, beside Discuss and never the primary.
+        records = [open_record] if open_record is not None else []
         if looks:
-            return [looks[0].model_copy(update={"primary": True}), discuss, *looks[1:]]
-        return [discuss]
+            return [looks[0].model_copy(update={"primary": True}), discuss, *looks[1:], *records]
+        return [discuss, *records]
     if caller_is_demo and not is_decision:
         # /alerts/{id}/approve refuses every demo person; only a decision of
         # theirs is answered (/decisions/{id}/approve).

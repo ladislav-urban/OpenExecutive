@@ -424,3 +424,24 @@ def test_a_demo_person_only_looks_at_a_card_that_isnt_theirs() -> None:
     assert "approve" in demo_actions(proposal(routed_to_person_id=7, decision_instance_id=5), "needs_you")
     # Solo puts every card in Needs you: someone else's is still only looked at.
     assert demo_actions(proposal(routed_to_person_id=3), "needs_you") == ["discuss"]
+
+
+# An ERP alert's record (proposal.record): Open for everyone who sees the card.
+
+def test_an_erp_alerts_card_offers_open_first_in_the_menu() -> None:
+    record = SimpleNamespace(doctype="Sales Invoice", name="ACC-SINV-2026-00042")
+    actions = offered(proposal(record=record))
+    assert keys(actions)[:3] == ["approve", "discuss", "open_record"]
+    opened = actions[2]
+    assert opened.label == "Open" and not opened.primary and opened.href is None
+    assert "open_record" not in keys(offered(proposal()))
+
+
+def test_a_demo_person_gets_open_beside_discuss_never_as_primary() -> None:
+    record = SimpleNamespace(doctype="Item", name="DEMO-BRK-16")
+    actions = hr.card_actions(
+        proposal(record=record), lane_="needs_you", caller_is_principal=False, people_by_id={},
+        snoozes=hr.snooze_choices(NOW, ZoneInfo("UTC")), caller_is_demo=True, caller_id=7,
+    )
+    assert keys(actions) == ["discuss", "open_record"]
+    assert not any(a.primary for a in actions)

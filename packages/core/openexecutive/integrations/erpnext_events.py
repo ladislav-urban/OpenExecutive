@@ -97,6 +97,46 @@ def _room(count: int, now: float) -> bool:
     return True
 
 
+# The ERPNext document each rule's event is about, from its key (oe_connector
+# alerts.py), for Home's Open (``record_for``). A budget line or a week's
+# margin names a report, not one document, so those rules open nothing.
+def _record_name(kind: str, key: str) -> str:
+    if kind == "stock_below_reorder":
+        return key.split("@", 1)[0]
+    if kind == "stalled_repost":
+        return key.rsplit(":", 1)[-1]
+    return key
+
+
+RECORD_DOCTYPES: dict[str, str] = {
+    "overdue_receivable": "Sales Invoice",
+    "large_purchase_invoice": "Purchase Invoice",
+    "stock_below_reorder": "Item",
+    "stalled_repost": "Repost Item Valuation",
+}
+
+
+def record_for(alert: Any) -> dict[str, str] | None:
+    """``{"doctype", "name"}`` of the ERPNext document ``alert`` is about,
+    for Home's Open; None for any other alert, or a rule without one.
+    Only an alert of source ``erpnext`` counts, which the model's
+    ``create_alert`` may not use (``alert_tools.RESERVED_SOURCES``): this
+    module's events, whose ``dedup_key`` is ``private:erpnext:<kind>:<key>``,
+    and a demo bundle's alerts (``cli.demo_reset``), shown to demo people and
+    so not private, as ``erpnext:<kind>:<key>``. It names a record only;
+    ERPNext decides whether the person may open it."""
+    if getattr(alert, "source", None) != "erpnext":
+        return None
+    ref = getattr(alert, "dedup_key", "") or ""
+    if ref.startswith("private:"):
+        ref = ref[len("private:"):]
+    prefix, kind, key = (ref.split(":", 2) + ["", ""])[:3]
+    if prefix != "erpnext" or kind not in RECORD_DOCTYPES or not _KEY_RE.fullmatch(key):
+        return None
+    name = _record_name(kind, key).strip()
+    return {"doctype": RECORD_DOCTYPES[kind], "name": name} if name else None
+
+
 def _text(value: Any, cap: int) -> str:
     if not isinstance(value, str):
         return ""
