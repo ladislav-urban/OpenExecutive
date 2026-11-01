@@ -183,6 +183,14 @@ def _roster_request_card(topic_tags: list[str]) -> RosterRequestCard | None:
         return None
 
 
+class ErpRecord(BaseModel):
+    """The ERPNext document an ERP alert's card is about
+    (``erpnext_events.record_for``), which the host opens for Open."""
+
+    doctype: str
+    name: str
+
+
 class ProposalItem(BaseModel):
     alert_id: int
     headline: str
@@ -249,6 +257,16 @@ class ProposalItem(BaseModel):
     lane: Lane = "needs_you"
     card_kind: CardKind = "proposal"
     actions: list[CardAction] = Field(default_factory=list)
+    # An ERP alert's document, for Open (action ``open_record``); None on
+    # every other card, and on a rule that names a report, not a document.
+    record: ErpRecord | None = None
+
+
+def _erp_record(alert: Alert) -> ErpRecord | None:
+    from openexecutive.integrations.erpnext_events import record_for
+
+    found = record_for(alert)
+    return ErpRecord(**found) if found else None
 
 
 def _proposal_body(alert: Alert) -> str:
@@ -959,6 +977,7 @@ def _build_today(
             suggested_workflow=alert.suggested_workflow,
             artifact_format=alert.artifact_format if alert.source == "artifact" else None,
             artifact_url=alert.artifact_url if alert.source == "artifact" else None,
+            record=_erp_record(alert),
         ))
 
     # Action items first (sharpest by score), monitoring noise after; ties

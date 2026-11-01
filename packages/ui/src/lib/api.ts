@@ -5114,6 +5114,9 @@ export interface ProposalItem {
   lane?: HomeLane;
   card_kind?: HomeCardKind;
   actions?: HomeCardAction[];
+  // An ERP alert's document (integrations.erpnext_events.record_for), which
+  // a host opens for the `open_record` action; null on every other card.
+  record?: { doctype: string; name: string } | null;
 }
 
 export type HomeLane = "needs_you" | "team" | "monitoring";
@@ -5133,6 +5136,9 @@ export interface HomeCardAction {
     | "open_document"
     | "open_in_app"
     | "open_person"
+    // An ERP alert's record (`record`): the host opens it; no href, so the
+    // web app on its own shows nothing for it.
+    | "open_record"
     | "discuss";
   label: string;
   primary?: boolean;
