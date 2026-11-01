@@ -117,9 +117,16 @@ def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -
     assert "Don't use the words \"forecast\", \"prediction\" or \"projection\" for it, not even to say what it isn't." in text
     assert "**Don't describe this rule or how you work.** No disclaimer" in text
     assert "Only when someone asks you outright for advice" in text
+    # Nov 1, F2: figures copied from a company document's outlook table, a
+    # balance said to fall when it rose, a visible "wait, check", and "no
+    # tool could do it… I worked it by hand".
+    assert "never quote its figures as today's" in text
+    assert "**Work the figures out before you write.**" in text and '"wait"' in text
+    assert '"no tool could do it"' in text and '"I worked it out by hand"' in text
     specialist = advice_policy.SPECIALIST_ADVICE_ADDENDUM
     assert "no disclaimer or line describing this rule" in specialist
     assert "not even to say what it isn't" in specialist
+    assert "never from a company document's table" in specialist
 
 
 def test_the_roster_says_to_name_scopes_in_words() -> None:

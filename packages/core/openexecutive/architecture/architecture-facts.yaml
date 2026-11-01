@@ -222,7 +222,13 @@ caching:
         line about advice (the canned line only when advice is asked for
         outright); on these decisions it wins over the persona's
         "recommendation first"; "outlook from today's records", never
-        forecast/prediction/projection even negated. The People roster
+        forecast/prediction/projection even negated; today's figures from
+        the books read now, never a company document's table (a snapshot);
+        worked out before writing, no visible check or correction; no talk
+        of its tools or limits unasked (pilot F2, Nov 1, 2026; evals
+        erpnext_030, erpnext_034, finance_advice_010). A demo turn's refused
+        tool asks for one sentence only when the person asked for the
+        action (schedule_tools.erpnext_panel_withheld_error). The People roster
         also says to name a scope in words, not by its key. Evals
         finance_advice_001-009. Off, nothing changes but that roster line.
     - id: company_and_org
