@@ -1,0 +1,23 @@
+id: finance_advice_010
+domain: finance
+advice_policy: explain
+description: "ADVICE_POLICY=explain. F2's options for a week below the minimum cash (knowledge/builtin/finance/short_term_cash_outlook.md, 'Options and Who Decides'). The reply finds the weeks below the minimum from the figures given, tests how much the low point depends on the one large late payer, and lays out chasing that customer, paying a supplier later within terms, delaying the purchase not yet ordered, and drawing on the overdraft, each with what it does to the low point and who decides: a draw on the facility is the owner's, with the lender's terms. The disputed invoice stays out, and the reply says so. An outlook from today's records, never a forecast, prediction or projection, and no verdict between the options."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "We keep $25,000 as a minimum in the bank and have $38,000 today. Over the next three weeks: payroll of $15,000 in weeks 1 and 3; supplier invoices of $16,000 due in week 2, which we could pay in week 3 within terms; a $7,000 tool purchase planned for week 2 but not yet ordered; customer receipts of $6,000 in week 1 and $20,000 in week 3, where $14,000 of the week-3 money is Halden, who usually pays a week late. Leo's $4,000 invoice is disputed. We have a $30,000 overdraft. Morgan approves supplier payments and spend up to $10,000, Priya owns collections, and Diane owns the company. Which week is the problem, and what are our options?"
+forbidden_reply_words:
+  - "forecast"
+  - "prediction"
+  - "projection"
+  - "I wouldn't"
+  - "I recommend"
+  - "My recommendation"
+quality_criteria:
+  shows_each_weeks_closing_cash_with_the_arithmetic_and_names_the_weeks_below_25000: true
+  recomputes_the_low_point_with_halden_paying_on_time_and_a_week_late: true
+  leaves_leos_disputed_invoice_out_and_says_so: true
+  gives_each_option_with_its_effect_on_the_low_point: true
+  names_priya_for_chasing_morgan_for_supplier_timing_and_the_purchase_and_diane_for_the_overdraft: true
+  gives_no_verdict_between_the_options: true

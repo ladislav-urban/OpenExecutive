@@ -1,0 +1,20 @@
+id: finance_advice_011
+domain: finance
+advice_policy: explain
+description: "ADVICE_POLICY=explain. F3's open items at the close, from the figures given (knowledge/builtin/finance/month_end_close_checklist.md, 'Options When Something Is Still Open'). For each item the reply gives the checklist's options with what each does to October's figures and who decides: the unidentified $1,240 bank charge held or posted to a clearing account with a note; the missing freight bill accrued from the receipt or left out with the cost understated; the uninvoiced delivery invoiced dated in October if policy allows, or the income accrued. Locking October with a list of exceptions or leaving it open with a date to lock is the bookkeeper's call with the owner's sign-off. Whether the accrued income changes the VAT return is for the accountant to confirm. No verdict and no disclaimer about advice."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Three things are holding October's close. A $1,240 bank charge on Oct 29 that nobody recognises. Northline's freight bill for October hasn't arrived; the goods were received on Oct 24 against a $3,600 purchase order. And a $5,800 delivery to Calder on Oct 30 was never invoiced. Sam keeps the books, Morgan approved the freight, Priya invoices customers, and Diane signs off the month. What are the options for each, who decides, and can we lock October?"
+forbidden_reply_words:
+  - "I wouldn't"
+  - "I recommend"
+  - "My recommendation"
+quality_criteria:
+  gives_hold_or_clearing_account_for_the_bank_charge_with_sam_deciding: true
+  gives_accrue_from_the_receipt_or_close_understated_for_the_freight_bill_with_the_3600: true
+  gives_invoice_dated_in_october_or_accrue_the_income_for_the_calder_delivery: true
+  lays_out_locking_with_exceptions_or_leaving_it_open_with_sam_locking_and_diane_signing_off: true
+  sends_the_vat_or_treatment_question_to_an_accountant: true
+  gives_no_verdict_or_disclaimer_about_advice: true

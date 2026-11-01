@@ -1,0 +1,23 @@
+id: erpnext_031
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+description: "F3, closing last month around what is still open (knowledge/builtin/finance/month_end_close_checklist.md, 'Options When Something Is Still Open' and 'Lock the Month'). For each open item the books show, the reply gives the checklist's options with what each does to the month's figures and who decides from the roster: an unidentified bank line held or posted to a clearing account with a note; a supplier bill not yet arrived accrued from the purchase receipt or left out with the month's cost understated; a delivery not invoiced invoiced now or accrued. It says whether last month can still be posted into, and lays out locking with a known list of exceptions or leaving it open with a date to lock. Anything that changes tax or accounting treatment goes to an accountant to confirm. No verdict and no disclaimer about advice."
+query: "We need last month closed this week even if a few things are still open. For each open item, what are our options and who decides? Can we lock the month now?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - I wouldn't
+  - I recommend
+  - My recommendation
+quality_criteria:
+  gives_each_open_item_the_checklists_options_with_what_each_does_to_the_months_figures: true
+  names_who_decides_each_item_from_the_roster: true
+  says_whether_last_month_can_still_be_posted_into: true
+  lays_out_locking_with_a_list_of_exceptions_or_leaving_it_open_with_a_date: true
+  sends_tax_or_accounting_treatment_questions_to_an_accountant: true
+  gives_no_verdict_or_disclaimer_about_advice: true
