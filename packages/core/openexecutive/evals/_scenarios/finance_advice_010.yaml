@@ -14,7 +14,7 @@ forbidden_reply_words:
   - "I wouldn't"
   - "I recommend"
   - "My recommendation"
-  - "wait"
+  - "wait, check"
   - "let me check"
   - "by hand"
   - "no tool"
