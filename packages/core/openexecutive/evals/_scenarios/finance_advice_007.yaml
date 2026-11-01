@@ -1,0 +1,19 @@
+id: finance_advice_007
+domain: finance
+advice_policy: explain
+description: "ADVICE_POLICY=explain. Commentary for the monthly budget review, asked for the choices for each line with who decides. The reply gives what moved, why, and per line the choices with who decides, and nothing more: no recommendation of its own and no line about what the commentary is or isn't. Found on the pilot (Oct 30, 2026, F5): an otherwise good commentary added 'My recommendation: review the commitments before the next invoice is approved' and 'Commentary only; it decides nothing'."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Write the commentary for the monthly review: what moved, why, and the choices for each line, with who decides. Freight is $14,200 against a $9,000 budget, after two expedited shipments. Repairs are $6,800 against $4,000, mostly forklift FL-01. Marketing is $2,100 against $5,000, with a trade show moved to next month. Morgan decides spend up to $10,000 and Diane above."
+forbidden_reply_words:
+  - "My recommendation"
+  - "I recommend"
+  - "decides nothing"
+  - "Commentary only"
+quality_criteria:
+  says_what_moved_and_why_per_line_with_the_variance_arithmetic: true
+  gives_choices_per_line_with_who_decides_from_the_stated_limits: true
+  makes_no_recommendation_of_its_own: true
+  does_not_describe_what_the_commentary_is_or_decides: true

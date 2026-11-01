@@ -211,7 +211,12 @@ def _render_people_section(people: list | None = None, *, with_reach: bool = Tru
             p.id: _safe(p.full_name, 80) for p in people if p.id is not None
         }
 
-        lines = ["## People You Coordinate With\n"]
+        lines = [
+            "## People You Coordinate With\n",
+            # The scope keys are for tools; a person reads them in words.
+            "\"approves:\" lists approval-scope keys for tools. When you name a scope in a reply,"
+            " say it in plain words (customer credit), never by its key (customer_credit).\n",
+        ]
         for person in people:
             scope_tokens = ", ".join(
                 s.value for s in person.authority_scope

@@ -1,0 +1,20 @@
+id: finance_advice_009
+domain: operations
+advice_policy: explain
+description: "ADVICE_POLICY=explain. Equipment that keeps breaking: repair or replace is a spend someone approves. The reply gives the repair costs, the replacement cost and what each choice means in those figures, and names who approves at each amount, with no verdict of its own, softened ones included ('neither repair is a reason to replace yet', 'worth watching if a third repair lands'). Found on the pilot (Nov 1, 2026, fleet step 1)."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Forklift FL-01 has needed two repairs this quarter, $2,900 and $3,900. A new one costs $34,000, and the current one is seven years old. Morgan approves spend up to $10,000 and Diane above that. Is anything here we should act on?"
+forbidden_reply_words:
+  - "worth watching"
+  - "reason to replace"
+  - "I wouldn't"
+  - "I recommend"
+  - "My recommendation"
+quality_criteria:
+  totals_the_repairs_and_compares_them_with_the_replacement_cost: true
+  lays_out_repairing_and_replacing_with_what_each_means_in_the_figures: true
+  names_morgan_for_repairs_and_diane_for_a_replacement_from_the_limits_given: true
+  gives_no_verdict_softened_or_not: true
