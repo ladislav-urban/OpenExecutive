@@ -1,0 +1,23 @@
+id: erpnext_038
+domain: mcp
+speaker: principal
+surface: erpnext_panel
+requires_mcp: true
+product_name: Dynocortex
+description: "An action turn in ERPNext's panel (phase 4b, drafts on), with the erpnext server connected: the principal asks for a restock. The reply reports the outcome (a Material Request draft waits on a card for their approval in the app, with the item and quantity), and never the tool calls behind it: no calls that 'returned ok', no first attempt that failed, no retry. Found on the pilot's panel round (Nov 1, 2026, month-end step 6): 'Both calls ran in my last reply and returned ok… My first attempt at the journal entry failed, and the retry went through.'"
+query: "Raise a restock for ITEM-1 in Stores, up to its reorder quantity."
+expected_tool_calls:
+  - call_tool
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - retry
+  - first attempt
+  - returned ok
+  - both calls
+quality_criteria:
+  reports_the_outcome_with_the_item_and_quantity: true
+  says_the_card_waits_for_their_approval_in_the_app: true
+  never_mentions_tool_calls_attempts_or_retries: true
+  never_claims_the_material_request_was_created_or_submitted: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

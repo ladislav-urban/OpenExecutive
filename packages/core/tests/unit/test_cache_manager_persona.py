@@ -206,3 +206,25 @@ def test_no_tool_building_guidance_without_the_sandbox(monkeypatch: pytest.Monke
 
     monkeypatch.setattr("openexecutive.workflows.step_script.available", lambda: False)
     assert TOOL_BUILDING_ADDENDUM not in build_system_blocks(mcp_enabled=True)[0]["text"]
+
+
+def test_persona_reports_outcomes_not_tool_calls() -> None:
+    # Pilot, Nov 1: "Both calls ran ... returned ok ... the retry went through."
+    from openexecutive.prompts.executive_persona import EXECUTIVE_PERSONA_SOLO_PROMPT
+
+    for persona in (EXECUTIVE_PERSONA_PROMPT, EXECUTIVE_PERSONA_SOLO_PROMPT):
+        assert "**Report the outcome, never the calls.**" in persona
+        assert "the retry went through" in persona
+
+
+def test_persona_reads_before_ruling_out_and_corrects_once() -> None:
+    # Pilot, Nov 1: margins without materials, "stock isn't the blocker"
+    # then 194 short; each corrected only on the next step.
+    from openexecutive.prompts.executive_persona import EXECUTIVE_PERSONA_SOLO_PROMPT
+
+    for persona in (EXECUTIVE_PERSONA_PROMPT, EXECUTIVE_PERSONA_SOLO_PROMPT):
+        assert "## Getting the Figures Right Once" in persona
+        assert "**Read before you rule something out.**" in persona
+        assert "**Correct yourself plainly, once.**" in persona
+    blocks = build_system_blocks()
+    assert "**Correct yourself plainly, once.**" in blocks[0]["text"]

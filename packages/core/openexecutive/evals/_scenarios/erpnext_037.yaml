@@ -1,0 +1,21 @@
+id: erpnext_037
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+description: "A correction between steps, in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. The person quotes an earlier answer (stock isn't what holds Harbor Electric's latest order) and asks whether it holds. The reply reads the stock against the order; if the earlier answer was wrong it says so plainly in one sentence at the start and gives the corrected figure (how many short, of which item), with no hedging or relitigating; if it holds, it says so with the figures. Found on the pilot's panel round (Nov 1, 2026): 'stock isn't the blocker', then 194 short."
+query: "Earlier you said stock isn't what's holding up Harbor Electric's latest order. Is that still right?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "wait, check"
+  - let me check
+quality_criteria:
+  reads_the_stock_against_what_the_order_needs: true
+  if_the_earlier_answer_was_wrong_says_so_once_in_one_plain_sentence_at_the_start: true
+  gives_the_corrected_figure_with_the_item_and_how_many_short: true
+  does_not_hedge_or_relitigate_the_earlier_answer: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
