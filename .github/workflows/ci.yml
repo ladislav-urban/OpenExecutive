@@ -9,12 +9,17 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR supersedes the run in flight: agents often push several
-# times in a row, and each superseded run would otherwise burn a full suite.
-# Never cancel main, so every merge keeps its own result.
+# A newer push supersedes the run in flight, on a PR and on main alike: agents
+# often push several times in a row, and merges land back to back, so each
+# superseded run would otherwise hold a self-hosted runner for a full suite and
+# queue every PR behind it (Nov 2, 2026: PR checks waited 1-2 h behind a main
+# run for a commit already superseded). On main the newest run tests every
+# merge before it as well. Nothing waits on main's CI (images publish in
+# parallel; the release PR is gated on its own CI), and Publish images and
+# Release please keep their own groups, which never cancel.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   # Decides which suites a PR can affect. Skipped jobs count as passing for
@@ -67,12 +72,32 @@ jobs:
       # uv prefers a Python it manages itself: on a self-hosted runner
       # (vars.CI_RUNNER) that can be a newer one, which installs different
       # dependencies (rapidocr-onnxruntime is for < 3.13) and fails tests.
+      #
+      # GitHub's cache only on GitHub's runners. On the self-hosted ones
+      # restoring and saving it took 7-16 min of every job (Nov 2, 2026), while
+      # uv's own cache in the runner user's home survives between jobs: the
+      # next step points uv at it. uv locks its cache, so the runners sharing
+      # the host can use one cache at once. Pull requests and main keep
+      # separate caches: uv trusts what it finds in its cache without hashing
+      # it again, so a PR's job must not fill the cache main's jobs install
+      # from. (Every job runs as the same user on these hosts, so this guards
+      # against accidents, not a hostile branch; no job here has secrets, and
+      # images are built on GitHub's runners with a fresh cache.)
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
+          prune-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: packages/core/uv.lock
           python-version: "3.11"
+
+      - name: Keep uv's cache on the runner
+        if: runner.environment == 'self-hosted'
+        run: |
+          echo "UV_CACHE_DIR=$HOME/.cache/uv-ci/$TRUST" >> "$GITHUB_ENV"
+          echo "MYPY_CACHE_DIR=$HOME/.cache/mypy-ci/$TRUST/$RUNNER_NAME" >> "$GITHUB_ENV"
+        env:
+          TRUST: ${{ github.event_name == 'push' && 'main' || 'pr' }}
 
       # docker/Dockerfile installs from uv.lock with `uv sync --locked`, which
       # fails the image build if the lock is stale. `uv sync` below would
@@ -130,12 +155,30 @@ jobs:
       # uv prefers a Python it manages itself: on a self-hosted runner
       # (vars.CI_RUNNER) that can be a newer one, which installs different
       # dependencies (rapidocr-onnxruntime is for < 3.13) and fails tests.
+      # GitHub's cache only on GitHub's runners; see the lint job.
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
+          prune-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: packages/core/uv.lock
           python-version: "3.11"
+
+      # Also caps pytest's workers there. The self-hosted runners share one
+      # host, and `-n auto` gave each job a worker per core: three jobs ran 36
+      # workers on 12 cores (load 19.6, Nov 2, 2026) and timing tests failed.
+      # vars.CI_PYTEST_WORKERS sets the count; the default 5 suits the two
+      # runners there now and leaves room for tsc, mypy and the local bench.
+      # Change the variable when a runner is added. GitHub's runners keep one
+      # worker per core.
+      - name: Keep uv's cache on the runner
+        if: runner.environment == 'self-hosted'
+        run: |
+          echo "UV_CACHE_DIR=$HOME/.cache/uv-ci/$TRUST" >> "$GITHUB_ENV"
+          echo "PYTEST_XDIST_AUTO_NUM_WORKERS=$WORKERS" >> "$GITHUB_ENV"
+        env:
+          TRUST: ${{ github.event_name == 'push' && 'main' || 'pr' }}
+          WORKERS: ${{ vars.CI_PYTEST_WORKERS || '5' }}
 
       - name: Install dependencies
         run: cd packages/core && uv sync --extra dev

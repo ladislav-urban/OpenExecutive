@@ -536,6 +536,11 @@ def test_a_hanging_card_endpoint_is_bounded(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(honcho_client, "_IDENTITY_SEED_TIMEOUT_S", 0.05)
 
     hang_attempts: list[int] = []
+    # How long the hanging call lived, from its start until it was cut off.
+    # Timed inside the call, not around the whole run: the run also does a
+    # roster read on a worker thread and starts the loop, which on a busy CI
+    # host (three runners, parallel workers) took 0.5-0.66 s by themselves.
+    lived: list[float] = []
 
     class _HangingClient(_CardClient):
         async def peer(self, peer_id: str, **kwargs: Any) -> Any:
@@ -543,22 +548,30 @@ def test_a_hanging_card_endpoint_is_bounded(monkeypatch: pytest.MonkeyPatch) -> 
 
             async def _hang() -> Any:
                 hang_attempts.append(1)
-                await asyncio.sleep(30)
+                loop = asyncio.get_running_loop()
+                started = loop.time()
+                try:
+                    await asyncio.sleep(30)
+                except asyncio.CancelledError:
+                    lived.append(loop.time() - started)
+                    raise
 
             peer.get_card = _hang  # type: ignore[method-assign]
             return peer
 
     loop = asyncio.new_event_loop()
     try:
-        started = loop.time()
         loop.run_until_complete(_async_sync(_HangingClient(store), person_id=1))
-        # Ten times the patched bound, not a hundred: a regression to a
-        # seconds-scale bound must fail this, not hide under slack.
-        assert loop.time() - started < honcho_client._IDENTITY_SEED_TIMEOUT_S * 10
     finally:
         loop.close()
-    # The bound only means something if the hanging call was actually made.
+    # The bound only means something if the hanging call was actually made,
+    # and it was cut off rather than left to finish.
     assert hang_attempts == [1]
+    assert len(lived) == 1
+    # Under a second against a 0.05 s bound and a 30 s hang: loop latency
+    # on a loaded host fits, and a regression to a seconds-scale bound (the
+    # SDK client's own timeout) still fails.
+    assert lived[0] < 1.0
     assert len(store["messages"]) == 2
 
 

@@ -437,7 +437,10 @@ async def test_the_wall_clock_holds_when_each_step_runs_in_its_own_task() -> Non
             done = payload
     body = json.loads(done[0])
     assert done[1] and body["error"] == "the script ran past its time limit"
-    assert 1 <= len(body["calls"]) < 10
+    # Stopped far short of the 50 steps. On a busy CI host the limit can pass
+    # before the first step runs, and the result then has no "calls" at all
+    # (Nov 2, 2026), which still shows the limit held across the tasks.
+    assert len(body.get("calls", [])) < 10
 
 
 @pytest.mark.asyncio
