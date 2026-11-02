@@ -2238,24 +2238,32 @@ def mcp_client_allows_mcp_tool(tool_name: object) -> bool:
     return isinstance(tool_name, str) and tool_name in MCP_CLIENT_MCP_TOOLS
 
 
+def host_page_turn(session: Any) -> bool:
+    """Whether ``session`` is a host origin's turn that carried the page
+    beside ERPNext's docked panel (``Session.host_page``, set per turn by the
+    web chat route, F1). Its one extra: ERPNext's show tool."""
+    return host_turn(session) and getattr(session, "host_page", False) is True
+
+
 def host_allows_erpnext_read(tool_name: object, session: Any = None) -> bool:
     """Whether a host origin's turn (``host_turn``; default: the bound one)
     may call ``tool_name``: one of ERPNext's pinned read tools
-    (``connected_systems.PINNED_ERPNEXT_TOOLS``), never a draft, show or
+    (``connected_systems.PINNED_ERPNEXT_TOOLS``), and on a host page's turn
+    (``host_page_turn``) ERPNext's show tool, which writes nothing and names
+    a view oe_connector checks again as the desk user; never a draft or
     supplier tool. The owner's choice (Oct 29, 2026): the desk's Chats answer
     ERPNext questions, and ``erpnext_caller.caller_for`` signs each call as
     the person signed in to this app, from the session alone. A script on
     the page already runs as that ERPNext user and reads the same records.
     What it may also steer into a reply is this app's context (specialists,
     knowledge, a teammate's standing facts); the rest stays read-only."""
-    from openexecutive.prompts.connected_systems import PINNED_ERPNEXT_TOOLS
+    from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL, PINNED_ERPNEXT_TOOLS
 
     turn = session if session is not None else current_session.get()
-    return (
-        host_turn(turn)
-        and isinstance(tool_name, str)
-        and tool_name.strip().lower().replace("-", "_") in PINNED_ERPNEXT_TOOLS
-    )
+    if not host_turn(turn) or not isinstance(tool_name, str):
+        return False
+    name = tool_name.strip().lower().replace("-", "_")
+    return name in PINNED_ERPNEXT_TOOLS or (name == ERPNEXT_SHOW_TOOL and host_page_turn(turn))
 
 
 def read_only_allows_mcp_tool(tool_name: object) -> bool:

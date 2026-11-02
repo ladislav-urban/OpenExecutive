@@ -428,6 +428,10 @@ def offer_refusal(session: Any) -> str | None:
             return "ERPNext drafts are not turned on here."
         if session is None or getattr(session, "unattended", False) is True:
             return "ERPNext drafts are proposed only in a conversation with the person, never in a run nobody is watching."
+        # A host origin's page (ERPNext's docked panel and the desk's Chats
+        # among them) only reads and advises; F1 leaves drafts out of it.
+        if getattr(session, "from_host", False) is True:
+            return "ERPNext drafts are proposed only in OpenExecutive's own chat, never from another app's page such as ERPNext's panel."
         if getattr(session, "private_to_principal", False) is True or str(getattr(session, "origin_channel", "") or "") == "email":
             return "ERPNext drafts are proposed only when the person asks in a chat, never from an email."
         who = _proposer(session)
