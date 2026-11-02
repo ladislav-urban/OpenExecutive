@@ -91,7 +91,7 @@ def test_a_retraction_of_a_claim_that_says_not_is_kept() -> None:
 def test_long_sentences_stay_cheap() -> None:
     import time
 
-    words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu".split()
+    words = ["alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta", "iota", "kappa", "lambda", "mu"]
 
     def prose(seed: int) -> str:
         return " ".join(words[(seed * 7 + i * 5) % len(words)] for i in range(45)) + "."
