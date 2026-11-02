@@ -551,7 +551,7 @@ ACK_ALERT_TOOL: dict[str, Any] = {
     "name": "ack_alert",
     "description": (
         "Mark a briefing proposal/alert as acknowledged or dismissed so it clears from "
-        "the user's 'Needs you' list. The briefing page's Approve / Dismiss buttons "
+        "the user's 'Your decision' list. The briefing page's Approve / Dismiss buttons "
         "already ack via HTTP before the chat handoff, so you must NOT call this tool "
         "when the user's first message mentions that the alert is already acked. Call "
         "ONLY when the user EXPLICITLY approves (\"ok\", \"approve\", \"go ahead\", "
@@ -2926,7 +2926,7 @@ async def handle_ack_alert(tool_input: dict[str, Any]) -> str:
 
     Wraps `alerts.store.set_status` — the same backing call the
     `POST /alerts/{id}/ack` HTTP route uses. Exposed so the Executive
-    can clear a briefing proposal from the user's 'Needs you' list after
+    can clear a briefing proposal from the user's 'Your decision' list after
     detecting explicit approval/dismissal in a Discuss-flow conversation.
 
     Idempotent: re-acking an already-acked alert (or re-dismissing a

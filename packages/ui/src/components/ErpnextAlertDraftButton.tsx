@@ -58,8 +58,8 @@ export default function ErpnextAlertDraftButton({ alertId }: { alertId: number }
       const prepared = await prepareErpnextAlertDraft(alertId);
       setDone(
         prepared.already_waiting
-          ? "Its draft card is already waiting in Needs you."
-          : "Its draft card is in Needs you. Nothing is in ERPNext until you approve it.",
+          ? "Its draft card is already waiting in Your decision."
+          : "Its draft card is in Your decision. Nothing is in ERPNext until you approve it.",
       );
       void reloadErpnextDraftCards();
     } catch (err) {

@@ -824,7 +824,7 @@ async def test_handle_message_fires_first_turn_hook_when_history_empty():
             send_fn=send_fn,
             is_dm=False,
             session_id="discord:thread:t1",
-            session_title="New chat",
+            session_title="New Conversation",
             on_first_turn_complete=hook,
         )
 
@@ -896,7 +896,7 @@ async def test_handle_message_does_not_fire_hook_on_chat_failure():
             send_fn=send_fn,
             is_dm=False,
             session_id="discord:thread:t1",
-            session_title="New chat",
+            session_title="New Conversation",
             on_first_turn_complete=hook,
         )
 

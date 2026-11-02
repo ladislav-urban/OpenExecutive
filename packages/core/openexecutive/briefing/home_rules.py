@@ -589,7 +589,7 @@ def summary(
         if count > 0:
             parts.append(SummaryPart(text=text, count=count, target=target))
 
-    add(needs_you, f"{needs_you} {_plural(needs_you, 'thing needs', 'things need')} you", SummaryTarget(kind="needs_you"))
+    add(needs_you, f"{needs_you} {_plural(needs_you, 'waits', 'wait')} for your decision", SummaryTarget(kind="needs_you"))
     add(handled, f"The Executive handled {handled} on its own", SummaryTarget(kind="panel", panel="handled"))
     add(people_overdue, f"{people_overdue} overdue", SummaryTarget(kind="panel", panel="people"))
     add(people_need_reply, f"{people_need_reply} awaiting reply", SummaryTarget(kind="panel", panel="people"))

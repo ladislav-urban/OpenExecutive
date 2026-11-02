@@ -151,6 +151,7 @@ def test_profile_figures_ground() -> None:
         "**Top call** — Approve the lease renewal.",
         "**Top Three Today**",
         "**Needs you**",
+        "**Your decision**",
         "**What changed**",
         "Monday is packed; OKR review in Q3.",
         "Take it to the Board via Slack.",

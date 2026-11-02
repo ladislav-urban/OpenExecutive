@@ -235,7 +235,7 @@ export default function ChatsPage() {
             </div>
             <Link href={NEW_CHAT_PATH} className={buttonClass("primary", "md", "flex-shrink-0")}>
               <Icon name="plus" size="w-4 h-4" />
-              <span className="hidden sm:inline">New chat</span>
+              <span className="hidden sm:inline">New Conversation</span>
               <span className="sm:hidden">New</span>
             </Link>
           </div>
@@ -324,7 +324,7 @@ export default function ChatsPage() {
             <>
               {sharedSection}
               <p className="px-1 py-6 text-[15px] text-fg-muted">
-                No conversations yet. Start one with New chat.
+                No conversations yet. Start one with New Conversation.
               </p>
             </>
           ) : (

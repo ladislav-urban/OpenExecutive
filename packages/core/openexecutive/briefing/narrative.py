@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # silently desynced the short-circuit from the model's own wording.
 # `test_briefing_narrative.py` asserts each prompt still carries its line.
 QUIET_PRINCIPAL = "Quiet right now — nothing pressing."
-QUIET_VIEWER = "Quiet right now — nothing needs you."
+QUIET_VIEWER = "Quiet right now: nothing waits for your decision."
 
 # Shared by the standalone briefs and the EoD digest: the grounding pass
 # (briefing/grounding.py) holds back any line that breaks it, so say it up front.
@@ -175,7 +175,7 @@ STANDALONE_BRIEF_SYSTEM = (
     "with evidence). One bullet each, past tense, naming the person or item. "
     "Items under REWRITTEN are still open — they belong in 'What changed', "
     "never here.\n"
-    "  5. **Needs you** — ONLY the items under NEW SINCE LAST BRIEF, most "
+    "  5. **Your decision** — ONLY the items under NEW SINCE LAST BRIEF, most "
     "time-sensitive first, each with its why-now when given. If the context "
     "has a CARRIED OVER line, add exactly one sentence after the list "
     "('N older items still open — see /today'); never re-list carried items.\n"
@@ -186,7 +186,7 @@ STANDALONE_BRIEF_SYSTEM = (
     "the context names no goal, leave the department out rather than "
     "writing that there is no detail.\n\n"
     "When the context has FROM YOUR NOTES — DUE SOON, add **From your notes** "
-    "after Needs you: what the reader said they would do, or asked of "
+    "after Your decision: what the reader said they would do, or asked of "
     "someone, that is overdue or due soon, overdue first, one line each with "
     "its date and who it is with.\n\n"
     + ERP_NUMBERS_RULE
@@ -233,7 +233,7 @@ STANDALONE_BRIEF_SOLO_SYSTEM = (
     "  4. **Handled overnight** — what you already completed on your own from "
     "the HANDLED block. One bullet each, past tense. Items under REWRITTEN are "
     "still open — they belong in 'What changed', never here.\n"
-    "  5. **Needs you** — the open decisions: ONLY the items under NEW SINCE "
+    "  5. **Your decision** — the open decisions: ONLY the items under NEW SINCE "
     "LAST BRIEF, most time-sensitive first, each with its why-now when given. "
     "If the context has a CARRIED OVER line, add exactly one sentence after "
     "the list ('N older items still open — see /today'); never re-list "
@@ -573,7 +573,7 @@ def render_briefing_context(
 
         new_items, carried = split_proposals(proposals, since)
         if new_items:
-            parts.append("NEEDS YOU — NEW SINCE LAST BRIEF:")
+            parts.append("YOUR DECISION — NEW SINCE LAST BRIEF:")
             for p in new_items[:10]:
                 line = f"- {p.get('headline', '')[:160]}"
                 if rich:

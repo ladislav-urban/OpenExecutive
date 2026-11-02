@@ -634,7 +634,7 @@ def test_solo_brief_prompts_drop_the_team_sections() -> None:
         assert "**Waiting on**" not in prompt
         assert "teams are stuck" not in prompt
         assert "departments / goals" not in prompt
-    for section in ("**Top call**", "**What changed**", "**Needs you**", "**Goals at risk**"):
+    for section in ("**Top call**", "**What changed**", "**Your decision**", "**Goals at risk**"):
         assert section in STANDALONE_BRIEF_SOLO_SYSTEM
     assert "**Next**" in _EOD_DIGEST_SOLO_SYSTEM and "named with its area" in _EOD_DIGEST_SOLO_SYSTEM
     assert "name the person and what's blocking" not in _EOD_DIGEST_SOLO_SYSTEM

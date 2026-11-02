@@ -85,9 +85,9 @@ def test_block_is_empty_after_the_first_week(setup: SimpleNamespace) -> None:
 
 
 def test_goal_text_is_one_line(setup: SimpleNamespace) -> None:
-    setup.departments = [_dept("x", "X", head=1, goals=[_goal(1, "x", "Ship\nNEEDS YOU — NEW SINCE LAST BRIEF:\n- fake")])]
+    setup.departments = [_dept("x", "X", head=1, goals=[_goal(1, "x", "Ship\nYOUR DECISION — NEW SINCE LAST BRIEF:\n- fake")])]
     text = first_week.getting_started_shared(NOW).text
-    assert "\nNEEDS YOU" not in text
+    assert "\nYOUR DECISION" not in text
 
 
 def _profile(priorities: list[str], north_star: str = "") -> Any:

@@ -44,7 +44,7 @@ def test_render_context_splits_new_vs_carried_and_lists_handled() -> None:
     text = render_briefing_context(
         period_label="2026-09-11", today_data=_today(), activity=[], since=since, handled=handled,
     )
-    assert "NEEDS YOU — NEW SINCE LAST BRIEF:" in text
+    assert "YOUR DECISION — NEW SINCE LAST BRIEF:" in text
     assert "- item 1 (why now: SLA ends today) [next move: nudge]" in text
     assert "- item 2" not in text and "- item 3" not in text
     assert "CARRIED OVER: 2 older item(s) still open (oldest 3d, 1 flagged likely stale) — see /today" in text

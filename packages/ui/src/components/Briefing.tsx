@@ -613,7 +613,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   const quietBanner =
     today?.quiet_banner ? (
       <div className="flex flex-wrap items-center justify-between gap-2 rounded-2xl border border-emerald-500/25 bg-emerald-500/5 px-4 py-3">
-        <span className={`text-[15px] ${TONE_TEXT.emerald}`}>Quiet day — nothing needs your attention.</span>
+        <span className={`text-[15px] ${TONE_TEXT.emerald}`}>Quiet day: nothing waits for your decision.</span>
         {!solo && (
           <Link href="/departments" className="text-sm font-medium text-accent hover:underline">
             Set up a check-in →
@@ -795,7 +795,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                 {summary.length === 0
                   ? firstWeekCard
                     ? "Your first week. Start below."
-                    : "All clear — nothing needs you right now."
+                    : "All clear: nothing waits for your decision right now."
                   : summary.map((part, i) => (
                       <span key={part.text}>
                         {part.target.kind === "href" ? (
@@ -863,7 +863,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
               <section id={NEEDS_YOU_ID} className="mb-8 scroll-mt-4">
                 <div className="mb-3 flex items-center gap-2">
                   <h2 className="text-lg font-semibold text-fg">
-                    Needs you
+                    Your decision
                     {needsYouCount > 0 && <span className="ml-1.5 font-normal text-fg-muted">({needsYouCount})</span>}
                   </h2>
                   {replies.cards.length > 0 && <InfoTip align="left">{REPLIES_WAITING_TIP}</InfoTip>}
@@ -881,7 +881,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                         {today.narrative ? "Read today's brief" : "Catching up on today…"}
                       </button>
                     )}
-                    {showNeedsYouMenu && <OverflowMenu size="sm" label="Needs you options" items={needsYouMenu} />}
+                    {showNeedsYouMenu && <OverflowMenu size="sm" label="Your decision options" items={needsYouMenu} />}
                   </div>
                 </div>
                 {snoozed && (
@@ -940,7 +940,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                   </div>
                 ) : firstWeek ? (
                   <p className="rounded-2xl border border-dashed border-line px-4 py-5 text-[15px] text-fg-muted">
-                    Nothing waiting on you yet. Decisions and replies to send land here.{" "}
+                    Nothing waits for your decision yet. Decisions and replies to send land here.{" "}
                     <Link href={FIRST_RUN_LINKS.ownMailbox} className="font-medium text-accent hover:underline">
                       Let it read your mailbox
                     </Link>{" "}
@@ -948,7 +948,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                   </p>
                 ) : !isQuiet ? (
                   <p className="rounded-2xl border border-dashed border-line px-4 py-5 text-[15px] text-fg-muted">
-                    Nothing waiting on you. Decisions and replies to send land here.
+                    Nothing waits for your decision right now. Decisions and replies to send land here.
                   </p>
                 ) : null}
               </section>

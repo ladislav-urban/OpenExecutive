@@ -21,7 +21,7 @@ workflow_inputs:
   force_full: true
 expected_artifact_sections:
   - "Top call"
-  - "Needs you"
+  - "Your decision"
   - "At risk"
 quality_criteria:
   addresses_the_reader_as_you_never_by_name_or_as_the_principal: true
