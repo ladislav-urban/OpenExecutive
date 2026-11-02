@@ -7988,6 +7988,34 @@ auth:
     in-process chat._host_sessions set. Suggested starter prompts skip
     host-written chats' titles (fail closed); the Markdown export labels
     host lines "(from another app's page)".
+    Host page turns (F1, oe_connector's docs/panel-f1-plan.md, PR 1):
+    ERPNext's docked panel asks through POST /chat as a host turn. A host
+    call may add erpnext_page (api.models.ErpnextPage: the webhook's page
+    shape, extra keys refused, sizes capped) and card_id (an int >= 1);
+    any other call sending either gets 422, and a host call sending
+    page_context gets 422 (it would reach the model unwrapped). With
+    ERPNEXT_HOST_PAGE_TURNS off (the default) both are dropped with a log
+    line naming the reason only (switch_off), and the turn is a plain host
+    turn. card_id counts only beside Home (screen "/") and is read with
+    alerts._visible_alert for the caller, inside the host limit and before a
+    demo question is spent: missing and hidden both answer 404 "Card not
+    found". In a shared chat both are dropped (shared_chat). Otherwise
+    chat._host_page_block passes integrations.erpnext_panel.page_block and
+    the card (wrap_untrusted source home_card) in the page-context user
+    part, never in the message, the saved line or a cached block, and the
+    card never joins trusted_alert_ids. Session.host_page marks the turn,
+    reset every turn and never saved; erpnext_panel_email is set "" on
+    every /chat turn, so the turn asks ERPNext through _host_caller, never
+    as a panel turn. No debug_event reaches a host turn's stream (the
+    turn_error and turn_complete ones included, as for demo turns).
+    The host limit (api.host_limit): every host turn (/chat, /chat/upload,
+    /chat/background) takes a slot per person (person:<id>, else
+    api.caller.identity_key), before any demo question: one in flight at a
+    time across all their conversations, then HOURLY (60) in a rolling hour,
+    demo people exempt from the hourly part. 429 with a plain detail. The
+    slot is freed by the stream's finally, on every exit before it, and
+    counts as stale after the turn's whole timeout plus 60 s. In process
+    memory: there is one API process.
     In any frame, card actions, chat sends and any other change off the host
     list made within 10 s of a trusted click/key are confirmed in a panel
     inside the frame (components/embed/FrameConfirm.tsx) whose Yes counts

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
@@ -51,6 +51,39 @@ class PageContext(BaseModel):
     form: PageFormDescriptor | None = None
 
 
+# Sizes before ``page_block``'s own rules (integrations/erpnext_panel.py),
+# which fold each value and drop what doesn't fit: a size here refuses the
+# request, a rule there drops the one value.
+_PageText = Annotated[str, Field(max_length=560)]
+
+
+class ErpnextPage(BaseModel):
+    """What the person has open in ERPNext beside its docked panel, sent with
+    a host page's turn: the shape the ERPNext webhook's ``page`` has, which
+    oe_connector's ``panel._page`` builds and ``page_block`` reads. Untrusted
+    (names, filter values and the like are written by outsiders); the route
+    passes it to the model only through ``page_block``. No ``card``: a Home
+    card goes by ``ChatRequest.card_id`` on this route."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    doctype: _PageText | None = None
+    name: _PageText | None = None
+    report: _PageText | None = None
+    screen: _PageText | None = None
+    # [field, op, value] each, at most MAX_FILTERS (erpnext_panel).
+    filters: list[tuple[_PageText, _PageText, _PageText]] | None = Field(None, max_length=10)
+    # "<field> asc|desc", beside a list.
+    sort: str | None = Field(None, max_length=140)
+
+    def as_page(self) -> dict[str, Any]:
+        """The dict ``page_block`` reads, filters as lists as the webhook's are."""
+        page: dict[str, Any] = self.model_dump(exclude_none=True)
+        if self.filters is not None:
+            page["filters"] = [list(entry) for entry in self.filters]
+        return page
+
+
 class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=32000)
     session_id: str | None = None
@@ -76,6 +109,13 @@ class ChatRequest(BaseModel):
     # the shared memory of each department consulted that turn; it is not in
     # the transcript, so the chat_turn audit row keeps it next to `message`.
     memory_text: str | None = Field(None, min_length=1, max_length=2000)
+    # Sent by ERPNext's docked panel through a host origin's page (oe_connector,
+    # docs/panel-f1-plan.md): what the person has open beside it, and on its
+    # Home the card last clicked, by id. Accepted only on a host call, with
+    # ERPNEXT_HOST_PAGE_TURNS on and outside a shared chat; refused (422) on
+    # any other call.
+    erpnext_page: ErpnextPage | None = None
+    card_id: int | None = Field(None, ge=1, le=2**62)
 
 
 class BackgroundChatRequest(BaseModel):
