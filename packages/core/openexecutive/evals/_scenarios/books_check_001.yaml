@@ -1,0 +1,19 @@
+id: books_check_001
+domain: operations
+advice_policy: explain
+description: "F11 without a connected ERP (knowledge/builtin/finance/ledger_health_checks.md): the check results are in the question. The reply reports each fault with its figures (a journal entry out by $310, the payment ledger $1,240 above the general ledger for one customer, two items at zero value), says what was clean, points to timing as a possible cause of the ledger difference where the figures support it, and names Sam to investigate and correct, with Diane approving a correction to the closed period. Tax treatment is for the accountant; no verdict of its own."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Our month-end checks for October came back: journal entry JV-0412 has debits of $8,310 and credits of $8,000; the payment ledger shows Halden owing $6,740 but the general ledger's receivables for Halden show $5,500, and Halden paid $1,240 on Nov 1; items BRK-16 and CBL-3025 were received at zero value; no duplicates and no negative stock. Sam keeps the books and Diane signs off October, which is closed. What's wrong, and who should do what?"
+forbidden_reply_words:
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  reports_jv_0412_out_by_310: true
+  reports_the_1240_difference_for_halden_and_notes_the_nov_1_payment_may_explain_it: true
+  reports_brk_16_and_cbl_3025_at_zero_value: true
+  says_duplicates_and_negative_stock_came_back_clean: true
+  names_sam_to_investigate_and_correct_and_diane_to_approve_a_correction_to_october: true
+  gives_no_verdict_on_tax_or_accounting_treatment: true

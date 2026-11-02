@@ -1,0 +1,24 @@
+id: erpnext_049
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "F11, is anything wrong in our books (knowledge/builtin/finance/ledger_health_checks.md), on oe_connector's demo data, whose books are healthy. The reply runs the books' own checks from reports (the invalid-ledger-entries and general-and-payment-ledger-comparison reports, the trial balance, stock at zero value or below zero) for a stated company and period, and gives each check's result, so an empty result never reads as 'didn't look'. The demo's ledgers are clean; anything a check does find (the local site has item names repeated across companies) is shown, not hidden, so 'nothing at all' isn't required. It invents no fault, posts or corrects nothing, and gives no verdict on tax or accounting treatment."
+query: "Is anything wrong in our books: entries that don't balance, ledgers that disagree, stock without a value?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  runs_the_checks_from_report_calls_not_by_adding_records_by_hand: true
+  checks_invalid_entries_the_trial_balance_ledger_agreement_and_stock_value: true
+  gives_the_company_currency_and_period_of_each_check: true
+  gives_each_checks_result_and_says_plainly_when_one_found_nothing: true
+  shows_anything_a_check_found_rather_than_hiding_it: true
+  invents_no_fault: true
+  gives_no_verdict_on_tax_or_accounting_treatment: true

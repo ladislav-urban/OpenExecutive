@@ -59,6 +59,7 @@ SHIPPED_BUILTIN_FILES: frozenset[str] = frozenset(
         "finance/financial_statements.md",
         "finance/fundraising.md",
         "finance/ipo_and_late_stage_readiness.md",
+        "finance/ledger_health_checks.md",
         "finance/month_end_close_checklist.md",
         "finance/saas_metrics.md",
         "finance/short_term_cash_outlook.md",
