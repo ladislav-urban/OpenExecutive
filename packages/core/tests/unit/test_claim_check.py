@@ -34,6 +34,52 @@ def _run(provider: ScriptedProvider, message: str = "Remove it from the brief") 
     return asyncio.run(_go())
 
 
+class _Delta:
+    type = "text_delta"
+
+    def __init__(self, text: str) -> None:
+        self.text = text
+
+
+class _DeltaEvent:
+    type = "content_block_delta"
+
+    def __init__(self, text: str) -> None:
+        self.delta = _Delta(text)
+
+
+class _TextStream:
+    """Streams each text block of the final message as one delta, as the
+    real provider does, so a test can read the reply the loop yields."""
+
+    def __init__(self, final_msg: FinalMsg) -> None:
+        self._final_msg = final_msg
+        self._events = [_DeltaEvent(b.text) for b in final_msg.content if getattr(b, "type", "") == "text"]
+
+    async def __aenter__(self) -> _TextStream:
+        return self
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
+
+    def __aiter__(self) -> _TextStream:
+        return self
+
+    async def __anext__(self) -> _DeltaEvent:
+        if not self._events:
+            raise StopAsyncIteration
+        return self._events.pop(0)
+
+    async def get_final_message(self) -> FinalMsg:
+        return self._final_msg
+
+
+class _TextProvider(ScriptedProvider):
+    def messages_stream(self, **kwargs: Any) -> _TextStream:  # type: ignore[override]
+        self.calls.append(kwargs)
+        return _TextStream(self._final_msgs.pop(0))
+
+
 def _verdict(payload: dict[str, Any]):
     calls: list[str] = []
 
@@ -109,16 +155,56 @@ def test_unbacked_claim_gets_one_more_round_with_the_nudge() -> None:
     ])
     fake, calls = _verdict({"unbacked": True, "claim": "Done"})
     with patch.object(claim_check, "_call_model", fake):
-        items = _run(provider)
+        _run(provider)
 
     assert len(provider.calls) == 2
     second = provider.calls[1]["messages"]
     assert second[-2] == {"role": "assistant", "content": [{"type": "text", "text": "Done."}]}
     nudge = second[-1]["content"][0]["text"]
     assert "“Done”" in nudge and "no tool call" in nudge
-    assert "\n\n" in items
     # Checked once a turn: the second reply ends it without another check.
     assert len(calls) == 1
+
+
+def test_the_extra_round_never_writes_the_answer_again() -> None:
+    # Pilot, Nov 2, 2026 (panel, credit hold): the whole answer came twice,
+    # "...is Rachel Dunmore's call..." then "...is Rachel Dunmore's decision...".
+    first = (
+        "Harbor Electric owes $4,656, of which $1,900 is over 30 days late. "
+        "Whether to release it is Rachel Dunmore's call; she holds customer credit. "
+        "I've noted the hold for her."
+    )
+    again = (
+        "Harbor Electric owes $4,656, of which $1,900 is more than 30 days late. "
+        "Whether to release it is Rachel Dunmore's decision; she holds customer credit. "
+        "I couldn't leave Rachel a note from here, so tell her directly."
+    )
+    provider = _TextProvider([
+        FinalMsg([TextBlock(first)], "end_turn"),
+        FinalMsg([TextBlock(again)], "end_turn"),
+    ])
+    fake, _ = _verdict({"unbacked": True, "claim": "I've noted the hold for her"})
+    with patch.object(claim_check, "_call_model", fake):
+        items = _run(provider)
+
+    reply = "".join(i for i in items if isinstance(i, str))
+    assert reply == first + "\n\nI couldn't leave Rachel a note from here, so tell her directly."
+    nudge = provider.calls[1]["messages"][-1]["content"][0]["text"]
+    assert "never write it again, reworded or not" in nudge
+
+
+def test_an_extra_round_that_only_repeats_adds_nothing() -> None:
+    # Pilot, Nov 2: "I've opened the report beside the panel." and then
+    # "The report is now open beside the panel." once the tool had run.
+    provider = _TextProvider([
+        FinalMsg([TextBlock("Margin fell to 27% last week. I've opened the report beside the panel.")], "end_turn"),
+        FinalMsg([TextBlock("I've opened the report beside the panel now.")], "end_turn"),
+    ])
+    fake, _ = _verdict({"unbacked": True, "claim": "I've opened the report beside the panel"})
+    with patch.object(claim_check, "_call_model", fake):
+        items = _run(provider)
+    reply = "".join(i for i in items if isinstance(i, str))
+    assert reply == "Margin fell to 27% last week. I've opened the report beside the panel."
 
 
 def test_backed_or_plain_reply_ends_the_turn() -> None:

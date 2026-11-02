@@ -443,7 +443,9 @@ SHOW_RULE = (
     "'order': 'desc'}}); for the chart of accounts, the tree ({'kind': 'tree', "
     "'doctype': 'Account'}); for \"where do I find the stock reports\", the "
     "workspace ({'kind': 'workspace', 'workspace': 'Stock'}). Never write "
-    "routes or links."
+    "routes or links. Call it before you write your answer, and don't write "
+    "that you opened or showed anything: the person sees it open beside the "
+    "panel."
 )
 # Both panel blocks carry it too: beside one of Dynocortex's own screens the
 # panel names the screen, but its turn reads none of what the screen shows.
@@ -452,7 +454,7 @@ SCREEN_RULE = (
     "Home, Watch list, People, Settings and the like), you can't see what that "
     "screen shows: not their briefing, watches, people, memory or settings. "
     "Say so in a sentence, answer what you can from ERPNext and your "
-    "specialists, and suggest Chats for the rest. They already have that "
+    "specialists, and suggest Conversations for the rest. They already have that "
     "screen open beside you, so never send them to it, or to the "
     "OpenExecutive app for it: say the screen beside the panel shows it. "
     "Never guess what the screen shows. When the page block names the Home "

@@ -1,0 +1,25 @@
+id: erpnext_041
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+forbid_repeated_text: true
+description: "The pilot's Denver step 1, in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. The reply reads profit by branch, opens the report beside the panel with erpnext__show_in_erpnext, and never writes that it opened or showed anything, since the person sees it open; no closing line comes twice. Found on the pilot (Nov 2, 2026, 8b4f6e6): 'I've opened the report beside the panel. The Profit and Loss Statement by Branch is now open beside the panel.'"
+query: "How did each branch do last month? Is Denver's margin out of line?"
+expected_tool_calls:
+  - call_tool
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - beside the panel
+  - I've opened
+  - is now open
+quality_criteria:
+  reads_profit_by_branch_for_last_month_from_a_report: true
+  compares_denvers_margin_with_the_other_branches_with_the_figures: true
+  opens_the_report_beside_the_panel_without_saying_so: true
+  says_each_thing_once_with_no_closing_line_repeated: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
