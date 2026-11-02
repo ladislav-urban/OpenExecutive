@@ -342,6 +342,12 @@ class SessionSummary(BaseModel):
     # into it, and every turn in it keeps to the host surface's rules, from
     # any page. A host's call into any other conversation gets 409.
     host_started: bool = False
+    # Where it was asked (F1): "erpnext_panel" for a conversation ERPNext's
+    # docked panel started, and the page it was asked beside, {report},
+    # {doctype, name} or {doctype} (never filters); absent otherwise. Set by
+    # the server once, from the checked page; shown as text, grants nothing.
+    origin: Literal["erpnext_panel"] | None = None
+    origin_ref: dict[str, str] | None = None
     # Its group in the Chats list's date view, in the zone the caller sees
     # times in (``?tz=``; utils.chat_list): Pinned, Today, Yesterday, …
     date_group: DateGroup | None = None

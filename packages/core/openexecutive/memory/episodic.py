@@ -486,6 +486,18 @@ def initialize_db(db_path: Path | None = None) -> None:
             except sqlite3.OperationalError as exc:
                 if "duplicate column" not in str(exc).lower():
                     raise
+        # Where the conversation was asked (F1): "erpnext_panel" for one
+        # ERPNext's docked panel started through the web chat, else NULL, and
+        # its page as JSON ({report}, {doctype, name} or {doctype}; never
+        # filters). Set once, before the first message is saved
+        # (session_store.set_origin). They grant nothing.
+        for col in ("origin", "origin_ref"):
+            if col not in _sessions_existing:
+                try:
+                    conn.execute(f"ALTER TABLE sessions ADD COLUMN {col} TEXT")
+                except sqlite3.OperationalError as exc:
+                    if "duplicate column" not in str(exc).lower():
+                        raise
         # Act as me: 1 once a turn here read or drafted in the speaker's own
         # mailbox — from then on the conversation is its owner's alone, the
         # principal included (session_store.mark_mail_private).
