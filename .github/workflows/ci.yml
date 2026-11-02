@@ -164,11 +164,21 @@ jobs:
           cache-dependency-glob: packages/core/uv.lock
           python-version: "3.11"
 
+      # Also caps pytest's workers there. The self-hosted runners share one
+      # host, and `-n auto` gave each job a worker per core: three jobs ran 36
+      # workers on 12 cores (load 19.6, Nov 2, 2026) and timing tests failed.
+      # vars.CI_PYTEST_WORKERS sets the count; the default 5 suits the two
+      # runners there now and leaves room for tsc, mypy and the local bench.
+      # Change the variable when a runner is added. GitHub's runners keep one
+      # worker per core.
       - name: Keep uv's cache on the runner
         if: runner.environment == 'self-hosted'
-        run: echo "UV_CACHE_DIR=$HOME/.cache/uv-ci/$TRUST" >> "$GITHUB_ENV"
+        run: |
+          echo "UV_CACHE_DIR=$HOME/.cache/uv-ci/$TRUST" >> "$GITHUB_ENV"
+          echo "PYTEST_XDIST_AUTO_NUM_WORKERS=$WORKERS" >> "$GITHUB_ENV"
         env:
           TRUST: ${{ github.event_name == 'push' && 'main' || 'pr' }}
+          WORKERS: ${{ vars.CI_PYTEST_WORKERS || '5' }}
 
       - name: Install dependencies
         run: cd packages/core && uv sync --extra dev
