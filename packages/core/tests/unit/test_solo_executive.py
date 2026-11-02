@@ -50,7 +50,9 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # the wording was tightened (same rules, ~27% shorter) to cut the cached prefix.
 # And again: report outcomes not tool calls, read before ruling a cause out,
 # and correct an earlier figure once (pilot panel round, Nov 1, 2026).
-TEAM_PERSONA_SHA256 = "0808f31d8c225a8b730041a5c8e6691c9dc809c09e83803ca4b797653486dc0b"
+# And again: Home's queue is named "Your decision", not "Needs you" (the
+# owner's wording, Nov 2, 2026), one word in a static constant.
+TEAM_PERSONA_SHA256 = "42d564d236a039f9505b4fcac10a9a75c1cfb2c18b64e58f587a60b773f65d16"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",
