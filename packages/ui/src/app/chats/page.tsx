@@ -227,7 +227,7 @@ export default function ChatsPage() {
         <div className="max-w-3xl mx-auto">
           <div className="mb-6 flex items-start justify-between gap-4">
             <div className="min-w-0">
-              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg mb-1">Chats</h1>
+              <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg mb-1">Conversations</h1>
               <p className="text-[15px] text-fg-muted">
                 Every conversation with the Executive, from the web app and from connected
                 channels.

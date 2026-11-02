@@ -394,7 +394,7 @@ function TopicHistory({
       })}
       {layout.other && (
         <section className="mt-6">
-          {header({ key: "other", label: "Other", count: layout.other.items.length, preview: "Chats under no topic" })}
+          {header({ key: "other", label: "Other", count: layout.other.items.length, preview: "Conversations under no topic" })}
           {isOpen("other") && rows("other", layout.other.items, "")}
         </section>
       )}

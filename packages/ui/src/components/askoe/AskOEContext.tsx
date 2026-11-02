@@ -53,7 +53,7 @@ const ROUTE_GUIDE_MAP: Array<{ prefix: string; guideId: string; title: string }>
   { prefix: "/audit/usage", guideId: "token_usage", title: "Token usage" },
   { prefix: "/audit", guideId: "audit", title: "Audit log" },
   { prefix: "/today", guideId: "today", title: "Today" },
-  { prefix: "/chats", guideId: "chat", title: "Chats" },
+  { prefix: "/chats", guideId: "chat", title: "Conversations" },
   { prefix: "/delegate", guideId: "delegate", title: "Delegate" },
   { prefix: "/skills", guideId: "skills", title: "How it's done" },
   { prefix: "/memories", guideId: "pulse", title: "Pulse" },

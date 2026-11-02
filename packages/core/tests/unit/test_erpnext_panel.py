@@ -250,7 +250,7 @@ def test_a_filter_value_cannot_close_the_untrusted_block() -> None:
 def test_both_panel_blocks_say_a_dynocortex_screen_is_not_seen() -> None:
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
         assert erpnext_panel.SCREEN_RULE in block
-        assert "suggest Chats" in block and "Never guess what the screen shows" in block
+        assert "suggest Conversations" in block and "Never guess what the screen shows" in block
         assert "never send them to it" in block and "the screen beside the panel shows it" in block
         assert "its headline is all you have of it" in block
 

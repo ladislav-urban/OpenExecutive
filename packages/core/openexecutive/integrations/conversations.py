@@ -61,7 +61,7 @@ def start_fresh(base_id: str, owner_person_id: int | None) -> str:
         return "I couldn't start a new conversation just now. Please try again."
     if ended and ended != NEW_CONVERSATION_TITLE:
         return (
-            "Started a fresh conversation. The last one is saved in Chats as "
+            "Started a fresh conversation. The last one is saved in Conversations as "
             f"“{ended}”."
         )
     return "Started a fresh conversation."
