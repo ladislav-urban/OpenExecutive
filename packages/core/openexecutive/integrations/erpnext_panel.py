@@ -65,6 +65,8 @@ import re
 import time
 import unicodedata
 from collections import OrderedDict, deque
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
@@ -515,8 +517,25 @@ class _TurnViews:
         return out
 
 
+# The web chat route's name for it (F1): a fresh one per host page turn.
+TurnViews = _TurnViews
+
 # Set by the route around one turn; the turn's tasks share the holder.
 _turn_views: ContextVar[_TurnViews | None] = ContextVar("erpnext_panel_turn_views", default=None)
+
+
+@contextmanager
+def collect_views(views: _TurnViews) -> Iterator[_TurnViews]:
+    """Bind ``views`` as the turn's holder for what ``note_erpnext_call``
+    keeps, around a web chat turn the docked panel sent (F1). Saved and put
+    back rather than reset by token, as ``schedule_tools.set_session`` is, so
+    it holds across the stream's task hops."""
+    previous = _turn_views.get()
+    _turn_views.set(views)
+    try:
+        yield views
+    finally:
+        _turn_views.set(previous)
 
 
 def _small(value: Any) -> bool:

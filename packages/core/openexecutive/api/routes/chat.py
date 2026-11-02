@@ -1045,7 +1045,7 @@ def _host_page_block(page: ErpnextPage | None, card: Any) -> str:
     ``page_block`` and the Home card as untrusted text, or "" when neither
     survives the checks. Not the webhook panel's SCREEN_RULE: a host turn
     reads the person's briefing, so the screen beside it isn't closed to it."""
-    from openexecutive.integrations.erpnext_panel import page_block
+    from openexecutive.integrations.erpnext_panel import SHOW_RULE, page_block
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
     parts: list[str] = []
@@ -1057,7 +1057,9 @@ def _host_page_block(page: ErpnextPage | None, card: Any) -> str:
         parts.append(wrap_untrusted(text, source="home_card", author="openexecutive"))
     if not parts:
         return ""
-    return "\n\n".join([_HOST_PAGE_INTRO, *parts])
+    # The show tool is offered on such a turn only (schedule_tools.
+    # host_page_turn), so the rule for it rides with the block.
+    return "\n\n".join([_HOST_PAGE_INTRO, *parts, SHOW_RULE])
 
 
 def _beside_home(page: ErpnextPage | None) -> bool:
@@ -1635,6 +1637,13 @@ async def _chat_turn(
             _release_session_turn(lock_key, turn_lock)
         raise
 
+    # What this turn showed in ERPNext (F1): a fresh holder per host page
+    # turn, bound for the stream alone and never kept on the session, so an
+    # earlier turn's views can't come back. Sent as `erpnext_views`.
+    from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
+
+    turn_views = TurnViews() if session.host_page else None
+
     async def event_generator():
         # Bind the turn AND the session for the whole SSE body, not just its
         # first step. `_sse_body` drives the executive with `asyncio.wait_for`,
@@ -1665,6 +1674,7 @@ async def _chat_turn(
             principal_turn_rows(principal_turn),
             rows_for_person(caller_person_id) if own_rows else contextlib.nullcontext(),
             bind_turn_files(turn_files),
+            collect_views(turn_views) if turn_views is not None else contextlib.nullcontext(),
         ):
             async with contextlib.aclosing(_sse_body()) as body:
                 async for evt in body:
@@ -2115,6 +2125,17 @@ async def _chat_turn(
             if not demo_sse:
                 yield f"data: {json.dumps(collector.to_sse_dict(complete_evt))}\n\n"
 
+            if turn_views is not None:
+                # Never to a shared chat's other pages (not a live step): a
+                # host page turn is a private one.
+                views_evt = {
+                    "type": "erpnext_views",
+                    "views": turn_views.views,
+                    "call": turn_views.call,
+                    "session_id": session.session_id,
+                }
+                yield f"data: {json.dumps(views_evt)}\n\n"
+
             done_payload: dict[str, Any] = {"type": "done", "session_id": session.session_id}
             if persisted.get("assistant_message_id"):
                 done_payload["message_id"] = persisted["assistant_message_id"]
@@ -2140,6 +2161,11 @@ async def _chat_turn(
                 _release_session_turn(lock_key, turn_lock)
             if host_slot is not None:
                 host_slot.release()
+            if turn_views is not None:
+                # The show tool is this turn's alone: a turn of the same
+                # conversation running past the lock's deadline mustn't
+                # inherit it from the cached session.
+                session.host_page = False
             if session.shared_chat:
                 # Saved by now (every path persists before it ends): the
                 # other pages read the chat again.
