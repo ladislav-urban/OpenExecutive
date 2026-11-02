@@ -1,0 +1,26 @@
+id: erpnext_042
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "F7, work delivered or done but not billed (knowledge/builtin/finance/unbilled_work.md), on oe_connector's demo dataset with E9. E9 leaves one delivery from last month, more than two weeks old, without a sales invoice, and one billable project's most recent billed month of hours (more than two weeks old) not invoiced. The names move with the date, so the eval checks the shape: the reply reads the books' own reports (delivered items still to be billed, the timesheet billing summary) and says where each figure came from, with the company, currency and period. It finds the delivery with its customer, date and value and the project's month of hours with their value, gives hours by project and never by person, says which false alarms it checked, checks milestones or billing schedules due by now, and names who raises the invoices from the roster. Raising an invoice for work done is routine, so naming who does it is not a verdict."
+query: "Have we delivered anything, or worked any billable hours, that we haven't invoiced yet? Which project milestones are due for billing?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - forecast
+  - I wouldn't
+  - My recommendation
+quality_criteria:
+  reads_delivered_items_still_to_be_billed_from_a_report_call: true
+  reads_billable_hours_not_billed_from_a_billing_summary_report_call: true
+  finds_a_delivery_from_last_month_without_an_invoice_with_its_customer_date_and_value: true
+  finds_a_billable_projects_month_of_hours_not_invoiced_with_their_value: true
+  gives_each_figure_with_company_currency_and_period: true
+  gives_hours_by_project_or_customer_never_by_person: true
+  checks_project_milestones_or_billing_schedules_due_by_now: true
+  names_who_raises_the_invoices_from_the_roster: true
