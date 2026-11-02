@@ -209,10 +209,30 @@ def test_email_poller_logs_a_missing_server_once_per_outage(monkeypatch: pytest.
     monkeypatch.setattr(email_poller, "poll_once", _poll)
     monkeypatch.setattr(email_poller, "POLL_INTERVAL_SECONDS", 0)
     # Missing for three cycles, back for two, missing again, then back.
-    states = iter([True, True, True, False, False, True, True])
-    monkeypatch.setattr(email_poller, "provider_server_missing", lambda *_a: next(states, False))
+    states = [True, True, True, False, False, True, True]
+    checks: list[int] = []
 
-    asyncio.run(_run_briefly(email_poller.run_email_poller(object())))  # type: ignore[arg-type]
+    def _missing(*_a: Any) -> bool:
+        checks.append(1)
+        return states[len(checks) - 1] if len(checks) <= len(states) else False
+
+    monkeypatch.setattr(email_poller, "provider_server_missing", _missing)
+
+    # Run until the poller has been through every state and one cycle past,
+    # not for a fixed 0.1 s: a busy CI host ran too few cycles in that time
+    # and logged the second "defined again" too late (Nov 2, 2026).
+    async def _run_through_states() -> None:
+        task = asyncio.create_task(email_poller.run_email_poller(object()))  # type: ignore[arg-type]
+        try:
+            async with asyncio.timeout(10):
+                while len(checks) <= len(states) + 1:
+                    await asyncio.sleep(0.005)
+        finally:
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await task
+
+    asyncio.run(_run_through_states())
 
     errors = [msg for level, msg in logged if level == "error"]
     back = [msg for _, msg in logged if "is defined again" in msg]
