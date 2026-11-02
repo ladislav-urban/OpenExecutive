@@ -304,6 +304,35 @@ def _ready() -> str | None:
     return None
 
 
+def _page_value(page: dict[str, Any], key: str) -> str:
+    """``page[key]`` folded as ``wrap_untrusted`` will fold it, if it fits
+    the page's value rule, else ""."""
+    raw = page.get(key)
+    if not isinstance(raw, str) or len(raw) > 560:
+        return ""
+    # Folded first, as wrap_untrusted will: the cap is on what the model reads.
+    text = unicodedata.normalize("NFKC", raw).strip()
+    return text if _PAGE_VALUE_RE.fullmatch(text) else ""
+
+
+def page_ref(page: Any) -> dict[str, str] | None:
+    """Where a conversation was asked, from the page beside ERPNext's docked
+    panel, by the values ``page_block`` keeps: ``{report}``, ``{doctype,
+    name}`` or ``{doctype}``, never filters or sort; None beside one of
+    Dynocortex's own screens or when nothing passes. Shown as text, and it
+    grants nothing (``sessions.origin_ref``)."""
+    if not isinstance(page, dict):
+        return None
+    doctype, name, report = (_page_value(page, key) for key in ("doctype", "name", "report"))
+    if report:
+        return {"report": report}
+    if doctype and name:
+        return {"doctype": doctype, "name": name}
+    if doctype:
+        return {"doctype": doctype}
+    return None
+
+
 def page_block(page: Any) -> str:
     """What the person has open in ERPNext, from the fields the panel sends,
     as an untrusted block for the user turn: document names can be written by
@@ -316,15 +345,7 @@ def page_block(page: Any) -> str:
     if not isinstance(page, dict):
         return ""
 
-    def value(key: str) -> str:
-        raw = page.get(key)
-        if not isinstance(raw, str) or len(raw) > 560:
-            return ""
-        # Folded first, as wrap_untrusted will: the cap is on what the model reads.
-        text = unicodedata.normalize("NFKC", raw).strip()
-        return text if _PAGE_VALUE_RE.fullmatch(text) else ""
-
-    doctype, name, report = value("doctype"), value("name"), value("report")
+    doctype, name, report = (_page_value(page, key) for key in ("doctype", "name", "report"))
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
     lines: list[str] = []

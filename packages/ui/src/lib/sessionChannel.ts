@@ -40,6 +40,17 @@ export function sessionTitle(session: SessionSummary): string {
   return session.title || "Untitled chat";
 }
 
+/** The chip for a conversation ERPNext's docked panel started: the page it
+ * was asked beside, as text (`origin_ref`), or the ERP when there was none. */
+export function askedBeside(session: SessionSummary): string {
+  const ref = session.origin_ref;
+  if (ref && "report" in ref) return `Asked beside ${ref.report}`;
+  if (ref && "doctype" in ref) {
+    return ref.name ? `Asked beside ${ref.doctype} ${ref.name}` : `Asked beside the ${ref.doctype} list`;
+  }
+  return "Asked in the ERP";
+}
+
 /** The newest `limit` web chats. Input is newest-first (the API sorts by `updated_at DESC`). */
 export function recentWebChats(sessions: SessionSummary[], limit: number): SessionSummary[] {
   const out: SessionSummary[] = [];

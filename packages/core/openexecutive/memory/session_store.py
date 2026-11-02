@@ -117,6 +117,51 @@ def save_message(
         return int(cur.lastrowid or 0)
 
 
+# Where a conversation may say it was asked (sessions.origin), and the keys
+# its page may have (sessions.origin_ref).
+ORIGINS = frozenset({"erpnext_panel"})
+_ORIGIN_REF_KEYS = (frozenset({"report"}), frozenset({"doctype", "name"}), frozenset({"doctype"}))
+
+
+def set_origin(
+    session_id: str, origin: str, origin_ref: dict[str, str] | None, db_path: Path = DB_PATH
+) -> bool:
+    """Record where ``session_id`` was asked, once: only while it has no
+    origin and no saved message, so a later turn can't relabel it. Whether
+    it was recorded."""
+    if origin not in ORIGINS:
+        raise ValueError(f"unknown origin {origin!r}")
+    ref = json.dumps(origin_ref, ensure_ascii=False) if origin_ref else None
+    with _get_conn(db_path) as conn:
+        cur = conn.execute(
+            "UPDATE sessions SET origin = ?, origin_ref = ? WHERE session_id = ? AND origin IS NULL "
+            "AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE session_id = ?)",
+            (origin, ref, session_id, session_id),
+        )
+        return cur.rowcount > 0
+
+
+def _origin_fields(row: Any) -> dict[str, Any]:
+    """``origin`` and ``origin_ref`` of a sessions row, as the summary shows
+    them: a known origin only, and a page only of the agreed shape (anything
+    else read back is dropped, never passed on)."""
+    origin = row["origin"]
+    if origin not in ORIGINS:
+        return {}
+    out: dict[str, Any] = {"origin": origin}
+    try:
+        ref = json.loads(row["origin_ref"]) if row["origin_ref"] else None
+    except (TypeError, ValueError):
+        ref = None
+    if (
+        isinstance(ref, dict)
+        and frozenset(ref) in _ORIGIN_REF_KEYS
+        and all(isinstance(v, str) and v for v in ref.values())
+    ):
+        out["origin_ref"] = ref
+    return out
+
+
 def mark_host_wrote(session_id: str, db_path: Path = DB_PATH) -> None:
     """Mark ``session_id`` as written in by a host origin's page, now, before
     its turn is saved (``host_wrote``). Never cleared."""
@@ -255,7 +300,8 @@ def list_sessions(
         rows = conn.execute(
             """
             SELECT s.session_id, s.title, s.created_at, s.updated_at, s.pinned_at,
-                   s.topic_id, s.host_wrote, COUNT(m.id) AS message_count, MAX(m.id) AS last_id
+                   s.topic_id, s.host_wrote, s.origin, s.origin_ref,
+                   COUNT(m.id) AS message_count, MAX(m.id) AS last_id
             FROM sessions s
             LEFT JOIN chat_messages m ON m.session_id = s.session_id
             WHERE s.caller_person_id = ?
@@ -292,6 +338,7 @@ def list_sessions(
         if row["topic_id"] is not None:
             item["topic_id"] = row["topic_id"]
         item["host_started"] = bool(row["host_wrote"])
+        item.update(_origin_fields(row))
         msg = last.get(row["last_id"]) if row["last_id"] is not None else None
         # In a shared chat the last message may be a teammate's: no "You: ".
         mine = msg is not None and msg["sender_person_id"] in (None, caller_person_id)
@@ -377,6 +424,7 @@ def search_sessions(
         rows = conn.execute(
             """
             SELECT s.session_id, s.title, s.created_at, s.updated_at, s.topic_id, s.host_wrote,
+                   s.origin, s.origin_ref,
                    (SELECT COUNT(*) FROM chat_messages m
                      WHERE m.session_id = s.session_id) AS message_count,
                    (SELECT COUNT(*) FROM chat_messages m
@@ -403,6 +451,7 @@ def search_sessions(
             if row["topic_id"] is not None:
                 item["topic_id"] = row["topic_id"]
             item["host_started"] = bool(row["host_wrote"])
+            item.update(_origin_fields(row))
             item["snippet"] = None
             if row["match_count"]:
                 hit = conn.execute(
@@ -442,7 +491,7 @@ def get_session_metadata(session_id: str, db_path: Path = DB_PATH) -> dict[str, 
         row = conn.execute(
             """
             SELECT s.session_id, s.title, s.created_at, s.updated_at, s.pinned_at,
-                   s.topic_id, s.host_wrote, COUNT(m.id) AS message_count
+                   s.topic_id, s.host_wrote, s.origin, s.origin_ref, COUNT(m.id) AS message_count
             FROM sessions s
             LEFT JOIN chat_messages m ON m.session_id = s.session_id
             WHERE s.session_id = ?
@@ -454,6 +503,9 @@ def get_session_metadata(session_id: str, db_path: Path = DB_PATH) -> dict[str, 
         return None
     meta = dict(row)
     meta["host_started"] = bool(meta.pop("host_wrote", 0))
+    meta.pop("origin", None)
+    meta.pop("origin_ref", None)
+    meta.update(_origin_fields(row))
     if not meta.get("pinned_at"):
         meta.pop("pinned_at", None)
     if meta.get("topic_id") is None:

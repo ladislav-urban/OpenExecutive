@@ -8033,6 +8033,18 @@ auth:
     call, session_id} (api.chat_events.ErpnextViewsEvent, in EVENT_TYPES),
     not a _LIVE_STEPS step; a shared chat is never a host page turn.
     erpnext_drafts.offer_refusal refuses every from_host turn explicitly.
+    Session origin (F1 PR 3): sessions.origin ("erpnext_panel" or NULL)
+    and sessions.origin_ref (JSON {report} | {doctype, name} | {doctype},
+    never filters), set by chat on a host page turn's first turn from
+    erpnext_panel.page_ref (page_block's own value rules) through
+    session_store.set_origin, which writes only while the row has no origin
+    and no saved message, so no later turn relabels it. list_sessions,
+    search_sessions and get_session_metadata return them through
+    _origin_fields, which drops an unknown origin or a ref of another shape.
+    SessionSummary.origin / origin_ref; the web Chats list shows "Asked
+    beside <page>" as text (sessionChannel.askedBeside). They grant nothing.
+    The demo reset removes such conversations with the demo person's own
+    (caller_person_id).
     In any frame, card actions, chat sends and any other change off the host
     list made within 10 s of a trusted click/key are confirmed in a panel
     inside the frame (components/embed/FrameConfirm.tsx) whose Yes counts
