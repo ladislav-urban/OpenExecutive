@@ -554,7 +554,7 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_surface(s)
         except ValueError as e:
             raise ValueError(f"`surface`: {e}") from e
-    for flag in ("demo_viewer", "forbid_principal_name"):
+    for flag in ("demo_viewer", "forbid_principal_name", "forbid_repeated_text"):
         if s.get(flag) is not None and not isinstance(s[flag], bool):
             raise ValueError(f"`{flag}` must be true or false")
     if s.get("page") is not None:
