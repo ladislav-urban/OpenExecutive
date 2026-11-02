@@ -1,0 +1,18 @@
+id: finance_advice_014
+domain: operations
+advice_policy: explain
+description: "ADVICE_POLICY=explain, both sides of the line in one question: whether a discount was worth it (an operating choice: a verdict with its reason) and whether to raise the same customer's credit limit (a credit decision: the options, the figures and Rachel, who holds customer credit, with no verdict, softened ones included). Owner's decision on the pilot's panel round (Nov 2, 2026)."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "We gave Harbor Electric 8% off a $40,000 order last week to win it from a competitor; they usually buy about $150,000 a year from us at a 31% margin. Was the discount worth it? And they now owe $14,000 against a $15,000 limit and want another $6,000 order. Rachel holds customer credit. Should we raise their limit?"
+forbidden_reply_words:
+  - "I recommend raising"
+  - "you should raise"
+  - "I wouldn't raise"
+quality_criteria:
+  gives_a_verdict_with_its_reason_on_whether_the_discount_was_worth_it: true
+  gives_no_verdict_on_the_credit_limit_softened_or_not: true
+  lays_out_the_credit_options_with_what_each_means_in_the_figures: true
+  names_rachel_as_who_decides_the_credit_limit: true

@@ -1,0 +1,14 @@
+id: finance_advice_013
+domain: operations
+advice_policy: explain
+description: "ADVICE_POLICY=explain, an operating choice that leads to approved spending: which supplier to order from. The reply gives its verdict on the supplier, with the reason in the figures given (landed cost, lead time, late deliveries), and names Morgan as the one who approves the order's spend; whether to spend stays Morgan's. Owner's decision on the pilot's panel round (Nov 2, 2026)."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "We need 400 cable trays for a job that starts in three weeks. Northline quotes $41 each, delivered in 10 days, and was late on 1 of its last 12 orders. Calder quotes $38 each plus $900 freight, delivered in 18 days, and was late on 4 of its last 10. Morgan approves purchase orders up to $25,000. Which supplier should we choose?"
+quality_criteria:
+  gives_a_verdict_on_which_supplier: true
+  gives_the_reason_in_the_figures_landed_cost_lead_time_and_late_deliveries: true
+  shows_each_suppliers_landed_cost: true
+  names_morgan_as_the_one_who_approves_the_order: true
