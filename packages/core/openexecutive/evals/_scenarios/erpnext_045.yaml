@@ -1,0 +1,25 @@
+id: erpnext_045
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "F4 with E3, supplier invoices that don't match (knowledge/builtin/finance/supplier_invoice_exceptions.md), in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. E3 is a supplier invoice keyed without its purchase order, billing 5 more reels than were received at a rate about 4% above the order's, still unpaid. The reply checks invoices against their orders and receipts, finds the unlinked invoice and matches it by hand to its order and receipt, gives the extra quantity, the higher rate and the amount at stake with company and currency, says it is unpaid, and names who approves supplier invoices or the buyer to ask for a credit note. Whether to pay, hold or dispute is a decision with no verdict."
+query: "Do any of our supplier invoices not match what we ordered or received?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  checks_invoices_against_their_purchase_orders_and_receipts: true
+  finds_the_invoice_keyed_without_its_order_and_matches_it_by_hand: true
+  gives_the_extra_quantity_the_higher_rate_and_the_amount_at_stake: true
+  says_whether_it_is_paid_with_company_and_currency: true
+  names_who_approves_supplier_invoices_or_the_buyer_to_ask_for_a_credit_note: true
+  gives_no_verdict_on_whether_to_pay_hold_or_dispute: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

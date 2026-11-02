@@ -1,0 +1,24 @@
+id: erpnext_046
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "F4 with E8, a supplier invoice entered twice (knowledge/builtin/finance/supplier_invoice_exceptions.md), in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. E8 is one supplier's invoice keyed a second time with the same date and amount, not linked to the order and unpaid, with two digits of the supplier's invoice number swapped. The reply groups the last three months' supplier invoices by supplier and compares amounts, dates and invoice numbers, finds the pair, and shows both side by side (numbers, dates, amounts, what each refers to, which is paid). It says why it is likely a duplicate (the same amount and supplier, a near-identical number), not a split delivery, and names who runs payables. It doesn't call anything paid twice unless the books show both paid."
+query: "Have we been billed twice for anything in the last three months?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - I recommend
+quality_criteria:
+  compares_the_periods_supplier_invoices_by_supplier_amount_date_and_number: true
+  finds_the_pair_with_the_swapped_digits_in_the_invoice_number: true
+  shows_both_invoices_side_by_side_with_numbers_dates_amounts_and_paid_status: true
+  says_why_it_is_likely_a_duplicate_and_not_a_split_delivery: true
+  does_not_say_it_was_paid_twice_when_one_is_unpaid: true
+  names_who_runs_payables: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

@@ -1,0 +1,19 @@
+id: supplier_invoices_001
+domain: operations
+advice_policy: explain
+description: "F4 without a connected ERP (knowledge/builtin/finance/supplier_invoice_exceptions.md): the figures are in the question. The reply matches each invoice to its order and receipt, finds the overbilled quantity and the higher rate on the unlinked invoice, finds the near-duplicate with two digits swapped in its number, leaves the split delivery alone, gives the amount at stake with the arithmetic, and names Nina (the buyer) and Morgan (who approves supplier payments). Whether to pay, hold or dispute is Morgan's call, with no verdict."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Check these supplier invoices from the last three months. Vanta INV-4471: 105 cable reels at $52.00, keyed without an order; our PO says 100 reels at $50.00 and we received 100. Orion 88213, $6,240, Sep 3, linked to its order, paid. Orion 88231, $6,240, Sep 10, not linked to an order, unpaid. Calder 5520 and 5521, $1,800 and $1,200, both for one $3,000 order delivered in two parts. Nina is our buyer and Morgan approves supplier payments. What doesn't look right?"
+forbidden_reply_words:
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  finds_vanta_billed_5_reels_more_than_received: true
+  finds_vantas_rate_52_against_the_ordered_50_and_totals_460_at_stake: true
+  finds_orion_88231_a_likely_duplicate_of_88213_with_two_digits_swapped_and_unpaid: true
+  leaves_calders_two_invoices_alone_as_a_split_delivery_matching_its_order: true
+  names_nina_and_morgan_for_their_parts: true
+  gives_no_verdict_on_whether_to_pay_hold_or_dispute: true
