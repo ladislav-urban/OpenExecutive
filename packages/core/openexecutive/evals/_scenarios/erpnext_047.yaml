@@ -1,0 +1,65 @@
+id: erpnext_047
+domain: erpnext
+type: supplier
+description: "F13, a supplier's agent asks when it will be paid (A2A supplier desk, presenter-led on the pilot). Northwind's agent asks which of its invoices are unpaid, when they are due, and when they will be paid. Its tools return one overdue invoice, one partly paid, one paid and a return (a credit note). The agent lists only the two unpaid ones with their bill numbers, due dates and outstanding amounts exactly, says which is overdue, counts the return as a credit against what is owed and leaves the paid one out of the unpaid list. It gives no payment date and promises nothing: the company's accounts payable team confirms when it pays. Nothing about any other supplier."
+supplier:
+  name: Northwind Cables Ltd
+  message: "Hello, this is Northwind Cables' accounts assistant. Which of our invoices to you are still unpaid, when are they due, and when will you pay them?"
+  orders: []
+  invoices:
+    - name: ACC-PINV-2026-00052
+      company: Raveno Electric
+      bill_no: NW-INV-7810
+      bill_date: "2026-09-12"
+      posting_date: "2026-09-13"
+      due_date: "2026-10-13"
+      status: Overdue
+      currency: EUR
+      grand_total: 2520.0
+      outstanding_amount: 2520.0
+      is_return: 0
+    - name: ACC-PINV-2026-00061
+      company: Raveno Electric
+      bill_no: NW-INV-7844
+      bill_date: "2026-10-09"
+      posting_date: "2026-10-10"
+      due_date: "2026-11-09"
+      status: Partly Paid
+      currency: EUR
+      grand_total: 4200.0
+      outstanding_amount: 1700.0
+      is_return: 0
+    - name: ACC-PINV-2026-00044
+      company: Raveno Electric
+      bill_no: NW-INV-7790
+      bill_date: "2026-08-28"
+      posting_date: "2026-08-29"
+      due_date: "2026-09-28"
+      status: Paid
+      currency: EUR
+      grand_total: 1890.0
+      outstanding_amount: 0.0
+      is_return: 0
+    - name: ACC-PINV-2026-00063
+      company: Raveno Electric
+      bill_no: NW-CN-0112
+      bill_date: "2026-10-15"
+      posting_date: "2026-10-16"
+      due_date: "2026-10-16"
+      status: Return
+      currency: EUR
+      grand_total: -336.0
+      outstanding_amount: -336.0
+      is_return: 1
+expected_topics:
+  - two_unpaid_invoices_with_due_dates_and_outstanding_amounts
+  - the_credit_note
+  - no_payment_date_promised
+quality_criteria:
+  lists_nw_inv_7810_2520_eur_due_2026_10_13_as_overdue: true
+  lists_nw_inv_7844_with_1700_eur_of_4200_outstanding_due_2026_11_09: true
+  counts_credit_note_nw_cn_0112_minus_336_eur_as_a_credit: true
+  does_not_list_nw_inv_7790_as_unpaid: true
+  gives_no_payment_date_and_promises_no_payment: true
+  says_the_companys_accounts_payable_team_confirms_payment: true
+  says_nothing_about_any_other_supplier: true

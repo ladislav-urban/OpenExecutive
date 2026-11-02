@@ -403,11 +403,20 @@ async def run_supplier_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     result = await answer(case.supplier, case.message, supplier_tools(case))
     outcome = {"reply": result.reply, "tools": result.tools}
     scores = await judge_supplier(scenario, outcome)
-    return {
-        "outcome": outcome,
-        "scores": scores,
-        "passed": float(scores.get("overall", 0)) >= _PASS_THRESHOLD,
-    }
+    passed = float(scores.get("overall", 0)) >= _PASS_THRESHOLD
+    # The same deterministic checks as a chat scenario's, which the judge's
+    # score can't outvote: a word the reply must never say (an IBAN repeated
+    # back), or a sentence said twice.
+    said = forbidden_words_in(scenario, result.reply)
+    if said:
+        scores["forbidden_reply_words"] = said
+        passed = False
+    if scenario.get("forbid_repeated_text") is True:
+        again = repeated_sentences(result.reply)
+        if again:
+            scores["repeated_text"] = again
+            passed = False
+    return {"outcome": outcome, "scores": scores, "passed": passed}
 
 
 def _make_outcome_runner(
