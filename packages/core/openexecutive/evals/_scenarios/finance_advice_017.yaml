@@ -1,0 +1,18 @@
+id: finance_advice_017
+domain: operations
+advice_policy: explain
+description: "ADVICE_POLICY=explain: a 'why' question about an operating result gets the causes and their figures, never a verdict on whether it was worth it, even though a verdict would be allowed if asked. Found on the pilot (Nov 2, 2026, margin drop step 1 in the panel): 'Was it worth it? Yes' volunteered, while step 3 later said 'not on these figures'."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Why did our gross margin drop last week? It went from 31% to 27% on $120,000 of sales. We sold 84 panels, 60 of them marked as clearance at 15% off, and freight on two orders was $1,900 above normal."
+forbidden_reply_words:
+  - "worth it"
+  - "paid off"
+  - "was justified"
+  - "I recommend"
+quality_criteria:
+  explains_the_causes_with_their_share_of_the_drop: true
+  shows_the_arithmetic_of_the_clearance_discount_and_the_freight: true
+  gives_no_verdict_on_whether_the_drop_or_the_clearance_was_worth_it: true

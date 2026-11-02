@@ -220,7 +220,9 @@ caching:
         (inside the company only); no recommendation or verdict, softened
         ones included ("I wouldn't", "worth watching"); an operating
         choice outside that list (whether a margin drop or discount was
-        worth it, which supplier) gets a verdict with its reason, the same
+        worth it, which supplier) gets a verdict with its reason when
+        the question asks for one (a "why" question gets the causes only),
+        the same
         in the panel and in Chats, naming who approves any spend it leads
         to (owner, Nov 2, 2026), while anything touching credit terms,
         a write-off, financing or whether to spend at all stays without
