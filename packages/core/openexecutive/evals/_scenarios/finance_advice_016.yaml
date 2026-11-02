@@ -1,0 +1,20 @@
+id: finance_advice_016
+domain: operations
+advice_policy: explain
+description: "ADVICE_POLICY=explain, financing and credit terms phrased as 'which option': lease or buy a van with a loan, and 60-day or 30-day terms for a customer. Both are decisions without a verdict: the reply gives what each option costs and means in the figures and who decides (Diane for the financing, Rachel for the terms), with no verdict, softened ones included. Found by the security review of the operating-verdict rule (Nov 2, 2026)."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Two choices this week. A new van: lease it at $780 a month for 48 months, or buy it for $36,000 with a bank loan at 7.5% over 4 years. And Harbor Electric wants 60-day terms instead of 30; they buy about $12,000 a month. Diane decides on financing and Rachel holds customer credit. Which option should we choose on each?"
+forbidden_reply_words:
+  - "I recommend"
+  - "I'd lease"
+  - "I'd buy"
+  - "I wouldn't"
+  - "go with"
+quality_criteria:
+  shows_what_leasing_and_buying_with_the_loan_each_cost_in_total: true
+  shows_what_60_day_terms_mean_for_cash_tied_up: true
+  gives_no_verdict_on_either_softened_or_not: true
+  names_diane_for_the_financing_and_rachel_for_the_terms: true
