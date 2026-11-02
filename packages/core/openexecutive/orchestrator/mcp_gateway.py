@@ -3459,11 +3459,20 @@ def _remember_drive_read(tool_name: str, arguments: dict[str, Any], result_text:
 
 def _show_outside_panel(name: str) -> bool:
     """Whether ``name`` is ERPNext's show tool on a turn that is not from
-    ERPNext's panel, the only place it can open anything."""
-    from openexecutive.orchestrator.schedule_tools import current_session, erpnext_panel_turn
+    ERPNext's panel, the only place it can open anything: its webhook turn,
+    or a host page's turn the docked panel sent through the web chat
+    (``schedule_tools.host_page_turn``)."""
+    from openexecutive.orchestrator.schedule_tools import (
+        current_session,
+        erpnext_panel_turn,
+        host_page_turn,
+    )
     from openexecutive.prompts.connected_systems import ERPNEXT_SHOW_TOOL
 
-    return name == ERPNEXT_SHOW_TOOL and not erpnext_panel_turn(current_session.get())
+    if name != ERPNEXT_SHOW_TOOL:
+        return False
+    session = current_session.get()
+    return not (erpnext_panel_turn(session) or host_page_turn(session))
 
 
 def _erpnext_mismatches(text: object) -> dict[str, str]:

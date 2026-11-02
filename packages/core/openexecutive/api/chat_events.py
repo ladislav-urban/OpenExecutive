@@ -108,6 +108,20 @@ class MessageAddedEvent(_Event):
     ids: list[str]
 
 
+class ErpnextViewsEvent(_Event):
+    """What the turn showed in ERPNext, sent before ``done`` on a turn
+    ERPNext's docked panel sent through a host origin's page (F1) and only
+    there: ``views`` as the model passed them to ERPNext's show tool, kept
+    only when ERPNext accepted the call as this person, and ``call``, the
+    last read call. The caller assertion is removed from both. oe_connector
+    checks each view again as the desk user before the browser opens one."""
+
+    type: Literal["erpnext_views"]
+    views: list[dict[str, Any]]
+    call: dict[str, Any] | None = None
+    session_id: str | None = None
+
+
 class StoppedEvent(_Event):
     """The person stopped the turn; ``done`` follows on the same stream."""
 
@@ -152,6 +166,7 @@ ChatStreamEvent = Annotated[
     | FormPatchEvent
     | SourcesEvent
     | MessageAddedEvent
+    | ErpnextViewsEvent
     | StoppedEvent
     | DebugEventEvent
     | ErrorEvent
@@ -162,7 +177,7 @@ ChatStreamEvent = Annotated[
 # The events' names, in the order a client reads about them.
 EVENT_TYPES: tuple[str, ...] = (
     "chunk", "thinking", "activity", "phase", "committee_critique", "action_taken", "form_patch",
-    "sources", "message_added", "stopped", "debug_event", "error", "done",
+    "sources", "message_added", "erpnext_views", "stopped", "debug_event", "error", "done",
 )
 
 

@@ -63,6 +63,7 @@ SHIPPED_BUILTIN_FILES: frozenset[str] = frozenset(
         "finance/saas_metrics.md",
         "finance/short_term_cash_outlook.md",
         "finance/supplier_invoice_exceptions.md",
+        "finance/unbilled_work.md",
         "finance/unit_economics.md",
         "finance/valuation_methods.md",
         "hr/compensation_design.md",
