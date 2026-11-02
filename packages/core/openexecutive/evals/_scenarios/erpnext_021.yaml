@@ -1,13 +1,13 @@
 id: erpnext_021
 domain: mcp
-description: "ERPNext's \"Ask the Dynocortex\" panel docked beside Dynocortex's Home (surface: erpnext_panel, page screen /). The person asks what needs them today. The panel's turn can't read their briefing or Home's cards, so it says it can't see Home's briefing from here and suggests Chats for it, invents no card, goal or figure, and may offer to look something up in ERPNext instead (open orders, overdue invoices). Short enough for a side panel"
+description: "ERPNext's \"Ask the Dynocortex\" panel docked beside Dynocortex's Home (surface: erpnext_panel, page screen /). The person asks what needs them today. The panel's turn can't read their briefing or Home's cards, so it says it can't see Home's briefing from here and suggests Conversations for it, invents no card, goal or figure, and may offer to look something up in ERPNext instead (open orders, overdue invoices). Short enough for a side panel"
 surface: erpnext_panel
 page:
   screen: /
 query: "What needs me today?"
 quality_criteria:
   says_it_cannot_see_homes_briefing_or_cards_from_this_panel: true
-  suggests_chats_for_the_briefing: true
+  suggests_conversations_for_the_briefing: true
   does_not_invent_cards_goals_or_figures: true
   any_erpnext_figure_it_gives_comes_from_reading_erpnext: true
   keeps_the_answer_short_enough_for_a_side_panel: true

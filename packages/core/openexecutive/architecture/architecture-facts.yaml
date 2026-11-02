@@ -2456,7 +2456,7 @@ memory:
     first when the reply being redone already did something (action chips),
     since the new turn could do it again.
   chat_topics: |
-    The Chats page groups a person's own chats by date or by topic
+    The Conversations page (route /chats) groups a person's own chats by date or by topic
     (memory/chat_topics.py, utils/chat_topics.py). Topics are per owner
     (chat_topics rows; sessions.topic_id, sessions.topic_source). Why it
     costs almost nothing: the one utility-fast call that already titled a
@@ -5239,7 +5239,7 @@ chat:
     GET /sessions?q= searches the caller's own chats (same scope as the
     list) by title and message text, case-insensitive with LIKE
     wildcards escaped. Each result adds match_count (0 = title only) and
-    snippet (newest matching message around the match). The Chats page
+    snippet (newest matching message around the match). The Conversations page
     debounces it and opens a message match with /?session=…&find=…, and
     the chat starts on that message with previous/next and highlights
     the words (CSS Custom Highlight API where the browser has it).
@@ -8264,7 +8264,7 @@ integrations:
     one channel are each one endless stream with a fixed base id
     (telegram:{chat}, slack:dm:{user}, slack:channel:{c}:{user},
     discord:dm:{user}, discord:channel:{c}:{user}). memory.conversations
-    cuts it into conversations so the Chats page shows each one, titled,
+    cuts it into conversations so the Conversations page shows each one, titled,
     instead of one chat that never ends, and replayed history starts
     clean.
       • A message starts the next conversation when the stream has been
@@ -10303,7 +10303,7 @@ integrations:
     call the Executive Dynocortex, and states the read-only limits (suggest
     the OpenExecutive app for anything else); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
-    people, memory, settings), so it says so and suggests Chats rather than
+    people, memory, settings), so it says so and suggests Conversations rather than
     guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the
     route's page block, evals.scenarios.scenario_query). Eval erpnext_006 runs a turn
     this way: a chat scenario's `surface: erpnext_panel`

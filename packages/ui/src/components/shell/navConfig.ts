@@ -295,7 +295,7 @@ export function buildDestinations({
     {
       key: "chats",
       href: "/chats",
-      label: "Chats",
+      label: "Conversations",
       icon: "chat",
       description: "Every conversation, searchable — including Slack, Telegram and Discord.",
     },

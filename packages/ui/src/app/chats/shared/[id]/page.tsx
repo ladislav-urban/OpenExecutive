@@ -47,7 +47,7 @@ export default function SharedChatPage() {
       <div className="border-b border-line px-4 sm:px-6 py-3 flex-shrink-0">
         <div className="max-w-3xl mx-auto min-w-0">
           <Link href="/chats" className="text-sm text-fg-muted hover:text-fg">
-            ← Chats
+            ← Conversations
           </Link>
           {current?.state === "ok" && (
             <h1 className="mt-1 text-lg font-semibold text-fg truncate">{sessionTitle(current.session)}</h1>

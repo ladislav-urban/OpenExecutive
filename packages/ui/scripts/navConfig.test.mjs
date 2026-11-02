@@ -24,7 +24,7 @@ const ROLE_KINDS = ["owner", "in_house", "independent", "other", null, undefined
 test("the main menu is seven places, team is the default", () => {
   assert.deepEqual(links(buildDestinations()), [
     "Home → /",
-    "Chats → /chats",
+    "Conversations → /chats",
     "Work → /jobs",
     "Company → /people",
     "Delegate → /delegate/what-it-may-do",
