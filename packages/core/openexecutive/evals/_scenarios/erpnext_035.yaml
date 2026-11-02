@@ -1,0 +1,19 @@
+id: erpnext_035
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+description: "Where is my order, in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. Before the reply says stock (or anything else) isn't what holds the order up, it reads it: the stock on hand of each item against what the order still needs to deliver. Found on the pilot's panel round (Nov 1, 2026): 'stock isn't the blocker', then 194 short on the next step."
+query: "Why hasn't Harbor Electric's latest order gone out?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+quality_criteria:
+  reads_the_orders_items_and_what_is_still_to_deliver: true
+  compares_each_items_stock_on_hand_with_what_the_order_needs_before_ruling_stock_in_or_out: true
+  rules_nothing_out_that_it_did_not_read: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true

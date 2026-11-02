@@ -1,0 +1,21 @@
+id: erpnext_036
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+description: "Project margins in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. Each project's margin counts every cost line the books hold for it, materials as well as labour and overheads, and the reply says which costs it counted. Found on the pilot's panel round (Nov 1, 2026): the projects' margins left materials out and were corrected on the next step."
+query: "Which of our projects have the thinnest margins, and what's driving them?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - forecast
+quality_criteria:
+  counts_materials_as_well_as_labour_and_other_costs_in_each_margin: true
+  says_which_cost_lines_each_margin_includes: true
+  shows_the_arithmetic_of_each_margin_it_gives: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true

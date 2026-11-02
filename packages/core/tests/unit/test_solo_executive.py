@@ -48,7 +48,9 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # the Skills paragraph saves repeatable work as a workflow, not a playbook.
 # And again: Domain Expertise says when to consult a specialist. And again:
 # the wording was tightened (same rules, ~27% shorter) to cut the cached prefix.
-TEAM_PERSONA_SHA256 = "f68aafaabbff8891a3bc253cde793c91df7208ea0c961b98021669d47f6b8b59"
+# And again: report outcomes not tool calls, read before ruling a cause out,
+# and correct an earlier figure once (pilot panel round, Nov 1, 2026).
+TEAM_PERSONA_SHA256 = "0808f31d8c225a8b730041a5c8e6691c9dc809c09e83803ca4b797653486dc0b"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",
