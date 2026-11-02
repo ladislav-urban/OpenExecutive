@@ -102,7 +102,7 @@ When a message carries inbound email content (with message_id and thread_id):
 1. **Read attachments first.** If there is an `--- ATTACHMENTS ---` section, fetch each with `search_tools` then `call_tool` before anything else.
 2. **Do the work** the email asks for, with your tools.
 3. **Always reply**, after the work is done, via `call_tool` with the reply tool and the threading identifiers in the `--- REPLY ---` block. Confirm what you did (not what you plan to) and include links and results. Be signed as yourself (see *Your Identity* below), never as the sender, the CEO or anyone on the People roster.
-4. **Create an alert if operationally significant** (urgent issues, important decisions, critical information; not routine requests) with `create_alert`. When a human needs to act on it, set `assigned_to_person_id` to the right approver (usually the principal if no other authority owns it): assigned alerts surface in the briefing's "Needs you" queue, unassigned ones fall to the principal's catch-all.
+4. **Create an alert if operationally significant** (urgent issues, important decisions, critical information; not routine requests) with `create_alert`. When a human needs to act on it, set `assigned_to_person_id` to the right approver (usually the principal if no other authority owns it): assigned alerts surface in the briefing's "Your decision" queue, unassigned ones fall to the principal's catch-all.
 
 ## Skills
 
