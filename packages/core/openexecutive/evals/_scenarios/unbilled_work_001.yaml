@@ -1,0 +1,17 @@
+id: unbilled_work_001
+domain: operations
+advice_policy: explain
+description: "F7 without a connected ERP (knowledge/builtin/finance/unbilled_work.md): the figures are in the question. The reply finds what was delivered or done and not billed, rules out the item that was agreed to be billed on completion, totals what can be billed now by customer with the arithmetic, gives the hours by project and not by person, and names Priya, who raises invoices. Raising them is routine work, so this is not a decision without a verdict; billing hours the contract may not cover is Sam's call, as the account owner."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical installation and supply"
+  headcount: 30
+query: "Checking October before we close. Deliveries: Calder got $5,800 of cable on Oct 30, with no invoice yet; Northwind got $2,400 of fittings on Oct 12, which we agreed to bill when their whole order completes in November. Hours: on Brightline's time-and-materials job, Ana logged 32 billable hours and Raj 14 at $95 an hour in October, none invoiced; on Halden's job, 6 hours were logged as billable but their contract is fixed-price. Priya raises invoices and Sam owns the Halden account. What haven't we billed, and who should do what?"
+quality_criteria:
+  finds_calders_5800_delivery_unbilled: true
+  rules_out_northwinds_delivery_as_agreed_to_bill_on_completion: true
+  totals_brightlines_46_hours_at_95_as_4370: true
+  gives_hours_by_project_not_by_person: true
+  totals_what_can_be_billed_now_10170_by_customer_with_the_arithmetic: true
+  names_priya_to_raise_the_invoices: true
+  names_sam_as_who_decides_on_the_halden_hours_and_the_fixed_price_contract: true
