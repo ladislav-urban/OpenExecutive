@@ -31,9 +31,12 @@ MIN_SENTENCE_CHARS = 25
 # The most an extra round adds: the "one short line" it is asked for.
 MAX_LINE_CHARS = 300
 # Bounds on the comparison's cost (difflib's ratio is quadratic).
-COMPARE_CHARS = 300
+COMPARE_CHARS = 120
 MAX_EARLIER = 200
 MAX_SENTENCES = 200
+# The most difflib ratios one call works out; past it, a sentence counts as
+# new (kept), which costs a repeat at worst, never a lost line.
+MAX_RATIOS = 2000
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])[\"'”’)\]]*\s+|\n+")
 _WORD = re.compile(r"[a-z0-9$%.,]+")
@@ -41,6 +44,14 @@ _WORD = re.compile(r"[a-z0-9$%.,]+")
 _NOT = re.compile(
     r"\b(?:not|no|never|cannot|can't|couldn't|didn't|isn't|wasn't|won't|"
     r"haven't|hasn't|unable|failed|refused|without)\b|n't\b"
+)
+# Words that say an action wasn't done: a sentence with one is the line the
+# claim check's extra round exists for, so it is only ever a repeat when it
+# is word for word an earlier sentence. "I've removed it so it won't show"
+# against "I couldn't remove it, so it will still show" both say "not".
+_FAILED = re.compile(
+    r"\b(?:couldn't|can't|cannot|unable|failed|refused|didn't|haven't|"
+    r"hasn't|isn't done|wasn't done|not done|not able)\b"
 )
 
 
@@ -58,15 +69,8 @@ def _negative(sentence: str) -> bool:
     return _NOT.search(sentence.replace("’", "'").lower()) is not None
 
 
-def _alike(a: str, b: str) -> bool:
-    if a == b:
-        return True
-    matcher = SequenceMatcher(None, a, b, autojunk=False)
-    return (
-        matcher.real_quick_ratio() >= SIMILAR
-        and matcher.quick_ratio() >= SIMILAR
-        and matcher.ratio() >= SIMILAR
-    )
+def _failed(sentence: str) -> bool:
+    return _FAILED.search(sentence.replace("’", "'").lower()) is not None
 
 
 class _Said:
@@ -74,18 +78,32 @@ class _Said:
 
     def __init__(self) -> None:
         self._items: list[tuple[str, bool]] = []
+        self._ratios = 0
 
     def add(self, sentence: str) -> None:
         self._items.append((_norm(sentence), _negative(sentence)))
         del self._items[:-MAX_EARLIER]
 
+    def _alike(self, a: str, b: str) -> bool:
+        if a == b:
+            return True
+        matcher = SequenceMatcher(None, a, b, autojunk=False)
+        if matcher.real_quick_ratio() < SIMILAR or matcher.quick_ratio() < SIMILAR:
+            return False
+        if self._ratios >= MAX_RATIOS:
+            return False
+        self._ratios += 1
+        return matcher.ratio() >= SIMILAR
+
     def has(self, sentence: str) -> bool:
         norm = _norm(sentence)
         if len(norm) < MIN_SENTENCE_CHARS:
             return False
+        if _failed(sentence):
+            return any(norm == e for e, _ in self._items)
         negative = _negative(sentence)
         return any(
-            neg == negative and len(e) >= MIN_SENTENCE_CHARS and _alike(norm, e)
+            neg == negative and len(e) >= MIN_SENTENCE_CHARS and self._alike(norm, e)
             for e, neg in self._items
         )
 

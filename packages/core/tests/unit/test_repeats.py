@@ -76,3 +76,29 @@ def test_the_comparison_stays_cheap_on_long_text() -> None:
     new_line(many, " ".join(reversed(many.split(". "))))
     repeated_sentences(many + " " + long_sentence)
     assert time.monotonic() - start < 5
+
+
+def test_a_retraction_of_a_claim_that_says_not_is_kept() -> None:
+    # Security review, round 2: both say "not", so the not-guard alone let
+    # the retraction be matched with the claim.
+    earlier = "Done. I've removed it so it won't show in the brief."
+    retraction = "I couldn't remove it, so it will still show in the brief."
+    assert new_line(earlier, retraction) == retraction
+    # Only word for word does a failure line count as said.
+    assert new_line(retraction, retraction) == ""
+
+
+def test_long_sentences_stay_cheap() -> None:
+    import time
+
+    words = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu".split()
+
+    def prose(seed: int) -> str:
+        return " ".join(words[(seed * 7 + i * 5) % len(words)] for i in range(45)) + "."
+
+    earlier = " ".join(prose(i) for i in range(200))
+    text = " ".join(prose(i + 1000) for i in range(200))
+    start = time.monotonic()
+    new_line(earlier, text)
+    repeated_sentences(earlier + " " + text)
+    assert time.monotonic() - start < 10
