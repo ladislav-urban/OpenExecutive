@@ -2161,6 +2161,11 @@ async def _chat_turn(
                 _release_session_turn(lock_key, turn_lock)
             if host_slot is not None:
                 host_slot.release()
+            if turn_views is not None:
+                # The show tool is this turn's alone: a turn of the same
+                # conversation running past the lock's deadline mustn't
+                # inherit it from the cached session.
+                session.host_page = False
             if session.shared_chat:
                 # Saved by now (every path persists before it ends): the
                 # other pages read the chat again.
