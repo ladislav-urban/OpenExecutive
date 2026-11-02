@@ -102,3 +102,14 @@ def test_long_sentences_stay_cheap() -> None:
     new_line(earlier, text)
     repeated_sentences(earlier + " " + text)
     assert time.monotonic() - start < 10
+
+
+def test_an_uncontracted_retraction_is_kept() -> None:
+    # Security review, round 3: "could not" / "did not" / "have not".
+    earlier = "Done. I've removed it so it won't show in the brief."
+    for retraction in (
+        "I could not remove it, so it will still show in the brief.",
+        "I did not remove it, so it will still show in the brief.",
+        "I have not removed it, so it will still show in the brief.",
+    ):
+        assert new_line(earlier, retraction) == retraction

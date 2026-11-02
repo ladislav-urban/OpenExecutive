@@ -99,11 +99,13 @@ class _Said:
         norm = _norm(sentence)
         if len(norm) < MIN_SENTENCE_CHARS:
             return False
-        if _failed(sentence):
+        # A sentence that says "not" ("could not", "won't", "unable") may be
+        # the line that retracts a claim: a repeat only word for word. A
+        # doubled negative sentence is the lesser harm.
+        if _failed(sentence) or _negative(sentence):
             return any(norm == e for e, _ in self._items)
-        negative = _negative(sentence)
         return any(
-            neg == negative and len(e) >= MIN_SENTENCE_CHARS and self._alike(norm, e)
+            not neg and len(e) >= MIN_SENTENCE_CHARS and self._alike(norm, e)
             for e, neg in self._items
         )
 
