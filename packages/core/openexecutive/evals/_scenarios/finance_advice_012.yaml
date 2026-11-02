@@ -1,0 +1,17 @@
+id: finance_advice_012
+domain: operations
+advice_policy: explain
+description: "ADVICE_POLICY=explain, an operating choice outside the list: whether last week's margin drop was worth it. The reply gives its verdict first, with the reason in the figures given (the margin given up against the volume or customer it bought), and doesn't stop at the figures or say it's for someone else to judge. Owner's decision on the pilot's panel round (Nov 2, 2026): operating choices get a verdict, the same in the panel and in Chats."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Last week our gross margin fell from 31% to 27% on $120,000 of sales, because we gave Harbor Electric 8% off a $40,000 order to win it from a competitor. Harbor usually buys about $150,000 a year from us at our normal 31%. Was last week's margin drop worth it?"
+forbidden_reply_words:
+  - "not yet provable"
+  - "that's your call"
+quality_criteria:
+  gives_a_verdict_first_on_whether_it_was_worth_it: true
+  gives_the_reason_in_the_figures_margin_given_up_against_what_it_bought: true
+  shows_the_arithmetic_of_the_margin_given_up: true
+  does_not_stop_at_the_figures_or_hand_the_judgement_to_someone_else: true

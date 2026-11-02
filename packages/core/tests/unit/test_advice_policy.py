@@ -101,7 +101,7 @@ def test_a_scenario_names_only_explain() -> None:
     with pytest.raises(ValueError, match="advice_policy"):
         validate_scenario_yaml(base + "advice_policy: advise\n")
     ours = [s for s in load_scenarios() if s["id"].startswith("finance_advice_")]
-    assert len(ours) == 11 and all(s["advice_policy"] == "explain" for s in ours)
+    assert len(ours) == 16 and all(s["advice_policy"] == "explain" for s in ours)
 
 
 def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -> None:
@@ -127,6 +127,26 @@ def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -
     assert "no disclaimer or line describing this rule" in specialist
     assert "not even to say what it isn't" in specialist
     assert "never from a company document's table" in specialist
+
+
+def test_operating_choices_get_a_verdict_and_the_listed_decisions_do_not() -> None:
+    # Owner, Nov 2, 2026 (pilot panel round): "was last week's margin drop
+    # worth it?" and which supplier get a verdict with its reason, the same
+    # in the panel and in Chats; the listed decisions stay verdict-free.
+    text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
+    assert "**Operating choices get your verdict.**" in text
+    assert "which of two quoted suppliers to order from" in text and "margin drop" in text
+    assert "name who approves the spend" in text and "whether to spend stays theirs" in text
+    assert "in hindsight too; only an operating choice gets your verdict." in text
+    # Security review: the exclusion is the category, not the examples, and
+    # holds in hindsight (credit terms, write-offs, leasing, repair or replace).
+    for near in ("payment terms, a write-off", "leasing or buying with a loan",
+                 "repair or replace", '"was raising their limit worth it?"'):
+        assert near in text, near
+    specialist = advice_policy.SPECIALIST_ADVICE_ADDENDUM
+    assert "an operating choice (whether a margin drop or a discount was worth it" in specialist
+    assert "gets your verdict with its reason in the figures" in specialist
+    assert "gets no verdict, also when asked in hindsight" in specialist
 
 
 def test_the_roster_says_to_name_scopes_in_words() -> None:

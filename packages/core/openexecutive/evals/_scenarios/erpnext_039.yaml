@@ -1,0 +1,21 @@
+id: erpnext_039
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+description: "The panel round's own question, in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. Whether last week's margin drop was worth it is an operating choice: the reply reads the margin and what drove it from the books and gives its verdict first, with the reason in those figures, as Chats would. Found on the pilot's panel round (Nov 1, 2026): 'On the numbers, no…' and 'Mostly yes, by your own policy…' in the panel against 'not yet provable' in Chats; the owner chose a verdict with its reason in both (Nov 2)."
+query: "Was last week's margin drop worth it?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "not yet provable"
+quality_criteria:
+  reads_last_weeks_margin_and_what_drove_it_from_the_books: true
+  gives_a_verdict_first_on_whether_it_was_worth_it: true
+  gives_the_reason_in_the_books_figures: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
+  does_not_name_internal_tool_names_to_the_user: true
