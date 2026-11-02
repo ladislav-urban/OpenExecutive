@@ -1194,6 +1194,54 @@ def test_a_removed_one_isnt_suggested_straight_back(
     assert again["uses"] == 0 and again["example"] == {}
 
 
+def _clock_behind(hours: int) -> type:
+    """A ``datetime`` whose ``now`` reads ``hours`` early: a wall clock that
+    stepped back, as WSL's does under load."""
+    from datetime import datetime, timedelta
+
+    class _Behind(datetime):
+        @classmethod
+        def now(cls, tz: Any = None) -> Any:  # type: ignore[override]
+            return datetime.now(tz) - timedelta(hours=hours)
+
+    return _Behind
+
+
+def test_a_removal_counts_approvals_by_id_not_by_the_wall_clock(
+    client: TestClient, owner: Any, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Which approvals came before a removal is pinned by their ids, so a
+    clock that steps back between the two can't move one across it."""
+    _carry_out_into([], monkeypatch)
+    sam = _teammate()
+    _training()
+
+    def approve(n: int, **edits: Any) -> None:
+        decision_id = ttl.hold("message_person", {"person_id": sam, "text": f"Note {n}"},
+                               ttl.Hit(ttl.TRAINING, "it's in training"), source="reflection", mcp=False)
+        assert client.post(f"/decisions/{decision_id}/approve", json={"edits": edits}).status_code == 200
+
+    def suggested() -> list[int]:
+        return [s["approvals"] for s in client.get("/take-the-lead").json()["suggested"]]
+
+    for n in range(ttl.SUGGEST_AFTER):
+        approve(n)
+    approve(99, allow=True)
+    [learned] = client.get("/take-the-lead").json()["learned"]
+    # Removed on a clock an hour behind: every earlier approval reads later.
+    monkeypatch.setattr(ttl, "datetime", _clock_behind(1))
+    assert client.delete(f"/take-the-lead/learned/{learned['id']}").status_code == 200
+    assert suggested() == []
+    # Approved after it on a clock two hours behind: each reads earlier, and
+    # still counts.
+    monkeypatch.setattr(ledger, "datetime", _clock_behind(2))
+    for n in range(ttl.SUGGEST_AFTER - 1):
+        approve(100 + n)
+    assert suggested() == []
+    approve(200)
+    assert suggested() == [ttl.SUGGEST_AFTER]
+
+
 def test_the_owners_act_as_me_ones_share_the_list_and_nobody_elses(client: TestClient, owner: Any) -> None:
     from openexecutive.delegation import training
 

@@ -237,6 +237,16 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         except sqlite3.OperationalError as exc:
             if "duplicate column" not in str(exc).lower():
                 raise
+    # The training approvals a removal had already counted, by decision id
+    # (JSON list): `suggestions` skips exactly those, so the order of an
+    # approval and a removal never rests on two wall-clock readings, which
+    # step back under load. NULL on a row removed before this column existed.
+    if "removed_decisions" not in allowed_columns:
+        try:
+            conn.execute(f"ALTER TABLE {ALLOWED_TABLE} ADD COLUMN removed_decisions TEXT")  # noqa: S608
+        except sqlite3.OperationalError as exc:
+            if "duplicate column" not in str(exc).lower():
+                raise
     conn.execute(
         f"CREATE TABLE IF NOT EXISTS {RULES_TABLE} ("  # noqa: S608
         "id INTEGER PRIMARY KEY AUTOINCREMENT, scope TEXT NOT NULL, kind TEXT NOT NULL, "
@@ -891,7 +901,7 @@ def allow(
             "ELSE example END, "
             "uses = CASE WHEN removed_at IS NOT NULL THEN 0 ELSE uses END, "
             "created_at = CASE WHEN removed_at IS NOT NULL THEN excluded.created_at ELSE created_at END, "
-            "removed_at = NULL",
+            "removed_at = NULL, removed_decisions = NULL",
             (key, label[:200], feature, text, created_by, datetime.now(UTC).isoformat(), decision_id, person_id),
         )
         conn.commit()
@@ -915,15 +925,56 @@ def _allowed_count(conn: sqlite3.Connection, feature: str, person_id: int | None
     ).fetchone()[0])
 
 
-def _removed(*, db_path: Path | None = None) -> dict[str, str]:
+@dataclass(frozen=True)
+class _Removal:
+    at: str
+    # The approvals already counted when it was removed; None on a row
+    # removed before they were recorded (then `at` decides, as it used to).
+    decisions: frozenset[int] | None
+
+
+def _removed(*, db_path: Path | None = None) -> dict[str, _Removal]:
     conn = _connect(db_path)
     try:
         rows = conn.execute(
-            f"SELECT key, removed_at FROM {ALLOWED_TABLE} WHERE removed_at IS NOT NULL",  # noqa: S608
+            f"SELECT key, removed_at, removed_decisions FROM {ALLOWED_TABLE} "  # noqa: S608
+            "WHERE removed_at IS NOT NULL",
         ).fetchall()
     finally:
         conn.close()
-    return {r["key"]: r["removed_at"] for r in rows}
+    out: dict[str, _Removal] = {}
+    for r in rows:
+        decisions: frozenset[int] | None = None
+        try:
+            ids = json.loads(r["removed_decisions"]) if r["removed_decisions"] else None
+            if isinstance(ids, list):
+                decisions = frozenset(i for i in ids if isinstance(i, int) and not isinstance(i, bool))
+        except (TypeError, ValueError):
+            decisions = None
+        out[r["key"]] = _Removal(at=r["removed_at"], decisions=decisions)
+    return out
+
+
+def _approvals(*, db_path: Path | None = None) -> list[tuple[str, int, str, str]]:
+    """Training cards approved unchanged in the last ``SUGGEST_DAYS`` days:
+    ``(key, decision id, resolved_at, label)`` for each that would allow
+    something."""
+    from openexecutive.memory.decision_ledger import STATUS_APPROVED_UNCHANGED, list_instances
+
+    since = (datetime.now(UTC) - timedelta(days=SUGGEST_DAYS)).isoformat()
+    out: list[tuple[str, int, str, str]] = []
+    for instance in list_instances(
+        DECISION_CLASS, status=STATUS_APPROVED_UNCHANGED, resolved_since=since, limit=500, db_path=db_path,
+    ):
+        try:
+            grant = json.loads(instance.proposed_payload_json).get("allow")
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if not isinstance(grant, dict) or not isinstance(grant.get("key"), str):
+            continue
+        key = grant["key"]
+        out.append((key, instance.id, instance.resolved_at or "", str(grant.get("label") or key)))
+    return out
 
 
 def room_for(key: str, *, person_id: int | None = None, db_path: Path | None = None) -> bool:
@@ -945,12 +996,20 @@ def disallow(
     is (False, as if it weren't there)."""
     conn = _connect(db_path)
     try:
+        row = conn.execute(
+            f"SELECT key FROM {ALLOWED_TABLE} WHERE id = ?", (allowed_id,),  # noqa: S608
+        ).fetchone()
+        counted = sorted(
+            decision_id for key, decision_id, _, _ in _approvals(db_path=db_path)
+            if row is not None and key == row["key"]
+        )
         # Kept, marked removed: Settings suggests it again only after new
-        # approvals (``suggestions``), and its example is dropped.
+        # approvals (``suggestions``: any not among ``removed_decisions``),
+        # and its example is dropped.
         cur = conn.execute(
-            f"UPDATE {ALLOWED_TABLE} SET removed_at = ?, example = '' "  # noqa: S608
+            f"UPDATE {ALLOWED_TABLE} SET removed_at = ?, removed_decisions = ?, example = '' "  # noqa: S608
             "WHERE id = ? AND removed_at IS NULL AND ((person_id IS NULL AND ?) OR person_id = ?)",
-            (datetime.now(UTC).isoformat(), allowed_id, 1 if shared else 0, person_id),
+            (datetime.now(UTC).isoformat(), json.dumps(counted), allowed_id, 1 if shared else 0, person_id),
         )
         conn.commit()
         return cur.rowcount > 0
@@ -985,26 +1044,18 @@ def suggestions(*, db_path: Path | None = None) -> list[Suggestion]:
     the last ``SUGGEST_DAYS`` days, for actions not allowed yet. After a
     removal only approvals since count, so a removed one isn't suggested
     straight back."""
-    from openexecutive.memory.decision_ledger import STATUS_APPROVED_UNCHANGED, list_instances
-
-    since = (datetime.now(UTC) - timedelta(days=SUGGEST_DAYS)).isoformat()
     counts: dict[str, int] = {}
     labels: dict[str, str] = {}
     removed = _removed(db_path=db_path)
-    for instance in list_instances(
-        DECISION_CLASS, status=STATUS_APPROVED_UNCHANGED, resolved_since=since, limit=500, db_path=db_path,
-    ):
-        try:
-            grant = json.loads(instance.proposed_payload_json).get("allow")
-        except (TypeError, ValueError, AttributeError):
-            continue
-        if not isinstance(grant, dict) or not isinstance(grant.get("key"), str):
-            continue
-        key = grant["key"]
-        if key in removed and (instance.resolved_at or "") <= removed[key]:
+    for key, decision_id, resolved_at, label in _approvals(db_path=db_path):
+        removal = removed.get(key)
+        if removal is not None and (
+            decision_id in removal.decisions if removal.decisions is not None
+            else resolved_at <= removal.at
+        ):
             continue
         counts[key] = counts.get(key, 0) + 1
-        labels.setdefault(key, str(grant.get("label") or key))
+        labels.setdefault(key, label)
     allowed = {a.key for a in list_allowed(feature=FEATURE, db_path=db_path)}
     out = [
         Suggestion(key=k, label=labels[k], approvals=n)
