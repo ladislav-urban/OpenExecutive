@@ -179,8 +179,10 @@ def nudge(claim: str) -> str:
     return (
         "[Check before you finish] Your reply says “" + claim + "”, but no "
         "tool call in this reply made that change. Make it now with the right "
-        "tool and say so in one short line, or, if you can't, tell the person "
-        "plainly that it isn't done and why. Don't repeat the rest of your reply."
+        "tool; your reply already says it, so then add nothing. If you can't, "
+        "tell the person plainly, in one short line, that it isn't done and "
+        "why. Your reply has already been sent: never write it again, reworded "
+        "or not."
     )
 
 

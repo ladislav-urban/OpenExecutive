@@ -88,6 +88,7 @@ from openexecutive.evals.scenarios import (
     scenario_turn_surface,
     scenario_voice_persona,
 )
+from openexecutive.utils.repeats import repeated_sentences
 from openexecutive.workflows.gate import ensure_workflow_event
 
 logger = logging.getLogger(__name__)
@@ -677,6 +678,13 @@ def _make_chat_runner(
                     if said:
                         scores["forbidden_reply_words"] = said
                         ok = False
+                    # A sentence said twice (a rewritten answer after the
+                    # first, a closing line repeated): deterministic too.
+                    if scenario.get("forbid_repeated_text") is True:
+                        again = repeated_sentences(response)
+                        if again:
+                            scores["repeated_text"] = again
+                            ok = False
                     routing = routing_check(
                         scenario,
                         [

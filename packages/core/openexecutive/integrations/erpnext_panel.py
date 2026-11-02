@@ -420,7 +420,9 @@ SHOW_RULE = (
     "'order': 'desc'}}); for the chart of accounts, the tree ({'kind': 'tree', "
     "'doctype': 'Account'}); for \"where do I find the stock reports\", the "
     "workspace ({'kind': 'workspace', 'workspace': 'Stock'}). Never write "
-    "routes or links."
+    "routes or links. Call it before you write your answer, and don't write "
+    "that you opened or showed anything: the person sees it open beside the "
+    "panel."
 )
 # Both panel blocks carry it too: beside one of Dynocortex's own screens the
 # panel names the screen, but its turn reads none of what the screen shows.

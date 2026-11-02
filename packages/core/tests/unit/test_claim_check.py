@@ -121,6 +121,47 @@ def test_unbacked_claim_gets_one_more_round_with_the_nudge() -> None:
     assert len(calls) == 1
 
 
+def test_the_extra_round_never_writes_the_answer_again() -> None:
+    # Pilot, Nov 2, 2026 (panel, credit hold): the whole answer came twice,
+    # "...is Rachel Dunmore's call..." then "...is Rachel Dunmore's decision...".
+    first = (
+        "Harbor Electric owes $4,656, of which $1,900 is over 30 days late. "
+        "Whether to release it is Rachel Dunmore's call; she holds customer credit. "
+        "I've noted the hold for her."
+    )
+    again = (
+        "Harbor Electric owes $4,656, of which $1,900 is more than 30 days late. "
+        "Whether to release it is Rachel Dunmore's decision; she holds customer credit. "
+        "I couldn't leave Rachel a note from here, so tell her directly."
+    )
+    provider = ScriptedProvider([
+        FinalMsg([TextBlock(first)], "end_turn"),
+        FinalMsg([TextBlock(again)], "end_turn"),
+    ])
+    fake, _ = _verdict({"unbacked": True, "claim": "I've noted the hold for her"})
+    with patch.object(claim_check, "_call_model", fake):
+        items = _run(provider)
+
+    reply = "".join(i for i in items if isinstance(i, str))
+    assert reply == first + "\n\nI couldn't leave Rachel a note from here, so tell her directly."
+    nudge = provider.calls[1]["messages"][-1]["content"][0]["text"]
+    assert "never write it again, reworded or not" in nudge
+
+
+def test_an_extra_round_that_only_repeats_adds_nothing() -> None:
+    # Pilot, Nov 2: "I've opened the report beside the panel." and then
+    # "The report is now open beside the panel." once the tool had run.
+    provider = ScriptedProvider([
+        FinalMsg([TextBlock("Margin fell to 27% last week. I've opened the report beside the panel.")], "end_turn"),
+        FinalMsg([TextBlock("I've opened the report beside the panel now.")], "end_turn"),
+    ])
+    fake, _ = _verdict({"unbacked": True, "claim": "I've opened the report beside the panel"})
+    with patch.object(claim_check, "_call_model", fake):
+        items = _run(provider)
+    reply = "".join(i for i in items if isinstance(i, str))
+    assert reply == "Margin fell to 27% last week. I've opened the report beside the panel."
+
+
 def test_backed_or_plain_reply_ends_the_turn() -> None:
     provider = ScriptedProvider([FinalMsg([TextBlock("Done.")], "end_turn")])
     fake, calls = _verdict({"unbacked": False, "claim": ""})
