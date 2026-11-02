@@ -72,12 +72,24 @@ jobs:
       # uv prefers a Python it manages itself: on a self-hosted runner
       # (vars.CI_RUNNER) that can be a newer one, which installs different
       # dependencies (rapidocr-onnxruntime is for < 3.13) and fails tests.
+      #
+      # GitHub's cache only on GitHub's runners. On the self-hosted ones
+      # restoring and saving it took 7-16 min of every job (Nov 2, 2026), while
+      # uv's own cache in the runner user's home survives between jobs: the
+      # next step points uv at it. uv locks its cache, so the runners sharing
+      # the host can use one cache at once.
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: packages/core/uv.lock
           python-version: "3.11"
+
+      - name: Keep uv's cache on the runner
+        if: runner.environment == 'self-hosted'
+        run: |
+          echo "UV_CACHE_DIR=$HOME/.cache/uv-ci" >> "$GITHUB_ENV"
+          echo "MYPY_CACHE_DIR=$HOME/.cache/mypy-ci/$RUNNER_NAME" >> "$GITHUB_ENV"
 
       # docker/Dockerfile installs from uv.lock with `uv sync --locked`, which
       # fails the image build if the lock is stale. `uv sync` below would
@@ -135,12 +147,17 @@ jobs:
       # uv prefers a Python it manages itself: on a self-hosted runner
       # (vars.CI_RUNNER) that can be a newer one, which installs different
       # dependencies (rapidocr-onnxruntime is for < 3.13) and fails tests.
+      # GitHub's cache only on GitHub's runners; see the lint job.
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          enable-cache: true
+          enable-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: packages/core/uv.lock
           python-version: "3.11"
+
+      - name: Keep uv's cache on the runner
+        if: runner.environment == 'self-hosted'
+        run: echo "UV_CACHE_DIR=$HOME/.cache/uv-ci" >> "$GITHUB_ENV"
 
       - name: Install dependencies
         run: cd packages/core && uv sync --extra dev
