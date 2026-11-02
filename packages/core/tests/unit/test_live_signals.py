@@ -550,3 +550,45 @@ def test_an_own_email_keeps_whether_its_reply_went_out(
     own = live_signals.gather_live_signals(_since(), include_private=True).own
 
     assert own[0].endswith("email (no reply went out): send me the deck")
+
+
+def _panel(logger: AuditLogger, person_id: int, text: str, *, marked: bool) -> None:
+    details: dict[str, Any] = {"channel": "erpnext", "person_id": person_id, "text_len": len(text)}
+    if marked:
+        details["in_brief"] = False
+    logger.log(
+        "integration_inbound", f"Inbound erpnext panel from person {person_id}: {text}",
+        actor="erpnext_panel", details=details,
+    )
+
+
+@pytest.mark.parametrize("include_private", [False, True])
+def test_a_panel_turn_never_reaches_the_brief(audit: AuditLogger, include_private: bool) -> None:
+    """A question asked in ERPNext's docked panel, by a demo person or anyone
+    else, is mirrored nowhere: not in INBOUND, its count or its keys, nor in
+    the rendered blocks. Rows from before the in_brief mark stay out by
+    their actor."""
+    _email(audit, "dana@x.com", "Budget draft")
+    for n in range(3):
+        _panel(audit, 8, f"Why hasn't Harbor Electric's order {n} gone out?", marked=n % 2 == 0)
+
+    signals = live_signals.gather_live_signals(_since(), include_private=include_private)
+
+    assert signals.inbound_total == 1
+    rendered = "\n".join([*signals.inbound, *signals.stuck, *signals.own, *map(str, signals.keys.values())])
+    assert "Harbor Electric" not in rendered and "person 8" not in rendered
+    blocks = "\n".join(live_signals.render_live_blocks(signals, window="today so far"))
+    assert "Harbor Electric" not in blocks and "person 8" not in blocks
+    assert "dana@x.com" in blocks
+
+
+def test_erpnexts_own_events_still_reach_the_principals_brief(audit: AuditLogger) -> None:
+    """Only the panel's turns are left out: an ERPNext event (an overdue
+    order, raised by oe_connector) is the principal's business."""
+    audit.log(
+        "integration_inbound", "Inbound erpnext event overdue_order: SO-0001 is three days late",
+        actor="erpnext_events", details={"channel": "erpnext", "kind": "overdue_order", "key": "SO-0001"},
+        private=True,
+    )
+    signals = live_signals.gather_live_signals(_since(), include_private=True)
+    assert "SO-0001 is three days late" in "\n".join(signals.inbound)

@@ -215,6 +215,19 @@ def _audit_rows(event_type: str, since: datetime, include_private: bool) -> list
     )
 
 
+# A row its writer marked as never briefed, and every row ERPNext's docked
+# panel wrote: a panel turn is mirrored nowhere and feeds nobody's memory or
+# briefing (oe_connector's docs/erpnext-integration.md, "ERPNext's word
+# only"), so the people who ask there, demo people among them, never reach
+# the principal's day. By the actor too, so the rows written before the
+# mark (`in_brief`) stay out.
+PANEL_ACTOR = "erpnext_panel"
+
+
+def _never_briefed(ev: Any, details: dict[str, Any]) -> bool:
+    return details.get("in_brief") is False or str(getattr(ev, "actor", "") or "") == PANEL_ACTOR
+
+
 def _inbound(
     since: datetime, tz: tzinfo, include_private: bool, now: datetime | None = None,
 ) -> tuple[list[str], int, int, list[str], list[str], list[str]]:
@@ -245,6 +258,8 @@ def _inbound(
     for ev in rows:  # newest first
         summary = str(ev.summary or "")
         details = ev.details if isinstance(ev.details, dict) else {}
+        if _never_briefed(ev, details):
+            continue
         if details.get("outcome") == "accepted_non_roster":
             sender = _one_line(details.get("from"), 80)
             key = f"nonroster:{sender.lower()}"

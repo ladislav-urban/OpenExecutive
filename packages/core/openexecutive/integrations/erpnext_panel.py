@@ -704,7 +704,12 @@ async def _answer(person: Any, email: str, conversation_id: str, message: str, p
             f"Inbound erpnext panel from person {person.id}: {message[:160]}",
             actor="erpnext_panel",
             session_id=session_id,
-            details={"channel": "erpnext", "person_id": person.id, "text_len": len(message)},
+            # For the audit log alone: a panel turn reaches nobody's brief
+            # (briefing.live_signals skips the actor and this mark).
+            details={
+                "channel": "erpnext", "person_id": person.id, "text_len": len(message),
+                "in_brief": False,
+            },
         )
         retrieved_context = await asyncio.to_thread(
             retrieve, query=message, max_chars=get_settings().knowledge_chat_max_chars
