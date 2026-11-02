@@ -18,16 +18,25 @@ _MODULE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*")
 # inside the working tree instead of resolving to filesystem root —
 # previously `_ROOT / "chroma_db"` became `/chroma_db` in CI, which is
 # unwritable and produced `chromadb.InternalError: Permission denied`.
+# The walk stops at the checkout's root (the folder with `.git`, a file in a
+# worktree): a .env above it belongs to something else. A self-hosted CI
+# runner keeps its own .env in its root, above the workspace, and every run
+# then put chroma_db/ and company/ there, outside the checkout (Nov 2, 2026).
+def _env_root(start: Path) -> Path | None:
+    """The nearest folder from ``start`` up holding a .env, never above the
+    checkout's root; None when there is none."""
+    folder = start
+    while folder.parent != folder:
+        if (folder / ".env").exists():
+            return folder
+        if (folder / ".git").exists():
+            return None
+        folder = folder.parent
+    return None
+
+
 _HERE = Path(__file__).resolve().parent
-_ROOT = _HERE
-_FOUND_ENV = False
-while _ROOT.parent != _ROOT:
-    if (_ROOT / ".env").exists():
-        _FOUND_ENV = True
-        break
-    _ROOT = _ROOT.parent
-if not _FOUND_ENV:
-    _ROOT = Path.cwd()
+_ROOT = _env_root(_HERE) or Path.cwd()
 _ENV_FILE = _ROOT / ".env"
 
 
