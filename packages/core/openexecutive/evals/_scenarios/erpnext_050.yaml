@@ -1,0 +1,23 @@
+id: erpnext_050
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "F4's duplicate step in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded (E8: a supplier invoice keyed again with two digits of its bill number swapped). The reply writes every bill and invoice number exactly as the records have it, in plain text, with no bold, italics or spaces inside it, and says in words which digits differ. Found on the pilot (Nov 2, 2026, 797d3010): 'ORI-LCP- 10 -PO-ORION-R1', emphasis on the swapped digits that left spaces inside the number."
+query: "Have we been billed twice for anything in the last three months?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "**10**"
+  - "**01**"
+quality_criteria:
+  writes_each_bill_and_invoice_number_exactly_as_the_records_have_it: true
+  puts_no_emphasis_or_spaces_inside_an_identifier: true
+  says_in_words_which_digits_differ_between_the_two_numbers: true
+  shows_both_invoices_side_by_side_with_dates_amounts_and_paid_status: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

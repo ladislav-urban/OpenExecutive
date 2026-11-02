@@ -228,3 +228,16 @@ def test_persona_reads_before_ruling_out_and_corrects_once() -> None:
         assert "**Correct yourself plainly, once.**" in persona
     blocks = build_system_blocks()
     assert "**Correct yourself plainly, once.**" in blocks[0]["text"]
+
+
+def test_persona_writes_identifiers_whole_and_reads_what_the_records_show() -> None:
+    # Pilot, Nov 2: "ORI-LCP- 10 -PO-ORION-R1" (bold on swapped digits, padded
+    # with spaces), and "I haven't checked ... opening costs" with the
+    # opening project in the books.
+    from openexecutive.prompts.executive_persona import EXECUTIVE_PERSONA_SOLO_PROMPT
+
+    for persona in (EXECUTIVE_PERSONA_PROMPT, EXECUTIVE_PERSONA_SOLO_PROMPT):
+        assert "**Write identifiers exactly as the records have them**" in persona
+        assert "no bold, italics or spaces inside them" in persona
+        assert "quote both in full and say in words which characters differ" in persona
+        assert "read it rather than say you haven't checked" in persona

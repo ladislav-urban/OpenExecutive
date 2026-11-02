@@ -52,7 +52,9 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # and correct an earlier figure once (pilot panel round, Nov 1, 2026).
 # And again: Home's queue is named "Your decision", not "Needs you" (the
 # owner's wording, Nov 2, 2026), one word in a static constant.
-TEAM_PERSONA_SHA256 = "42d564d236a039f9505b4fcac10a9a75c1cfb2c18b64e58f587a60b773f65d16"
+# And again: identifiers written exactly as the records have them, and read
+# what the records can show rather than say it wasn't checked (Nov 2, 2026).
+TEAM_PERSONA_SHA256 = "fe1ac0021db8dcc06f453a88beab898b5f464b2fe5b6733d8b53fe537676e677"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",

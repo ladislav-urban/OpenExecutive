@@ -1,0 +1,25 @@
+id: erpnext_051
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Profit and Loss Statement
+description: "Denver step 1 (oe_connector's help/try-denver-branch.md) in ERPNext's panel as a demo person, beside Profit and Loss by Branch, with the erpnext server connected and oe_connector's demo dataset loaded. The books hold Denver's opening project (its start-up costs), so the reply reads it and counts it in how Denver has done, rather than saying it hasn't checked the opening costs. Found on the pilot (Nov 2, 2026, 797d3010): 'I haven't checked ... opening costs', although step 2 then found the opening project."
+query: "How has Denver done over the last four months, since it opened, compared with Pittsburgh?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "haven't checked"
+  - "have not checked"
+  - "didn't check"
+quality_criteria:
+  compares_denver_with_pittsburgh_from_profit_and_loss_by_branch_with_the_period_and_currency: true
+  reads_denvers_opening_project_and_counts_its_cost: true
+  does_not_say_it_has_not_checked_something_the_records_can_show: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
