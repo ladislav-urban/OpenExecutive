@@ -21,6 +21,11 @@ on:
 permissions:
   contents: read
 
+# A new push to the PR supersedes the build in flight.
+concurrency:
+  group: embed-outputs-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   stage:
     name: Embed outputs stage

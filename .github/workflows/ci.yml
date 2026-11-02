@@ -9,12 +9,17 @@ on:
 permissions:
   contents: read
 
-# A new push to a PR supersedes the run in flight: agents often push several
-# times in a row, and each superseded run would otherwise burn a full suite.
-# Never cancel main, so every merge keeps its own result.
+# A newer push supersedes the run in flight, on a PR and on main alike: agents
+# often push several times in a row, and merges land back to back, so each
+# superseded run would otherwise hold a self-hosted runner for a full suite and
+# queue every PR behind it (Nov 2, 2026: PR checks waited 1-2 h behind a main
+# run for a commit already superseded). On main the newest run tests every
+# merge before it as well. Nothing waits on main's CI (images publish in
+# parallel; the release PR is gated on its own CI), and Publish images and
+# Release please keep their own groups, which never cancel.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: true
 
 jobs:
   # Decides which suites a PR can affect. Skipped jobs count as passing for
