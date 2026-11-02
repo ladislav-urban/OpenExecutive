@@ -1,0 +1,23 @@
+id: erpnext_044
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "The pilot's margin-drop step 1, in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. A 'why' question gets the causes from the books (which items, discounts or costs moved the margin, with their figures, company, currency and period), and no verdict on whether the drop was worth it, not even in a closing line. Found on the pilot (Nov 2, 2026): 'Was it worth it? Yes' volunteered at step 1, against 'not on these figures' at step 3."
+query: "Why did our margin drop last week?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "worth it"
+  - "paid off"
+  - "was justified"
+quality_criteria:
+  reads_last_weeks_margin_and_what_moved_it_from_the_books: true
+  gives_each_cause_with_its_figures_company_currency_and_period: true
+  gives_no_verdict_on_whether_the_drop_was_worth_it: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

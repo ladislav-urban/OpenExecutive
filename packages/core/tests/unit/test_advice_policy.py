@@ -101,7 +101,7 @@ def test_a_scenario_names_only_explain() -> None:
     with pytest.raises(ValueError, match="advice_policy"):
         validate_scenario_yaml(base + "advice_policy: advise\n")
     ours = [s for s in load_scenarios() if s["id"].startswith("finance_advice_")]
-    assert len(ours) == 16 and all(s["advice_policy"] == "explain" for s in ours)
+    assert len(ours) == 17 and all(s["advice_policy"] == "explain" for s in ours)
 
 
 def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -> None:
@@ -134,7 +134,11 @@ def test_operating_choices_get_a_verdict_and_the_listed_decisions_do_not() -> No
     # worth it?" and which supplier get a verdict with its reason, the same
     # in the panel and in Chats; the listed decisions stay verdict-free.
     text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
-    assert "**Operating choices get your verdict.**" in text
+    assert "**Operating choices get your verdict when it is asked for.**" in text
+    # Pilot, Nov 2 (margin drop, panel): "Was it worth it? Yes" volunteered on
+    # step 1's "why", and "not on these figures" at step 3.
+    assert '("why did margin drop?") gets the causes and their figures, and no verdict' in text
+    assert "so the same question asked again gets the same verdict" in text
     assert "which of two quoted suppliers to order from" in text and "margin drop" in text
     assert "name who approves the spend" in text and "whether to spend stays theirs" in text
     assert "in hindsight too; only an operating choice gets your verdict." in text
@@ -147,6 +151,7 @@ def test_operating_choices_get_a_verdict_and_the_listed_decisions_do_not() -> No
     assert "an operating choice (whether a margin drop or a discount was worth it" in specialist
     assert "gets your verdict with its reason in the figures" in specialist
     assert "gets no verdict, also when asked in hindsight" in specialist
+    assert "never on a question about why something happened" in specialist
 
 
 def test_the_roster_says_to_name_scopes_in_words() -> None:
