@@ -120,7 +120,7 @@ export default function AppSidebar({
           className="w-full h-11 rounded-xl bg-accent-strong text-white text-[15px] font-semibold flex items-center justify-center gap-2 shadow-sm hover:bg-accent-strong/90 transition-colors cursor-pointer"
         >
           <Icon name="plus" size="w-5 h-5" />
-          New chat
+          New Conversation
         </SidebarEntry>
       </div>
 

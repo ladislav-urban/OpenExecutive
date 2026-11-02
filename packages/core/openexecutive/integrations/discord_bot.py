@@ -64,7 +64,7 @@ _DISCORD_MAX_LEN = 2000
 # could chop a word mid-character. Title generation runs through Haiku with a
 # small token budget so this is a safety net, not the primary length control.
 _THREAD_TITLE_MAX_LEN = 80
-_THREAD_TITLE_PLACEHOLDER = "New chat"
+_THREAD_TITLE_PLACEHOLDER = "New Conversation"
 
 # Strong refs to background rename tasks. Without this, the asyncio GC can
 # cancel a not-yet-awaited task before it runs. Mirrors the pattern in

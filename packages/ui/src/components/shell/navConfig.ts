@@ -589,7 +589,7 @@ export function buildMobilePrimary(opts: BuildOpts = {}): Destination[] {
   const newChat: Destination = {
     key: "new",
     href: "/chats/new",
-    label: "New chat",
+    label: "New Conversation",
     icon: "plus",
     description: NEW_CHAT_DESCRIPTION,
   };

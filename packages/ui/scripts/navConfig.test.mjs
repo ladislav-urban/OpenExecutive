@@ -149,7 +149,7 @@ test("the review badge rides on Knowledge in both modes", () => {
   }
 });
 
-test("phone bar: five, with New chat in the middle", () => {
+test("phone bar: five, with New Conversation in the middle", () => {
   assert.deepEqual(buildMobilePrimary().map((i) => i.href), ["/", "/chats", "/chats/new", "/jobs", "/people"]);
   assert.deepEqual(buildMobilePrimary({ mode: "solo" }).map((i) => i.href), ["/", "/chats", "/chats/new", "/jobs", "/goals"]);
 });

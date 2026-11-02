@@ -1451,7 +1451,7 @@ def test_teammate_with_no_routed_proposals_quiet_path(
     narr = c.get("/today", headers={"x-caller-email": "dan@x.com"}).json()["narrative"]
     # Nothing is routed to Dan, so his slice is empty — the fixed quiet line is
     # written directly and no model call is spent on it.
-    assert narr == "Quiet right now — nothing needs you."
+    assert narr == "Quiet right now: nothing waits for your decision."
     assert calls["n"] == 0
 
 

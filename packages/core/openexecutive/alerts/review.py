@@ -901,7 +901,7 @@ async def _apply_escalate(ctx: _MoveContext) -> None:
     with _urgent_if(_bump_severity(alert.severity, v.severity) == "urgent"):
         ok, detail = await _dm(
             ctx.principal_id,
-            v.message or f"Needs you today: {alert.headline}\n{v.why_now or ''}".strip(),
+            v.message or f"Your decision today: {alert.headline}\n{v.why_now or ''}".strip(),
             headline=alert.headline,
             alert_id=ctx.alert_id,
         )

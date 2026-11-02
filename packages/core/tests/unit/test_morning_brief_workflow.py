@@ -430,7 +430,7 @@ async def test_morning_brief_holds_back_a_fabricated_colleague_and_cites_figures
     _stub_lease_board(monkeypatch)
     captured: dict[str, object] = {}
     draft = (
-        "**Needs you**\n- Renew Acme lease for 48 units\n"
+        "**Your decision**\n- Renew Acme lease for 48 units\n"
         "- Marcus Lee wants a call about 52 units"
     )
 
@@ -453,7 +453,7 @@ async def test_morning_brief_holds_back_a_fabricated_colleague_and_cites_figures
     assert "Marcus" not in artifact
     assert "- Renew Acme lease for 48 [1] units" in artifact
     assert "_I left out 1 line " in artifact
-    assert "- [1] Needs you — Renew Acme lease for 48 units" in artifact
+    assert "- [1] Your decision — Renew Acme lease for 48 units" in artifact
     step = next(e for e in events if e.type == "step_done" and e.step_id == "synthesize")
     assert "1 line(s) held back" in step.summary
     [row] = rows

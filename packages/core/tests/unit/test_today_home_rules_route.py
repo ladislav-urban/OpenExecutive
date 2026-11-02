@@ -62,7 +62,7 @@ def test_the_principal_gets_their_lanes_actions_and_counts(board: dict[str, Any]
     assert "approve" in [a["key"] for a in by_id[board["danas"]]["actions"]]
     assert body["needs_you_count"] == 1
     assert body["summary"][0] == {
-        "text": "1 thing needs you", "count": 1, "target": {"kind": "needs_you", "panel": None, "href": None},
+        "text": "1 waits for your decision", "count": 1, "target": {"kind": "needs_you", "panel": None, "href": None},
     }
     assert [t["key"] for t in body["tiles"]] == ["departments", "people", "team"]
     assert body["dismiss_older"]["alert_ids"] == []
@@ -83,7 +83,7 @@ def test_cards_from_other_endpoints_count_toward_needs_you(board: dict[str, Any]
     home_rules.register_waiting_cards("replies", lambda person: 2 if person.full_name == "Pat Principal" else 0)
     body = _make_client().get("/today", headers=_as("pat@example.com")).json()
     assert body["needs_you_count"] == 3
-    assert body["summary"][0]["text"] == "3 things need you"
+    assert body["summary"][0]["text"] == "3 wait for your decision"
     assert _make_client().get("/today", headers=_as("dana@example.com")).json()["needs_you_count"] == 1
 
 

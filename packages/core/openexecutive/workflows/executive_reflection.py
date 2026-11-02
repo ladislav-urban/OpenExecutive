@@ -258,7 +258,7 @@ def _build_reflection_system_solo() -> str:
         "department channel and no company broadcast.\n"
         "  • Something the principal must decide or act on → `create_alert`, "
         "assigned to the person_id on the YOUR PRINCIPAL line in the turn — "
-        "it lands in the brief's Needs you list. Prefer this.\n"
+        "it lands in the brief's Your decision list. Prefer this.\n"
         "  • Something to chase at a set time → `schedule_followup` to the "
         "principal, on a channel and ref from the YOUR PRINCIPAL line.\n"
         "  • Never message anyone else. Their contacts hear from you only "
