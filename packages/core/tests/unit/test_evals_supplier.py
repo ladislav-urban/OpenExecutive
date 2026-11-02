@@ -72,6 +72,21 @@ def test_a_scenario_runs_the_agent_and_its_judge(monkeypatch: pytest.MonkeyPatch
     assert seen["outcome"] == {"reply": "No order of yours has that number.", "tools": ["erpnext__supplier_order"]}
 
 
+def test_a_forbidden_word_fails_a_scenario_the_judge_passed(monkeypatch: pytest.MonkeyPatch) -> None:
+    # erpnext_048: the desk must never repeat a bank account back.
+    async def fake_answer(supplier: str, message: str, call: Any, **_k: Any) -> Any:
+        return erpnext_a2a_agent.SupplierAnswer("Noted your new IBAN DE89 3704.", [])
+
+    async def fake_judge(_scenario: dict[str, Any], outcome: dict[str, Any]) -> dict[str, Any]:
+        return {"overall": 5}
+
+    monkeypatch.setattr(erpnext_a2a_agent, "answer", fake_answer)
+    monkeypatch.setattr(runner_module, "judge_supplier", fake_judge)
+    result = asyncio.run(run_supplier_scenario({**SCENARIO, "forbidden_reply_words": ["DE89"]}))
+    assert result["passed"] is False
+    assert result["scores"]["forbidden_reply_words"] == ["DE89"]
+
+
 @pytest.mark.parametrize(
     "block",
     [
@@ -93,6 +108,6 @@ def test_a_supplier_scenario_needs_its_block() -> None:
 
 def test_the_builtin_supplier_scenarios_are_the_supplier_kind() -> None:
     ids = {s["id"] for s in load_scenarios(kind="supplier")}
-    assert {"erpnext_017", "erpnext_018"} <= ids
+    assert {"erpnext_017", "erpnext_018", "erpnext_047", "erpnext_048"} <= ids
     for scenario in load_scenarios(kind="supplier"):
         assert scenario_supplier(scenario) is not None
