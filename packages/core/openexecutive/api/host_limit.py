@@ -10,9 +10,11 @@ conversations it is in (ERPNext's docked panel and its native Chats alike):
   their daily cap (``DEMO_DAILY_QUESTIONS``) governs them.
 
 The route takes a slot before a demo question is spent, so a 429 never spends
-one. The slot is released when the turn's stream ends, on every early exit,
-and, as a backstop for a response never read, once it is older than a turn
-can run. Kept in this process's memory: there is one API process.
+one. The slot is released when the turn's stream ends (a dropped connection
+included, once the stream has started), on every exit before the stream, and,
+as a backstop for a response whose body never starts, once it is older than a
+turn can run. ``POST /chat/add`` takes none: it folds into the turn already in
+flight. Kept in this process's memory: there is one API process.
 """
 
 from __future__ import annotations

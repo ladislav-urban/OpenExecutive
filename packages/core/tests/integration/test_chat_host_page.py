@@ -8,7 +8,6 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -222,39 +221,61 @@ def test_a_shared_chat_gets_no_page_block(
 
 
 @pytest.fixture()
-def cards(monkeypatch: pytest.MonkeyPatch) -> dict[int, Any]:
-    """Alerts by id; one private to the principal, which this caller isn't."""
-    from openexecutive.api.routes import alerts as alerts_route
+def cards(temp_db: Path) -> dict[str, int]:
+    """Cards in the real alert store, by what they are. The caller is no
+    roster person here, so neither the principal nor an artifact's owner."""
+    from openexecutive.alerts import store
+    from openexecutive.alerts.models import ARTIFACT_SOURCE, PRIVATE_ALERT_TAG
+    from openexecutive.people.roster_requests import ALERT_SOURCE as ROSTER_SOURCE
 
-    store: dict[int, Any] = {
-        5: SimpleNamespace(id=5, headline="Overdue invoice from Acme", body="Acme owes 4,200.", private=False),
-        6: SimpleNamespace(id=6, headline="Board pack", body="Private.", private=True),
+    store.initialize_db()
+
+    def _card(name: str, **kwargs: Any) -> int:
+        fields: dict[str, Any] = {
+            "source": "monitor", "external_id": name, "severity": "medium",
+            "headline": f"{name} headline", "body": f"{name} body", "dedup_key": name,
+        }
+        fields.update(kwargs)
+        card_id = store.insert_alert(**fields)
+        assert card_id is not None
+        return card_id
+
+    ids = {
+        "visible": _card("visible", headline="Overdue invoice from Acme", body="Acme owes 4,200."),
+        "private": _card("private", topic_tags=[PRIVATE_ALERT_TAG]),
+        "artifact": _card("artifact", source=ARTIFACT_SOURCE, owner_person_id=99),
+        "roster": _card("roster", source=ROSTER_SOURCE),
+        "closed": _card("closed"),
     }
-    monkeypatch.setattr(alerts_route.store, "get_alert", lambda alert_id: store.get(alert_id))
-    monkeypatch.setattr(alerts_route, "is_private_alert", lambda alert: alert.private)
-    monkeypatch.setattr(alerts_route, "visible_alert", lambda _alert, _viewer: True)
-    monkeypatch.setattr(alerts_route, "_caller_is_principal", lambda _request: False)
-    return store
+    store.set_status(ids["closed"], "acknowledged")
+    return ids
 
 
 def test_a_visible_card_is_read_by_id_and_wrapped_never_trusted(
-    turns: list[dict[str, Any]], switch_on: None, cards: dict[int, Any]
-) -> None:
-    response = _client().post("/chat", json={"message": "Why?", "erpnext_page": HOME, "card_id": 5}, headers=HOST)
-    assert response.status_code == 200
-    block = turns[0]["block"]
-    assert '<untrusted_content source="home_card"' in block
-    assert "Overdue invoice from Acme" in block and "Acme owes 4,200." in block
-    assert 5 not in turns[0]["trusted_alert_ids"]
-    assert turns[0]["host_page"] is True
-
-
-def test_a_hidden_card_answers_exactly_like_a_missing_one(
-    turns: list[dict[str, Any]], switch_on: None, cards: dict[int, Any]
+    turns: list[dict[str, Any]], switch_on: None, cards: dict[str, int]
 ) -> None:
     client = _client()
-    hidden = client.post("/chat", json={"message": "x", "erpnext_page": HOME, "card_id": 6}, headers=HOST)
-    missing = client.post("/chat", json={"message": "x", "erpnext_page": HOME, "card_id": 7}, headers=HOST)
+    plain = client.post("/chat", json={"message": "Why?", "erpnext_page": HOME}, headers=HOST)
+    response = client.post(
+        "/chat", json={"message": "Why?", "erpnext_page": HOME, "card_id": cards["visible"]}, headers=HOST
+    )
+    assert plain.status_code == response.status_code == 200
+    block = turns[1]["block"]
+    assert '<untrusted_content source="home_card"' in block
+    assert "Overdue invoice from Acme" in block and "Acme owes 4,200." in block
+    assert turns[1]["host_page"] is True
+    # The card adds nothing to what the turn may act on: the same trusted
+    # ids as the turn without it.
+    assert turns[1]["trusted_alert_ids"] == turns[0]["trusted_alert_ids"]
+
+
+@pytest.mark.parametrize("kind", ["private", "artifact", "roster", "closed"])
+def test_a_hidden_card_answers_exactly_like_a_missing_one(
+    turns: list[dict[str, Any]], switch_on: None, cards: dict[str, int], kind: str
+) -> None:
+    client = _client()
+    hidden = client.post("/chat", json={"message": "x", "erpnext_page": HOME, "card_id": cards[kind]}, headers=HOST)
+    missing = client.post("/chat", json={"message": "x", "erpnext_page": HOME, "card_id": 10_000}, headers=HOST)
     assert hidden.status_code == missing.status_code == 404
     assert hidden.json() == missing.json() == {"detail": "Card not found"}
     assert turns == []
@@ -262,10 +283,13 @@ def test_a_hidden_card_answers_exactly_like_a_missing_one(
     assert host_limit._in_flight == {}
 
 
+@pytest.mark.parametrize("page", [PAGE, {"doctype": "Sales Order", "screen": "/"}, {"screen": "/watch"}])
 def test_a_card_counts_only_beside_home(
-    turns: list[dict[str, Any]], switch_on: None, cards: dict[int, Any]
+    turns: list[dict[str, Any]], switch_on: None, cards: dict[str, int], page: dict[str, Any]
 ) -> None:
-    response = _client().post("/chat", json={"message": "x", "erpnext_page": PAGE, "card_id": 7}, headers=HOST)
+    response = _client().post(
+        "/chat", json={"message": "x", "erpnext_page": page, "card_id": cards["visible"]}, headers=HOST
+    )
     assert response.status_code == 200
     assert "home_card" not in turns[0]["block"]
 
