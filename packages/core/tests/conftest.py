@@ -106,6 +106,18 @@ def reset_active_gateway():
 
 
 @pytest.fixture(autouse=True)
+def _fresh_host_limit():
+    """Forget the host limit's slots and counts (api.host_limit) between
+    tests, so host turns from earlier tests in the worker never add up to a
+    429."""
+    from openexecutive.api import host_limit
+
+    host_limit.reset()
+    yield
+    host_limit.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_background_open_loop_pass(monkeypatch: pytest.MonkeyPatch):
     """Keep the post-turn open-loop pass from firing in unrelated tests.
 

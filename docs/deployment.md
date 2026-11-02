@@ -1038,6 +1038,25 @@ same tab instead. So the desk's page can't click it unseen. Every change to the 
 the CSP headers is read with `security-reviewer`
 ([auth.md, "Host origins"](auth.md#host-origins-showing-open-executive-inside-another-app)).
 
+**The docked panel on the chat route (F1).** With oe_connector's
+`oe_connector_panel_via_chat` on, ERPNext's docked panel asks through
+`POST /chat` as a host turn, with the page beside it and, on Home, the card last
+clicked. The API uses them only with `ERPNEXT_HOST_PAGE_TURNS=true`; off (the
+default), it drops both with a log line and answers as a plain Chats turn. The
+page and card reach the model as untrusted text, never as the person's words,
+and never in a chat shared with others. Every host turn, the panel's and native
+Chats' in the desk alike, counts against one limit per person: one in flight at
+a time and 60 an hour (demo people only by their daily cap), answered `429`
+past it. Stop it by setting `ERPNEXT_HOST_PAGE_TURNS=false` and restarting the
+API, or with `oe_connector_panel_via_chat: 0` on the site.
+
+**The trade the owner accepted (Nov 2, 2026).** A panel conversation is saved as
+the person's, as a native Chats one is. Any script on ERPNext's origin can read
+it with the person's Open Executive session, through the host list's
+`/sessions` reads, as it can read native Chats today. F1 adds no endpoint or
+right, only more saved conversations (oe_connector's `docs/panel-f1-plan.md`,
+"Threat model").
+
 **Stopping it.** Remove ERPNext's origin from `OE_HOST_ORIGINS` and restart the
 UI, which reads it at start. Nothing in ERPNext needs restarting. From then on:
 

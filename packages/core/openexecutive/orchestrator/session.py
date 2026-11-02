@@ -100,6 +100,14 @@ class Session:
     # script or extension tool, and of the gateway tools only the reads. What
     # would act, the person does in Open Executive's own pages.
     from_host: bool = False
+    # Set per turn by the web chat route: a host turn that carried the page
+    # beside ERPNext's docked panel or a Home card (`ChatRequest.erpnext_page`,
+    # `card_id`), outside a shared chat, with ERPNEXT_HOST_PAGE_TURNS on.
+    # Reset every turn and never saved. It grants nothing on its own: the turn
+    # is still a host turn (`from_host`) and asks ERPNext through
+    # `erpnext_caller._host_caller`, never as a panel turn
+    # (`erpnext_panel_email` stays empty on every /chat turn).
+    host_page: bool = False
     # The rostered Person behind this conversation, when one is resolved. The
     # adapters already pass this to `Executive.chat(person_id=...)`; holding it
     # on the session too lets tool handlers running mid-turn tell "the approver

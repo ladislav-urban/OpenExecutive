@@ -913,6 +913,13 @@ class Settings(BaseSettings):
     # public key>"}}. Unset, the agent card is not served and POST /a2a/suppliers
     # answers 503. Needs ERPNEXT_CALLER_PRIVATE_KEY.
     erpnext_a2a_suppliers: str | None = Field(None, alias="ERPNEXT_A2A_SUPPLIERS")
+    # F1 (oe_connector's docs/panel-f1-plan.md): ERPNext's docked panel asks
+    # through POST /chat as a host turn, with the page beside it
+    # (`erpnext_page`) and a Home card by id (`card_id`). Off by default:
+    # the route then drops both, with a log line, and the turn is a plain
+    # Chats turn, so desk text never reaches the model without an operator's
+    # switch. Server environment only: no request field reads it.
+    erpnext_host_page_turns: bool = Field(False, alias="ERPNEXT_HOST_PAGE_TURNS")
     # This install's public https URL of POST /a2a/suppliers: the audience
     # every supplier signs and the agent card's url. Unset, A2A stays off.
     erpnext_a2a_url: str | None = Field(None, alias="ERPNEXT_A2A_URL")
