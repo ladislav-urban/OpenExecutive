@@ -220,6 +220,7 @@ from openexecutive.people.demo import (
 from openexecutive.prompts.cache_manager import build_system_blocks
 from openexecutive.providers import get_provider
 from openexecutive.providers.translator import reasoning_replay_block
+from openexecutive.utils import repeats
 from openexecutive.workflows import python_job, step_script
 from openexecutive.workflows.action_step import looks_like_error
 from openexecutive.workflows.python_job import PYTHON_JOB_TOOL_HANDLERS, PYTHON_JOB_TOOLS
@@ -383,7 +384,8 @@ def _cap_tool_result(
         return (
             f"\n\n[TRUNCATED by Open Executive: showed the first {shown:,} of "
             f"{len(text):,} characters from `{safe_name}` ({pct}% omitted). "
-            "This is NOT the full result."
+            "This is NOT the full result. Tell the person only what you "
+            "couldn't read, never this note's figures."
             + (
                 # A narrower re-read would be cut the same way, so the
                 # budget note replaces the "ask again" advice.
@@ -2538,6 +2540,13 @@ class Executive:
         # (``calls_out``) for the conversation review's record of the turn.
         turn_calls: list[tuple[str, str]] = calls_out if calls_out is not None else []
         claim_checked = False
+        # The reply as it stood when the claim check asked for one more round:
+        # that round's text is held and only a short line of what the reply
+        # doesn't already say is kept (utils.repeats), so a rewritten answer
+        # never follows the first one. None until the check nudges.
+        reply_before_nudge: str | None = None
+        reply_so_far = ""
+        after_nudge = ""
 
         for iteration in range(1, max_iterations + 1):
             logger.info(
@@ -2619,20 +2628,40 @@ class Executive:
                         full_text += event.delta.text
                         if flushed:
                             streamed_tail = (streamed_tail + event.delta.text)[-2:]
+                            reply_so_far += event.delta.text
                             yield event.delta.text
                             continue
                         held += event.delta.text
-                        if not _is_note(held):
+                        if reply_before_nudge is None and not _is_note(held):
                             for chunk in _flush_held(held, streamed_tail):
                                 yield chunk
                             streamed_tail = (streamed_tail + held)[-2:]
+                            reply_so_far += held
                             held, flushed = "", True
 
                 final_msg = await stream.get_final_message()
-            if held and final_msg.stop_reason != "tool_use":
+            if reply_before_nudge is not None:
+                # After the claim check's nudge, everything the model writes,
+                # before a tool call or after it, is gathered and trimmed once
+                # when the turn ends, so an "it isn't done" line written
+                # before a call is never lost.
+                if held:
+                    after_nudge = f"{after_nudge}\n{held}" if after_nudge else held
+                if after_nudge and final_msg.stop_reason != "tool_use":
+                    line = await asyncio.to_thread(repeats.new_line, reply_before_nudge, after_nudge)
+                    if line != after_nudge.strip():
+                        logger.info("kept %d of %d chars after the claim check", len(line), len(after_nudge))
+                    after_nudge = ""
+                    if line:
+                        for chunk in _flush_held(line, streamed_tail):
+                            yield chunk
+                        streamed_tail = (streamed_tail + line)[-2:]
+                        reply_so_far += line
+            elif held and final_msg.stop_reason != "tool_use":
                 for chunk in _flush_held(held, streamed_tail):
                     yield chunk
                 streamed_tail = (streamed_tail + held)[-2:]
+                reply_so_far += held
             elif held:
                 logger.info("held back a note before a tool call: %s", _trunc(held, 80))
 
@@ -2735,7 +2764,7 @@ class Executive:
                 current_messages.append(
                     {"role": "user", "content": [{"type": "text", "text": claim_check.nudge(claim)}]}
                 )
-                yield "\n\n"
+                reply_before_nudge = reply_so_far
                 continue
 
             # open_tools is answered here; a use_tool call becomes the call it

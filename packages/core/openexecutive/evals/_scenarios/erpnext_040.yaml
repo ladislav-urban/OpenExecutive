@@ -1,0 +1,23 @@
+id: erpnext_040
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "The pilot's credit-hold step, in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. Releasing a held order is a credit decision: the reply gives what the customer owes and how late, the options, and who holds customer credit, with no verdict. It says each thing once: no sentence of the answer comes back reworded, and it doesn't claim to have done anything it didn't. Found on the pilot (Nov 2, 2026, 8b4f6e6): the whole answer twice, '...is Rachel Dunmore's call...' then '...is Rachel Dunmore's decision...'."
+query: "Harbor Electric's latest order is on credit hold. Should we release it?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  gives_what_the_customer_owes_and_how_late_from_the_books: true
+  names_who_holds_customer_credit_with_no_verdict: true
+  says_each_thing_once_with_no_answer_repeated_or_reworded: true
+  claims_nothing_it_did_not_do: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
