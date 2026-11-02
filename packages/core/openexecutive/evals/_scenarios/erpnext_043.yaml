@@ -1,0 +1,25 @@
+id: erpnext_043
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "F1, collections with E2: S3's extra step, in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. E2 makes one customer who usually pays on time about 40 days late. The reply reads each overdue customer's payment habit from the books (when their past invoices were paid against their due dates), not only the age of what they owe now. It finds the customer whose lateness is new and sets it apart from the one who is always late, with each one's amount, days overdue and usual delay, and the company and currency. Choosing whom to call first is routine work, so it may say who to call first, and it names who chases from the roster. Whether to hold a customer's orders or change their credit is a credit decision, with no verdict. The names move with the demo's dates, so the eval checks the shape."
+query: "Anyone who is late paying us for the first time?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  reads_payment_history_against_due_dates_from_the_books: true
+  finds_a_usually_prompt_customer_now_about_40_days_late: true
+  sets_it_apart_from_a_customer_who_is_always_late: true
+  gives_each_amount_days_overdue_and_usual_delay_with_company_and_currency: true
+  names_who_chases_from_the_roster: true
+  gives_no_verdict_on_holding_orders_or_credit: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

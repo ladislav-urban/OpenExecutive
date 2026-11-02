@@ -1045,6 +1045,12 @@ export interface SessionSummary {
   /** A host origin's page started it: a host may send into it (any other
    * conversation is read-only from a host). */
   host_started?: boolean;
+  /** Where it was asked: "erpnext_panel" for a conversation ERPNext's docked
+   * panel started; absent otherwise. */
+  origin?: "erpnext_panel";
+  /** The page it was asked beside: a report, a document or a list; never
+   * filters. Text only. */
+  origin_ref?: { report: string } | { doctype: string; name?: string };
   /** Its group in the date view, in this browser's zone (`?tz=`). */
   date_group?: { key: SessionDateGroupKey; label: string; order: number };
 }

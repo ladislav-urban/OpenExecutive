@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  askedBeside,
   countByChannel,
   filterSessions,
   recentWebChats,
@@ -82,4 +83,12 @@ test("countByChannel only lists channels that have sessions", () => {
     { web: 2, slack: 1, telegram: 2 },
   );
   assert.deepEqual(countByChannel([]), {});
+});
+
+test("a panel conversation's chip names the page it was asked beside", () => {
+  const panel = (origin_ref) => ({ ...s("a"), origin: "erpnext_panel", origin_ref });
+  assert.equal(askedBeside(panel({ report: "General Ledger" })), "Asked beside General Ledger");
+  assert.equal(askedBeside(panel({ doctype: "Sales Order", name: "SO-0001" })), "Asked beside Sales Order SO-0001");
+  assert.equal(askedBeside(panel({ doctype: "Customer" })), "Asked beside the Customer list");
+  assert.equal(askedBeside(panel(undefined)), "Asked in the ERP");
 });

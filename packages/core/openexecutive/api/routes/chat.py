@@ -1475,6 +1475,20 @@ async def _chat_turn(
             mark_host_wrote(session.session_id)
         except Exception:
             logger.exception("chat.host_mark_failed session_id=%s", session.session_id)
+    if session.host_page and is_first_turn:
+        # Where it was asked (F1): derived here from the checked page, once,
+        # as the conversation starts; Chats shows it as text.
+        try:
+            from openexecutive.integrations.erpnext_panel import page_ref
+            from openexecutive.memory.session_store import set_origin
+
+            set_origin(
+                session.session_id,
+                "erpnext_panel",
+                page_ref(erpnext_page.as_page()) if erpnext_page is not None else None,
+            )
+        except Exception:
+            logger.exception("chat.origin_failed session_id=%s", session.session_id)
 
     # Fan out the three context-fetching steps in parallel. Each one is a few
     # hundred ms to a few seconds on its own and they are mutually independent,

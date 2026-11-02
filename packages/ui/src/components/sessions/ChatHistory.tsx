@@ -24,7 +24,7 @@ import {
 import { downloadChat } from "@/lib/downloadChat";
 import { formatRelativeTime } from "@/lib/relativeTime";
 import { highlightParts, matchLabel } from "@/lib/chatSearch";
-import { sessionChannel, sessionTitle } from "@/lib/sessionChannel";
+import { askedBeside, sessionChannel, sessionTitle } from "@/lib/sessionChannel";
 import { ChannelLogo } from "@/components/sessions/ChannelLogo";
 import {
   groupByDate,
@@ -742,6 +742,11 @@ export function ChatRow({
           <span className="flex items-center gap-2 min-w-0">
             <span className="text-base font-medium text-fg truncate">{sessionTitle(session)}</span>
             <ChannelLogo channel={channel} label />
+            {session.origin === "erpnext_panel" && (
+              <span className="shrink-0 truncate max-w-[14rem] rounded border border-line px-1.5 text-xs text-fg-muted">
+                {askedBeside(session)}
+              </span>
+            )}
           </span>
           <span className="block text-sm text-fg-subtle mt-0.5">
             {sharedWithYou ? (

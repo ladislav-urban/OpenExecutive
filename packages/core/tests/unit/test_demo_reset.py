@@ -522,3 +522,19 @@ def test_a_demo_chat_named_like_someone_elses_honcho_session_is_not_forgotten(en
     _chat(env.db, f"person-{principal}", visitor)
     _chat(env.db, "visitor-chat", visitor)
     assert dr.honcho_sessions([visitor], env.db) == sorted(["visitor-chat", f"person-{visitor}"])
+
+
+def test_a_demo_persons_panel_conversations_go_with_theirs(env: SimpleNamespace) -> None:
+    """F1: a conversation ERPNext's docked panel started is a demo person's
+    own (sessions.origin), so the nightly reset takes it like any other."""
+    from openexecutive.memory import session_store
+
+    principal = _person("Pat Principal", principal=True, directory=True)
+    visitor = _person("Vic Visitor", directory=True, demo=True)
+    session_store.create_session("panel-chat", "t", "now", caller_person_id=visitor, db_path=env.db)
+    assert session_store.set_origin("panel-chat", "erpnext_panel", {"doctype": "Item"}, db_path=env.db)
+    _chat(env.db, "own-chat", principal)
+    dr.clear_people_state([visitor], env.db)
+    with sqlite3.connect(str(env.db)) as conn:
+        left = {r[0] for r in conn.execute("SELECT session_id FROM sessions")}
+    assert left == {"own-chat"}
