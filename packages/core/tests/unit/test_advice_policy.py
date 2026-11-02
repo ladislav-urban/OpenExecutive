@@ -129,6 +129,15 @@ def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -
     assert "never from a company document's table" in specialist
 
 
+def test_figures_are_compared_in_one_currency() -> None:
+    # Pilot, Nov 2 (F4 step 1): a euro invoice's dollar total (3,848.89 at
+    # 1.0603) set against its euro order (3,630.00) read as a 218.89 overcharge.
+    text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
+    assert "Compare figures only in one currency" in text
+    assert "never one with the other" in text
+    assert "Compare figures in one currency only" in advice_policy.SPECIALIST_ADVICE_ADDENDUM
+
+
 def test_operating_choices_get_a_verdict_and_the_listed_decisions_do_not() -> None:
     # Owner, Nov 2, 2026 (pilot panel round): "was last week's margin drop
     # worth it?" and which supplier get a verdict with its reason, the same

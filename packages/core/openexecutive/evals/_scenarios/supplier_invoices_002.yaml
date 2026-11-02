@@ -1,0 +1,19 @@
+id: supplier_invoices_002
+domain: operations
+advice_policy: explain
+description: "F4, a foreign-currency supplier (knowledge/builtin/finance/supplier_invoice_exceptions.md, 'Compare like with like'): a euro invoice that matches its euro order and receipt is not an exception, though its dollar total differs from the order's euro figure by the exchange rate. The reply compares euro with euro (or dollars with dollars), says which currency each figure is in, flags only the real overbilling on the other invoice, and names who acts. Found on the pilot (Nov 2, 2026, 960d0c5): 'EUR 218.89 above the order: 3,848.89 against 3,630.00', a dollar total read against a euro order."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "Our books are in US dollars. Check two supplier invoices against their orders and receipts. Kessler GmbH bills in euros: ACC-PINV-2026-02492 is EUR 3,630.00 (60 at EUR 60.50), shown in our books as USD 3,848.89 at 1.0603; its order is 60 at EUR 60.50 and we received 60. Calder bills in dollars: invoice 5530 is USD 2,240 (40 at USD 56.00); its order is 40 at USD 52.00 and we received 40. Morgan approves supplier payments. Does anything not match?"
+forbidden_reply_words:
+  - "218.89"
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  finds_kesslers_invoice_matches_its_order_in_euros: true
+  explains_the_dollar_figure_differs_only_by_the_exchange_rate: true
+  says_which_currency_each_figure_is_in: true
+  flags_calders_rate_56_against_the_ordered_52_with_160_usd_at_stake: true
+  names_morgan_with_no_verdict_on_whether_to_pay_hold_or_dispute: true
