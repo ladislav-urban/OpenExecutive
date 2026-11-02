@@ -12613,7 +12613,10 @@ delegation:
     approved unchanged SUGGEST_AFTER (3) times in 30 days and not allowed;
     POST /take-the-lead/learned allows only a current suggestion, DELETE
     removes one (tightening, no proof needed; the row keeps removed_at so
-    only approvals after it count toward suggesting it again). Leaving training while on is
+    only approvals after it count toward suggesting it again, and
+    removed_decisions, the ids of the approvals already counted, which
+    decide that order: two wall-clock readings can't, as the clock steps
+    back under load). Leaving training while on is
     loosening (provable owner). The allowed list is shared across features
     (feature column, owner's choice: one list, a switch per feature); Act as
     me is the second (feature act_as_me, per person, a training switch per
