@@ -77,19 +77,27 @@ jobs:
       # restoring and saving it took 7-16 min of every job (Nov 2, 2026), while
       # uv's own cache in the runner user's home survives between jobs: the
       # next step points uv at it. uv locks its cache, so the runners sharing
-      # the host can use one cache at once.
+      # the host can use one cache at once. Pull requests and main keep
+      # separate caches: uv trusts what it finds in its cache without hashing
+      # it again, so a PR's job must not fill the cache main's jobs install
+      # from. (Every job runs as the same user on these hosts, so this guards
+      # against accidents, not a hostile branch; no job here has secrets, and
+      # images are built on GitHub's runners with a fresh cache.)
       - name: Install uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: ${{ runner.environment == 'github-hosted' }}
+          prune-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: packages/core/uv.lock
           python-version: "3.11"
 
       - name: Keep uv's cache on the runner
         if: runner.environment == 'self-hosted'
         run: |
-          echo "UV_CACHE_DIR=$HOME/.cache/uv-ci" >> "$GITHUB_ENV"
-          echo "MYPY_CACHE_DIR=$HOME/.cache/mypy-ci/$RUNNER_NAME" >> "$GITHUB_ENV"
+          echo "UV_CACHE_DIR=$HOME/.cache/uv-ci/$TRUST" >> "$GITHUB_ENV"
+          echo "MYPY_CACHE_DIR=$HOME/.cache/mypy-ci/$TRUST/$RUNNER_NAME" >> "$GITHUB_ENV"
+        env:
+          TRUST: ${{ github.event_name == 'push' && 'main' || 'pr' }}
 
       # docker/Dockerfile installs from uv.lock with `uv sync --locked`, which
       # fails the image build if the lock is stale. `uv sync` below would
@@ -152,12 +160,15 @@ jobs:
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
           enable-cache: ${{ runner.environment == 'github-hosted' }}
+          prune-cache: ${{ runner.environment == 'github-hosted' }}
           cache-dependency-glob: packages/core/uv.lock
           python-version: "3.11"
 
       - name: Keep uv's cache on the runner
         if: runner.environment == 'self-hosted'
-        run: echo "UV_CACHE_DIR=$HOME/.cache/uv-ci" >> "$GITHUB_ENV"
+        run: echo "UV_CACHE_DIR=$HOME/.cache/uv-ci/$TRUST" >> "$GITHUB_ENV"
+        env:
+          TRUST: ${{ github.event_name == 'push' && 'main' || 'pr' }}
 
       - name: Install dependencies
         run: cd packages/core && uv sync --extra dev
