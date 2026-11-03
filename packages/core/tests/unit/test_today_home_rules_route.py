@@ -157,3 +157,59 @@ def test_an_erp_alerts_card_carries_its_record_and_open(board: dict[str, Any]) -
     # Every other card: no record, no Open.
     other = by_id[board["unrouted"]]
     assert other["record"] is None and "open_record" not in [a["key"] for a in other["actions"]]
+
+
+def _bundle_and_live(db: Path, kind: str, ref: str) -> tuple[int, int]:
+    """The demo bundle's card for everyone, and the live event's alert for
+    the same rule and document, as the pipeline stores it (private)."""
+    shared = alert_store.insert_alert(
+        source="erpnext", external_id=f"demo-{kind}-{ref}", severity="medium",
+        headline=f"Bundle: {ref}", body="The bundle's copy.", dedup_key=f"erpnext:{kind}:{ref}", db_path=db,
+    )
+    live = alert_store.insert_alert(
+        source="erpnext", external_id=f"erpnext:{kind}:{ref}:2026-11", severity="medium",
+        headline=f"Live: {ref}", body="The principal's live figures.", topic_tags=["stock", PRIVATE_ALERT_TAG],
+        dedup_key=f"private:erpnext:{kind}:{ref}", db_path=db,
+    )
+    return shared, live
+
+
+def test_a_live_erpnext_alert_and_the_bundles_card_are_one_card_for_the_principal(board: dict[str, Any]) -> None:
+    shared, live = _bundle_and_live(board["db"], "stock_below_reorder", "SKU-001@Stores - AC")
+    other_shared, _ = _bundle_and_live(board["db"], "overdue_receivable", "ACC-SINV-2026-00042")
+    lonely = alert_store.insert_alert(
+        source="erpnext", external_id="demo-reorder-SKU-002", severity="medium", headline="Only the bundle's",
+        body="No live twin.", dedup_key="erpnext:stock_below_reorder:SKU-002@Stores - AC", db_path=board["db"],
+    )
+    client = _make_client()
+    mine = {p["alert_id"] for p in client.get("/today", headers=_as("pat@example.com")).json()["proposals"]}
+    assert live in mine and shared not in mine and other_shared not in mine
+    assert lonely in mine
+    # A teammate never sees the private one, so keeps the bundle's card.
+    theirs = {p["alert_id"] for p in client.get("/today", headers=_as("dana@example.com")).json()["proposals"]}
+    assert shared in theirs and other_shared in theirs and live not in theirs
+    text = str(client.get("/today", headers=_as("dana@example.com")).json())
+    assert "live figures" not in text and "Live: " not in text
+    # Left off Home, the shared card still opens on its own page, for anyone it waits for.
+    assert client.get(f"/alerts/{shared}/card", headers=_as("pat@example.com")).status_code == 200
+    assert client.get(f"/alerts/{live}/card", headers=_as("pat@example.com")).status_code == 200
+
+
+def test_the_bundles_card_comes_back_once_the_live_alert_is_closed(board: dict[str, Any]) -> None:
+    shared, live = _bundle_and_live(board["db"], "stock_below_reorder", "SKU-001@Stores - AC")
+    alert_store.set_status(live, "resolved", db_path=board["db"])
+    mine = {p["alert_id"] for p in _make_client().get("/today", headers=_as("pat@example.com")).json()["proposals"]}
+    assert shared in mine and live not in mine
+
+
+def test_only_erpnext_twins_fold(board: dict[str, Any]) -> None:
+    shared = alert_store.insert_alert(
+        source="system", external_id="s", severity="high", headline="Shared", body="b",
+        dedup_key="erpnext:stock_below_reorder:X", db_path=board["db"],
+    )
+    alert_store.insert_alert(
+        source="system", external_id="p", severity="high", headline="Private", body="b",
+        topic_tags=[PRIVATE_ALERT_TAG], dedup_key="private:erpnext:stock_below_reorder:X", db_path=board["db"],
+    )
+    mine = {p["alert_id"] for p in _make_client().get("/today", headers=_as("pat@example.com")).json()["proposals"]}
+    assert shared in mine
