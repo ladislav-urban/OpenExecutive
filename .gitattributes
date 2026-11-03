@@ -1,0 +1,4 @@
+# Shell scripts run under sh (the image's launchers, the hooks) and break on
+# CRLF ("set: Illegal option -"). Git for Windows ships core.autocrlf=true,
+# which would check them out with CRLF, so pin them to LF everywhere.
+*.sh text eol=lf

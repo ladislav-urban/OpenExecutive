@@ -10367,12 +10367,17 @@ integrations:
     turn's channel block is erpnext_panel.PANEL_CONTEXT_BLOCK (user turn,
     not cached): it names the panel "Ask the Dynocortex", says people there
     call the Executive Dynocortex, and states the read-only limits (suggest
-    the OpenExecutive app for anything else); FRESH_RULE says the person may
-    not see earlier answers (the panel shows only what was said since its
-    page opened; the website retake of Nov 3, 2026 ran 67 turns in one
-    conversation), so each answer stands alone, never refers to an earlier
-    one (a figure that changed comes with its arithmetic), and reads ERPNext on that turn instead of answering from
-    an earlier answer or notes (evals erpnext_056 to erpnext_061); SCREEN_RULE adds that beside
+    the OpenExecutive app for anything else); FOLLOW_UP_RULE says the person
+    sees the conversation's earlier turns (oe_connector#386 starts a new
+    conversation whenever the panel opens empty; it replaced #144's rule
+    that each answer stood alone, which broke follow-ups in the Nov 3, 2026
+    retake), so a follow-up means everything the earlier turns named, never
+    only the last, without asking or assuming which; figures are re-read
+    from ERPNext over the same period and filters, and corrections are never
+    narrated (a changed figure comes with its arithmetic) (evals erpnext_056
+    to erpnext_065; evals.scenarios prior_turns seeds the session history
+    and shows it to the judge); TABLE_RULE keeps a table to four columns, wider
+    detail in the place it opens (eval erpnext_066); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
     people, memory, settings), so it says so and suggests Conversations rather than
     guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the

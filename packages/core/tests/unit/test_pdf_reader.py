@@ -408,6 +408,9 @@ def test_a_huge_page_is_rendered_within_the_pixel_budget():
 
 def test_ocr_renders_a_huge_page_at_the_capped_scale(monkeypatch):
     pytest.importorskip("pypdfium2")
+    # The page goes to the engine as a PIL image. Pillow comes with rapidocr,
+    # which Python 3.13+ doesn't install, and there _get_ocr_engine refuses first.
+    pytest.importorskip("PIL")
     writer = PdfWriter()
     writer.add_blank_page(width=14_000, height=14_000)
     buf = io.BytesIO()

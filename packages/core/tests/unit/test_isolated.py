@@ -47,13 +47,17 @@ def test_the_child_does_not_inherit_the_deployments_keys(monkeypatch) -> None:
     assert run_isolated(os.getenv, "ANTHROPIC_API_KEY", timeout=60) is None
 
 
+# math.sqrt(-1.0)'s message: Python 3.14 reworded the older "math domain error".
+_SQRT_OF_MINUS_ONE = "(math domain error|expected a nonnegative input)"
+
+
 def test_a_named_exception_is_raised_again_as_itself() -> None:
-    with pytest.raises(ValueError, match="math domain error"):
+    with pytest.raises(ValueError, match=_SQRT_OF_MINUS_ONE):
         run_isolated(math.sqrt, -1.0, timeout=60, reraise=(ValueError,))
 
 
 def test_any_other_exception_is_an_isolated_error() -> None:
-    with pytest.raises(IsolatedError, match="ValueError: math domain error") as info:
+    with pytest.raises(IsolatedError, match=f"ValueError: {_SQRT_OF_MINUS_ONE}") as info:
         run_isolated(math.sqrt, -1.0, timeout=60)
     assert not isinstance(info.value, WorkerStopped)
     # What callers log: the type, never the message (it can quote the file).
