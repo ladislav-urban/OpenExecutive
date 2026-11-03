@@ -87,6 +87,7 @@ from openexecutive.evals.scenarios import (
     scenario_supplier,
     scenario_turn_surface,
     scenario_voice_persona,
+    seed_prior_turns,
     view_kinds_check,
 )
 from openexecutive.utils.repeats import repeated_sentences
@@ -655,6 +656,8 @@ def _make_chat_runner(
                         delegation_override=delegation,
                         **surface,
                     )
+                    # A follow-up: the turns it follows, in the session's history.
+                    seed_prior_turns(session, scenario)
                     query = scenario_query(scenario)
                     # Records which specialists the turn consulted, for
                     # the scenario's routing expectation (routing_check).

@@ -1,6 +1,7 @@
 """Unit tests for the SME knowledge review store."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -721,13 +722,18 @@ def test_shipped_manifest_matches_git(tmp_path: Path) -> None:
     from openexecutive.knowledge.shipped_manifest import SHIPPED_BUILTIN_FILES
 
     prefix = "packages/core/openexecutive/knowledge/builtin/"
-    tracked = subprocess.run(
+    listed = subprocess.run(
         ["git", "ls-files", f"{prefix}**/*.md"],
         capture_output=True,
         text=True,
         cwd=Path(__file__).resolve().parents[4],
-        check=True,
-    ).stdout.split()
+    )
+    if listed.returncode != 0:
+        # e.g. WSL's git in a worktree Windows git made (its .git names a C:/ path)
+        if os.environ.get("CI"):
+            pytest.fail(f"git ls-files failed in CI: {listed.stderr}")
+        pytest.skip(f"git can't read this checkout: {listed.stderr.strip()}")
+    tracked = listed.stdout.split()
     expected = {
         p[len(prefix):] for p in tracked
         if p.startswith(prefix) and "/skills/" not in p

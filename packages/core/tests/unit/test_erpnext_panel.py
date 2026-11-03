@@ -255,16 +255,28 @@ def test_both_panel_blocks_say_a_dynocortex_screen_is_not_seen() -> None:
         assert "its headline is all you have of it" in block
 
 
-def test_both_panel_blocks_answer_each_question_fresh() -> None:
-    # The website retake (Nov 3, 2026): 67 turns in one panel conversation,
-    # answered with "Earlier I said…" and "from our notes".
+def test_both_panel_blocks_read_a_follow_up_with_the_turns_before_it() -> None:
+    # oe_connector#386: a panel conversation goes on only while its turns are
+    # on screen. The website retake (Nov 3, 2026, 15:12Z) under the rule that
+    # each answer stood alone: "I'm assuming that's the invoice you mean", and
+    # a supplier from step 1 forgotten by step 5.
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
-        assert erpnext_panel.FRESH_RULE in block
-        assert "may not see your earlier answers" in block
-        assert "never refer to an earlier answer" in block
-        assert "give the right one with its arithmetic" in block
-        assert "never answer from an earlier answer or from notes" in block
+        assert erpnext_panel.FOLLOW_UP_RULE in block
+        assert "sees the earlier turns of this conversation" in block
+        assert "never only the last one" in block
+        assert "or write that you're assuming it" in block
+        assert "rather than repeat it from an earlier answer" in block
+        assert "over the same period and filters the earlier answer used" in block
         assert "haven't re-read or checked" in block
+        assert "give the right one with its arithmetic" in block
+        assert "may not see your earlier answers" not in block
+        assert "never refer to an earlier answer" not in block
+
+
+def test_both_panel_blocks_keep_a_table_to_four_columns() -> None:
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert erpnext_panel.TABLE_RULE in block
+        assert "four at most" in block and "wider detail goes in the place you open" in block
 
 
 # ── the route ───────────────────────────────────────────────────────────────

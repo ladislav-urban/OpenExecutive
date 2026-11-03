@@ -194,11 +194,13 @@ async def judge_chat(
     response: str,
     drafts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    from openexecutive.evals.scenarios import prior_turns_section
+
     judge_prompt = f"""You are an evaluator for an AI executive advisory system.
 
 Evaluate this response to an executive question on a 1-5 scale for each dimension.
 
-QUESTION: {scenario['query']}
+{prior_turns_section(scenario)}QUESTION: {scenario['query']}
 
 RESPONSE: {response}
 

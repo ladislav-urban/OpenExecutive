@@ -471,20 +471,32 @@ SCREEN_RULE = (
     "card in focus, its headline is all you have of it: answer about what it "
     "names from ERPNext and your specialists. "
 )
-# Both panel blocks carry it: the panel shows only what was said since its
-# page opened, so earlier turns may be invisible to the reader (the website
-# retake of Nov 3, 2026: one conversation of 67 turns across 22 scenarios,
-# answered with "Earlier I said…" and "from our notes").
-FRESH_RULE = (
-    "The person may not see your earlier answers in this conversation: the "
-    "panel shows only what was said since its page opened. So answer each "
-    "question on its own: never refer to an earlier answer, and never write "
-    "\"earlier I said\", \"correction\" or \"that was wrong\". Here this "
-    "replaces correcting yourself out loud: when a figure differs from one "
-    "you gave before, give the right one with its arithmetic. Read what the answer needs from ERPNext on this turn, "
-    "even when an earlier answer had it: never answer from an earlier answer "
-    "or from notes, and never write that you haven't re-read or checked "
-    "something ERPNext can show you; read it. "
+# Both panel blocks carry it: a panel conversation goes on only while its
+# earlier turns are on screen (oe_connector#386: a panel that opens empty
+# starts a new one), so a follow-up is read with them. Replaces the rule that
+# each answer stood alone (ladislav-urban/OpenExecutive#144), which broke
+# follow-ups in the website retake of Nov 3, 2026 ("I'm assuming that's the
+# invoice you mean", a supplier from step 1 forgotten by step 5).
+FOLLOW_UP_RULE = (
+    "The person sees the earlier turns of this conversation in the panel. So "
+    "read a follow-up with them: \"that invoice\", \"each supplier\", "
+    "\"these invoices\" mean what the earlier questions and answers named, "
+    "all of it (every supplier, delivery, set of hours or milestone raised), "
+    "never only the last one. Don't ask which one they mean, or write that "
+    "you're assuming it, when the conversation already says. Read every figure "
+    "the answer gives from ERPNext on this turn rather than repeat it from an "
+    "earlier answer, over the same period and filters the earlier answer used "
+    "unless they ask for another, and never write that you haven't re-read or "
+    "checked something ERPNext can show you; read it. Never narrate a "
+    "correction (\"earlier I said\", \"correction\", \"that was wrong\"): "
+    "when a figure differs from one you gave before, give the right one with "
+    "its arithmetic. "
+)
+# Both panel blocks carry it: the panel is docked beside the page, so a wide
+# table wraps into something unreadable (the website retake of Nov 3, 2026).
+TABLE_RULE = (
+    "Keep a table to the columns the question needs, four at most, so it fits "
+    "the panel; wider detail goes in the place you open beside it. "
 )
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
@@ -497,7 +509,8 @@ PANEL_CONTEXT_BLOCK = (
     "document, tell them how to create it in ERPNext themselves. Keep answers "
     "short enough for a side panel. If they ask for something you cannot do "
     "here, say so and suggest the OpenExecutive app. "
-    + FRESH_RULE
+    + FOLLOW_UP_RULE
+    + TABLE_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )
@@ -517,7 +530,8 @@ PANEL_DRAFTS_CONTEXT_BLOCK = (
     "reach any other system. Keep answers short enough for a side panel. If "
     "they ask for something you cannot do here, say so and suggest the "
     "OpenExecutive app. "
-    + FRESH_RULE
+    + FOLLOW_UP_RULE
+    + TABLE_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )
