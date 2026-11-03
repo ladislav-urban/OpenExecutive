@@ -135,7 +135,7 @@ ERPNEXT_DISCOVERY_QUERIES: dict[str, str] = {
     "erpnext__run_report": "Run an ERPNext report and get its rows",
     "erpnext__search_catalog": "Map a business question to the ERPNext reports and DocTypes that answer it",
     "erpnext__show_in_erpnext": (
-        "Kinds: list, report_view, report, form, tree, calendar, gantt, kanban, dashboard, workspace, page"
+        "Kinds: list, report_view, report, chart, form, tree, calendar, gantt, kanban, dashboard, workspace, page"
     ),
 }
 

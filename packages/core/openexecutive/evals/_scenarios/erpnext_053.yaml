@@ -1,0 +1,26 @@
+id: erpnext_053
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+forbid_repeated_text: true
+description: "Workstream D (oe_connector's docs/panel-d-plan.md), cash-outlook in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. A weekly trend opens a `chart` view beside the panel: receivables outstanding by due week (Sales Invoice, sum of outstanding_amount over due_date by week), not only the Accounts Receivable table. The reply names the heavy weeks with their figures and never writes that it opened or showed anything. expected_view_kinds is checked from the show calls ERPNext accepted, so it fails until oe_connector's chart kind is deployed."
+query: "How much do customers owe us week by week over the next 13 weeks?"
+expected_tool_calls:
+  - call_tool
+forbidden_tool_calls:
+  - propose_erpnext_draft
+expected_view_kinds:
+  - chart
+forbidden_reply_words:
+  - ERPNext
+  - beside the panel
+  - I've opened
+  - is now open
+quality_criteria:
+  gives_the_amount_due_in_each_week_or_the_weeks_that_stand_out_with_figures: true
+  reads_outstanding_receivables_by_due_date_not_invoice_totals: true
+  opens_the_chart_beside_the_panel_without_saying_so: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

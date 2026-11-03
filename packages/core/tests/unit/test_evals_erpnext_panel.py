@@ -198,3 +198,76 @@ def test_both_runners_hand_chat_the_speaker(monkeypatch: pytest.MonkeyPatch) -> 
     assert seen["person_id"] == 7
     # No speaker: nobody, as before.
     assert _run(monkeypatch, {"id": "w", "query": "q"})["person_id"] is None
+
+
+# ── the views a panel turn opens (workstream D) ─────────────────────────────
+
+
+def _done(monkeypatch: pytest.MonkeyPatch, scenario: dict[str, Any], views: list[dict[str, Any]]) -> dict[str, Any]:
+    from openexecutive.integrations import erpnext_panel
+
+    async def fake_chat(self: Any, **kwargs: Any) -> str:
+        for view in views:
+            erpnext_panel.note_erpnext_call("erpnext__show_in_erpnext", {"view": view}, failed=False)
+        return "a response"
+
+    async def fake_judge(_scenario: dict[str, Any], _response: str) -> dict[str, Any]:
+        return {"overall": 5}
+
+    monkeypatch.setattr(Executive, "__init__", lambda self, mcp_gateway=None: None)
+    monkeypatch.setattr(Executive, "chat", fake_chat)
+    monkeypatch.setattr(runner_module, "judge_chat", fake_judge)
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    run_one = runner_module._make_chat_runner(asyncio.Semaphore(1), queue, [0], 1, None)
+    asyncio.run(run_one(0, scenario))
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+    return next(e for e in events if e["type"] == "scenario_done")
+
+
+_CHART = {
+    "kind": "chart", "doctype": "Sales Invoice", "measure": "sum", "on": "outstanding_amount",
+    "over": {"time": "due_date", "every": "week", "from": "2026-11-02", "to": "2027-02-01"},
+}
+
+
+def test_a_panel_scenario_passes_only_when_its_turn_opens_the_expected_kind(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = {"id": "c", "query": "q", "surface": "erpnext_panel", "expected_view_kinds": ["chart"]}
+    done = _done(monkeypatch, scenario, [{"kind": "report", "report": "Accounts Receivable"}, _CHART])
+    assert done["passed"] is True
+    assert done["scores"]["views"] == {"kinds": ["chart", "report"], "missing": [], "forbidden": [], "ok": True}
+
+    done = _done(monkeypatch, scenario, [{"kind": "report", "report": "Accounts Receivable"}])
+    assert done["passed"] is False
+    assert done["scores"]["views"]["missing"] == ["chart"]
+
+
+def test_a_forbidden_kind_fails_the_scenario_whatever_the_judge_says(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = {"id": "f", "query": "q", "surface": "erpnext_panel", "forbidden_view_kinds": ["chart"]}
+    done = _done(monkeypatch, scenario, [_CHART])
+    assert done["passed"] is False and done["scores"]["views"]["forbidden"] == ["chart"]
+    assert _done(monkeypatch, scenario, [{"kind": "list", "doctype": "Sales Invoice"}])["passed"] is True
+    # A turn that opens nothing opens no chart either.
+    assert _done(monkeypatch, scenario, [])["passed"] is True
+
+
+def test_a_scenario_without_view_kinds_is_scored_as_before(monkeypatch: pytest.MonkeyPatch) -> None:
+    done = _done(monkeypatch, {"id": "p", "query": "q", "surface": "erpnext_panel"}, [_CHART])
+    assert done["passed"] is True and "views" not in done["scores"]
+
+
+def test_view_kinds_are_a_list_of_names_and_only_for_a_panel_scenario() -> None:
+    for key in ("expected_view_kinds", "forbidden_view_kinds"):
+        with pytest.raises(ValueError, match=key):
+            validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{key}: chart\n")
+        with pytest.raises(ValueError, match=key):
+            validate_scenario_yaml(f"id: x\nquery: q\n{key}:\n  - chart\n")
+        validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{key}:\n  - chart\n")
+
+
+def test_the_chart_scenarios_ship_with_their_view_kinds() -> None:
+    found = {s["id"]: s for s in load_scenarios() if s["id"] in ("erpnext_053", "erpnext_054")}
+    assert found["erpnext_053"]["expected_view_kinds"] == ["chart"]
+    assert found["erpnext_054"]["forbidden_view_kinds"] == ["chart"]
+    assert all(scenario_surface(s) == "erpnext_panel" for s in found.values())

@@ -1,0 +1,25 @@
+id: erpnext_054
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+forbid_repeated_text: true
+description: "Workstream D (oe_connector's docs/panel-d-plan.md), the other side of erpnext_053: in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded, a question with a single figure for an answer opens no `chart` view. SHOW_RULE's 'a single figure gets no chart': the place it shows, if any, is a list or the report."
+query: "What's the total our customers owe us right now?"
+expected_tool_calls:
+  - call_tool
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_view_kinds:
+  - chart
+forbidden_reply_words:
+  - ERPNext
+  - beside the panel
+  - I've opened
+  - is now open
+quality_criteria:
+  gives_one_total_of_outstanding_receivables_with_its_currency: true
+  answers_in_a_sentence_or_two_without_a_weekly_breakdown_nobody_asked_for: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

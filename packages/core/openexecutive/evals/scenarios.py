@@ -554,6 +554,14 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_surface(s)
         except ValueError as e:
             raise ValueError(f"`surface`: {e}") from e
+    for key in ("expected_view_kinds", "forbidden_view_kinds"):
+        if s.get(key) is None:
+            continue
+        kinds = s[key]
+        if not isinstance(kinds, list) or not kinds or not all(isinstance(k, str) and k.strip() for k in kinds):
+            raise ValueError(f"`{key}`: a list of non-empty strings")
+        if scenario_surface(s) != SURFACE_ERPNEXT_PANEL:
+            raise ValueError(f"`{key}`: only a scenario with surface: erpnext_panel opens views")
     for flag in ("demo_viewer", "forbid_principal_name", "forbid_repeated_text"):
         if s.get(flag) is not None and not isinstance(s[flag], bool):
             raise ValueError(f"`{flag}` must be true or false")
@@ -597,6 +605,23 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         raise ValueError("triage scenarios require an `event` field")
 
     return s
+
+
+def view_kinds_check(scenario: dict[str, Any], views: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Whether a panel turn opened the kinds of view the scenario expects
+    beside the panel, from what ``erpnext_panel.note_erpnext_call`` kept (the
+    show calls ERPNext accepted): deterministic, since the judge reads only the
+    reply. ``None`` when the scenario sets neither ``expected_view_kinds`` nor
+    ``forbidden_view_kinds``; otherwise ``{"kinds", "missing", "forbidden",
+    "ok"}``."""
+    expected = [k.strip() for k in scenario.get("expected_view_kinds") or []]
+    banned = [k.strip() for k in scenario.get("forbidden_view_kinds") or []]
+    if not expected and not banned:
+        return None
+    kinds = sorted({str(v.get("kind")) for v in views if isinstance(v, dict) and v.get("kind")})
+    missing = [k for k in expected if k not in kinds]
+    forbidden = [k for k in banned if k in kinds]
+    return {"kinds": kinds, "missing": missing, "forbidden": forbidden, "ok": not missing and not forbidden}
 
 
 def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:

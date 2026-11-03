@@ -87,6 +87,7 @@ from openexecutive.evals.scenarios import (
     scenario_supplier,
     scenario_turn_surface,
     scenario_voice_persona,
+    view_kinds_check,
 )
 from openexecutive.utils.repeats import repeated_sentences
 from openexecutive.workflows.gate import ensure_workflow_event
@@ -658,25 +659,35 @@ def _make_chat_runner(
                     # Records which specialists the turn consulted, for
                     # the scenario's routing expectation (routing_check).
                     collector = DebugCollector()
-                    response = await scenario_executive.chat(
-                        user_message=query,
-                        session=session,
-                        channel_context_block=channel_block,
-                        # chat() sets the turn's speaker from this, as the chat
-                        # route passes the signed-in person: a `speaker`
-                        # scenario's caller, else None.
-                        person_id=surface.get("caller_person_id"),
-                        debug_collector=collector,
-                        # A scenario may supply the <peer_memory> body itself.
-                        # Evals run with no person_id, so the Honcho prefetch
-                        # never fires; this is the only way to exercise how the
-                        # Executive USES peer memory. None keeps chat()'s default.
-                        peer_memory_context=scenario.get("peer_memory_context"),
-                        # Likewise the <standing_facts> body (memory/facts.py):
-                        # the scenario's own lines under the shared header, or
-                        # none — an eval never reads the install's facts.
-                        standing_facts=scenario_standing_facts(scenario),
+                    # A panel turn keeps the views its show calls opened, as
+                    # the panel's route collects them, for the scenario's
+                    # expected_view_kinds (view_kinds_check).
+                    from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
+
+                    shown = TurnViews()
+                    views_ctx = (
+                        collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
                     )
+                    with views_ctx:
+                        response = await scenario_executive.chat(
+                            user_message=query,
+                            session=session,
+                            channel_context_block=channel_block,
+                            # chat() sets the turn's speaker from this, as the chat
+                            # route passes the signed-in person: a `speaker`
+                            # scenario's caller, else None.
+                            person_id=surface.get("caller_person_id"),
+                            debug_collector=collector,
+                            # A scenario may supply the <peer_memory> body itself.
+                            # Evals run with no person_id, so the Honcho prefetch
+                            # never fires; this is the only way to exercise how the
+                            # Executive USES peer memory. None keeps chat()'s default.
+                            peer_memory_context=scenario.get("peer_memory_context"),
+                            # Likewise the <standing_facts> body (memory/facts.py):
+                            # the scenario's own lines under the shared header, or
+                            # none — an eval never reads the install's facts.
+                            standing_facts=scenario_standing_facts(scenario),
+                        )
                     if delegation is not None:
                         drafts = [asdict(d) for d in delegation.gmail.drafts]
                         scores = await judge_chat(scenario, response, drafts=drafts)
@@ -705,6 +716,10 @@ def _make_chat_runner(
                     if routing is not None:
                         scores["routing"] = routing
                         ok = ok and routing["ok"]
+                    opened = view_kinds_check(scenario, shown.views)
+                    if opened is not None:
+                        scores["views"] = opened
+                        ok = ok and opened["ok"]
                     if ok:
                         passed[0] += 1
                     await queue.put(
