@@ -130,9 +130,24 @@ def _materialize_layer(layer: DependencyLayer, directory: Path) -> None:
         shutil.copy(REPO_ROOT / source, directory / Path(source).name)
 
 
+def _image_python() -> str:
+    """The api stage's Python (``FROM python:3.11-slim AS api`` -> ``3.11``)."""
+    match = re.search(r"^FROM python:(\d+\.\d+)\S* AS api$", _read(DOCKERFILE), re.MULTILINE)
+    assert match, "docker/Dockerfile has no `FROM python:X.Y… AS api` stage"
+    return match.group(1)
+
+
 def _dry_run(layer: DependencyLayer, cwd: Path) -> subprocess.CompletedProcess[str]:
-    """Run the Dockerfile's sync as a dry run, with its environment redirected away from /usr/local."""
-    env = {**os.environ, **layer.env, "UV_PROJECT_ENVIRONMENT": str(cwd / "planned-env")}
+    """Run the Dockerfile's sync as a dry run, with its environment redirected away from /usr/local.
+
+    Planned for the image's Python: markers like ``python_version < '3.13'``
+    decide what the image installs, so a host on another Python would plan a
+    different set (CI's setup-python pins it; a local run may not)."""
+    env = {
+        **os.environ, **layer.env,
+        "UV_PROJECT_ENVIRONMENT": str(cwd / "planned-env"),
+        "UV_PYTHON": _image_python(),
+    }
     return subprocess.run(
         [*layer.sync, "--dry-run"], cwd=cwd, env=env, capture_output=True, text=True, timeout=120
     )
