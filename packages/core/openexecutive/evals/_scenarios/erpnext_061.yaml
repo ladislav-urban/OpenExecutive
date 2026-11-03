@@ -1,0 +1,26 @@
+id: erpnext_061
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Work Order
+description: 'Production step 1 (oe_connector''s help/try-production.md) in ERPNext''s panel as a demo person, beside the Work Order list. The reply finds the work order still in process past its planned end, and for why reads what would settle it (its job cards, the materials issued, the stock of what it needs) rather than guessing. Found in the website retake on the pilot (Nov 3, 2026, OpenExecutive 8828ff5, one 67-turn panel conversation): ''…may be part of it. That is a guess.'''
+query: Which work orders are behind, and why?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Earlier I
+- a guess
+- I guess
+- I recommend
+quality_criteria:
+  finds_the_work_order_in_process_past_its_planned_end: true
+  reads_its_job_cards_materials_and_stock_for_why: true
+  offers_no_guess_and_says_plainly_what_the_records_do_not_show: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

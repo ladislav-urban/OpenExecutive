@@ -1,0 +1,36 @@
+id: erpnext_056
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Invoice
+  filters:
+  - - customer
+    - '='
+    - Metro Transit Works
+  - - status
+    - '='
+    - Overdue
+description: 'F1 collections step 3 (oe_connector''s help/try-collections.md) in ERPNext''s panel as a demo person, beside Metro Transit Works'' overdue invoices, with the erpnext server connected and oe_connector''s demo dataset loaded. One customer that pays on time has one invoice about 40 days past due and no reminder (E2). The reply reads that customer''s paid invoices against their due dates, puts it first as the one whose lateness is new, and sets it apart from prompt payers a few days late. Found in the website retake on the pilot (Nov 3, 2026, OpenExecutive 8828ff5, one 67-turn panel conversation): Cedar & Pine was listed last, with its record taken ''per our process note'' because the reply ''couldn''t read its full payment record''.'
+query: Is any other customer late who usually pays on time?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- process note
+- our notes
+- couldn't read
+- Earlier I
+- I recommend
+quality_criteria:
+  reads_the_customers_paid_invoices_against_their_due_dates_from_the_books: true
+  puts_first_the_usually_prompt_customer_now_about_40_days_late_with_no_reminder: true
+  sets_it_apart_from_prompt_payers_only_a_few_days_late: true
+  gives_amount_days_overdue_and_usual_record_with_company_and_currency: true
+  names_who_sends_the_first_reminder_from_the_roster: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

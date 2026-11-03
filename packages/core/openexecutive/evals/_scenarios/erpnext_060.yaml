@@ -1,0 +1,31 @@
+id: erpnext_060
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Contract
+  filters:
+  - - party_name
+    - '='
+    - Lakeside Hospital Trust
+description: 'Service-desk step 4 (oe_connector''s help/try-service-desk.md) in ERPNext''s panel as a demo person, beside Lakeside Hospital Trust''s contract. No field holds the contract''s cost, so the reply works it out from the records that do (the timesheets and the stock issued for Lakeside''s visits), says how, and sets it against what the contract billed, with its end date and Rachel for the renewal. Found in the website retake on the pilot (Nov 3, 2026, OpenExecutive 8828ff5, one 67-turn panel conversation): ''Cost: I can''t give you a figure'', with Ellen asked to work it out from the timesheets and parts.'
+query: When does this contract end, and what has the service cost us against what it bills?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Earlier I
+- can't give you a figure
+- I recommend
+quality_criteria:
+  gives_the_contracts_end_date_and_rachel_for_the_renewal: true
+  gives_what_the_contract_billed_with_its_arithmetic: true
+  works_out_the_service_cost_from_timesheets_and_stock_issued_and_says_how: true
+  sets_the_cost_against_what_it_billed: true
+  does_not_hand_the_working_out_to_someone_else: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

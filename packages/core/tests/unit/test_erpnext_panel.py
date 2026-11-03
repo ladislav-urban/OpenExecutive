@@ -255,6 +255,18 @@ def test_both_panel_blocks_say_a_dynocortex_screen_is_not_seen() -> None:
         assert "its headline is all you have of it" in block
 
 
+def test_both_panel_blocks_answer_each_question_fresh() -> None:
+    # The website retake (Nov 3, 2026): 67 turns in one panel conversation,
+    # answered with "Earlier I said…" and "from our notes".
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert erpnext_panel.FRESH_RULE in block
+        assert "may not see your earlier answers" in block
+        assert "never refer to an earlier answer" in block
+        assert "give the right one with its arithmetic" in block
+        assert "never answer from an earlier answer or from notes" in block
+        assert "haven't re-read or checked" in block
+
+
 # ── the route ───────────────────────────────────────────────────────────────
 
 

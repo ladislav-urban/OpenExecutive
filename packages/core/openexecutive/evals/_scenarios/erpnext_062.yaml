@@ -1,0 +1,24 @@
+id: erpnext_062
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "Fleet step 4 (oe_connector's help/try-fleet.md) in Conversations, with the erpnext server connected and oe_connector's demo dataset loaded. Trading in the oldest van was a spend decision the team already made, so the reply gives no verdict of its own, and doesn't say it can't give one: it says who decided, what they decided and the reason the records give (the dealer's trade-in beat selling privately), then the figures that bear on it (the old van's servicing bills before the trade-in, the trade-in against its book value and the loss on disposal). Found in the website retake on the pilot (Nov 3, 2026, OpenExecutive 8828ff5): 'I can't give a verdict on this one, because repair-or-replace is a spend decision.'"
+query: "Was trading in the oldest van the right call?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "can't give a verdict"
+  - "cannot give a verdict"
+  - I recommend
+  - I wouldn't
+quality_criteria:
+  says_who_decided_the_trade_in_what_they_decided_and_the_reason_the_records_give: true
+  gives_the_old_vans_servicing_costs_before_the_trade_in: true
+  gives_the_trade_in_against_book_value_and_the_loss_on_disposal_with_arithmetic: true
+  does_not_say_it_cannot_judge_or_give_a_verdict: true
+  gives_no_verdict_of_its_own_on_the_spend: true

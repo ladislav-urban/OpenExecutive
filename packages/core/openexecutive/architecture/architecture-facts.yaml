@@ -10360,7 +10360,12 @@ integrations:
     turn's channel block is erpnext_panel.PANEL_CONTEXT_BLOCK (user turn,
     not cached): it names the panel "Ask the Dynocortex", says people there
     call the Executive Dynocortex, and states the read-only limits (suggest
-    the OpenExecutive app for anything else); SCREEN_RULE adds that beside
+    the OpenExecutive app for anything else); FRESH_RULE says the person may
+    not see earlier answers (the panel shows only what was said since its
+    page opened; the website retake of Nov 3, 2026 ran 67 turns in one
+    conversation), so each answer stands alone, never refers to an earlier
+    one (a figure that changed comes with its arithmetic), and reads ERPNext on that turn instead of answering from
+    an earlier answer or notes (evals erpnext_056 to erpnext_061); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
     people, memory, settings), so it says so and suggests Conversations rather than
     guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the

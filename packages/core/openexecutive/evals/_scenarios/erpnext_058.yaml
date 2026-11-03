@@ -1,0 +1,35 @@
+id: erpnext_058
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Invoice
+  filters:
+  - - customer
+    - '='
+    - Metro Transit Works
+  - - status
+    - '='
+    - Overdue
+description: 'Monday-morning step 3 (oe_connector''s help/try-monday-morning.md) in ERPNext''s panel as a demo person, beside Metro Transit Works'' overdue invoice. The invoice''s history holds a first reminder and a final reminder (Dunning, both submitted), which the demo role reads. The reply reads that history and says yes, with each reminder''s level and date, that no payment came since, and that the next step is a call, by Ellen. Found in the website retake on the pilot (Nov 3, 2026, OpenExecutive 8828ff5, one 67-turn panel conversation): the answer said nobody had chased it.'
+query: Has anyone chased Metro Transit Works about this invoice, and when?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Earlier I
+- nobody has chased
+- no one has chased
+- hasn't been chased
+- I recommend
+quality_criteria:
+  reads_the_invoices_history_and_finds_both_reminders: true
+  gives_each_reminders_level_and_date: true
+  says_no_payment_has_come_in_since: true
+  names_a_call_by_ellen_as_the_next_step: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
