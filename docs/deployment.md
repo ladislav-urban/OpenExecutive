@@ -1046,8 +1046,12 @@ default), it drops both with a log line and answers as a plain Chats turn. The
 page and card reach the model as untrusted text, never as the person's words,
 and never in a chat shared with others. Every host turn, the panel's and native
 Chats' in the desk alike, counts against one limit per person: one in flight at
-a time and 60 an hour (demo people only by their daily cap), answered `429`
-past it. Stop it by setting `ERPNEXT_HOST_PAGE_TURNS=false` and restarting the
+a time and 60 an hour (demo people only by their daily caps: their own,
+`DEMO_DAILY_QUESTIONS`, and all of theirs together, `DEMO_DAILY_QUESTIONS_TOTAL`,
+off by default; docs/auth.md, "Demo people"), answered `429` past it. On a
+public demo, set the total cap as well as a spend limit on the model account:
+the account's limit stops the principal too, while the total cap stops only
+demo people and tells the principal. Stop it by setting `ERPNEXT_HOST_PAGE_TURNS=false` and restarting the
 API, or with `oe_connector_panel_via_chat: 0` on the site.
 
 **The trade the owner accepted (Nov 2, 2026).** A panel conversation is saved as

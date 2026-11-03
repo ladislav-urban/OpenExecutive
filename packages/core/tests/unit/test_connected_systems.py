@@ -492,3 +492,13 @@ def test_prime_reads_settings_once_for_the_whole_run(monkeypatch: pytest.MonkeyP
 
     assert sorted(missing) == sorted(PINNED_GOOGLE_TOOLS)
     assert calls == 1
+
+
+def test_a_truncated_report_is_narrowed_not_given_up(channel_env: Any) -> None:
+    # F11 on the pilot (Nov 3, 2026): "I couldn't read the full Stock Balance
+    # report", 500 rows of it, with the question still unanswered.
+    text = _render(("erpnext", "fetch"))
+    assert "A `truncated` result is not the end of the reading" in text
+    assert "run it again in parts" in text
+    assert "Bin with actual_qty < 0" in text
+    assert "Never say you couldn't read a report when a narrower read would answer." in text

@@ -12,7 +12,9 @@ Executive can do on demo data, so:
   (``orchestrator.outbound_guard``);
 - they may ask ``DEMO_DAILY_QUESTIONS`` questions a day, across the web chat
   and ERPNext's panel (``take_question``), so one registrant can't run up the
-  AI bill.
+  AI bill; and all of them together ``DEMO_DAILY_QUESTIONS_TOTAL`` (``admit``),
+  so many registrants can't either. The first refusal of a day at that cap is
+  audited and tells the principal.
 - they never see another demo person, nor anyone's email or chat ids but
   their own (``shown_to_demo_viewer``; the org prompt block's demo variant),
   so one prospect never learns who else is trying the product or how to
@@ -25,8 +27,10 @@ docs/auth.md, "Demo people", has the whole picture.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -42,6 +46,15 @@ LIMIT_REACHED = (
     "You've asked today's {limit} questions for this demo. "
     "Come back tomorrow, or ask the person who invited you for more."
 )
+
+# What a demo person reads once every demo person together has asked the
+# day's DEMO_DAILY_QUESTIONS_TOTAL.
+SITE_LIMIT_REACHED = "The demo is busy today. Try again tomorrow."
+
+# Rows of TABLE that are no person's (person ids start at 1): the day's
+# questions from every demo person together, and the day's refusals at that cap.
+SITE_ROW = 0
+SITE_REFUSED_ROW = -1
 
 
 def demo_state(person_id: int | None) -> bool | None:
@@ -169,14 +182,39 @@ def _today() -> str:
     return datetime.now(UTC).date().isoformat()
 
 
-def take_question(person_id: int, limit: int, *, day: str | None = None, db_path: Path | None = None) -> bool:
-    """Count one question for a demo person today (UTC); False, and nothing
-    counted, once they've had ``limit``. ``limit`` 0 means no limit. Fails
-    closed: a count that can't be written refuses the question."""
-    if limit <= 0:
-        return True
+@dataclass(frozen=True)
+class Taken:
+    """How counting one demo question went."""
+
+    ok: bool
+    # Refused at the site-wide cap (DEMO_DAILY_QUESTIONS_TOTAL), not the person's.
+    site: bool = False
+    # The day's first refusal at the site-wide cap: the one that tells the principal.
+    first_site_refusal: bool = False
+
+
+def _count_one(conn: Any, row: int, day: str, limit: int) -> bool:
+    # One statement, so two questions at once can't both take the last one.
+    return conn.execute(
+        f"INSERT INTO {TABLE} (person_id, day, count) VALUES (?, ?, 1)"
+        " ON CONFLICT (person_id, day) DO UPDATE SET count = count + 1 WHERE count < ?",
+        (row, day, limit),
+    ).rowcount > 0
+
+
+def take(
+    person_id: int, limit: int, site_limit: int = 0, *, day: str | None = None, db_path: Path | None = None
+) -> Taken:
+    """Count one question for a demo person today (UTC), against their own
+    ``limit`` and every demo person's together, ``site_limit``; 0 means no
+    limit for either. A refused question counts toward neither: both counts
+    are one transaction. Fails closed: a count that can't be written refuses
+    the question."""
+    if limit <= 0 and site_limit <= 0:
+        return Taken(True)
     from openexecutive.people.store import _get_conn
 
+    today = day or _today()
     try:
         with _get_conn(db_path) as conn:
             conn.execute(
@@ -184,16 +222,90 @@ def take_question(person_id: int, limit: int, *, day: str | None = None, db_path
                 " person_id INTEGER NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL,"
                 " PRIMARY KEY (person_id, day))"
             )
-            # One statement, so two questions at once can't both take the last one.
-            taken = conn.execute(
-                f"INSERT INTO {TABLE} (person_id, day, count) VALUES (?, ?, 1)"
-                " ON CONFLICT (person_id, day) DO UPDATE SET count = count + 1 WHERE count < ?",
-                (person_id, day or _today(), limit),
-            ).rowcount
+            if limit > 0 and not _count_one(conn, person_id, today, limit):
+                return Taken(False)
+            if site_limit > 0 and not _count_one(conn, SITE_ROW, today, site_limit):
+                conn.rollback()  # the person's count above
+                refusals = conn.execute(
+                    f"INSERT INTO {TABLE} (person_id, day, count) VALUES (?, ?, 1)"
+                    " ON CONFLICT (person_id, day) DO UPDATE SET count = count + 1 RETURNING count",
+                    (SITE_REFUSED_ROW, today),
+                ).fetchone()
+                return Taken(False, site=True, first_site_refusal=int(refusals[0]) == 1)
     except Exception:
         logger.warning("demo: question count failed for person %s; refusing", person_id, exc_info=True)
-        return False
-    return taken > 0
+        return Taken(False)
+    return Taken(True)
+
+
+def take_question(person_id: int, limit: int, *, day: str | None = None, db_path: Path | None = None) -> bool:
+    """Count one question for a demo person today (UTC); False, and nothing
+    counted, once they've had ``limit``. ``limit`` 0 means no limit. Fails
+    closed: a count that can't be written refuses the question."""
+    return take(person_id, limit, day=day, db_path=db_path).ok
+
+
+# The principal's notices in flight (a task with no reference can be collected).
+_notices: set[asyncio.Task[None]] = set()
+
+
+def site_limit_notice(site_limit: int) -> str:
+    return (
+        f"The demo reached today's limit of {site_limit} questions from all demo people together "
+        "(DEMO_DAILY_QUESTIONS_TOTAL). Demo people are told it's busy until midnight UTC; "
+        "nobody else is affected. Raise the limit in the environment if that was too few."
+    )
+
+
+async def _tell_principal(site_limit: int) -> None:
+    try:
+        from openexecutive.orchestrator.schedule_tools import set_session
+        from openexecutive.scheduler.runner import _deliver_to_principal
+
+        # Nothing sent here is the demo person's turn's outbound.
+        with set_session(None):
+            delivery = await _deliver_to_principal(site_limit_notice(site_limit), label="Demo limit")
+        if not delivery.ok:
+            logger.warning("demo: the principal wasn't told of the site limit: %s", delivery.detail)
+    except Exception:
+        logger.warning("demo: telling the principal of the site limit failed", exc_info=True)
+
+
+def _site_refused(site_limit: int) -> None:
+    """The day's first refusal at the site-wide cap: audit it, and tell the
+    principal without holding up the refusal."""
+    try:
+        from openexecutive.audit import log_event
+
+        log_event(
+            "demo_site_limit",
+            f"Demo questions reached today's limit of {site_limit} from all demo people together",
+            actor="demo",
+            details={"limit": site_limit, "day": _today()},
+        )
+    except Exception:
+        logger.warning("demo: audit of the site limit failed", exc_info=True)
+    task = asyncio.get_running_loop().create_task(_tell_principal(site_limit))
+    _notices.add(task)
+    task.add_done_callback(_notices.discard)
+
+
+async def admit(person_id: int) -> str | None:
+    """Count one question for demo person ``person_id`` (only ever called for
+    one); None when they may ask it, else what to tell them. The caller
+    refuses with 429 before anything is spent."""
+    from openexecutive.config import get_settings
+
+    settings = get_settings()
+    limit, site_limit = settings.demo_daily_questions, settings.demo_daily_questions_total
+    taken = await asyncio.to_thread(take, person_id, limit, site_limit)
+    if taken.ok:
+        return None
+    if not taken.site:
+        return limit_message(limit)
+    if taken.first_site_refusal:
+        _site_refused(site_limit)
+    return SITE_LIMIT_REACHED
 
 
 def questions_today(person_id: int, *, day: str | None = None, db_path: Path | None = None) -> int:
