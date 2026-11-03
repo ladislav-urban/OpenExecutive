@@ -2405,17 +2405,20 @@ async def test_a_trigger_during_a_regen_gets_one_more_pass(
     _setup_isolated_db(db, monkeypatch)
     _seed_live_action_alert(db)
     release = asyncio.Event()
+    in_model = asyncio.Event()
     contexts: list[str] = []
 
     async def _synth(**kw: object) -> str:
         contexts.append(str(kw.get("rendered_context")))
         if len(contexts) == 1:
+            in_model.set()
             await release.wait()
         return f"pass {len(contexts)}"
 
     monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _synth)
     first = asyncio.create_task(today_route._regen_briefing_narrative(None, "company"))
-    await asyncio.sleep(0.05)
+    # The first pass has read the board (in a thread) and is in the model call.
+    await asyncio.wait_for(in_model.wait(), timeout=30)
     _log_inbound(db, "sam@x.com", "arrived mid-run")
     await today_route._regen_briefing_narrative(None, "company")  # queued, not run
     release.set()
