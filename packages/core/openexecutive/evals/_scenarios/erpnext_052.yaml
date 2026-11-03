@@ -1,0 +1,22 @@
+id: erpnext_052
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "F4 step 1 in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded, whose euro supplier's invoices match their orders. The reply compares each invoice with its order and receipt in one currency (the document's own, or the company's for both) and says which currency each figure is in, so a euro invoice whose company-currency total differs from its euro order only by the exchange rate is not flagged. E3's real mismatch is still found. Found on the pilot (Nov 2, 2026, 960d0c5): 'Kessler, EUR 218.89 above the order', a USD total read against a EUR order."
+query: "Do any of our supplier invoices not match what we ordered or received?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "218.89"
+quality_criteria:
+  compares_each_invoice_with_its_order_in_one_currency: true
+  says_which_currency_each_figure_is_in: true
+  does_not_flag_a_foreign_currency_invoice_that_matches_its_order: true
+  still_finds_the_invoice_keyed_without_its_order_and_its_extra_quantity_and_rate: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

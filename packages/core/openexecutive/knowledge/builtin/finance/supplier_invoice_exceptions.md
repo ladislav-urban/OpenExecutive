@@ -13,6 +13,8 @@ A supplier invoice is checked against two other documents:
 
 For each line, the invoice should bill no more than was received, at no more than the agreed price. Small differences within an agreed tolerance (a rounding difference, a small freight charge the order allows) are normal. Anything beyond it is an exception to look at.
 
+**Compare like with like.** A supplier who bills in another currency has two totals on each document: the amount in the document's own currency (what the supplier billed and what the order says) and the same amount converted into the company's currency at that day's rate. Compare the invoice's own-currency total with the order's own-currency total, or the converted total with the converted total, never one with the other: a euro invoice that matches its euro order shows a different dollar figure purely from the exchange rate. Say which currency each figure is in. A difference in the converted totals alone, with the own-currency totals equal, is an exchange-rate effect, not an overcharge.
+
 ## Where Exceptions Hide
 
 - **Billed for more than was received.** The invoice quantity is above the receipt's, often because part of the order hasn't arrived yet.
