@@ -54,7 +54,10 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # owner's wording, Nov 2, 2026), one word in a static constant.
 # And again: identifiers written exactly as the records have them, and read
 # what the records can show rather than say it wasn't checked (Nov 2, 2026).
-TEAM_PERSONA_SHA256 = "fe1ac0021db8dcc06f453a88beab898b5f464b2fe5b6733d8b53fe537676e677"
+# And again: read a document's history before saying nothing was done, work
+# a figure out from the records that hold it, and one way to work a figure
+# out (the website retake, Nov 3, 2026).
+TEAM_PERSONA_SHA256 = "c68fbfb8f36576d1a314bd70f8275cbd9dfda328f05bcd9677712c0710efa0e5"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",

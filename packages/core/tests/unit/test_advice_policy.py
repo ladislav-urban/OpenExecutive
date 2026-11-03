@@ -174,3 +174,11 @@ def test_the_roster_says_to_name_scopes_in_words() -> None:
     block = prompt_block._render_people_section([rachel])
     assert "approves: customer_credit" in block
     assert "When you name a scope in a reply, say it in plain words (customer credit), never by its key (customer_credit)" in block
+
+
+def test_a_past_decision_is_reported_not_refused() -> None:
+    # The website retake, Nov 3 (fleet 4): "I can't give a verdict on this
+    # one, because repair-or-replace is a spend decision."
+    text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
+    assert "don't say you can't judge it" in text
+    assert "give who decided, what they decided and the reason the records give" in text
