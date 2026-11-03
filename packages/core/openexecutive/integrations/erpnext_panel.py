@@ -814,13 +814,12 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
     if not demo_asker and not _rate.allow(email, time.monotonic()):
         return _error(429, "rate_limited", "You have asked a lot this hour; try again later.")
     if getattr(person, "demo", False) is True:
-        # A demo person's questions a day count here as in the web chat (people.demo).
-        from openexecutive.config import get_settings
+        # A demo person's questions a day count here as in the web chat, theirs
+        # and every demo person's together (people.demo).
         from openexecutive.people import demo as people_demo
 
-        limit = get_settings().demo_daily_questions
-        if not await asyncio.to_thread(people_demo.take_question, person.id, limit):
-            return _error(429, "daily_limit", people_demo.limit_message(limit))
+        if (demo_refusal := await people_demo.admit(person.id)) is not None:
+            return _error(429, "daily_limit", demo_refusal)
     _in_flight.add(email)
     shown = _TurnViews()
     views_token = _turn_views.set(shown)
