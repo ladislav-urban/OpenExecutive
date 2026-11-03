@@ -1973,7 +1973,10 @@ async def _regen_briefing_narrative_locked(
     from openexecutive.memory.workspace_settings import get_workspace
 
     started = time.monotonic()
-    try:
+
+    def prepare() -> tuple[Any, ...] | None:
+        # The SQLite reads behind the context: seconds on a slow disk, so run
+        # in a thread rather than on the event loop (GET /today, above).
         mode = get_workspace().mode
         snapshot = _build_today(include_private=expected_scope == narrative_cache.DEFAULT_SCOPE)
         scope, today_data, viewer_desc, viewer = _narrative_inputs(
@@ -1984,7 +1987,7 @@ async def _regen_briefing_narrative_locked(
                 "today: narrative scope changed (%s → %s) between serve and "
                 "regen; skipping write", expected_scope, scope,
             )
-            return True
+            return None
         reader = _narrative_reader(scope, viewer)
         context, activity = _narrative_context(
             today_data, viewer, viewer_desc, mode, scope, reader=reader,
@@ -1992,7 +1995,14 @@ async def _regen_briefing_narrative_locked(
         input_hash = narrative_cache.build_narrative_input_hash(context, scope=scope, mode=mode)
         cached = narrative_cache.get(scope)
         if cached is not None and cached.input_hash == input_hash:
-            return True  # another trigger already wrote this exact state
+            return None  # another trigger already wrote this exact state
+        return mode, scope, today_data, viewer_desc, reader, context, activity, input_hash
+
+    try:
+        prepared = await asyncio.to_thread(prepare)
+        if prepared is None:
+            return True
+        mode, scope, today_data, viewer_desc, reader, context, activity, input_hash = prepared
         if context == narrative_cache.QUIET_CONTEXT:
             # Nothing awaits a decision — skip the model call entirely and
             # write the fixed quiet line. Still cached (below) so the hot path
@@ -2019,7 +2029,7 @@ async def _regen_briefing_narrative_locked(
     if not text:
         logger.warning("today: narrative regen returned no text (scope=%s) — not cached", scope)
         return False
-    narrative_cache.put(narrative_cache.BriefingNarrative(
+    await asyncio.to_thread(narrative_cache.put, narrative_cache.BriefingNarrative(
         scope=scope,
         input_hash=input_hash,
         narrative_text=text,
@@ -2084,11 +2094,23 @@ def _is_principal(caller_person_id: int | None) -> bool:
 async def get_today(
     request: Request, background_tasks: BackgroundTasks, tz: TzQuery = None,
 ) -> TodayResponse:
-    stale: list[StaleInsight] = []
     from openexecutive.api.routes.chat import _resolve_caller_person_id
-    from openexecutive.orchestrator.artifact_records import viewer_for_person
 
     caller = _resolve_caller_person_id(request)
+    # Every read below is SQLite on the request path, seconds of it on a slow
+    # disk (Nov 3, 2026: WSL on /mnt/c). On the event loop that stalled every
+    # other request, so an ERPNext panel question signed for 60 s was read
+    # after its assertion had expired. A worker thread keeps the loop free.
+    return await asyncio.to_thread(_today_for, caller, background_tasks, tz)
+
+
+def _today_for(
+    caller: int | None, background_tasks: BackgroundTasks, tz: TzQuery
+) -> TodayResponse:
+    """GET /today's work for ``caller``, synchronous (run in a thread)."""
+    from openexecutive.orchestrator.artifact_records import viewer_for_person
+
+    stale: list[StaleInsight] = []
     principal = _is_principal(caller)
     response = _build_today(
         stale_out=stale,
