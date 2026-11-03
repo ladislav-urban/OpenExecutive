@@ -2156,12 +2156,15 @@ async def _chat_turn(
             done = json.dumps(done_payload)
             yield f"data: {done}\n\n"
 
-        except Exception:
+        except Exception as exc:
             # Don't leak exception text (may contain API keys, paths, etc.) to clients.
             logger.exception("chat.turn_failed turn_id=%s", turn_id)
+            from openexecutive.providers.refusal import refusal_reply
+
             error = json.dumps({
                 "type": "error",
-                "message": "An internal error occurred. Please try again.",
+                # Out of credit or over a spend limit: trying again won't help.
+                "message": refusal_reply(exc) or "An internal error occurred. Please try again.",
                 "session_id": session.session_id,
             })
             yield f"data: {error}\n\n"

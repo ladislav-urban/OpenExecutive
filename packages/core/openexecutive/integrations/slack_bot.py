@@ -1128,8 +1128,11 @@ async def create_slack_app():
             # Guard the apology itself. Telegram and Google Chat already do
             # this; Slack did not, so a failing say() escaped into Bolt.
             try:
+                from openexecutive.providers.refusal import refusal_reply
+
                 await say(
-                    text=(
+                    text=refusal_reply(exc)
+                    or (
                         "I encountered an error processing your request. "
                         "Please try again."
                     ),

@@ -495,6 +495,32 @@ providers:
     backend per call. Module-level singletons cache one provider per
     backend — the Anthropic SDK and the httpx-backed OpenRouter client
     each pool their own connections.
+  refusals: |
+    openexecutive.providers.refusal (Nov 3, 2026: the pilot ran out of
+    Anthropic credit, and every turn said "something went wrong; please
+    try again" while nobody was told). classify(exc) finds a billing or
+    spend-limit refusal under what a route caught (__cause__, __context__,
+    exception groups): an SDK billing_error type or HTTP 402 is billing.
+    Out-of-credit and a reached spend limit come as a plain 400
+    invalid_request_error, so for those two the error's own message
+    decides. OpenRouter's 402 (httpx.HTTPStatusError) is billing too.
+    AnthropicProvider notes each refusal on its way out (_watched_create,
+    _WatchedStream at __aenter__), whoever called. For FAIL_FAST_S (60 s)
+    after one, calls raise ProviderRefused without being sent, and the
+    first call that answers clears it. The SDK retries only
+    408/409/429/5xx, so a refusal is sent once. alert_principal files an
+    urgent card (source provider_refused, dedup private:provider_refused:
+    <cause>, private:principal, routed to the principal), pushes it with
+    dispatch_web and sends it with scheduler.runner.deliver_to_person; at
+    most once an hour (in memory, and the last card's created_at across a
+    restart). Every route answers refusal_reply(exc) = "<product> can't
+    answer right now; the team has been told." in place of its generic
+    apology: web chat SSE error, the ERPNext panel (503 unavailable), A2A
+    (503), Slack, Discord, Telegram, Google Chat and MCP ask_executive.
+    Email sends nothing (its replies are the model's own send).
+    setup_checks.check_ai_model shows the refusal as an error with its
+    time, ahead of its probe: models.list is free and passes on an empty
+    account.
   backends:
     - id: AnthropicProvider
       what: Thin delegate over anthropic.AsyncAnthropic; default for the Claude trio when OPENROUTER_ENABLED is off.

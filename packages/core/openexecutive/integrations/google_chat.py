@@ -358,14 +358,17 @@ async def _process_and_reply(
             send_reply, space_name, thread_name, with_chat_line(response, session_id),
             service_account_file, service_account_email,
         )
-    except Exception:
+    except Exception as exc:
         logger.exception("Google Chat: handler error for message %s", message_name)
         try:
+            from openexecutive.providers.refusal import refusal_reply
+
             await asyncio.to_thread(
                 send_reply,
                 space_name,
                 thread_name,
-                "I encountered an error processing your request. Please try again.",
+                refusal_reply(exc)
+                or "I encountered an error processing your request. Please try again.",
                 service_account_file,
                 service_account_email,
             )

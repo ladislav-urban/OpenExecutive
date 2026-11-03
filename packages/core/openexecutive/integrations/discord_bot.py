@@ -1030,8 +1030,11 @@ async def _handle_message(
 
         except Exception as e:
             logger.error("Discord handler error: %s", e, exc_info=True)
+            from openexecutive.providers.refusal import refusal_reply
+
             await send_fn(
-                "I encountered an error processing your request. Please try again."
+                refusal_reply(e)
+                or "I encountered an error processing your request. Please try again."
             )
             return
 
