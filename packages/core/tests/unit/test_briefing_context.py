@@ -239,6 +239,14 @@ def test_truncated_digest_says_it_is_not_the_whole_board(db: Path) -> None:
     assert "not the complete board" in out
 
 
+def test_the_header_keeps_alert_ids_out_of_replies(db: Path) -> None:
+    # The website retake (Nov 3, 2026, monday-morning step 2): "(alert 91)".
+    _seed(db, 1)
+    block = format_open_alerts_for_prompt(db_path=db, limit=5)
+    assert "The alert_id is for tool calls only: never write it in a reply" in block
+    assert "name an item by its headline" in block
+
+
 def test_untruncated_digest_makes_no_truncation_claim(db: Path) -> None:
     _seed(db, 3)
 
