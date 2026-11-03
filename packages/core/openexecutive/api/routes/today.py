@@ -389,7 +389,7 @@ def _handled_overnight(now: datetime, *, include_private: bool = False) -> list[
         return []
 
 
-def _board_alerts(now: datetime, *, include_private: bool, viewer: Any) -> list[Any]:
+def _board_alerts(now: datetime, *, include_private: bool, viewer: Any, fold_twins: bool = True) -> list[Any]:
     """The alerts Home's cards are made from.
 
     Live = unread AND inside its TTL AND not snoozed — the read-side twin of
@@ -412,7 +412,7 @@ def _board_alerts(now: datetime, *, include_private: bool, viewer: Any) -> list[
         from openexecutive.alerts.models import is_private_alert
 
         raw_alerts = [a for a in raw_alerts if not is_private_alert(a)]
-    else:
+    elif fold_twins:
         raw_alerts = _fold_private_twins(raw_alerts)
     return raw_alerts
 
@@ -785,6 +785,7 @@ def _build_today(
     *,
     include_private: bool = False,
     viewer: Any = None,
+    fold_twins: bool = True,
 ) -> TodayResponse:
     """Assemble the live dashboard snapshot.
 
@@ -964,7 +965,7 @@ def _build_today(
     from openexecutive.workflows.failure_alerts import SOURCE as FAILED_RUN_SOURCE
     from openexecutive.workflows.failure_alerts import failed_run_id
 
-    raw_alerts = _board_alerts(now, include_private=include_private, viewer=viewer)
+    raw_alerts = _board_alerts(now, include_private=include_private, viewer=viewer, fold_twins=fold_twins)
     superseded_counts = count_superseded_by()
     trust_by_slug = _watch_trust_by_slug(raw_alerts)
     proposal_items = []
@@ -2365,7 +2366,9 @@ async def get_alert_card(alert_id: int, request: Request, tz: TzQuery = None) ->
 
     caller = _resolve_caller_person_id(request)
     principal = _is_principal(caller)
-    response = _build_today(include_private=principal, viewer=viewer_for_person(caller))
+    # Unfolded: a shared card Home leaves out for a live twin still opens on
+    # its own page (a link or a host frame may hold its id).
+    response = _build_today(include_private=principal, viewer=viewer_for_person(caller), fold_twins=False)
     proposal = next((p for p in response.proposals if p.alert_id == alert_id), None)
     # A demo person's Needs you holds the cards nobody owns (to look at only).
     if proposal is None or not (

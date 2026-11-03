@@ -190,6 +190,9 @@ def test_a_live_erpnext_alert_and_the_bundles_card_are_one_card_for_the_principa
     assert shared in theirs and other_shared in theirs and live not in theirs
     text = str(client.get("/today", headers=_as("dana@example.com")).json())
     assert "live figures" not in text and "Live: " not in text
+    # Left off Home, the shared card still opens on its own page, for anyone it waits for.
+    assert client.get(f"/alerts/{shared}/card", headers=_as("pat@example.com")).status_code == 200
+    assert client.get(f"/alerts/{live}/card", headers=_as("pat@example.com")).status_code == 200
 
 
 def test_the_bundles_card_comes_back_once_the_live_alert_is_closed(board: dict[str, Any]) -> None:
