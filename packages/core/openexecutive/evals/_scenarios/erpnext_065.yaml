@@ -1,0 +1,38 @@
+id: erpnext_065
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Timesheet Billing Summary
+prior_turns:
+- page:
+    report: Delivered Items To Be Billed
+  user: Have we delivered anything, or worked any billable hours, that we haven't invoiced?
+  assistant: 'Yes, two things are unbilled.
+
+
+    - **A delivery**: $733.30 of goods delivered with no sales invoice yet.
+
+    - **Hours**: $3,825 of billable hours on PROJ-0154 with no invoice.
+
+
+    Nothing else delivered or worked is waiting to be billed.'
+description: 'Unbilled-work step 2 (oe_connector''s help/try-unbilled-work.md) in ERPNext''s panel as a demo person, following step 1. "These hours" are step 1''s: $3,825 unbilled on PROJ-0154. The reply reads the timesheets over the same span step 1 did, not only the report''s default month, and finds the unbilled hours on PROJ-0154 with their amount; when a figure differs from step 1''s it gives the right one with its arithmetic, never a contradiction left standing. Found in the website retake on the pilot (Nov 3, 2026, 15:12-15:33Z, OpenExecutive 13e34a41, one panel conversation per scenario): the answer read October only and said only PROJ-0153 had unbilled hours, none billable.'
+query: Which of these hours haven't been billed yet, and on which project?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Earlier I
+- none billable
+- no billable hours
+quality_criteria:
+  finds_the_unbilled_billable_hours_on_proj_0154_with_their_amount: true
+  reads_the_same_span_as_the_earlier_answer_not_only_one_month: true
+  does_not_contradict_the_earlier_figure_without_giving_the_arithmetic: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

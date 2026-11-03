@@ -257,3 +257,13 @@ def test_persona_reads_history_works_figures_out_and_one_way() -> None:
         assert "**Work a figure out the same way every time.**" in persona
         assert "not the mean of the weekly margins" in persona
         assert "with every line the report includes" in persona
+
+
+def test_persona_gives_a_revaluation_as_its_gain_or_loss() -> None:
+    # Month-end step 6 in the website retake (Nov 3, 2026): "revalues the
+    # Kessler payable by $4,202.22", the revalued balance of a €3,630 invoice.
+    from openexecutive.prompts.executive_persona import EXECUTIVE_PERSONA_SOLO_PROMPT
+
+    for persona in (EXECUTIVE_PERSONA_PROMPT, EXECUTIVE_PERSONA_SOLO_PROMPT):
+        assert "**A revaluation changes a balance by its gain or loss.**" in persona
+        assert "never by the revalued balance itself" in persona

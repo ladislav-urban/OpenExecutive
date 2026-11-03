@@ -57,7 +57,9 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # And again: read a document's history before saying nothing was done, work
 # a figure out from the records that hold it, and one way to work a figure
 # out (the website retake, Nov 3, 2026).
-TEAM_PERSONA_SHA256 = "c68fbfb8f36576d1a314bd70f8275cbd9dfda328f05bcd9677712c0710efa0e5"
+# And: a revaluation changes a balance by its gain or loss (the website
+# retake, Nov 3, 2026, month-end step 6).
+TEAM_PERSONA_SHA256 = "ac5e280a69c967c128832917f0952a43376cf8e1d52c58c865e0301448c8defb"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",
