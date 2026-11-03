@@ -1,0 +1,33 @@
+id: erpnext_053
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Invalid Ledger Entries
+description: "F11 step 1 (oe_connector's help/try-books-check.md) in ERPNext's panel as a demo person, beside Invalid Ledger Entries, with the erpnext server connected and oe_connector's demo dataset loaded, whose books are healthy. The demo role reads every report the check needs (ladislav-urban/oe_connector#375 and #379): Invalid Ledger Entries, General and Payment Ledger Comparison, Stock and Account Value Comparison, the Trial Balance and Stock Balance. The reply runs each one for Aurora Components in USD for a stated period and says what each found, so 'nothing wrong' reads as checked. Found on the pilot (Nov 2, 2026, oe_connector 4edce53): 'I couldn't run the dedicated comparison report because this user lacks permission', then totals compared by hand."
+query: "Is anything wrong in our books: entries that don't balance, ledgers that disagree, stock without a value?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - lacks permission
+  - lack permission
+  - "don't have permission"
+  - "do not have permission"
+  - not permitted
+  - I recommend
+quality_criteria:
+  runs_invalid_ledger_entries_and_the_general_and_payment_ledger_comparison_reports: true
+  compares_the_stock_ledger_with_the_stock_accounts_from_the_stock_and_account_value_comparison_report: true
+  checks_the_trial_balance_and_stock_at_no_value_or_below_zero: true
+  gives_the_company_currency_and_period_of_each_check: true
+  says_plainly_that_the_ledgers_show_nothing_wrong_and_lists_what_was_checked: true
+  shows_anything_a_check_found_rather_than_hiding_it: true
+  invents_no_fault: true
+  reads_every_report_rather_than_saying_one_was_refused_or_adding_up_totals_by_hand: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
