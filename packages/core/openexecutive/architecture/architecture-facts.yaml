@@ -8224,7 +8224,14 @@ integrations:
     demo_questions upsert, fails closed) gets 429 before any cost:
     POST /chat, each /chat/add message and each /chat/upload file count
     (_take_demo_questions); ERPNext's panel counts the same (429
-    daily_limit). Transcription shares the install-wide cap. A demo turn is held to the panel's tools
+    daily_limit). Every demo person together gets DEMO_DAILY_QUESTIONS_TOTAL
+    a UTC day (default 0, off): people.demo.admit counts both in one
+    transaction (take; site row person_id 0), so a question refused by
+    either counts toward neither; past it the 429 reads "The demo is busy
+    today. Try again tomorrow.", and the day's first such refusal (row -1)
+    writes a demo_site_limit audit event and tells the principal through
+    scheduler.runner._deliver_to_principal, off the request path. The
+    principal and teammates are never counted. Transcription shares the install-wide cap. A demo turn is held to the panel's tools
     (ERPNEXT_PANEL_TOOLS, drafts where offered, no web search, the same
     dispatch guard). Setup status: one line ("N of them demo users"),
     never "new from the directory". Not built: per-person AI cost totals in

@@ -71,12 +71,123 @@ def test_questions_a_day_are_capped(db: Path) -> None:
     assert all(people_demo.take_question(pid, 0, day="2026-10-25") for _ in range(5))
 
 
+def test_all_demo_people_together_are_capped_too(db: Path) -> None:
+    dana, vic = _demo(), _demo("Vic Visitor", "vic@example.com")
+    day = "2026-11-03"
+    assert people_demo.take(dana, 50, 3, day=day).ok
+    assert people_demo.take(vic, 50, 3, day=day).ok
+    assert people_demo.take(vic, 50, 3, day=day).ok
+    refused = people_demo.take(dana, 50, 3, day=day)
+    assert refused == people_demo.Taken(False, site=True, first_site_refusal=True)
+    # Only the first refusal of the day tells the principal.
+    assert people_demo.take(vic, 50, 3, day=day) == people_demo.Taken(False, site=True)
+    # A refused question counts toward neither cap.
+    assert people_demo.questions_today(dana, day=day) == 1
+    assert people_demo.questions_today(vic, day=day) == 2
+    # A new day starts again; 0 means no site cap.
+    assert people_demo.take(dana, 50, 3, day="2026-11-04").ok
+    assert all(people_demo.take(dana, 50, 0, day=day).ok for _ in range(5))
+
+
+def test_a_person_past_their_own_cap_takes_nothing_from_the_site(db: Path) -> None:
+    dana, vic = _demo(), _demo("Vic Visitor", "vic@example.com")
+    day = "2026-11-03"
+    assert people_demo.take(dana, 1, 2, day=day).ok
+    for _ in range(3):
+        assert people_demo.take(dana, 1, 2, day=day) == people_demo.Taken(False)
+    # Dana's refusals left the site's second question for Vic.
+    assert people_demo.take(vic, 1, 2, day=day).ok
+
+
+def test_the_site_cap_refuses_politely_audits_once_and_tells_the_principal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import asyncio
+
+    from fastapi import HTTPException
+
+    import openexecutive.audit as audit
+    from openexecutive.api.routes import chat
+    from openexecutive.scheduler import runner
+
+    events: list[tuple[str, dict[str, object]]] = []
+    told: list[tuple[str, str]] = []
+
+    def _log(event_type: str, _summary: str, **kw: object) -> None:
+        events.append((event_type, kw.get("details")))  # type: ignore[arg-type]
+
+    async def _deliver(text: str, *, label: str = "Update") -> runner.PrincipalDelivery:
+        told.append((label, text))
+        return runner.PrincipalDelivery(True, "slack", "sent", "slack_dm")
+
+    monkeypatch.setattr(audit, "log_event", _log)
+    monkeypatch.setattr(runner, "_deliver_to_principal", _deliver)
+    monkeypatch.setenv("DEMO_DAILY_QUESTIONS_TOTAL", "1")
+    dana, vic = _demo(), _demo("Vic Visitor", "vic@example.com")
+
+    async def _ask() -> None:
+        await chat._take_demo_questions(dana, 1)
+        for _ in range(2):
+            with pytest.raises(HTTPException) as refused:
+                await chat._take_demo_questions(vic, 1)
+            assert refused.value.status_code == 429
+            assert refused.value.detail == people_demo.SITE_LIMIT_REACHED
+        await asyncio.gather(*people_demo._notices)
+
+    asyncio.run(_ask())
+    assert [e for e, _ in events] == ["demo_site_limit"]
+    assert events[0][1]["limit"] == 1  # type: ignore[index]
+    assert told == [("Demo limit", people_demo.site_limit_notice(1))]
+    assert "DEMO_DAILY_QUESTIONS_TOTAL" in told[0][1]
+    # The principal and teammates are never counted or refused.
+    principal = people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="o@example.com")
+    teammate = people_store.upsert_person(full_name="Tom Team", email="tom@example.com")
+    asyncio.run(chat._take_demo_questions(principal, 5))
+    asyncio.run(chat._take_demo_questions(teammate, 5))
+
+
+def test_an_add_or_upload_the_route_refuses_spends_no_question(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi.testclient import TestClient
+
+    from openexecutive.api.main import create_app
+    from openexecutive.api.routes import chat
+
+    spent: list[int] = []
+
+    async def _count(person_id: int | None, n: int) -> None:
+        spent.append(n)
+
+    monkeypatch.setattr(chat, "_take_demo_questions", _count)
+    monkeypatch.setattr(chat, "_MAX_BYTES_PER_FILE", 4)
+    client = TestClient(create_app())
+    # No live turn: 404, nothing counted.
+    added = client.post("/chat/add", json={"client_turn_id": "no-such-turn", "message_id": "message-1", "message": "."})
+    assert added.status_code == 404
+    # A file too large: 413, nothing counted.
+    upload = client.post(
+        "/chat/upload", data={"message": "see"}, files={"files": ("a.txt", b"too big", "text/plain")}
+    )
+    assert upload.status_code == 413
+    assert spent == []
+
+
+def test_every_demo_question_goes_through_admit() -> None:
+    from openexecutive.api.routes import chat
+    from openexecutive.integrations import erpnext_panel
+
+    for module in (chat, erpnext_panel):
+        source = inspect.getsource(module)
+        assert "people_demo.admit(" in source, module.__name__
+        assert "people_demo.take_question(" not in source, module.__name__
+
+
 def test_a_count_that_cant_be_written_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
     def broken(*_a: object, **_k: object) -> None:
         raise RuntimeError("disk")
 
     monkeypatch.setattr(people_store, "_get_conn", broken)
     assert not people_demo.take_question(1, 50)
+    assert people_demo.take(1, 0, 500) == people_demo.Taken(False)
 
 
 def test_a_roster_that_cant_be_read_is_said_so_in_the_chat(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -212,7 +323,8 @@ def test_the_web_chat_marks_the_turn_and_refuses_past_the_cap() -> None:
 
     source = inspect.getsource(chat)
     assert "demo_known = await asyncio.to_thread(people_demo.demo_state, caller_person_id)" in source
-    assert "raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))" in source
+    assert "if demo_caller and (refused := await people_demo.admit(caller_person_id)) is not None:" in source
+    assert "raise HTTPException(status_code=429, detail=refused)" in source
     assert "session.demo_caller = demo_caller" in source
 
 

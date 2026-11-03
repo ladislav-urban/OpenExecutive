@@ -308,6 +308,7 @@ refuses to start with settings it can't trust):
 | `DIRECTORY_SYNC_DEMO_ROLE` | The role a demo person is created with, default `Demo user` |
 | `DIRECTORY_SYNC_DEMO_MAX_SUSPEND` | The demo people's own brake, default 50 |
 | `DEMO_DAILY_QUESTIONS` | Questions a demo person may ask a day, default 50 (0: no limit) |
+| `DEMO_DAILY_QUESTIONS_TOTAL` | Questions all demo people together may ask a day, default 0 (no limit) |
 | `DIRECTORY_PROFILES_ENABLED` | Keep each person's business profile from their user attributes (below), default off |
 | `DIRECTORY_PROFILE_ATTR_COUNTRY` / `_BUSINESS_TYPE` / `_INDUSTRY` / `_JURISDICTION` | The provider's attribute names for them, default `country`, `businessType`, `industry`, `jurisdiction` |
 
@@ -360,7 +361,16 @@ the row is unlinked. The demo group can't be the team's group or hold it.
   and ERPNext's panel. A message added to a running turn counts as one, and
   so does each uploaded file. The question past it is refused before it
   costs anything, with a message saying so. The count resets at midnight
-  UTC. Voice transcription still shares the install-wide daily cap
+  UTC.
+- **A cap on all of them together,** `DEMO_DAILY_QUESTIONS_TOTAL` (off by
+  default), counted the same way, so many registrants can't run up the AI
+  bill either. Past it a demo person reads "The demo is busy today. Try
+  again tomorrow." A question refused by either cap counts toward neither.
+  The first refusal of a day writes a `demo_site_limit` audit event and
+  tells the principal on their usual channel; later ones that day are
+  quiet. The principal and teammates are never counted or refused. Set it
+  from the day's budget over the cost of a question: at $0.04 to $0.20 a
+  question, 500 is about $20 to $100 a day. Voice transcription still shares the install-wide daily cap
   (`TRANSCRIPTION_MAX_MB_PER_DAY`), so one demo person can use it up.
 - **One line in Setup status** ("N of them demo users"), never one "new from
   the directory" line each.

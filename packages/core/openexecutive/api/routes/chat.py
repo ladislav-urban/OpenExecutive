@@ -460,6 +460,14 @@ def _request_stop(client_turn_id: str, owner: str) -> str | None:
     return entry.turn_id
 
 
+def _turn_takes_messages(client_turn_id: str, owner: str) -> bool:
+    """Whether `_add_to_turn` would hand this caller's message to a live turn
+    now: looked at before a demo question is counted, so an add the route
+    would refuse costs no one a question."""
+    entry = _active_stops.get(client_turn_id)
+    return entry is not None and entry.owner == owner and entry.inbox is not None and not entry.event.is_set()
+
+
 def _add_to_turn(client_turn_id: str, owner: str, message_id: str, text: str) -> str | None:
     """Hand a message to a running turn's inbox. Returns its server
     `turn_id`, or None.
@@ -980,12 +988,9 @@ async def _take_demo_questions(person_id: int | None, n: int) -> None:
         raise HTTPException(status_code=503, detail="People can't be read just now. Try again in a moment.")
     if not demo:
         return
-    from openexecutive.config import get_settings
-
-    limit = get_settings().demo_daily_questions
     for _ in range(n):
-        if not await asyncio.to_thread(people_demo.take_question, person_id, limit):  # type: ignore[arg-type]
-            raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))
+        if (refused := await people_demo.admit(person_id)) is not None:  # type: ignore[arg-type]
+            raise HTTPException(status_code=429, detail=refused)
 
 
 def _resolve_caller_person_id(request: Request) -> int | None:
@@ -1197,16 +1202,15 @@ async def _chat_turn(
     host_card = (
         await asyncio.to_thread(_host_card, card_id, caller_person_id) if card_id is not None else None
     )
-    # A demo person (people.demo) may ask DEMO_DAILY_QUESTIONS a day: the
-    # question past that is refused here, before it costs anything.
+    # A demo person (people.demo) may ask DEMO_DAILY_QUESTIONS a day, and all
+    # of them together DEMO_DAILY_QUESTIONS_TOTAL: the question past either is
+    # refused here, before it costs anything.
     demo_known = await asyncio.to_thread(people_demo.demo_state, caller_person_id)
     if demo_known is None:
         raise HTTPException(status_code=503, detail="People can't be read just now. Try again in a moment.")
     demo_caller = demo_known
-    if demo_caller:
-        limit = get_settings().demo_daily_questions
-        if not await asyncio.to_thread(people_demo.take_question, caller_person_id, limit):  # type: ignore[arg-type]
-            raise HTTPException(status_code=429, detail=people_demo.limit_message(limit))
+    if demo_caller and (refused := await people_demo.admit(caller_person_id)) is not None:  # type: ignore[arg-type]
+        raise HTTPException(status_code=429, detail=refused)
     # The rows written before the Executive binds this caller to the session
     # (the "User:" row, the knowledge retrieval, the start of the stream) are
     # private, as the rest of the turn's are, when the principal sent the
@@ -2390,18 +2394,14 @@ async def chat_add(body: AddChatMessageRequest, request: Request) -> dict[str, s
     """
     client_turn_id = _clean_client_turn_id(body.client_turn_id)
     message_id = _clean_client_turn_id(body.message_id)
-    # A demo person's added message is a question of its own (people.demo).
+    owner = _stop_owner_key(request, _resolve_caller_person_id(request))
+    if not (client_turn_id and message_id and _turn_takes_messages(client_turn_id, owner)):
+        raise HTTPException(status_code=404, detail="No in-flight turn with that id")
+    # A demo person's added message is a question of its own (people.demo),
+    # counted only once the turn would take it: a refused add spends none of
+    # theirs nor the demo's shared day.
     await _take_demo_questions(_resolve_caller_person_id(request), 1)
-    turn_id = (
-        _add_to_turn(
-            client_turn_id,
-            _stop_owner_key(request, _resolve_caller_person_id(request)),
-            message_id,
-            body.message,
-        )
-        if client_turn_id and message_id
-        else None
-    )
+    turn_id = _add_to_turn(client_turn_id, owner, message_id, body.message)
     if turn_id is None:
         raise HTTPException(status_code=404, detail="No in-flight turn with that id")
     logger.info("chat.message_added turn_id=%s len=%d", turn_id, len(body.message))
@@ -2457,9 +2457,6 @@ async def _upload_turn(
     files: list[UploadFile],
     host_slot: host_limit.HostSlot | None,
 ) -> StreamingResponse:
-    # A demo person's files count a question each, on top of the message's (people.demo).
-    await _take_demo_questions(_resolve_caller_person_id(request), len(files))
-
     text_parts: list[str] = []
     image_blocks: list[dict[str, Any]] = []
     filenames: list[str] = []
@@ -2480,6 +2477,11 @@ async def _upload_turn(
             )
         uploads.append((filename, data))
 
+    # A demo person's files count a question each, on top of the message's
+    # (people.demo): once every file is in size, before reading any costs.
+    await _take_demo_questions(_resolve_caller_person_id(request), len(files))
+
+    for upload, (filename, data) in zip(files, uploads, strict=True):
         try:
             # The signed-in user sent it, so it is not metered as inbound.
             extra_text, blocks = await build_attachment_output(

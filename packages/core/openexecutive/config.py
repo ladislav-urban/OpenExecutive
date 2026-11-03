@@ -1523,13 +1523,16 @@ class Settings(BaseSettings):
     # created with DIRECTORY_SYNC_DEMO_ROLE and no departments, scopes or
     # manager; their chat turns only read and advise, they never approve for
     # anyone, the Executive sends them nothing, and each may ask
-    # DEMO_DAILY_QUESTIONS a day (0 = no limit). Demo accesses end in batches,
+    # DEMO_DAILY_QUESTIONS a day (0 = no limit), and all of them together
+    # DEMO_DAILY_QUESTIONS_TOTAL (0 = no limit; the first refusal of a day
+    # tells the principal). Demo accesses end in batches,
     # so their suspensions have a brake of their own,
     # DIRECTORY_SYNC_DEMO_MAX_SUSPEND, apart from the team's.
     directory_sync_demo_group: str = Field("", alias="DIRECTORY_SYNC_DEMO_GROUP")
     directory_sync_demo_role: str = Field("Demo user", max_length=80, alias="DIRECTORY_SYNC_DEMO_ROLE")
     directory_sync_demo_max_suspend: int = Field(50, ge=0, alias="DIRECTORY_SYNC_DEMO_MAX_SUSPEND")
     demo_daily_questions: int = Field(50, ge=0, alias="DEMO_DAILY_QUESTIONS")
+    demo_daily_questions_total: int = Field(0, ge=0, alias="DEMO_DAILY_QUESTIONS_TOTAL")
     # Business profiles from the directory (people/profile.py): off by
     # default. On, the sync keeps each person's country, type of business,
     # industry and jurisdiction from the provider's user attributes, named

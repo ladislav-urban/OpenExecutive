@@ -328,12 +328,12 @@ def demo_questions(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     """The caller is a demo person; each question taken is recorded."""
     taken: list[int] = []
 
-    def _take(person_id: int, _limit: int) -> bool:
+    def _take(person_id: int, _limit: int, _site_limit: int = 0) -> people_demo.Taken:
         taken.append(person_id)
-        return True
+        return people_demo.Taken(True)
 
     monkeypatch.setattr(people_demo, "demo_state", lambda _pid: True)
-    monkeypatch.setattr(people_demo, "take_question", _take)
+    monkeypatch.setattr(people_demo, "take", _take)
     monkeypatch.setattr(chat_route, "_resolve_caller_person_id", lambda _request: 42)
     return taken
 
