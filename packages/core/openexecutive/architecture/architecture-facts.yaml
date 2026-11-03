@@ -10397,7 +10397,22 @@ integrations:
     gives the view's shape and the three examples of the tool's own
     description (a list sorted as ranked for "largest", the Account tree,
     the Stock workspace for "where do I find"), since the panel turn may not
-    search and so never reads that description. The response
+    search and so never reads that description. It also gives a `chart`
+    example (workstream D, oe_connector's docs/panel-d-plan.md): a trend over
+    days, weeks or months, or a breakdown by a field, opens oe_connector's
+    `chart` kind (one DocType's count, sum or average over a Date field or
+    grouped by a Link or Select field, drawn on its read-only
+    dynocortex-chart page as the person), a report that draws its own chart
+    stays the report, and a single figure gets no chart. OpenExecutive never
+    reads `kind`: oe_connector's views.check is the one authority on kinds
+    and caps a chart spec at 2,000 characters, under MAX_VIEW_JSON, so the
+    model gets a tool error rather than a view dropped here. The show tool's
+    discovery query (connected_systems.ERPNEXT_DISCOVERY_QUERIES) names the
+    kinds, chart among them, for search only. A panel eval scenario may set
+    expected_view_kinds / forbidden_view_kinds: the runner collects the
+    turn's views as the route does (collect_views) and
+    evals.scenarios.view_kinds_check fails the scenario deterministically
+    (erpnext_054 opens a chart, erpnext_055 none). The response
     adds `views` and `call` when there are any. They are data: oe_connector's
     panel.ask checks each view again as the signed-in ERPNext user and builds
     every desk route itself. Off the panel, the gateway refuses

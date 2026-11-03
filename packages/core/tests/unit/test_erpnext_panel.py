@@ -556,6 +556,40 @@ def test_both_panel_blocks_show_the_place_that_fits() -> None:
         assert "{'kind': 'workspace', 'workspace': 'Stock'}" in block
 
 
+def test_both_panel_blocks_show_a_trend_or_a_breakdown_as_a_chart() -> None:
+    # Workstream D (oe_connector's docs/panel-d-plan.md): the `chart` kind,
+    # with the plan's example, and where it doesn't fit.
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert "{'kind': 'chart', 'doctype': 'Sales Invoice', 'measure': 'sum', 'on': 'outstanding_amount'" in block
+        assert "'over': {'time': 'due_date', 'every': 'week'" in block
+        assert "'filters': {'company': ..., 'outstanding_amount': ['>', 0]}" in block
+        assert "'over': {'group': 'territory', 'top': 10}" in block
+        assert "a single figure gets no chart" in block
+
+
+def test_a_chart_view_rides_along_unchanged_and_an_oversized_one_is_dropped() -> None:
+    # OpenExecutive never reads `kind`: oe_connector's views.check is the one
+    # authority on kinds, and caps a chart's spec at 2,000 characters, below
+    # MAX_VIEW_JSON, so the model hears of an oversized one.
+    chart = {
+        "kind": "chart", "doctype": "Sales Invoice", "measure": "sum", "on": "outstanding_amount",
+        "over": {"time": "due_date", "every": "week", "from": "2026-11-02", "to": "2027-02-01"},
+        "filters": {"outstanding_amount": [">", 0]}, "type": "bar",
+    }
+    big = {**chart, "filters": {"customer": ["in", ["x" * 140] * 30]}}
+    assert len(json.dumps(big)) > erpnext_panel.MAX_VIEW_JSON
+    shown = _noted()
+    token = erpnext_panel._turn_views.set(shown)
+    try:
+        erpnext_panel.note_erpnext_call(
+            "erpnext__show_in_erpnext", {"view": chart, "_oe_caller": "v1.secret"}, failed=False
+        )
+        erpnext_panel.note_erpnext_call("erpnext__show_in_erpnext", {"view": big}, failed=False)
+    finally:
+        erpnext_panel._turn_views.reset(token)
+    assert shown.views == [chart]
+
+
 # ── a panel turn's ERPNext reads reach the gateway ──────────────────────────
 
 CALLER_KEY = "vec:AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"
