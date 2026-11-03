@@ -412,7 +412,45 @@ def _board_alerts(now: datetime, *, include_private: bool, viewer: Any) -> list[
         from openexecutive.alerts.models import is_private_alert
 
         raw_alerts = [a for a in raw_alerts if not is_private_alert(a)]
+    else:
+        raw_alerts = _fold_private_twins(raw_alerts)
     return raw_alerts
+
+
+# An ERPNext event's key names its rule and document ("erpnext:<kind>:<key>",
+# integrations.erpnext_events). A live event's alert is the principal's
+# alone, so the pipeline stores it under "private:" + that key and never
+# coalesces it into a shared card (that would copy its body there); a demo
+# bundle's card for everyone carries the bare key.
+_PRIVATE_KEY_PREFIX = "private:"
+_ERPNEXT_SOURCE = "erpnext"
+
+
+def _fold_private_twins(alerts: list[Any]) -> list[Any]:
+    """One card per situation on the principal's own board: a shared ERPNext
+    card is left out while an open private alert names the same rule and
+    document, which carries the live figures and its own actions (Prepare
+    restock, ``erpnext_alert_drafts``). Read-side only: nothing is written,
+    no private text reaches the shared card, and everyone else still sees
+    the shared one."""
+    from openexecutive.alerts.models import is_private_alert
+
+    def key(alert: Any) -> str:
+        return str(getattr(alert, "dedup_key", "") or "")
+
+    twins = {
+        key(a)[len(_PRIVATE_KEY_PREFIX):]
+        for a in alerts
+        if getattr(a, "source", None) == _ERPNEXT_SOURCE
+        and is_private_alert(a)
+        and key(a).startswith(_PRIVATE_KEY_PREFIX + "erpnext:")
+    }
+    if not twins:
+        return alerts
+    return [
+        a for a in alerts
+        if is_private_alert(a) or getattr(a, "source", None) != _ERPNEXT_SOURCE or key(a) not in twins
+    ]
 
 
 def _watch_trust_by_slug(alerts: list[Any]) -> dict[str, float]:
