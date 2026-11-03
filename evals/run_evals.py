@@ -42,6 +42,7 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
         scenario_principal_role,
         scenario_query,
         scenario_turn_surface,
+        seed_prior_turns,
     )
 
     # `workspace_mode: solo` runs the scenario as solo mode on this session
@@ -55,6 +56,8 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
         principal_role=scenario_principal_role(scenario),
         **surface,
     )
+    # A follow-up: the turns it follows, in the session's history.
+    seed_prior_turns(session, scenario)
 
     response = await executive.chat(
         user_message=scenario_query(scenario),
@@ -75,11 +78,13 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
 
 
 async def judge_response(scenario: dict, response: str) -> dict:
+    from openexecutive.evals.scenarios import prior_turns_section
+
     judge_prompt = f"""You are an evaluator for an AI executive advisory system.
 
 Evaluate this response to an executive question on a 1-5 scale for each dimension.
 
-QUESTION: {scenario['query']}
+{prior_turns_section(scenario)}QUESTION: {scenario['query']}
 
 RESPONSE: {response}
 

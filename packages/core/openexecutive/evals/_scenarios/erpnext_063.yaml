@@ -1,0 +1,48 @@
+id: erpnext_063
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Received Items To Be Billed
+prior_turns:
+- page:
+    doctype: Purchase Invoice
+  user: Are there any supplier invoices that don't match what we ordered or received?
+  assistant: 'Two supplier invoices don''t match.
+
+
+    - **Orion Switchgear**: two invoices for the same delivery, with the quantities swapped (32 on one, 23 on the other). One of them is a duplicate.
+
+    - **Vanta Cable Mills**: ACC-PINV-2026-02613 has no purchase order and no purchase receipt behind its lines, so nothing in the books shows we ordered or received what it bills.
+
+
+    Every other submitted supplier invoice in the last three months matches its order and receipt.'
+- page:
+    doctype: Purchase Invoice
+    name: ACC-PINV-2026-02613
+  user: What's wrong with this invoice, and what should we do?
+  assistant: 'ACC-PINV-2026-02613 from Vanta Cable Mills bills $389.08 with no purchase order or purchase receipt linked to any of its lines, so it can''t be checked against what we ordered or received.
+
+
+    Before it''s paid, match it to the receipt it belongs to, or ask Vanta which order it bills. Nina in purchasing deals with Vanta; Ellen holds the payment until it matches.'
+description: 'Invoice-mismatch steps 1 to 3 (oe_connector''s help/try-invoice-mismatch.md) in ERPNext''s panel as a demo person, one conversation: step 3 follows the two before it, beside the Received Items To Be Billed report. "That Vanta invoice" is ACC-PINV-2026-02613 from steps 1 and 2, which the person still sees. The reply takes it as that invoice without asking or saying it assumes so, reads which Vanta receipts are received and not billed, and names the one or ones the invoice should have matched, with their amounts. Found in the website retake on the pilot (Nov 3, 2026, 15:12-15:33Z, OpenExecutive 13e34a41, one panel conversation per scenario): the answer said "I''m assuming that''s the invoice you mean" under the rule that each answer stood alone.'
+query: Which of these receipts should that Vanta invoice have matched?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- I'm assuming
+- I am assuming
+- which invoice do you mean
+- Earlier I
+quality_criteria:
+  takes_that_vanta_invoice_as_acc_pinv_2026_02613_without_asking_or_assuming: true
+  reads_the_vanta_receipts_received_and_not_billed: true
+  names_the_receipt_or_receipts_it_should_have_matched_with_amounts: true
+  does_not_restate_steps_one_and_two_at_length: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

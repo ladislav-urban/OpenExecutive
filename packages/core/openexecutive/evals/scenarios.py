@@ -286,6 +286,50 @@ def scenario_query(scenario: dict[str, Any]) -> str:
     return f"{where}\n\n{scenario['query']}" if where else scenario["query"]
 
 
+def scenario_prior_turns(scenario: dict[str, Any]) -> list[tuple[str, str]]:
+    """The conversation before the scenario's question (``prior_turns``):
+    ``[{user, assistant, page?}]``, oldest first, as (user message, reply).
+    A turn's ``page`` puts the page block before its message, as
+    ``scenario_query`` does for the question. Seeded into the session's
+    history, so a follow-up is judged as the person asked it."""
+    raw = scenario.get("prior_turns")
+    if raw is None:
+        return []
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("`prior_turns`: a list of {user, assistant, page?}")
+    turns: list[tuple[str, str]] = []
+    for turn in raw:
+        if not isinstance(turn, dict) or set(turn) - {"user", "assistant", "page"}:
+            raise ValueError("`prior_turns`: each turn is {user, assistant, page?}")
+        user, reply = turn.get("user"), turn.get("assistant")
+        if not (isinstance(user, str) and user.strip() and isinstance(reply, str) and reply.strip()):
+            raise ValueError("`prior_turns`: each turn needs a non-empty user and assistant")
+        turns.append((scenario_query({"query": user, "page": turn.get("page")}), reply))
+    return turns
+
+
+def seed_prior_turns(session: Any, scenario: dict[str, Any]) -> None:
+    """Put the scenario's ``prior_turns`` in ``session``'s history."""
+    for user, reply in scenario_prior_turns(scenario):
+        session.add_user_message(user)
+        session.add_assistant_message(reply)
+
+
+def prior_turns_section(scenario: dict[str, Any]) -> str:
+    """For a judge: the conversation the question follows, or "" when it
+    follows none (every other judge prompt stays byte-identical)."""
+    turns = scenario_prior_turns(scenario)
+    if not turns:
+        return ""
+    lines = "\n\n".join(
+        f"ASKER: {user}\nASSISTANT: {reply}" for user, reply in turns
+    )
+    return (
+        "\nEARLIER IN THIS CONVERSATION (the asker sees these turns; the question "
+        f"below follows them):\n{lines}\n"
+    )
+
+
 def scenario_voice_persona(scenario: dict[str, Any]) -> str | None:
     """The scenario's ``voice_persona`` slug, or None to use the install's
     voice. An unknown slug raises ValueError, so a typo fails the scenario
@@ -554,6 +598,8 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_surface(s)
         except ValueError as e:
             raise ValueError(f"`surface`: {e}") from e
+    if s.get("prior_turns") is not None:
+        scenario_prior_turns(s)
     for key in ("expected_view_kinds", "forbidden_view_kinds"):
         if s.get(key) is None:
             continue

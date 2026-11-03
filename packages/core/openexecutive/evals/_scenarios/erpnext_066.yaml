@@ -1,0 +1,22 @@
+id: erpnext_066
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Timesheet Billing Summary
+description: 'Unbilled-work step 3 (oe_connector''s help/try-unbilled-work.md) in ERPNext''s panel as a demo person. The panel is docked beside the page, so any table in the reply keeps to the columns the question needs, four at most, and wider detail goes in the place the answer opens beside it. The reply lists the milestones due for billing, the recurring service contracts'' billing included. Found in the website retake on the pilot (Nov 3, 2026, 15:12-15:33Z, OpenExecutive 13e34a41, one panel conversation per scenario): the milestone table was too wide for the panel, and the hospital''s monthly service contract was missing.'
+query: Which project milestones are due for billing?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  any_table_has_at_most_four_columns: true
+  lists_each_milestone_due_for_billing_with_its_amount: true
+  includes_a_recurring_service_contract_due_for_billing: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

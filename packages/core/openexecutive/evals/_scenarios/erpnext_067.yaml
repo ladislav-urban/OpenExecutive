@@ -1,0 +1,24 @@
+id: erpnext_067
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Exchange Rate Revaluation
+description: 'Month-end step 6 (oe_connector''s help/try-month-end.md) in ERPNext''s panel as a demo person. The euro payable (Kessler Elektrotechnik''s €3,630 invoice) was revalued on the month''s last day: the reply gives the revaluation''s effect as its gain or loss, the base balance after minus before (locally $3,848.89 to $3,946.17, a $97.28 loss), never the revalued balance as the change, and answers the insurance release and whether anyone can still post into last month. Found in the website retake on the pilot (Nov 3, 2026, 15:12-15:33Z, OpenExecutive 13e34a41, one panel conversation per scenario): the answer said it "revalues the Kessler payable by $4,202.22", the revalued balance.'
+query: Is last month's insurance released, and the euro payable revalued? Can anyone still post into last month?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- revalues the Kessler payable by $4,202
+quality_criteria:
+  gives_the_revaluations_effect_as_the_gain_or_loss_not_the_revalued_balance: true
+  labels_any_balance_before_or_after_as_such: true
+  says_whether_last_months_insurance_was_released: true
+  says_whether_last_month_is_closed_to_posting: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
