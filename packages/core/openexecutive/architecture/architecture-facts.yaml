@@ -10407,7 +10407,7 @@ integrations:
     expected_view_kinds / forbidden_view_kinds: the runner collects the
     turn's views as the route does (collect_views) and
     evals.scenarios.view_kinds_check fails the scenario deterministically
-    (erpnext_053 opens a chart, erpnext_054 none). The response
+    (erpnext_054 opens a chart, erpnext_055 none). The response
     adds `views` and `call` when there are any. They are data: oe_connector's
     panel.ask checks each view again as the signed-in ERPNext user and builds
     every desk route itself. Off the panel, the gateway refuses

@@ -267,7 +267,7 @@ def test_view_kinds_are_a_list_of_names_and_only_for_a_panel_scenario() -> None:
 
 
 def test_the_chart_scenarios_ship_with_their_view_kinds() -> None:
-    found = {s["id"]: s for s in load_scenarios() if s["id"] in ("erpnext_053", "erpnext_054")}
-    assert found["erpnext_053"]["expected_view_kinds"] == ["chart"]
-    assert found["erpnext_054"]["forbidden_view_kinds"] == ["chart"]
+    found = {s["id"]: s for s in load_scenarios() if s["id"] in ("erpnext_054", "erpnext_055")}
+    assert found["erpnext_054"]["expected_view_kinds"] == ["chart"]
+    assert found["erpnext_055"]["forbidden_view_kinds"] == ["chart"]
     assert all(scenario_surface(s) == "erpnext_panel" for s in found.values())

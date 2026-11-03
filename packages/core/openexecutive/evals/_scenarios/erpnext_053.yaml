@@ -5,22 +5,29 @@ requires_mcp: true
 demo_viewer: true
 forbid_principal_name: true
 product_name: Dynocortex
+advice_policy: explain
 forbid_repeated_text: true
-description: "Workstream D (oe_connector's docs/panel-d-plan.md), cash-outlook in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. A weekly trend opens a `chart` view beside the panel: receivables outstanding by due week (Sales Invoice, sum of outstanding_amount over due_date by week), not only the Accounts Receivable table. The reply names the heavy weeks with their figures and never writes that it opened or showed anything. expected_view_kinds is checked from the show calls ERPNext accepted, so it fails until oe_connector's chart kind is deployed."
-query: "How much do customers owe us week by week over the next 13 weeks?"
-expected_tool_calls:
-  - call_tool
+page:
+  report: Invalid Ledger Entries
+description: "F11 step 1 (oe_connector's help/try-books-check.md) in ERPNext's panel as a demo person, beside Invalid Ledger Entries, with the erpnext server connected and oe_connector's demo dataset loaded, whose books are healthy. The demo role reads every report the check needs (ladislav-urban/oe_connector#375 and #379): Invalid Ledger Entries, General and Payment Ledger Comparison, Stock and Account Value Comparison, the Trial Balance and Stock Balance. The reply runs each one for Aurora Components in USD for a stated period and says what each found, so 'nothing wrong' reads as checked. Found on the pilot (Nov 2, 2026, oe_connector 4edce53): 'I couldn't run the dedicated comparison report because this user lacks permission', then totals compared by hand."
+query: "Is anything wrong in our books: entries that don't balance, ledgers that disagree, stock without a value?"
 forbidden_tool_calls:
   - propose_erpnext_draft
-expected_view_kinds:
-  - chart
 forbidden_reply_words:
   - ERPNext
-  - beside the panel
-  - I've opened
-  - is now open
+  - lacks permission
+  - lack permission
+  - "don't have permission"
+  - "do not have permission"
+  - not permitted
+  - I recommend
 quality_criteria:
-  gives_the_amount_due_in_each_week_or_the_weeks_that_stand_out_with_figures: true
-  reads_outstanding_receivables_by_due_date_not_invoice_totals: true
-  opens_the_chart_beside_the_panel_without_saying_so: true
+  runs_invalid_ledger_entries_and_the_general_and_payment_ledger_comparison_reports: true
+  compares_the_stock_ledger_with_the_stock_accounts_from_the_stock_and_account_value_comparison_report: true
+  checks_the_trial_balance_and_stock_at_no_value_or_below_zero: true
+  gives_the_company_currency_and_period_of_each_check: true
+  says_plainly_that_the_ledgers_show_nothing_wrong_and_lists_what_was_checked: true
+  shows_anything_a_check_found_rather_than_hiding_it: true
+  invents_no_fault: true
+  reads_every_report_rather_than_saying_one_was_refused_or_adding_up_totals_by_hand: true
   keeps_the_answer_short_enough_for_a_side_panel: true

@@ -6,13 +6,13 @@ demo_viewer: true
 forbid_principal_name: true
 product_name: Dynocortex
 forbid_repeated_text: true
-description: "Workstream D (oe_connector's docs/panel-d-plan.md), the other side of erpnext_053: in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded, a question with a single figure for an answer opens no `chart` view. SHOW_RULE's 'a single figure gets no chart': the place it shows, if any, is a list or the report."
-query: "What's the total our customers owe us right now?"
+description: "Workstream D (oe_connector's docs/panel-d-plan.md), cash-outlook in ERPNext's panel as a demo person, with the erpnext server connected and oe_connector's demo dataset loaded. A weekly trend opens a `chart` view beside the panel: receivables outstanding by due week (Sales Invoice, sum of outstanding_amount over due_date by week), not only the Accounts Receivable table. The reply names the heavy weeks with their figures and never writes that it opened or showed anything. expected_view_kinds is checked from the show calls ERPNext accepted, so it fails until oe_connector's chart kind is deployed."
+query: "How much do customers owe us week by week over the next 13 weeks?"
 expected_tool_calls:
   - call_tool
 forbidden_tool_calls:
   - propose_erpnext_draft
-forbidden_view_kinds:
+expected_view_kinds:
   - chart
 forbidden_reply_words:
   - ERPNext
@@ -20,6 +20,7 @@ forbidden_reply_words:
   - I've opened
   - is now open
 quality_criteria:
-  gives_one_total_of_outstanding_receivables_with_its_currency: true
-  answers_in_a_sentence_or_two_without_a_weekly_breakdown_nobody_asked_for: true
+  gives_the_amount_due_in_each_week_or_the_weeks_that_stand_out_with_figures: true
+  reads_outstanding_receivables_by_due_date_not_invoice_totals: true
+  opens_the_chart_beside_the_panel_without_saying_so: true
   keeps_the_answer_short_enough_for_a_side_panel: true
