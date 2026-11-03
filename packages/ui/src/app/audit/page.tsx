@@ -12,6 +12,7 @@ import {
   type AuditQuery,
 } from "@/lib/api";
 import Icon from "@/components/Icon";
+import OversightExport from "@/components/audit/OversightExport";
 import { buttonClass } from "@/components/ui/Button";
 
 const PAGE_SIZE = 100;
@@ -466,6 +467,7 @@ function AuditPageInner() {
               Token usage
             </Link>
           </div>
+          <OversightExport />
           <div className="grid grid-cols-1 md:grid-cols-5 gap-3 mb-4">
             <input
               type="search"
