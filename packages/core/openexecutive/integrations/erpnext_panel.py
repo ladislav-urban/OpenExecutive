@@ -843,8 +843,14 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
         return _error(504, "timeout", "That took too long to answer; try a narrower question.")
     except PanelRefused:
         return _error(409, "conversation_busy", "Start a new chat and ask again.")
-    except Exception:
+    except Exception as exc:
         logger.exception("erpnext panel: the turn failed for person %s", person.id)
+        from openexecutive.providers.refusal import refusal_reply
+
+        unavailable = refusal_reply(exc)
+        if unavailable is not None:
+            # Out of credit or over a spend limit: trying again won't help.
+            return _error(503, "unavailable", unavailable)
         return _error(500, "failed", "Something went wrong answering that; please try again.")
     finally:
         _turn_views.reset(views_token)

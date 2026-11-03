@@ -84,9 +84,59 @@ class AnthropicProvider:
     def messages_create(self, **kwargs: Any) -> Awaitable[Any]:
         model = str(kwargs.get("model", ""))
         kwargs = fit_claude_generation(model, relax_forced_tool_choice(model, kwargs))
-        return self._client.messages.create(**kwargs)
+        return _watched_create(self._client, kwargs)
 
     def messages_stream(self, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
         model = str(kwargs.get("model", ""))
         kwargs = fit_claude_generation(model, relax_forced_tool_choice(model, kwargs))
-        return self._client.messages.stream(**kwargs)
+        return _WatchedStream(self._client, kwargs)
+
+
+# A billing or spend-limit refusal (providers.refusal) is noted on its way
+# out, so the principal hears of it whoever made the call, and for a minute
+# after one, calls fail here without being sent: the refusal would only
+# repeat, and a turn's specialists and reviewers would each spend a request
+# on it. The SDK never retries a 400 or 402 itself.
+
+
+async def _watched_create(client: anthropic.AsyncAnthropic, kwargs: dict[str, Any]) -> Any:
+    from openexecutive.providers import refusal
+
+    refusal.fail_fast()
+    try:
+        result = await client.messages.create(**kwargs)
+    except Exception as exc:
+        hit = refusal.classify(exc)
+        if hit is not None:
+            refusal.note_refusal(hit[0], provider=hit[1])
+        raise
+    refusal.note_success()
+    return result
+
+
+class _WatchedStream:
+    """``client.messages.stream(...)``, watched the same way: the request is
+    sent, and refused, when the stream is entered."""
+
+    def __init__(self, client: anthropic.AsyncAnthropic, kwargs: dict[str, Any]) -> None:
+        self._client = client
+        self._kwargs = kwargs
+        self._inner: Any = None
+
+    async def __aenter__(self) -> Any:
+        from openexecutive.providers import refusal
+
+        refusal.fail_fast()
+        self._inner = self._client.messages.stream(**self._kwargs)
+        try:
+            stream = await self._inner.__aenter__()
+        except Exception as exc:
+            hit = refusal.classify(exc)
+            if hit is not None:
+                refusal.note_refusal(hit[0], provider=hit[1])
+            raise
+        refusal.note_success()
+        return stream
+
+    async def __aexit__(self, *exc_info: Any) -> Any:
+        return await self._inner.__aexit__(*exc_info)

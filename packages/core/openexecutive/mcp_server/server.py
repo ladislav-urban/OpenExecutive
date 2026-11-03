@@ -502,6 +502,20 @@ async def ask_executive(message: str) -> str:
     Args:
         message: The question for the Executive.
     """
+    try:
+        return await _ask_executive(message)
+    except Exception as exc:
+        from openexecutive.providers.refusal import refusal_reply
+
+        refused = refusal_reply(exc)
+        if refused is None:
+            raise
+        # Out of credit or over a spend limit: the app's user gets the same
+        # sentence as every other channel, not a tool error to retry.
+        return refused
+
+
+async def _ask_executive(message: str) -> str:
     from openexecutive.orchestrator.artifact_records import NOBODY
     from openexecutive.orchestrator.executive import Executive
     from openexecutive.orchestrator.mcp_gateway import get_active_gateway

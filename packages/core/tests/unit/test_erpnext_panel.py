@@ -695,3 +695,44 @@ def test_the_panel_without_drafts_says_never_to_offer_one() -> None:
     assert "never offer to" in erpnext_panel.PANEL_CONTEXT_BLOCK
     assert "create it in ERPNext themselves" in erpnext_panel.PANEL_CONTEXT_BLOCK
     assert "never offer to" not in erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK
+
+
+def test_an_empty_provider_account_gets_one_plain_answer_and_tells_the_principal(
+    panel: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Nov 3, 2026: the pilot ran out of Anthropic credit and the panel said
+    "Something went wrong answering that; please try again"."""
+    from openexecutive.providers import refusal
+    from openexecutive.utils import product_name
+
+    refusal.reset_for_tests()
+    noted: list[str] = []
+    monkeypatch.setattr(refusal, "note_refusal", lambda cause, **_k: noted.append(cause))
+    monkeypatch.setattr(product_name, "configured_product_name", lambda: "Dynocortex")
+
+    import anthropic
+    import httpx
+
+    message = "Your credit balance is too low to access the Anthropic API."
+    body = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    response = httpx.Response(400, json=body, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
+
+    async def refused(*_a: Any) -> str:
+        # What the pilot got from every call (Anthropic SDK, 400).
+        raise anthropic.BadRequestError(message, response=response, body=body)
+
+    monkeypatch.setattr(erpnext_panel, "_answer", refused)
+    reply = _post(panel, {"message": "How are receivables?", "conversation": "c1"})
+    assert reply.status_code == 503
+    assert reply.json() == {
+        "error": "unavailable",
+        "message": "Dynocortex can't answer right now; the team has been told.",
+    }
+    assert noted == ["billing"]
+
+    async def broken(*_a: Any) -> str:
+        raise RuntimeError("a bug")
+
+    monkeypatch.setattr(erpnext_panel, "_answer", broken)
+    other = _post(panel, {"message": "And payables?", "conversation": "c1"})
+    assert other.status_code == 500 and other.json()["error"] == "failed"

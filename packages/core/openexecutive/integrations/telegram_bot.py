@@ -485,13 +485,16 @@ async def _process_and_reply(
             )
             if cards:
                 await _send_cards(token, chat_id, cards)
-        except Exception:
+        except Exception as exc:
             logger.exception("Telegram: handler error for message %s", message_id)
             try:
+                from openexecutive.providers.refusal import refusal_reply
+
                 await send_message(
                     token,
                     chat_id,
-                    "I encountered an error processing your request. Please try again.",
+                    refusal_reply(exc)
+                    or "I encountered an error processing your request. Please try again.",
                 )
             except Exception:
                 logger.exception("Telegram: also failed to send error reply")

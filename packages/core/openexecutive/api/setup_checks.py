@@ -190,6 +190,28 @@ def is_example_email(address: str) -> bool:
 
 
 async def check_ai_model(snap: Snapshot) -> SetupCheck:
+    from openexecutive.providers.refusal import last_refusal
+
+    refused = last_refusal()
+    if refused is not None:
+        # Listing models is free, so the probe below passes on an empty
+        # account: the last real call's refusal is what tells.
+        when = refused.at.strftime("%H:%M UTC on %d %b")
+        why = "the credit balance is too low" if refused.cause == "billing" else "the spend limit is reached"
+        console = "console.anthropic.com" if refused.provider == "Anthropic" else "your OpenRouter account"
+        fix = (
+            f"Add credit in {console}"
+            if refused.cause == "billing"
+            else f"Raise the spend limit in {console}, or wait for it to reset"
+        )
+        return _result(
+            "ai_model",
+            "error",
+            f"{refused.provider} refused the Executive's requests at {when}: {why}. "
+            "Nobody gets an answer until that changes.",
+            f"{fix}. The next question then answers as usual, with no restart.",
+        )
+
     settings = snap.settings
     key = (settings.anthropic_api_key or "").strip()
     if not key:

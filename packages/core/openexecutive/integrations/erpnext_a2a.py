@@ -523,9 +523,15 @@ async def erpnext_a2a_rpc(request: Request) -> JSONResponse:
         except TimeoutError:
             _audit_refusal("timeout", partner)
             return _rpc_error(request_id, INTERNAL_ERROR, "That took too long to answer; ask again.", 504)
-        except Exception:
+        except Exception as exc:
             logger.exception("erpnext a2a: the turn failed for supplier %r", supplier)
-            _audit_refusal("failed", partner)
+            from openexecutive.providers.refusal import refusal_reply
+
+            unavailable = refusal_reply(exc)
+            _audit_refusal("unavailable" if unavailable is not None else "failed", partner)
+            if unavailable is not None:
+                # Out of credit or over a spend limit: asking again won't help.
+                return _rpc_error(request_id, INTERNAL_ERROR, unavailable, 503)
             return _rpc_error(request_id, INTERNAL_ERROR, "Something went wrong answering that.", 500)
     finally:
         _in_flight.discard(supplier)
