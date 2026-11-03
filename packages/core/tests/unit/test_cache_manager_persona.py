@@ -241,3 +241,19 @@ def test_persona_writes_identifiers_whole_and_reads_what_the_records_show() -> N
         assert "no bold, italics or spaces inside them" in persona
         assert "quote both in full and say in words which characters differ" in persona
         assert "read it rather than say you haven't checked" in persona
+
+
+def test_persona_reads_history_works_figures_out_and_one_way() -> None:
+    # The website retake, Nov 3: "nobody chased Metro" with two reminders on
+    # the invoice, "I can't rank these" with the issues' descriptions there,
+    # "That is a guess", and three eight-week margins (55.4, 44.0, 40.4%).
+    from openexecutive.prompts.executive_persona import EXECUTIVE_PERSONA_SOLO_PROMPT
+
+    for persona in (EXECUTIVE_PERSONA_PROMPT, EXECUTIVE_PERSONA_SOLO_PROMPT):
+        assert "read the document's history" in persona
+        assert "**Work it out from the records that hold it.**" in persona
+        assert "never hand that reading to someone else" in persona
+        assert "Never offer a guess" in persona
+        assert "**Work a figure out the same way every time.**" in persona
+        assert "not the mean of the weekly margins" in persona
+        assert "with every line the report includes" in persona

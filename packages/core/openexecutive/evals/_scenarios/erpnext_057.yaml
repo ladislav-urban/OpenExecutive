@@ -1,0 +1,25 @@
+id: erpnext_057
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Gross Profit
+description: 'Margin-drop step 3 (oe_connector''s help/try-margin-drop.md) in ERPNext''s panel as a demo person, beside Gross Profit. The eight weeks before last week give one margin: their gross profit summed over their sales summed, from the Gross Profit report by invoice, with every line the report includes (installation services too), the way the Home margin card works it out. A figure without a skewing line comes second, labelled. Found in the website retake on the pilot (Nov 3, 2026, OpenExecutive 8828ff5, one 67-turn panel conversation): 44.0% with services left out on purpose, where the card gave 55.4% and another step 40.4%.'
+query: How did last week's gross margin compare with the eight weeks before it?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Earlier I
+- I recommend
+quality_criteria:
+  gives_last_weeks_margin_and_the_eight_weeks_margin_with_company_currency_and_dates: true
+  works_the_eight_weeks_margin_as_total_gross_profit_over_total_sales_not_a_mean_of_weekly_margins: true
+  includes_every_line_the_report_includes_services_too_in_the_main_figure: true
+  labels_any_figure_without_a_line_as_second_to_the_main_figure: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

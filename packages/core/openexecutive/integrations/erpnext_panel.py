@@ -461,6 +461,21 @@ SCREEN_RULE = (
     "card in focus, its headline is all you have of it: answer about what it "
     "names from ERPNext and your specialists. "
 )
+# Both panel blocks carry it: the panel shows only what was said since its
+# page opened, so earlier turns may be invisible to the reader (the website
+# retake of Nov 3, 2026: one conversation of 67 turns across 22 scenarios,
+# answered with "Earlier I said…" and "from our notes").
+FRESH_RULE = (
+    "The person may not see your earlier answers in this conversation: the "
+    "panel shows only what was said since its page opened. So answer each "
+    "question on its own: never refer to an earlier answer, and never write "
+    "\"earlier I said\", \"correction\" or \"that was wrong\". Here this "
+    "replaces correcting yourself out loud: when a figure differs from one "
+    "you gave before, give the right one with its arithmetic. Read what the answer needs from ERPNext on this turn, "
+    "even when an earlier answer had it: never answer from an earlier answer "
+    "or from notes, and never write that you haven't re-read or checked "
+    "something ERPNext can show you; read it. "
+)
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
     "a chat docked on every ERPNext page; people there call you Dynocortex, "
@@ -472,6 +487,7 @@ PANEL_CONTEXT_BLOCK = (
     "document, tell them how to create it in ERPNext themselves. Keep answers "
     "short enough for a side panel. If they ask for something you cannot do "
     "here, say so and suggest the OpenExecutive app. "
+    + FRESH_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )
@@ -491,6 +507,7 @@ PANEL_DRAFTS_CONTEXT_BLOCK = (
     "reach any other system. Keep answers short enough for a side panel. If "
     "they ask for something you cannot do here, say so and suggest the "
     "OpenExecutive app. "
+    + FRESH_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )

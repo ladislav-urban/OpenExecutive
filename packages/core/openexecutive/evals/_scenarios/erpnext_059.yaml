@@ -1,0 +1,27 @@
+id: erpnext_059
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Issue
+description: 'Service-desk step 2 (oe_connector''s help/try-service-desk.md) in ERPNext''s panel as a demo person, beside the Issue list. Issues have no item field, so the reply works out each issue''s product from its subject and description, says it did, and ranks the products together with the warranty claims (all on the 12-way distribution panel, DEMO-PNL-12). Found in the website retake on the pilot (Nov 3, 2026, OpenExecutive 8828ff5, one 67-turn panel conversation): ''I can''t rank these … someone has to read their descriptions.'''
+query: Which products cause the most issues and warranty claims?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Earlier I
+- can't rank
+- has to read
+- I recommend
+quality_criteria:
+  works_out_each_issues_product_from_its_subject_or_description_and_says_so: true
+  ranks_products_by_issues_and_warranty_claims_with_counts: true
+  finds_every_warranty_claim_is_on_the_12_way_distribution_panel: true
+  names_morgan_for_the_product_question: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
