@@ -88,24 +88,35 @@ def test_messages_create_proxies_kwargs_unchanged(monkeypatch: pytest.MonkeyPatc
     assert captured == payload
 
 
-def test_messages_stream_returns_sdk_context_manager_unchanged(
+async def test_messages_stream_yields_the_sdk_stream_unchanged(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    sentinel = MagicMock(name="anthropic-stream-cm")
+    stream = MagicMock(name="anthropic-stream")
+    exited: list[Any] = []
+
+    class _SdkManager:
+        async def __aenter__(self) -> Any:
+            return stream
+
+        async def __aexit__(self, *exc: Any) -> None:
+            exited.append(exc)
 
     monkeypatch.setattr(
         "openexecutive.providers.anthropic_provider.anthropic.AsyncAnthropic",
         lambda **_kw: SimpleNamespace(
-            messages=SimpleNamespace(stream=lambda **_kw: sentinel)
+            messages=SimpleNamespace(stream=lambda **_kw: _SdkManager())
         ),
     )
     registry_mod._reset_for_tests()
 
     provider = get_provider("claude-sonnet-4-6")
-    # Note: messages_stream is sync; the SDK returns the CM and the caller
-    # uses it in ``async with``. The provider must not wrap it in another
-    # layer that would change ``stream.get_final_message`` semantics.
-    assert provider.messages_stream(model="claude-sonnet-4-6") is sentinel
+    # The provider watches the request for a billing refusal
+    # (providers.refusal) but must hand back the SDK's own stream, so
+    # ``stream.get_final_message`` and the event iteration keep their
+    # semantics, and the SDK's manager still closes it.
+    async with provider.messages_stream(model="claude-sonnet-4-6") as entered:
+        assert entered is stream
+    assert exited == [(None, None, None)]
 
 
 def test_messages_create_accepts_per_request_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
