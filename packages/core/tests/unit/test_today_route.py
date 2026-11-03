@@ -2405,17 +2405,20 @@ async def test_a_trigger_during_a_regen_gets_one_more_pass(
     _setup_isolated_db(db, monkeypatch)
     _seed_live_action_alert(db)
     release = asyncio.Event()
+    in_model = asyncio.Event()
     contexts: list[str] = []
 
     async def _synth(**kw: object) -> str:
         contexts.append(str(kw.get("rendered_context")))
         if len(contexts) == 1:
+            in_model.set()
             await release.wait()
         return f"pass {len(contexts)}"
 
     monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _synth)
     first = asyncio.create_task(today_route._regen_briefing_narrative(None, "company"))
-    await asyncio.sleep(0.05)
+    # The first pass has read the board (in a thread) and is in the model call.
+    await asyncio.wait_for(in_model.wait(), timeout=30)
     _log_inbound(db, "sam@x.com", "arrived mid-run")
     await today_route._regen_briefing_narrative(None, "company")  # queued, not run
     release.set()
@@ -2513,3 +2516,97 @@ def test_a_delivered_brief_stays_off_the_activity_rail_and_heatmap(
     assert any("lease summary" in s for s in summaries)
     assert not any("Maple Court" in s for s in summaries)
     assert dict(episodic.count_activity_by_day(1)) == {now[:10]: 1}
+
+
+# --- The event loop stays free (Nov 3, 2026) ---------------------------------
+# On WSL with the DB on /mnt/c, GET /today's reads and the narrative pass's
+# took seconds each, on the event loop: an ERPNext panel question signed for
+# 60 s was read after its assertion expired. Both now read in a thread.
+
+_SLOW_S = 0.6
+
+
+def _slow_build_today(monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    real = today_route._build_today
+
+    def _slow(*args: object, **kwargs: object) -> object:
+        time.sleep(_SLOW_S)  # a slow disk: blocking, as SQLite is
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(today_route, "_build_today", _slow)
+
+
+async def _largest_gap(task: object, step: float = 0.02) -> float:
+    """The longest the loop went without running this coroutine while
+    ``task`` ran."""
+    import asyncio
+    import time
+
+    gap = 0.0
+    last = time.monotonic()
+    while not task.done():  # type: ignore[attr-defined]
+        await asyncio.sleep(step)
+        now = time.monotonic()
+        gap = max(gap, now - last)
+        last = now
+    return gap
+
+
+async def test_a_slow_narrative_pass_leaves_the_event_loop_free(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+
+    db = tmp_path / "free.db"
+    _setup_isolated_db(db, monkeypatch)
+    _seed_live_action_alert(db)
+
+    async def _synth(**_kw: object) -> str:
+        return "Fresh header."
+
+    monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _synth)
+    _slow_build_today(monkeypatch)
+
+    task = asyncio.create_task(today_route._regen_briefing_narrative(None, "company"))
+    gap = await _largest_gap(task)
+    await task
+    assert gap < _SLOW_S / 2, f"the loop was held for {gap:.2f}s"
+    cached = narrative_cache.get(narrative_cache.COMPANY_SCOPE, db_path=db)
+    assert cached is not None and cached.narrative_text == "Fresh header."
+
+
+async def test_a_slow_today_does_not_hold_up_another_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import asyncio
+    import time
+
+    import httpx
+
+    db = tmp_path / "free-route.db"
+    _setup_isolated_db(db, monkeypatch)
+    _seed_live_action_alert(db)
+    monkeypatch.setattr(today_route, "_attach_narrative", lambda *_a, **_k: None)
+    _slow_build_today(monkeypatch)
+
+    app = FastAPI()
+    app.include_router(today_route.router)
+
+    @app.get("/ping")
+    async def _ping() -> dict[str, bool]:
+        return {"ok": True}
+
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        home = asyncio.create_task(client.get("/today"))
+        await asyncio.sleep(0.05)  # /today is under way
+        started = time.monotonic()
+        ping = await client.get("/ping")
+        took = time.monotonic() - started
+        assert not home.done(), "the slow /today finished first; the test proves nothing"
+        assert (await home).status_code == 200
+    assert ping.status_code == 200
+    assert took < _SLOW_S / 2, f"/ping waited {took:.2f}s behind /today"
