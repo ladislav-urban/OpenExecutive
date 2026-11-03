@@ -550,6 +550,7 @@ def test_both_panel_blocks_show_a_trend_or_a_breakdown_as_a_chart() -> None:
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
         assert "{'kind': 'chart', 'doctype': 'Sales Invoice', 'measure': 'sum', 'on': 'outstanding_amount'" in block
         assert "'over': {'time': 'due_date', 'every': 'week'" in block
+        assert "'filters': {'company': ..., 'outstanding_amount': ['>', 0]}" in block
         assert "'over': {'group': 'territory', 'top': 10}" in block
         assert "a single figure gets no chart" in block
 
