@@ -188,6 +188,40 @@ async def test_an_answer_after_the_top_up_clears_it(monkeypatch: pytest.MonkeyPa
     assert upstream.requests == 2
 
 
+async def test_questions_during_the_window_do_not_keep_it_shut(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A held-back call that reaches a route must not push the window out
+    again: with a question a minute, a topped-up account would never be
+    asked again (security review of this change)."""
+    from types import SimpleNamespace
+
+    upstream = _Upstream((400, _error_body("invalid_request_error", CREDIT)), (200, OK_MESSAGE))
+    provider = _provider(upstream)
+    kwargs = {"model": "claude-haiku-5-5", "max_tokens": 5, "messages": [{"role": "user", "content": "hi"}]}
+    clock = [1000.0]
+    # The window's own clock only: the event loop keeps the real one.
+    monkeypatch.setattr(refusal, "time", SimpleNamespace(monotonic=lambda: clock[0]))
+
+    with pytest.raises(anthropic.BadRequestError):
+        await provider.messages_create(**kwargs)
+    first_at = refusal.last_refusal().at  # type: ignore[union-attr]
+    for _ in range(5):  # a question every 20 s, each held back and answered
+        clock[0] += 20
+        try:
+            await provider.messages_create(**kwargs)
+        except refusal.ProviderRefused as held:
+            assert refusal.refusal_reply(RuntimeError("turn failed").with_traceback(None)) is None
+            try:
+                raise RuntimeError("turn failed") from held
+            except RuntimeError as turn:
+                assert refusal.refusal_reply(turn) == refusal.reply_text()
+        else:
+            break
+    # 100 s after the refusal the account is asked again, and answers.
+    assert upstream.requests == 2
+    assert refusal.last_refusal() is None
+    assert first_at is not None
+
+
 async def test_another_error_is_not_held_against_the_next_call() -> None:
     upstream = _Upstream((400, _error_body("invalid_request_error", "max_tokens: bad")), (200, OK_MESSAGE))
     provider = _provider(upstream)
@@ -267,7 +301,8 @@ async def test_the_card_is_the_principals_alone_and_names_the_cause_and_time(
     assert severity == "urgent"
     assert "out of credit" in headline
     assert "15:33 UTC on 03 Nov 2026" in body and "credit balance is too low" in body
-    assert pushed == [card_id]
+    # Private: never on the live bus, which goes to every open browser.
+    assert pushed == []
     assert len(sent) == 1 and sent[0][0] == "pat@co.com" and "15:33 UTC" in sent[0][1]
 
 

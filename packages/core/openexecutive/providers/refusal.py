@@ -132,13 +132,36 @@ def reply_text() -> str:
     return f"{product_name()} can't answer right now; the team has been told."
 
 
+def _held_back(exc: BaseException) -> bool:
+    """Whether ``exc`` is, or wraps, a call :func:`fail_fast` never sent."""
+    seen: set[int] = set()
+    todo: list[BaseException] = [exc]
+    while todo:
+        cur = todo.pop()
+        if id(cur) in seen:
+            continue
+        seen.add(id(cur))
+        if isinstance(cur, ProviderRefused):
+            return True
+        if isinstance(cur, BaseExceptionGroup):
+            todo.extend(cur.exceptions)
+        todo.extend(nxt for nxt in (cur.__cause__, cur.__context__) if nxt is not None)
+    return False
+
+
 def refusal_reply(exc: BaseException) -> str | None:
-    """The reply a route gives for ``exc`` when it is a refusal (noting it, so
-    the principal hears of it however the call was made), else None."""
+    """The reply a route gives for ``exc`` when it is a refusal, else None.
+
+    A refusal the provider itself sent is noted, so the principal hears of it
+    whatever made the call (OpenRouter's has no provider hook). A call that
+    :func:`fail_fast` held back is not noted again: that would push the
+    window out on every new question, and after a top-up nothing would ever
+    be sent to find out the account answers again."""
     hit = classify(exc)
     if hit is None:
         return None
-    note_refusal(hit[0], provider=hit[1])
+    if not _held_back(exc):
+        note_refusal(hit[0], provider=hit[1])
     return reply_text()
 
 
@@ -177,6 +200,9 @@ def note_refusal(cause: Cause, *, provider: str = "Anthropic", now: datetime | N
         _blocked_until = time.monotonic() + FAIL_FAST_S
         due = _last_alert_at is None or at - _last_alert_at >= ALERT_EVERY
         if due:
+            # Taken before the send is known to have gone: a send the
+            # outbound guard holds (quiet hours, the per-recipient cap) or a
+            # chat outage leaves only the card for the hour, never a burst.
             _last_alert_at = at
     if fresh:
         logger.error("%s refused a request for %s; not retrying", provider, cause)
@@ -230,7 +256,10 @@ def _alerted_within(at: datetime) -> bool:
 
     with store._get_conn() as conn:
         row = conn.execute(
-            "SELECT MAX(created_at) FROM alerts WHERE source = ?", (SOURCE,)
+            # last_seen_at: a repeat folded into the card (coalesce_alert)
+            # bumps it, never created_at.
+            "SELECT MAX(COALESCE(last_seen_at, created_at)) FROM alerts WHERE source = ?",
+            (SOURCE,),
         ).fetchone()
     if not row or not row[0]:
         return False
@@ -272,8 +301,13 @@ def _file_card(cause: Cause, provider: str, at: datetime) -> int | None:
 
 
 async def alert_principal(cause: Cause, provider: str, at: datetime) -> None:
-    """File the principal's card, push it to an open Home, and send it on their
-    usual channel. Never raises."""
+    """File the principal's card and send it on their usual channel. Never
+    raises.
+
+    Not pushed on the live alert bus (``dispatcher.dispatch_web``): that bus
+    goes to every open browser, so a private card never rides it
+    (``alerts.pipeline._make_private``). The principal's Home shows it on its
+    next load; /today and /alerts keep it from everyone else."""
     try:
         card_id = await asyncio.to_thread(_file_card, cause, provider, at)
     except Exception:
@@ -281,14 +315,6 @@ async def alert_principal(cause: Cause, provider: str, at: datetime) -> None:
         return
     if card_id is None:
         return
-    try:
-        from openexecutive.alerts import dispatcher, store
-
-        alert = await asyncio.to_thread(store.get_alert, card_id)
-        if alert is not None:
-            await dispatcher.dispatch_web(alert)
-    except Exception:
-        logger.exception("provider refusal: could not push card %s", card_id)
     try:
         from openexecutive.orchestrator.schedule_tools import set_session
         from openexecutive.people.store import find_principal_person

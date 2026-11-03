@@ -510,10 +510,13 @@ providers:
     first call that answers clears it. The SDK retries only
     408/409/429/5xx, so a refusal is sent once. alert_principal files an
     urgent card (source provider_refused, dedup private:provider_refused:
-    <cause>, private:principal, routed to the principal), pushes it with
-    dispatch_web and sends it with scheduler.runner.deliver_to_person; at
-    most once an hour (in memory, and the last card's created_at across a
-    restart). Every route answers refusal_reply(exc) = "<product> can't
+    <cause>, private:principal, routed to the principal), never on the
+    live bus (dispatch_web reaches every browser; alerts.pipeline.
+    _make_private), and sends it with scheduler.runner.deliver_to_person;
+    at most once an hour (in memory, and the card's last_seen_at or
+    created_at across a restart). A route's refusal_reply notes only a
+    refusal the provider sent, never a call fail_fast held back, so
+    questions during the window don't extend it. Every route answers refusal_reply(exc) = "<product> can't
     answer right now; the team has been told." in place of its generic
     apology: web chat SSE error, the ERPNext panel (503 unavailable), A2A
     (503), Slack, Discord, Telegram, Google Chat and MCP ask_executive.
