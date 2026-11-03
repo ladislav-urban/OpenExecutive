@@ -698,8 +698,16 @@ def test_an_empty_provider_account_gets_one_plain_answer_and_tells_the_principal
     monkeypatch.setattr(refusal, "note_refusal", lambda cause, **_k: noted.append(cause))
     monkeypatch.setattr(product_name, "configured_product_name", lambda: "Dynocortex")
 
+    import anthropic
+    import httpx
+
+    message = "Your credit balance is too low to access the Anthropic API."
+    body = {"type": "error", "error": {"type": "invalid_request_error", "message": message}}
+    response = httpx.Response(400, json=body, request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"))
+
     async def refused(*_a: Any) -> str:
-        raise refusal.ProviderRefused("billing")
+        # What the pilot got from every call (Anthropic SDK, 400).
+        raise anthropic.BadRequestError(message, response=response, body=body)
 
     monkeypatch.setattr(erpnext_panel, "_answer", refused)
     reply = _post(panel, {"message": "How are receivables?", "conversation": "c1"})
