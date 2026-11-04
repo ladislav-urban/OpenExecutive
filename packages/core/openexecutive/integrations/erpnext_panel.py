@@ -488,9 +488,11 @@ FOLLOW_UP_RULE = (
     "earlier answer, over the same period and filters the earlier answer used "
     "unless they ask for another, and never write that you haven't re-read or "
     "checked something ERPNext can show you; read it. Never narrate a "
-    "correction (\"earlier I said\", \"correction\", \"that was wrong\"): "
-    "when a figure differs from one you gave before, give the right one with "
-    "its arithmetic. "
+    "correction (\"earlier I said\", \"that was wrong\", \"let me state it "
+    "plainly\"): when a figure differs from one you gave before, give the right "
+    "one plainly, marked \"corrected:\" at most, with its arithmetic worked out "
+    "before you write it, never retried in the reply. Never say you said "
+    "something the earlier turns don't show. "
 )
 # Both panel blocks carry it: the panel is docked beside the page, so a wide
 # table wraps into something unreadable (the website retake of Nov 3, 2026).

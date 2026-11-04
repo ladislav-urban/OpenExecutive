@@ -313,6 +313,21 @@ class SkillSearchResponse(BaseModel):
     results: list[SkillSearchHit]
 
 
+def _utc_stamp(value: str | None) -> str | None:
+    """An ISO stamp with no offset, as the database's UTC: rows written before
+    ``Session.created_at`` was aware hold one, and a browser reads it as local
+    time. Anything else unchanged."""
+    from datetime import datetime
+
+    if not value:
+        return value
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return value if parsed.tzinfo is not None else value + "+00:00"
+
+
 class SessionSummary(BaseModel):
     session_id: str
     title: str
@@ -351,6 +366,11 @@ class SessionSummary(BaseModel):
     # Its group in the Chats list's date view, in the zone the caller sees
     # times in (``?tz=``; utils.chat_list): Pinned, Today, Yesterday, …
     date_group: DateGroup | None = None
+
+    @field_validator("created_at", "updated_at", "pinned_at", "shared_at")
+    @classmethod
+    def _in_utc(cls, value: str | None) -> str | None:
+        return _utc_stamp(value)
 
 
 class ActionTaken(BaseModel):

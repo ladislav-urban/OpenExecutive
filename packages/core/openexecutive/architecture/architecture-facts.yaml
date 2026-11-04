@@ -8056,7 +8056,9 @@ auth:
     (from_host and Session.host_page) admits erpnext__show_in_erpnext in
     host_allows_erpnext_read and in mcp_gateway._show_outside_panel (both
     the search filter and call_tool); it is still not a pinned read. The
-    host page block carries erpnext_panel.SHOW_RULE. chat binds a fresh
+    host page block carries erpnext_panel.FOLLOW_UP_RULE and TABLE_RULE (the
+    reshoot of Nov 4, 2026: five-column tables and retold mistakes on F1),
+    then erpnext_panel.SHOW_RULE. chat binds a fresh
     erpnext_panel.TurnViews per host page turn with collect_views (saved and
     put back, as set_session is) around the stream, never on the session;
     note_erpnext_call fills it from accepted calls only, with ASSERTION_ARG
@@ -10403,7 +10405,9 @@ integrations:
     retake), so a follow-up means everything the earlier turns named, never
     only the last, without asking or assuming which; figures are re-read
     from ERPNext over the same period and filters, and corrections are never
-    narrated (a changed figure comes with its arithmetic) (evals erpnext_056
+    narrated or retold (a changed figure is given plainly, "corrected:" at
+    most, worked out first; no earlier statement the turns don't show is
+    claimed) (evals erpnext_056
     to erpnext_065; evals.scenarios prior_turns seeds the session history
     and shows it to the judge); TABLE_RULE keeps a table to four columns, wider
     detail in the place it opens (eval erpnext_066); SCREEN_RULE adds that beside

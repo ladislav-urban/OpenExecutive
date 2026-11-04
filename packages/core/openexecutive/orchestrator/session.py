@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from openexecutive.memory.company_profile import CompanyProfile
@@ -27,7 +27,10 @@ class Session:
     session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     company_profile: CompanyProfile | None = None
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    # Aware UTC, as `session_store.update_session_timestamp` writes `updated_at`:
+    # stored with no offset, a browser east of UTC read a one-turn chat's
+    # stamp as local time, hours older than it was (the reshoot of Nov 4, 2026).
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
     # (channel, channel_ref) pairs the Executive has seen during this session.
     # Used by schedule_followup to refuse scheduling sends to refs the user
     # never actually used — anti-spam guard.
