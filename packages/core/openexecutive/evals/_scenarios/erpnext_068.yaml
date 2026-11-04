@@ -9,8 +9,12 @@ advice_policy: explain
 forbid_repeated_text: true
 page:
   report: Stock Balance
-description: 'F11 step 3 (oe_connector''s help/try-books-check.md) in ERPNext''s panel as a demo person, beside Stock Balance. The report can come back `truncated` (oe_connector caps rows at 500): the reply narrows it with its filters or reads Bin''s quantities and values with filters and aggregates, then says whether any item is in stock with no value and whether any is below zero, for Aurora Components, with what it read. Found in the pilot run of F11 (Nov 3, 2026): the answer said "I couldn''t read the full Stock Balance report" and left the question unanswered.'
+description: 'F11 step 3 (oe_connector''s help/try-books-check.md) in ERPNext''s panel as a demo person, beside Stock Balance. The report can come back `truncated` (oe_connector caps rows at 500): the reply narrows it with its filters or reads Bin''s quantities and values with filters and aggregates, then says whether any item is in stock with no value and whether any is below zero, for Aurora Components, with what it read. Found in the pilot run of F11 (Nov 3, 2026): the answer said "I couldn''t read the full Stock Balance report" and left the question unanswered. On the reshoot (Nov 4, 2026) the Bin records it read to check the report opened beside the panel as an empty "(Bin)" list in place of Stock Balance: the view is the report, never the records read to check it.'
 query: Is any item in stock with no value, or below zero?
+expected_view_kinds:
+- report
+forbidden_view_kinds:
+- list
 forbidden_tool_calls:
 - propose_erpnext_draft
 forbidden_reply_words:
