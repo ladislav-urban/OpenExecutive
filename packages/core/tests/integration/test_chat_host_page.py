@@ -16,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from openexecutive.api import host_limit
 from openexecutive.api.routes import chat as chat_route
+from openexecutive.integrations import erpnext_panel
 from openexecutive.memory import episodic, session_store
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
@@ -185,6 +186,11 @@ def test_a_host_page_turn_gets_the_page_wrapped_and_stays_a_host_turn(
     assert '<untrusted_content source="erpnext" author="erpnext_page"' in block
     assert "Open in ERPNext: the Sales Order list." in block
     assert "status = To Deliver" in block and "Sorted by grand_total desc." in block
+    # The docked panel's rules, as the webhook panel's blocks carry them: the
+    # reshoot (Nov 4, 2026) had five-column tables and retold mistakes here.
+    assert erpnext_panel.FOLLOW_UP_RULE.strip() in block
+    assert erpnext_panel.TABLE_RULE.strip() in block
+    assert block.endswith(erpnext_panel.SHOW_RULE)
     # The person's words alone, as sent, saved and shown.
     assert turn["message"] == "Which are late?"
     saved = session_store.load_messages(_session_id(response.text), db_path=temp_db)

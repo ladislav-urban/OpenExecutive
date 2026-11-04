@@ -1050,7 +1050,12 @@ def _host_page_block(page: ErpnextPage | None, card: Any) -> str:
     ``page_block`` and the Home card as untrusted text, or "" when neither
     survives the checks. Not the webhook panel's SCREEN_RULE: a host turn
     reads the person's briefing, so the screen beside it isn't closed to it."""
-    from openexecutive.integrations.erpnext_panel import SHOW_RULE, page_block
+    from openexecutive.integrations.erpnext_panel import (
+        FOLLOW_UP_RULE,
+        SHOW_RULE,
+        TABLE_RULE,
+        page_block,
+    )
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
     parts: list[str] = []
@@ -1063,8 +1068,12 @@ def _host_page_block(page: ErpnextPage | None, card: Any) -> str:
     if not parts:
         return ""
     # The show tool is offered on such a turn only (schedule_tools.
-    # host_page_turn), so the rule for it rides with the block.
-    return "\n\n".join([_HOST_PAGE_INTRO, *parts, SHOW_RULE])
+    # host_page_turn), so the rule for it rides with the block. The panel's
+    # follow-up and table rules do too: the page is the same docked panel, and
+    # without them the reshoot (Nov 4, 2026) had tables of five or more columns
+    # past its 400px and follow-ups retelling their own earlier mistakes.
+    rules = (FOLLOW_UP_RULE + TABLE_RULE).strip()
+    return "\n\n".join([_HOST_PAGE_INTRO, *parts, rules, SHOW_RULE])
 
 
 def _beside_home(page: ErpnextPage | None) -> bool:
