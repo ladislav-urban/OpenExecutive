@@ -502,3 +502,37 @@ def test_a_truncated_report_is_narrowed_not_given_up(channel_env: Any) -> None:
     assert "run it again in parts" in text
     assert "Bin with actual_qty < 0" in text
     assert "Never say you couldn't read a report when a narrower read would answer." in text
+
+
+def test_records_read_to_check_a_report_are_not_shown_in_its_place(channel_env: Any) -> None:
+    # Reshoot on the pilot (Nov 4, 2026), books-check step 3: the Bin records
+    # read to check Stock Balance opened beside the panel as an empty "(Bin)"
+    # list in place of the report.
+    text = _render(("erpnext", "fetch"))
+    assert "Only when the parts still come back `truncated`" in text
+    assert "still show the report, never the records you read to check it" in text
+
+
+def test_records_are_named_as_people_know_them(channel_env: Any) -> None:
+    # Reshoot (Nov 4, 2026): "TASK-2026-00744", "planned October 16 to 17 end"
+    # and "SAL-ORD-2026-04746's customer".
+    text = _render(("erpnext", "fetch"))
+    assert "never by its id alone" in text
+    assert "a work order's sales order, to its customer" in text
+    assert "Give a task's planned end date, not a span of dates." in text
+
+
+def test_a_draft_the_question_is_about_is_read(channel_env: Any) -> None:
+    # Reshoot (Nov 4, 2026), credit-hold: the held order is a draft, and
+    # "only submitted documents count" kept the answer off it.
+    text = _render(("erpnext", "fetch"))
+    assert "Only submitted documents (docstatus 1) count, except the drafts a question is about" in text
+    assert "call them drafts" in text
+
+
+def test_the_erpnext_guide_is_constant() -> None:
+    # It sits in block 0 (cache_control): nothing in it may vary per turn.
+    from openexecutive.prompts import connected_systems
+
+    assert isinstance(connected_systems._ERPNEXT_GUIDE, str)
+    assert "{" not in connected_systems._ERPNEXT_GUIDE

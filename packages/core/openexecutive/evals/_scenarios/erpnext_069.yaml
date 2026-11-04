@@ -1,0 +1,22 @@
+id: erpnext_069
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: 'Projects step 3 (oe_connector''s help/try-projects.md) in ERPNext''s panel as a demo person, after the Project Summary report. The reply names the late task on the Keystone job by its subject, not its id, and gives its planned end date, not a span of dates. Found on the pilot reshoot (Nov 4, 2026): the answer showed "TASK-2026-00744" and "planned October 16 to 17 end".'
+query: What's late on the Keystone job right now?
+page:
+  report: Project Summary
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  names_the_late_task_by_its_subject_not_only_its_id: true
+  gives_the_task_s_planned_end_date_not_a_span_of_dates: true
+  says_how_late_it_is_against_today: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

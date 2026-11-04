@@ -1,0 +1,26 @@
+id: erpnext_070
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: 'Credit hold step 1 (oe_connector''s help/try-credit-hold.md) in ERPNext''s panel as a demo person, beside the Sales Order list filtered to Harbor Electric Co-op. The held order is a draft, so the "only submitted documents count" rule must not hide it: the reply reads the draft order and the customer''s credit limit (the Customer''s credit limits table, or Customer Credit Balance) and says the order is held because it would take the customer over that limit. Found on the pilot reshoot (Nov 4, 2026): "I couldn''t read it in the customer record", though the record holds a $13,500 limit.'
+query: Why hasn't Harbor Electric's latest order gone out?
+page:
+  doctype: Sales Order
+  filters:
+  - [customer, "=", Harbor Electric Co-op]
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- couldn't read
+- could not read
+quality_criteria:
+  finds_the_latest_order_even_though_it_is_a_draft_and_calls_it_a_draft: true
+  gives_the_customer_s_credit_limit_and_what_is_already_owed: true
+  says_the_order_is_held_because_it_would_go_over_the_credit_limit: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
