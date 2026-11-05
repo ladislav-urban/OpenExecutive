@@ -33,7 +33,12 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
-from openexecutive.orchestrator.figure_check import Figure, format_like
+from openexecutive.orchestrator.figure_check import (
+    _NUMBER_WORDS,
+    Figure,
+    _in_table_cell,
+    format_like,
+)
 from openexecutive.orchestrator.name_check import Name
 
 # Decided Nov 4, 2026 (question 9). It never mentions checking.
@@ -198,12 +203,36 @@ class Correction:
     right: float | str | None
 
 
+_WORD_FOR = {n: w for w, n in _NUMBER_WORDS.items()}
+# Words before a count that read on without it ("all six customers" -> "all
+# customers"); any other count no value is known for becomes "several".
+_DROP_AFTER = frozenset({"all", "the", "these", "those", "its", "their", "our", "his", "her", "both"})
+
+
 def written(c: Correction) -> str:
-    """The right value as the reply should write it."""
+    """The right value as the reply should write it: a count written in words
+    stays in words ("Six customers" -> "Five customers")."""
     if isinstance(c.right, str):
         return c.right
     assert isinstance(c.figure, Figure) and c.right is not None
-    return format_like(c.figure, c.right)
+    fig = c.figure
+    if fig.count and fig.num.isalpha() and float(c.right).is_integer() and int(c.right) in _WORD_FOR:
+        word = _WORD_FOR[int(c.right)]
+        return word.capitalize() if fig.num[:1].isupper() else word
+    return format_like(fig, c.right)
+
+
+def vague(text: str, fig: Figure) -> tuple[int, int, str]:
+    """The edit that takes a figure no value is known for out of ``text``
+    without its sentence: "—" for a table cell; for a count, "several" in its
+    place, or nothing after "all", "the" and the like."""
+    if _in_table_cell(text, fig.start, fig.end):
+        return fig.start, fig.end, "—"
+    before = re.search(r"([A-Za-z]+)[ \t]+$", text[max(0, fig.start - 20):fig.start])
+    if before and before.group(1).lower() in _DROP_AFTER:
+        end = fig.end + (1 if text[fig.end:fig.end + 1] == " " else 0)
+        return fig.start, end, ""
+    return fig.start, fig.end, "Several" if fig.text[:1].isupper() else "several"
 
 
 def _depends(text: str, all_units: list[Unit], c: Correction) -> bool:
@@ -306,16 +335,30 @@ def fallback(text: str, corrections: list[Correction], every: list[Figure]) -> s
     all_units = units(text)
     keep: list[Correction] = []
     gone: list[Figure | Name] = []
+    loose: list[Figure] = []
     for c in corrections:
         if c.right is not None and not _depends(text, all_units, c):
             keep.append(c)
+        elif c.right is None and isinstance(c.figure, Figure) and (
+            c.figure.count or _in_table_cell(text, c.figure.start, c.figure.end)
+        ):
+            # A count of records ("several") or a table cell ("—"): never its
+            # sentence or row gone, nor the reply when that empties a table.
+            loose.append(c.figure)
         else:
             gone.append(c.figure)
-    return remove(text, gone, every, keep=keep) if gone else substitute(text, keep)
+    if gone or loose:
+        return remove(text, gone, every, keep=keep, loose=loose)
+    return substitute(text, keep)
 
 
 def remove(
-    text: str, failed: list[Figure | Name], every: list[Figure], *, keep: Iterable[Correction] = ()
+    text: str,
+    failed: list[Figure | Name],
+    every: list[Figure],
+    *,
+    keep: Iterable[Correction] = (),
+    loose: Iterable[Figure] = (),
 ) -> str:
     """``text`` without the unit holding each failed figure, or
     ``WHOLE_REPLY`` when leaving them out could mislead (module docstring).
@@ -337,6 +380,10 @@ def remove(
     if every and len(left) * 2 < len(every):
         return WHOLE_REPLY
     edits = [(u.start, u.end, "") for u in gone]
+    edits += [
+        vague(text, fig) for fig in loose
+        if not any(u.start <= fig.start and fig.end <= u.end for u in gone)
+    ]
     edits += [
         (c.figure.start, c.figure.end, written(c))
         for c in keep

@@ -204,6 +204,8 @@ class _Counts:
     code_only: bool = False
     # The whole-reply sentence avoided: names alone failed, or a projection.
     kept: int = 0
+    # Weekdays put right beside their dates (weekday_check).
+    weekdays: int = 0
 
 
 def _doctypes(turn: AnswerCheckTurn) -> list[str]:
@@ -550,6 +552,7 @@ def _audit(counts: _Counts, *, changed: bool) -> None:
             "report_differs": counts.report_differs,
             "code_only": counts.code_only,
             "kept": counts.kept,
+            "weekdays": counts.weekdays,
             "changed": changed,
         },
     )
@@ -590,6 +593,13 @@ async def check_reply(
     except Exception:
         logger.exception("answer_check: the check failed; the reply is left as it was")
         return text
+    if fixed != answer_correct.WHOLE_REPLY:
+        try:
+            from openexecutive.orchestrator import weekday_check
+
+            fixed, counts.weekdays = weekday_check.fix(fixed, date.today())
+        except Exception:
+            logger.warning("answer_check: the weekday check failed", exc_info=True)
     turn._done = (text, fixed)
     try:
         _audit(counts, changed=fixed != text)

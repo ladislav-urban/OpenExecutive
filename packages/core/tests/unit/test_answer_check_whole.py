@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from openexecutive.orchestrator import answer_check, answer_correct
+from openexecutive.orchestrator import answer_check
 from openexecutive.orchestrator.answer_review import CANNOT_TELL, Review
 
 from .test_answer_check import _reviews, _rewrites, _turn, audit_rows  # noqa: F401
@@ -75,12 +75,15 @@ def test_a_projection_stands_under_a_note_with_known_values_written_in(
     assert audit_rows[0][2]["kept"] == 1 and audit_rows[0][2]["whole_reply"] == 0
 
 
-def test_figures_that_fail_outside_a_projection_still_replace_the_reply(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_figures_that_fail_outside_a_projection_show_a_dash_in_their_cells(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Not a projection: the figures no value is known for go, as "—" in their
+    # cells (answer_correct.vague), and the table and reply stay.
     _reviews(monkeypatch, *[CANNOT_TELL] * 10)
     _rewrites(monkeypatch, None)
     turn = _turn()
-    assert _ask(OUTLOOK, "How much cash do we have?", turn) == answer_correct.WHOLE_REPLY
-    assert turn.whole_replaced
+    out = _ask(OUTLOOK, "How much cash do we have?", turn)
+    assert not turn.whole_replaced and answer_check.PROJECTION_NOTE not in out
+    assert "$41,130" not in out and "| Week 1 | — |" in out and "$48,200" in out
 
 
 def test_the_projection_test_reads_the_question_not_the_reply() -> None:

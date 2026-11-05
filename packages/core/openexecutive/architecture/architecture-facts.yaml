@@ -5311,6 +5311,11 @@ chat:
     Never WHOLE_REPLY when only names failed (the reply stands) or the
     question is a projection (answer_check._PROJECTION_Q: known values
     written in, the rest under PROJECTION_NOTE); audit `kept`.
+    Counts of records (figure_check._counts_records, Figure.count) match only
+    Sources.counts of that record (count_words); unknown ones become
+    "several" and unknown table cells "—" (answer_correct.vague), never a
+    removed unit. weekday_check fixes a weekday beside its unit's one date;
+    audit `weekdays`.
     The gateway feeds every ERPNext read's result to the bound
     AnswerCheckTurn (note_erpnext_result); the web chat route, Executive.chat,
     the panel and the morning brief bind one. Web chat: reply_replaced event,
