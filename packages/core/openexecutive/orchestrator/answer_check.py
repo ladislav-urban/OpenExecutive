@@ -171,6 +171,15 @@ def enabled() -> bool:
     return get_settings().erpnext_answer_check != "off"
 
 
+def _keep_whole() -> bool:
+    """``ERPNEXT_ANSWER_CHECK=correct_keep``: figures are put right in place,
+    and a reply the check would replace whole is kept with its known values
+    written in, never replaced (the owner's decision 90.a, Nov 5, 2026)."""
+    from openexecutive.config import get_settings
+
+    return get_settings().erpnext_answer_check == "correct_keep"
+
+
 def note_erpnext_result(normalized: str, arguments: Any, text: object, *, failed: bool) -> None:
     """Called by the gateway after every ``erpnext__*`` call: on a turn being
     checked, keep a read's result."""
@@ -446,6 +455,9 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
             return text
         if any(f.flagged for f in figure_check.check_figures(text, checked, fmt)):
             # A figure fails after all (the names written in moved it): as before.
+            if _keep_whole():
+                counts.kept = 1
+                return text
             counts.whole_reply = 1
             counts.substituted = 0
             turn.whole_replaced = True
@@ -506,6 +518,7 @@ def _whole(
       retake, "what's our cash position").
     - A projection (``_PROJECTION_Q``): every known value is written in, and
       the figures nothing contradicts stand, under ``PROJECTION_NOTE``.
+    - With ``correct_keep``: every known value written in, the rest kept.
     - Otherwise ``WHOLE_REPLY``, as before.
     """
     figure_fixes = [c for c in corrections if isinstance(c.figure, Figure)]
@@ -520,6 +533,13 @@ def _whole(
         counts.substituted += sum(1 for c in known if answer_correct.written(c) in out)
         counts.left_out = 0
         return f"{out.rstrip()}\n\n{PROJECTION_NOTE}"
+    if _keep_whole():
+        known = [c for c in figure_fixes if c.right is not None]
+        out = answer_correct.substitute(text, known) if known else text
+        counts.kept = 1
+        counts.substituted += sum(1 for c in known if answer_correct.written(c) in out)
+        counts.left_out = 0
+        return out
     counts.whole_reply = 1
     counts.substituted = 0
     turn.whole_replaced = True
