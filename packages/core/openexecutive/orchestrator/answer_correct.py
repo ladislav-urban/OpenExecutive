@@ -232,7 +232,8 @@ def vague(text: str, fig: Figure) -> tuple[int, int, str]:
     if before and before.group(1).lower() in _DROP_AFTER:
         end = fig.end + (1 if text[fig.end:fig.end + 1] == " " else 0)
         return fig.start, end, ""
-    return fig.start, fig.end, "Several" if fig.text[:1].isupper() else "several"
+    starts = fig.text[:1].isupper() or re.search(r"(?:^|[.!?]\s+|\n\s*(?:[-*]\s+)?)$", text[:fig.start]) is not None
+    return fig.start, fig.end, "Several" if starts else "several"
 
 
 def _depends(text: str, all_units: list[Unit], c: Correction) -> bool:
@@ -340,10 +341,12 @@ def fallback(text: str, corrections: list[Correction], every: list[Figure]) -> s
         if c.right is not None and not _depends(text, all_units, c):
             keep.append(c)
         elif c.right is None and isinstance(c.figure, Figure) and (
-            c.figure.count or _in_table_cell(text, c.figure.start, c.figure.end)
+            (c.figure.count and c.figure.readings[0][0] >= 2)
+            or _in_table_cell(text, c.figure.start, c.figure.end)
         ):
             # A count of records ("several") or a table cell ("—"): never its
             # sentence or row gone, nor the reply when that empties a table.
+            # "0 invoices" or "1 supplier" never becomes "several": removed.
             loose.append(c.figure)
         else:
             gone.append(c.figure)

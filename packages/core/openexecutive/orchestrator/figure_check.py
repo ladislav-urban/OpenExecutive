@@ -356,7 +356,10 @@ def _counts_records(text: str, end: int) -> str:
     noun = ""
     for word in m.group(1).lower().split():
         word = word.strip("'’-&")
-        if word in ("of", "and", "or", "to", "in", "on", "at", "by", "for", "from", "with", "are", "is", "were", "was"):
+        if word in (
+            "of", "and", "or", "to", "in", "on", "at", "by", "for", "from", "with", "are", "is", "were", "was",
+            "per", "each", "every", "across", "a", "an",
+        ):
             break
         stem = word[:-3] + "y" if word.endswith("ies") else word[:-2] if word.endswith("ches") else word.rstrip("s")
         if stem in _RECORD_NOUNS:
@@ -891,7 +894,13 @@ def sources_for(
         for value, how, whole_column in _aggregates(table):
             target.setdefault(round(value, 9), how)
             if not table.truncated and how.startswith("count of "):
-                counted.add((round(value, 9), how.lower()))
+                # Matched on the list or the field, never a row's text value
+                # ("rows where customer is Invoice Masters Ltd"): a group's
+                # rows count the list's records, distinct values the field's.
+                label = how.lower().split(" where ", 1)[0]
+                if label.startswith("count of distinct "):
+                    label = label.split(" in ", 1)[0]
+                counted.add((round(value, 9), label))
             if whole_column and not table.truncated:
                 headline.add(abs(value))
     src._complete_keys = sorted(src.complete)

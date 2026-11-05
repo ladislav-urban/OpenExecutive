@@ -597,7 +597,10 @@ async def check_reply(
         try:
             from openexecutive.orchestrator import weekday_check
 
-            fixed, counts.weekdays = weekday_check.fix(fixed, date.today())
+            # Off the event loop, and bounded: a reply is long text.
+            fixed, counts.weekdays = await asyncio.wait_for(
+                asyncio.to_thread(weekday_check.fix, fixed, date.today()), 2.0
+            )
         except Exception:
             logger.warning("answer_check: the weekday check failed", exc_info=True)
     turn._done = (text, fixed)

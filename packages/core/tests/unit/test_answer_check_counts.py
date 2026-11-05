@@ -130,3 +130,61 @@ def test_a_table_cell_no_value_is_known_for_shows_a_dash(monkeypatch: pytest.Mon
         "| Birch Co | 777 |\n| Cedar Ltd | 888 |\n"
     )
     assert _check(table) == table.replace("777", "—").replace("888", "—").strip()
+
+
+# ---------------------------------------------------------------------------
+# The security review of ladislav-urban/OpenExecutive#165
+
+
+def test_a_weekday_is_put_right_only_where_it_is_plainly_the_dates() -> None:
+    from datetime import date
+
+    from openexecutive.orchestrator import weekday_check
+
+    today = date(2026, 11, 5)
+    unchanged = [
+        # Names that begin like a weekday.
+        "Sun Pharma's invoice SINV-1 for $500 was due Nov 3 and is still unpaid.",
+        "Thu Nguyen owes $250 on SINV-2, due Nov 10.",
+        "Call Mon Health about PO-77 dated Nov 3.",
+        "SAT prep invoice 2026-11-03",
+        # A weekday in another clause, or far from the date.
+        "The invoice dated Nov 3 is due; let's meet Friday.",
+        "Quotation QTN-001 (Oct 30) expires soon; I'd chase them on Monday.",
+        "Nov 3 is the date on the order that the supplier promised for delivery by Friday.",
+        # Another line, code and links.
+        "- Northgate quotation, valid till Nov 8\n  - Follow-up call set for Friday",
+        "```json\n{\"date\": \"2026-11-08\", \"day\": \"Sat\"}\n```",
+        "See https://erp.example.com/report?date=2026-11-08&day=Sat for it.",
+    ]
+    for text in unchanged:
+        assert weekday_check.fix(text, today) == (text, 0), text
+    assert weekday_check.fix("Due Saturday, Nov 8.", today) == ("Due Sunday, Nov 8.", 1)
+    assert weekday_check.fix("Due Nov 8 (Sat).", today) == ("Due Nov 8 (Sun).", 1)
+
+
+def test_a_count_of_none_or_one_is_never_several(monkeypatch: pytest.MonkeyPatch) -> None:
+    _reviews(monkeypatch, CANNOT_TELL, CANNOT_TELL)
+    _rewrites(monkeypatch, None)
+    out = _check("Birch Co is owed 52 breakers. 0 overdue invoices remain.")
+    assert "several" not in out.lower() and out.startswith("Birch Co is owed 52 breakers.")
+
+
+def test_a_group_or_a_text_value_never_confirms_another_records_count() -> None:
+    # Birch Co has two orders: that counts orders, not customers.
+    assert _statuses("Two customers are waiting.") == {"Two": "unconfirmed"}
+    named = ErpnextResult(
+        "erpnext__list_records",
+        {"doctype": "Sales Order", "fields": ["name", "customer"]},
+        {
+            "doctype": "Sales Order",
+            "rows": [{"name": f"SO-{i}", "customer": "Invoice Masters Ltd"} for i in range(3)]
+            + [{"name": "SO-9", "customer": "Alder Works"}],
+            "truncated": False,
+        },
+    )
+    fmt = NumberFormat.parse(None)
+    got = {f.text: f.status for f in check_figures("Three invoices are overdue.", sources_for([named], fmt=fmt), fmt)}
+    assert got == {"Three": "unconfirmed"}
+    # "per invoice" is a rate, not a count of invoices.
+    assert _statuses("Birch Co took 52 units per invoice.") == {"52": "confirmed"}
