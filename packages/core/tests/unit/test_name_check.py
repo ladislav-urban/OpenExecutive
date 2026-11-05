@@ -232,3 +232,23 @@ def test_many_names_sharing_a_word_stay_quick() -> None:
 def test_bold_labels_that_name_no_record_stay() -> None:
     text = "- **Accounts Receivable**: $12,500\n- **Q3 2026 Sales**: $9,000\n- **Operating Expenses**: $1\n"
     assert _names(text) == {}
+
+
+def test_a_code_with_any_digit_is_exact_or_not_known() -> None:
+    result = ErpnextResult("erpnext__list_records", {"doctype": "Item"}, {
+        "doctype": "Item", "rows": [{"name": "SKU-A1"}, {"name": "RM-STEEL-12MM"}],
+    })
+    table = "| Item | Qty |\n|---|---|\n| SKU-A2 | 1 |\n| RM-STEEL-10MM | 1 |\n"
+    got = {n.text: n.status for n in check_names(table, name_sources_for([result]))}
+    assert got == {"SKU-A2": "unconfirmed", "RM-STEEL-10MM": "unconfirmed"}
+
+
+def test_a_source_name_with_any_line_break_is_never_written_in() -> None:
+    for planted in ("Ridgeway Electrical", "Ridgeway\x85Electrical", "Ridgeway\x0bElectrical"):
+        result = ErpnextResult("erpnext__run_report", {}, {
+            "columns": [{"fieldname": "party", "fieldtype": "Link", "label": "Customer"}],
+            "rows": [{"party": planted}],
+        })
+        table = "| Customer | Owed |\n|---|---|\n| Ridgeway Electrical | 12,500 |\n"
+        got = {n.text: n.status for n in check_names(table, name_sources_for([result]))}
+        assert got == {"Ridgeway Electrical": "unconfirmed"}, repr(planted)

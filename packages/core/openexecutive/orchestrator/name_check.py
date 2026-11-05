@@ -35,7 +35,7 @@ it in), and ``unconfirmed`` (a document name or a cell with no source, close
 to two or more, only contained in longer ones, or close to one whose name
 holds Markdown, a link or HTML (``safe_name``); its right value is "not
 known", so the correction leaves it out). A name with three digits in a row
-is never matched loosely, whatever separates them. Only ``near`` and
+is never matched loosely, nor is any name with a digit in it. Only ``near`` and
 ``unconfirmed`` are flagged.
 
 A source name is never sent to a model: a near name is written in by code
@@ -44,6 +44,7 @@ as the draft writes them (``answer_check``).
 """
 from __future__ import annotations
 
+import bisect
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
@@ -67,8 +68,9 @@ MAX_WORD_HOLDERS = 50
 _DOCUMENT_RE = re.compile(
     r"(?<![\w/.-])[A-Za-z]{1,12}(?:[-/.][A-Za-z]{1,12})*[-/.](?:\d{2,}[-/.])*\d{3,}(?:-\d{1,3})?(?![\w/-])"
 )
-# Three digits in a row: a numbered record, matched exactly or not at all.
-_DIGITS = re.compile(r"\d{3}")
+# Any digit: a numbered record or code (PO-0012, SKU-A2, RM-STEEL-10MM),
+# matched exactly or not at all.
+_DIGITS = re.compile(r"\d")
 # What a name written in by code may never hold: Markdown structure, a link, HTML.
 _UNSAFE = re.compile(r"[\n\r|\[\]<>`~\\]")
 _CODE_RE = re.compile(r"```.*?```|`[^`\n]*`", re.S)
@@ -284,6 +286,24 @@ def _overlaps(spans: list[tuple[int, int]], start: int, end: int) -> bool:
     return any(s < end and start < e for s, e in spans)
 
 
+class _Mask:
+    """Spans no name is read across, merged and sorted, tested by bisect."""
+
+    def __init__(self, spans: Iterable[tuple[int, int]]) -> None:
+        merged: list[tuple[int, int]] = []
+        for start, end in sorted(spans):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        self.spans = merged
+        self.starts = [s for s, _ in merged]
+
+    def hits(self, start: int, end: int) -> bool:
+        i = bisect.bisect_right(self.starts, end - 1) - 1
+        return i >= 0 and self.spans[i][1] > start
+
+
 def _clean_cell(cell: str) -> str:
     text = re.sub(r"\[([^\]]*)\]\([^)]*\)", r"\1", cell)
     return text.strip().strip("*_`~ ").strip()
@@ -334,7 +354,8 @@ def safe_name(name: str) -> bool:
     in; the name is left out instead."""
     stripped = name.strip()
     return (
-        not _UNSAFE.search(stripped)
+        len(stripped.splitlines()) <= 1  # every line break Python splits on
+        and not _UNSAFE.search(stripped)
         and not stripped.startswith(("*", "_", "-", "+", "#", "!", ">"))
         and not stripped.endswith(("*", "_"))
     )
@@ -342,8 +363,8 @@ def safe_name(name: str) -> bool:
 
 def _status(src: NameSources, name: str, *, loose: bool) -> tuple[NameStatus, str | None]:
     """What ``name`` is among the sources. ``loose`` allows a near match; a
-    name with three digits in a row never gets one (INV/2026/0002 is never
-    INV/2026/0001)."""
+    name with a digit never gets one (INV/2026/0002 is never INV/2026/0001,
+    SKU-A2 never SKU-A1)."""
     norm = normalize(name)
     exact = src.by_norm.get(norm)
     if exact and name.strip() in exact:
@@ -390,7 +411,7 @@ def check_names(text: str, src: NameSources, *, figures: Iterable[tuple[int, int
     Bold list openers and prose phrases are listed only when they are near a
     source name. ``figures`` are the figure check's spans: a name never
     overlaps one."""
-    masked = _masked(text) + list(figures)
+    masked = _Mask([*_masked(text), *figures])
     found: list[Name] = []
     taken: list[tuple[int, int]] = []
     budget = [MAX_STATUS_CALLS]
@@ -402,7 +423,7 @@ def check_names(text: str, src: NameSources, *, figures: Iterable[tuple[int, int
     def take(start: int, end: int, value: str, kind: NameKind, loose: bool) -> None:
         if len(found) >= MAX_CANDIDATES or budget[0] <= 0:
             return
-        if _overlaps(masked, start, end) or _overlaps(taken, start, end):
+        if masked.hits(start, end) or _overlaps(taken, start, end):
             return
         state, right = status(value, loose)
         taken.append((start, end))
@@ -422,7 +443,7 @@ def check_names(text: str, src: NameSources, *, figures: Iterable[tuple[int, int
             continue
         start = m.start(1) + (len(m.group(1)) - len(m.group(1).lstrip()))
         end = start + len(value)
-        if _overlaps(masked, start, end) or _overlaps(taken, start, end):
+        if masked.hits(start, end) or _overlaps(taken, start, end):
             continue
         # A bold label that isn't a record ("Accounts Receivable") stays; only
         # one written close to a source name is checked.
@@ -439,13 +460,13 @@ def check_names(text: str, src: NameSources, *, figures: Iterable[tuple[int, int
 
 
 def _phrase(
-    text: str, m: re.Match[str], masked: list[tuple[int, int]], taken: list[tuple[int, int]],
+    text: str, m: re.Match[str], masked: _Mask, taken: list[tuple[int, int]],
     found: list[Name], status: Any,
 ) -> None:
     """A run of capitalised words: listed when it, or the run less its first
     word (a sentence's opening word), is near a source name."""
     start, end = m.span()
-    if _overlaps(masked, start, end) or _overlaps(taken, start, end):
+    if masked.hits(start, end) or _overlaps(taken, start, end):
         return
     tokens = [(t.start() + start, t.end() + start) for t in re.finditer(r"\S+", m.group(0))]
     for a in range(min(2, len(tokens))):

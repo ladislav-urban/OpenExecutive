@@ -270,9 +270,12 @@ async def _sources(turn: AnswerCheckTurn) -> tuple[NumberFormat, figure_check.So
 
 
 def _passes(text: str, sources: figure_check.Sources, names: name_check.NameSources, fmt: NumberFormat) -> bool:
-    return not any(f.flagged for f in figure_check.check_figures(text, sources, fmt)) and not any(
-        n.flagged for n in name_check.check_names(text, names)
-    )
+    """Whether every figure and name of ``text`` passes, read as the first
+    pass reads them (names never across a figure)."""
+    figures = figure_check.check_figures(text, sources, fmt)
+    if any(f.flagged for f in figures):
+        return False
+    return not any(n.flagged for n in name_check.check_names(text, names, figures=[(f.start, f.end) for f in figures]))
 
 
 async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str, models: bool, counts: _Counts) -> str:
@@ -325,6 +328,7 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         if _passes(text, checked, checked_names, fmt):
             return text
         counts.whole_reply = 1
+        counts.substituted = 0
         turn.whole_replaced = True
         return answer_correct.WHOLE_REPLY
     failed = [c.figure for c in corrections]
@@ -352,6 +356,7 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         fixed = answer_correct.WHOLE_REPLY
     if fixed == answer_correct.WHOLE_REPLY:
         counts.whole_reply = 1
+        counts.substituted = 0
         turn.whole_replaced = True
     else:
         written = sum(1 for c in corrections if c.right is not None and answer_correct.written(c) in fixed)
