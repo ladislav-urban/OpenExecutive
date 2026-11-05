@@ -321,8 +321,9 @@ def test_a_rewrite_may_change_only_the_failed_figures_units() -> None:
 # The whole check
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def audit_rows(monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str, dict[str, Any]]]:
+    # Every check writes an answer_check row: kept here, never in a default DB.
     rows: list[tuple[str, str, dict[str, Any]]] = []
     monkeypatch.setattr(
         "openexecutive.audit.log_event",

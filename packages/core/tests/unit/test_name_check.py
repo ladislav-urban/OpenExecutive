@@ -121,8 +121,10 @@ def test_ordinary_capitalised_words_are_left_alone() -> None:
 # The whole check
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def audit_rows(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
+    # Every check here writes an answer_check row: kept here, never in a
+    # default episodic_memory.db another module reads.
     rows: list[Any] = []
     monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **kw: rows.append(kw.get("details")))
     return rows
