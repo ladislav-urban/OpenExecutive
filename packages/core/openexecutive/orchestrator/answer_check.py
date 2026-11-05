@@ -68,6 +68,24 @@ CONFIRM_BUDGET_S = 20.0
 _FIGURE_TOOLS = frozenset({"erpnext__list_records", "erpnext__get_record", "erpnext__run_report"})
 # An ERPNext result as the model read it. A result cut to the reading budget
 # loses its closing tag, so the block may run to the end of its text.
+# A question asking what will or would happen: its reply works figures out
+# from ERPNext's (a 13-week outlook, "what if Metro pays late"), which no
+# result holds, so the check never blanks it for those (_kept).
+# Phrases only, each closed by a word boundary: "project" (a DocType),
+# "what would be our total …" and "Outlook" (the mail app) are lookups, and a
+# lookup's figures stay held to its results (security review of #163).
+_PROJECTION_Q = re.compile(
+    r"\b(?:what if|what happens if|forecasts?|forecasting|projections?|projected"
+    r"|cash outlook|outlook for|\d+[- ]week (?:outlook|forecast|view|cash)"
+    r"|week[- ]by[- ]week|month[- ]by[- ]month|next \d+ (?:days|weeks|months)"
+    r"|(?:will|would) (?:it|that|things|cash|we) look|as late as"
+    r"|if \w+ (?:pays?|paid) (?:late|later|as late|on time))\b",
+    re.I,
+)
+PROJECTION_NOTE = (
+    "_The projected figures above are estimates; "
+    "they couldn't be checked against ERPNext's records._"
+)
 _ERPNEXT_BLOCK = re.compile(r'<untrusted_content source="erpnext"[^>]*>.*?(?:</untrusted_content>|\Z)', re.S)
 
 
@@ -184,6 +202,8 @@ class _Counts:
     report_runs: int = 0
     report_differs: int = 0
     code_only: bool = False
+    # The whole-reply sentence avoided: names alone failed, or a projection.
+    kept: int = 0
 
 
 def _doctypes(turn: AnswerCheckTurn) -> list[str]:
@@ -424,16 +444,25 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     if not corrections:
         if _passes(text, checked, checked_names, fmt):
             return text
-        counts.whole_reply = 1
-        counts.substituted = 0
-        turn.whole_replaced = True
-        return answer_correct.WHOLE_REPLY
+        if any(f.flagged for f in figure_check.check_figures(text, checked, fmt)):
+            # A figure fails after all (the names written in moved it): as before.
+            counts.whole_reply = 1
+            counts.substituted = 0
+            turn.whole_replaced = True
+            return answer_correct.WHOLE_REPLY
+        return _whole(text, [], turn, question=question, counts=counts)
     failed = [c.figure for c in corrections]
     if not answer_correct.needs_rewrite(text, corrections):
         substituted = answer_correct.substitute(text, corrections)
         if _passes(substituted, checked, checked_names, fmt):
             counts.substituted += len(corrections)
             return substituted
+    if _PROJECTION_Q.search(question or "") and any(
+        isinstance(c.figure, Figure) and c.right is None for c in corrections
+    ):
+        # Worked-out figures no result holds: never cut from a projection,
+        # whose weeks or cases would go missing (_whole).
+        return _whole(text, corrections, turn, question=question, counts=counts)
     if models:
         try:
             rewrite = await _rewrite(question, text, corrections, model)
@@ -452,14 +481,49 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         # What code wrote must pass as a rewrite must; else the decided sentence.
         fixed = answer_correct.WHOLE_REPLY
     if fixed == answer_correct.WHOLE_REPLY:
-        counts.whole_reply = 1
-        counts.substituted = 0
-        turn.whole_replaced = True
+        return _whole(text, corrections, turn, question=question, counts=counts)
     else:
         written = sum(1 for c in corrections if c.right is not None and answer_correct.written(c) in fixed)
         counts.substituted += written
         counts.left_out = len(corrections) - written
     return fixed
+
+
+def _whole(
+    text: str,
+    corrections: list[answer_correct.Correction],
+    turn: AnswerCheckTurn,
+    *,
+    question: str,
+    counts: _Counts,
+) -> str:
+    """What a reply the check would replace whole becomes, and a projection
+    with figures no result holds.
+
+    - Only names failed (no figure did): the reply stands. A name the check
+      can't place is not a figure ERPNext contradicts, and blanking a reply
+      whose every figure passed hid the answer (the pilot's Nov 5, 2026
+      retake, "what's our cash position").
+    - A projection (``_PROJECTION_Q``): every known value is written in, and
+      the figures nothing contradicts stand, under ``PROJECTION_NOTE``.
+    - Otherwise ``WHOLE_REPLY``, as before.
+    """
+    figure_fixes = [c for c in corrections if isinstance(c.figure, Figure)]
+    if not figure_fixes:
+        counts.kept = 1
+        counts.left_out = 0
+        return text
+    if _PROJECTION_Q.search(question or ""):
+        known = [c for c in figure_fixes if c.right is not None]
+        out = answer_correct.substitute(text, known) if known else text
+        counts.kept = 1
+        counts.substituted += sum(1 for c in known if answer_correct.written(c) in out)
+        counts.left_out = 0
+        return f"{out.rstrip()}\n\n{PROJECTION_NOTE}"
+    counts.whole_reply = 1
+    counts.substituted = 0
+    turn.whole_replaced = True
+    return answer_correct.WHOLE_REPLY
 
 
 def _audit(counts: _Counts, *, changed: bool) -> None:
@@ -485,6 +549,7 @@ def _audit(counts: _Counts, *, changed: bool) -> None:
             "report_runs": counts.report_runs,
             "report_differs": counts.report_differs,
             "code_only": counts.code_only,
+            "kept": counts.kept,
             "changed": changed,
         },
     )

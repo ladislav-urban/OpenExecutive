@@ -1,0 +1,20 @@
+id: erpnext_074
+domain: mcp
+speaker: principal
+surface: host
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: "Cash outlook step 1 (oe_connector's help/try-cash-outlook.md) in Conversations, with the erpnext server connected and oe_connector's demo dataset loaded. The reply gives cash on hand and a week-by-week outlook worked out from what is due in and out, and says the weeks ahead are estimates. The view it opens for what is due includes the invoices already overdue (Metro's among them): it never filters to due dates from a later day on. Found in the pilot's Nov 5, 2026 second retake (OpenExecutive ac2b047b): the view was the Sales Invoice list filtered to 'Payment Due Date >= 2026-12-05', hiding every overdue invoice."
+query: "How much cash do we have across all our accounts, and what will it look like week by week for the next 13 weeks?"
+forbidden_tool_calls:
+  - propose_erpnext_draft
+forbidden_reply_words:
+  - ERPNext
+  - "couldn't get those figures"
+quality_criteria:
+  gives_cash_on_hand_across_the_bank_and_cash_accounts: true
+  gives_a_week_by_week_outlook_from_what_is_due_in_and_out: true
+  counts_overdue_receivables_rather_than_leaving_them_out: true
+  any_view_it_opens_for_what_is_due_includes_overdue_invoices: true
