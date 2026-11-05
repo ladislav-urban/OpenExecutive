@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 
-from openexecutive.orchestrator import answer_check
+from openexecutive.orchestrator import answer_check, answer_correct
 from openexecutive.orchestrator.answer_review import CANNOT_TELL, Review
 
 from .test_answer_check import _reviews, _rewrites, _turn, audit_rows  # noqa: F401
