@@ -120,6 +120,27 @@ _NOT_COUNTED = frozenset({
     "were", "be", "more", "less", "than", "with", "as", "per", "that", "which", "who", "what", "it",
     "x", "st", "nd", "rd", "th", "s",
 })
+# Records a count may be of ("six customers", "three Cedar & Pine
+# quotations"): such a count is held to the counts the turn read, never to any
+# value that happens to equal it (a quantity of 6, a price of 3).
+_RECORD_NOUNS = frozenset({
+    "customer", "supplier", "vendor", "client", "order", "invoice", "bill", "quotation", "quote",
+    "project", "task", "batch", "issue", "claim", "delivery", "receipt", "payment", "entry",
+    "journal", "opportunity", "lead", "visit", "asset", "account", "employee", "request",
+    "note", "record", "document", "job", "card", "contract", "item", "product", "sku", "line",
+    "warehouse", "branch", "department", "site", "bank", "repair", "inspection", "reminder",
+    "dunning", "timesheet", "milestone", "shipment", "return", "credit", "debit",
+})
+# What a count of each record is labelled with in ``Sources.counts``: its own
+# word, and the DocTypes or fields that hold it.
+_COUNT_WORDS: dict[str, tuple[str, ...]] = {
+    "customer": ("customer", "party"), "supplier": ("supplier", "party"), "vendor": ("supplier", "party"),
+    "client": ("customer", "party"), "bill": ("purchase invoice", "bill"), "quote": ("quotation",),
+    "batch": ("work order", "batch", "job card"), "job": ("job card", "work order"),
+    "delivery": ("delivery",), "shipment": ("delivery", "shipment"), "entry": ("entry", "journal"),
+    "card": ("card",), "line": ("items", "line"), "product": ("item",), "sku": ("item",),
+    "credit": ("credit", "return"), "debit": ("debit", "return"),
+}
 # Words before a plain whole number that make it an ordinal or a label.
 _LABEL_BEFORE = frozenset({
     "top", "first", "last", "next", "past", "step", "phase", "option", "number", "no", "page", "line",
@@ -205,6 +226,9 @@ class Figure:
     status: Status = "unconfirmed"
     # "N times …": matched against ratios of two values.
     multiple: bool = False
+    # The record a count counts ("six customers": "customer"), held to counts
+    # of that record only; "" for any other figure.
+    count: str = ""
     # The currency mark as written ("$", "€", "USD"), and for wrong_currency
     # the mark the value's own currency takes.
     currency_text: str = ""
@@ -321,6 +345,33 @@ def _word_after(text: str, pos: int) -> str:
     return m.group(1).lower() if m else ""
 
 
+def _counts_records(text: str, end: int) -> str:
+    """The record the number ending at ``end`` counts, or "": the last record
+    noun within the next four words, before any punctuation or number ("nine
+    open orders", "three Cedar & Pine quotations", "six customer projects":
+    projects)."""
+    m = re.match(r"[ \t*_]*((?:[A-Za-z][A-Za-z'’&-]*[ \t]+){0,4}[A-Za-z][A-Za-z'’-]*)", text[end:end + 80])
+    if not m:
+        return ""
+    noun = ""
+    for word in m.group(1).lower().split():
+        word = word.strip("'’-&")
+        if word in (
+            "of", "and", "or", "to", "in", "on", "at", "by", "for", "from", "with", "are", "is", "were", "was",
+            "per", "each", "every", "across", "a", "an",
+        ):
+            break
+        stem = word[:-3] + "y" if word.endswith("ies") else word[:-2] if word.endswith("ches") else word.rstrip("s")
+        if stem in _RECORD_NOUNS:
+            noun = stem
+    return noun
+
+
+def count_words(noun: str) -> tuple[str, ...]:
+    """What a count of ``noun`` may be labelled with (``_COUNT_WORDS``)."""
+    return _COUNT_WORDS.get(noun, (noun,))
+
+
 def _in_table_cell(text: str, start: int, end: int) -> bool:
     """Whether the figure is a whole cell of a Markdown table row."""
     line_start = text.rfind("\n", 0, start) + 1
@@ -410,6 +461,12 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
                 readings=readings, scale=scale, scale_text=scale_text.strip() if scale_text else "",
                 percent=pct, fmt=used,
                 multiple=not marked and not everything and _is_multiple(text, num_end),
+                count=(
+                    _counts_records(text, num_end)
+                    if not marked and not separated and not everything and value < 10_000
+                    and not _in_table_cell(text, num_start, num_end)
+                    else ""
+                ),
                 currency_text=(pre.strip() or post.strip()) if (pre.strip() or post.strip()) else "",
             )
         )
@@ -442,6 +499,7 @@ def _word_figures(text: str, masked: list[tuple[int, int]], found: list[Figure])
                 start=start, end=end, text=m.group(1), num=m.group(1), pre="", post="",
                 readings=((float(_NUMBER_WORDS[m.group(1).lower()]), 0),), scale=1.0, scale_text="",
                 percent=False, fmt=PLAIN, multiple=multiple,
+                count="" if multiple else _counts_records(text, end),
             )
         )
     return out
@@ -564,6 +622,17 @@ class _Reader:
         self.currencies: dict[float, set[str]] = {}
         self._company: str | None = None
         self._document: str | None = None
+        # Values of fields that are counts (row_count, count, open_count…),
+        # with what they count: the field and its result's DocType.
+        self.counts: list[tuple[float, str]] = []
+        self._doctype = ""
+
+    def _note_count(self, value: float, key: str) -> None:
+        name = key.lower()
+        if name in ("count", "row_count", "total_count", "records") or name.endswith("_count") or name.startswith(
+            ("count(", "count_", "number_of")
+        ):
+            self.counts.append((abs(value), f"{key} of {self._doctype}".lower()))
 
     def _note_currency(self, value: float, key: str, row_currency: object = None) -> None:
         own = row_currency if isinstance(row_currency, str) and len(row_currency) == 3 else self._document
@@ -588,6 +657,8 @@ class _Reader:
                     table.numeric.setdefault(key, [None] * len(rows))[i] = got
                     self.cells.append((got, truncated))
                     self._note_currency(got, key, row.get("currency"))
+                    if not truncated:
+                        self._note_count(got, key)
                 elif isinstance(value, str) and value and len(value) <= 140:
                     table.text.setdefault(key, [None] * len(rows))[i] = value
         self.tables.append(table)
@@ -607,6 +678,7 @@ class _Reader:
                 self.cells.append((got, False))
                 self.headline.append(got)
                 self._note_currency(got, key)
+                self._note_count(got, key)
 
     def result(self, result: ErpnextResult) -> None:
         payload = result.payload
@@ -617,6 +689,7 @@ class _Reader:
         numeric = self.types.numeric(doctype) | _aggregate_names(result.arguments)
         # list_records and reports give `currency` (the company's, or the
         # report's presentation currency); get_record gives both.
+        self._doctype = str(doctype or payload.get("report_name") or result.arguments.get("report_name") or "")
         company = payload.get("company_currency") or payload.get("currency")
         self._company = company if isinstance(company, str) else None
         document = payload.get("document_currency")
@@ -653,6 +726,8 @@ def _aggregates(table: _Rows) -> Iterator[tuple[float, str, bool]]:
     yield float(table.count), f"count of {table.label} rows", True
     for group_key, labels in table.text.items():
         distinct = {v for v in labels if v is not None}
+        if distinct:
+            yield float(len(distinct)), f"count of distinct {group_key} in {table.label}", False
         if 2 <= len(distinct) <= MAX_GROUPS:
             for group in distinct:
                 n = sum(1 for v in labels if v == group)
@@ -703,6 +778,9 @@ class Sources:
     changes: list[float] = field(default_factory=list)
     given: list[float] = field(default_factory=list)
     text: list[float] = field(default_factory=list)
+    # Counts of whole lists' rows, of their groups and distinct values, and
+    # count fields' values, sorted: what a count of records may be.
+    counts: list[tuple[float, str]] = field(default_factory=list)
     # Each ERPNext value's currencies, and what each currency mark may stand for.
     value_currencies: dict[float, set[str]] = field(default_factory=dict)
     symbols: dict[str, frozenset[str]] = field(default_factory=dict)
@@ -810,14 +888,24 @@ def sources_for(
     whole = {abs(v) for v, cut in cells if not cut} | set(extra)
     src.partial = {abs(v) for v, cut in cells if cut} - whole
     headline = {abs(v) for v in reader.headline} | set(extra)
+    counted: set[tuple[float, str]] = set(reader.counts)
     for table in reader.tables:
         target = src.truncated if table.truncated else src.complete
         for value, how, whole_column in _aggregates(table):
             target.setdefault(round(value, 9), how)
+            if not table.truncated and how.startswith("count of "):
+                # Matched on the list or the field, never a row's text value
+                # ("rows where customer is Invoice Masters Ltd"): a group's
+                # rows count the list's records, distinct values the field's.
+                label = how.lower().split(" where ", 1)[0]
+                if label.startswith("count of distinct "):
+                    label = label.split(" in ", 1)[0]
+                counted.add((round(value, 9), label))
             if whole_column and not table.truncated:
                 headline.add(abs(value))
     src._complete_keys = sorted(src.complete)
     src._truncated_keys = sorted(src.truncated)
+    src.counts = sorted(counted)
     src.headline = sorted(v for v in headline if v)[:MAX_HEADLINE]
     diffs: set[float] = set()
     ratios: set[float] = set()
@@ -915,6 +1003,15 @@ def _classify(fig: Figure, src: Sources) -> None:
 
     if (v := first(src.given)) is not None:
         fig.status, fig.matched, fig.how = "given", v, "the person's own message"
+    elif fig.count:
+        words = count_words(fig.count)
+        of_it = sorted({v for v, how in src.counts if any(w in how for w in words)})
+        if (v := first(of_it)) is not None:
+            fig.status, fig.matched, fig.how = "confirmed", v, "a count of what the turn read"
+        elif (v := first(src.text)) is not None:
+            fig.status, fig.matched, fig.how = "from_text", v, "other text the turn read"
+        else:
+            fig.status, fig.matched, fig.how = "unconfirmed", None, ""
     elif (v := first(src.values)) is not None:
         fig.status, fig.matched, fig.how = "confirmed", v, "a value in ERPNext's results"
     elif (v := first(src._complete_keys)) is not None:
