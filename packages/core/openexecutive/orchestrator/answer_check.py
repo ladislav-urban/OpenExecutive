@@ -281,7 +281,9 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     fmt, sources, names = await _sources(turn)
     # Off the event loop: reading a long result or conversation takes time.
     figures = await asyncio.to_thread(figure_check.check_figures, text, sources, fmt)
-    named = await asyncio.to_thread(name_check.check_names, text, names)
+    named = await asyncio.to_thread(
+        lambda: name_check.check_names(text, names, figures=[(f.start, f.end) for f in figures])
+    )
     counts.figures = len(figures)
     flagged = [f for f in figures if f.flagged]
     counts.flagged = len(flagged)
@@ -296,10 +298,10 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         else [CANNOT_TELL] * len(flagged)
     )
     counts.reviewed = len(flagged) if models else 0
-    # A name close to exactly one source name is that name, written in by
-    # code; any other is "not known", for the correction to leave out.
+    # A name close to exactly one source name is not known for any other
+    # name, for the correction to leave out.
     corrections: list[answer_correct.Correction] = [
-        answer_correct.Correction(n, n.right if n.status == "near" else None) for n in wrong_names
+        answer_correct.Correction(n, None) for n in wrong_names if n.status != "near"
     ]
     known: list[float] = []
     for fig, verdict in zip(flagged, reviews, strict=True):
@@ -310,15 +312,26 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
             corrections.append(answer_correct.Correction(fig, verdict.right if verdict.verdict == "wrong" else None))
             if verdict.right is not None:
                 known.append(verdict.right)
-    if not corrections:
-        return text
     checked = sources.plus(known)
-    checked_names = names.plus(c.right for c in corrections if isinstance(c.right, str))
+    # A name close to exactly one source name is that name, written in by code
+    # first: a source name, which a customer may have written, never reaches
+    # the correction call's prompt (answer_correct.write_names).
+    near = [answer_correct.Correction(n, n.right) for n in wrong_names if n.status == "near"]
+    checked_names = names.plus(str(c.right) for c in near)
+    if near:
+        text, corrections, figures = answer_correct.write_names(text, near, corrections, figures)
+        counts.substituted = len(near)
+    if not corrections:
+        if _passes(text, checked, checked_names, fmt):
+            return text
+        counts.whole_reply = 1
+        turn.whole_replaced = True
+        return answer_correct.WHOLE_REPLY
     failed = [c.figure for c in corrections]
     if not answer_correct.needs_rewrite(text, corrections):
         substituted = answer_correct.substitute(text, corrections)
         if _passes(substituted, checked, checked_names, fmt):
-            counts.substituted = len(corrections)
+            counts.substituted += len(corrections)
             return substituted
     if models:
         try:
@@ -334,12 +347,16 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
             counts.model_corrected = len(corrections)
             return rewrite
     fixed = answer_correct.fallback(text, corrections, figures)
+    if fixed != answer_correct.WHOLE_REPLY and not _passes(fixed, checked, checked_names, fmt):
+        # What code wrote must pass as a rewrite must; else the decided sentence.
+        fixed = answer_correct.WHOLE_REPLY
     if fixed == answer_correct.WHOLE_REPLY:
         counts.whole_reply = 1
         turn.whole_replaced = True
     else:
-        counts.substituted = sum(1 for c in corrections if c.right is not None and answer_correct.written(c) in fixed)
-        counts.left_out = len(corrections) - counts.substituted
+        written = sum(1 for c in corrections if c.right is not None and answer_correct.written(c) in fixed)
+        counts.substituted += written
+        counts.left_out = len(corrections) - written
     return fixed
 
 

@@ -26,10 +26,12 @@ only the final text.
 """
 from __future__ import annotations
 
+import dataclasses
 import difflib
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
+from typing import Any
 
 from openexecutive.orchestrator.figure_check import Figure, format_like
 from openexecutive.orchestrator.name_check import Name
@@ -223,6 +225,26 @@ def substitute(text: str, corrections: Iterable[Correction]) -> str:
     return out
 
 
+def write_names(
+    text: str, names: list[Correction], others: list[Correction], figures: list[Figure],
+) -> tuple[str, list[Correction], list[Figure]]:
+    """``text`` with each near name written in by code, and ``others`` and
+    ``figures`` moved to where they now are. Spans never overlap: a name is
+    never read across a figure (``name_check.check_names``)."""
+    edits = sorted(((c.figure.start, c.figure.end, written(c)) for c in names), key=lambda e: e[0])
+
+    def moved(pos: int) -> int:
+        return pos + sum(len(new) - (end - start) for start, end, new in edits if end <= pos)
+
+    def at(item: Any) -> Any:
+        return dataclasses.replace(item, start=moved(item.start), end=moved(item.end))
+
+    out = text
+    for start, end, new in reversed(edits):
+        out = out[:start] + new + out[end:]
+    return out, [Correction(at(c.figure), c.right) for c in others], [at(f) for f in figures]
+
+
 def needs_rewrite(text: str, corrections: Iterable[Correction]) -> bool:
     """Whether code alone can't fix these: a value that isn't known, or a
     substituted figure whose sentence compares or ranks by it."""
@@ -338,14 +360,27 @@ def allowed_spans(text: str, failed: Iterable[Figure | Name]) -> list[tuple[int,
     return spans
 
 
+# How much of the draft a correction quotes.
+MAX_QUOTE = 60
+
+
+def _quote(text: str) -> str:
+    """Draft text as a correction quotes it: one line, capped, no double quote."""
+    one = re.sub(r"\s+", " ", text).strip().replace('"', "'")
+    return one if len(one) <= MAX_QUOTE else one[: MAX_QUOTE - 1] + "…"
+
+
 def describe(corrections: Iterable[Correction]) -> str:
-    """The corrections for the correction call, one per line, built in code."""
+    """The corrections for the correction call, one per line, built in code.
+    Only numbers and quotes of the draft: a near name is written in by code
+    before the call (``write_names``), so no source name is ever here."""
     lines = []
     for n, c in enumerate(corrections, start=1):
+        quoted = _quote(c.figure.text)
         if c.right is None and isinstance(c.figure, Name):
-            lines.append(f'{n}. "{c.figure.text}": not a name in the results. Leave it out.')
+            lines.append(f'{n}. "{quoted}": not a name in the results. Leave it out.')
         elif c.right is None:
-            lines.append(f'{n}. "{c.figure.text}": no known value. Leave it out.')
+            lines.append(f'{n}. "{quoted}": no known value. Leave it out.')
         else:
-            lines.append(f'{n}. "{c.figure.text}" should be "{written(c)}".')
+            lines.append(f'{n}. "{quoted}" should be "{_quote(written(c))}".')
     return "\n".join(lines)

@@ -110,8 +110,7 @@ def test_bold_opening_a_list_item_with_a_figure_is_a_name_unless_its_a_label() -
     )
     assert _names(text) == {
         "Ridgeway Electrcal": ("near", "Ridgeway Electrical"),
-        "Harbor Lights Ltd": ("unconfirmed", None),
-    }  # the last line has no figure, and a right name in prose isn't listed
+    }  # a bold label naming no record stays; a right name isn't listed
 
 
 def test_ordinary_capitalised_words_are_left_alone() -> None:
@@ -177,3 +176,59 @@ def test_a_rewrite_that_names_another_unknown_record_is_thrown_away(monkeypatch:
     bad = reply.replace("Harbor Lights Ltd", "Harbor Lights Group")
     out, _ = _check(monkeypatch, reply, rewrite=bad)
     assert "Harbor" not in out
+
+
+# ---------------------------------------------------------------------------
+# The security review's findings
+
+
+def test_no_source_name_reaches_the_correction_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A customer's own name, written close to how ERPNext has it, is written in
+    # by code; the model sees only what to leave out, quoted from the draft.
+    reply = (
+        "Receivables total $49,230.\n\n| Customer | Owed |\n|---|---|\n"
+        "| Ridgeway Electrcal | 12,500 |\n| Harbor Lights Ltd | 1,000 |\n"
+    )
+    out, calls = _check(monkeypatch, reply, rewrite=None)
+    assert calls == ['1. "Harbor Lights Ltd": not a name in the results. Leave it out.']
+    assert "Ridgeway Electrical" not in calls[0]
+    assert out == reply.replace("Electrcal", "Electrical").replace("| Harbor Lights Ltd | 1,000 |\n", "").strip()
+
+
+def test_a_source_name_with_markdown_in_it_is_never_written_in() -> None:
+    for planted in ("Ridgeway | Electrical", "Ridgeway\nElectrical", "[Ridgeway Electrical](/x)", "Ridgeway `x`"):
+        result = ErpnextResult("erpnext__run_report", {}, {
+            "columns": [{"fieldname": "party", "fieldtype": "Link", "label": "Customer"}],
+            "rows": [{"party": planted}],
+        })
+        table = "| Customer | Owed |\n|---|---|\n| Ridgeway Electrical | 12,500 |\n"
+        got = {n.text: (n.status, n.right) for n in check_names(table, name_sources_for([result]))}
+        assert got == {"Ridgeway Electrical": ("unconfirmed", None)}, planted
+
+
+def test_a_numbered_record_is_never_matched_loosely_whatever_its_separator() -> None:
+    result = ErpnextResult("erpnext__list_records", {"doctype": "Sales Invoice"}, {
+        "doctype": "Sales Invoice", "rows": [{"name": "INV/2026/0001"}, {"name": "SINV-0001"}],
+    })
+    src = name_sources_for([result])
+    table = "| Invoice | Total |\n|---|---|\n| INV/2026/0002 | 10 |\n| SINV 0002 | 10 |\n| INV/2026/0001 | 10 |\n"
+    got = {n.text: n.status for n in check_names(table, src)}
+    assert got == {"INV/2026/0002": "unconfirmed", "SINV 0002": "unconfirmed", "INV/2026/0001": "confirmed"}
+
+
+def test_many_names_sharing_a_word_stay_quick() -> None:
+    import time
+
+    result = ErpnextResult("erpnext__run_report", {}, {
+        "columns": [{"fieldname": "party", "fieldtype": "Link", "label": "Customer"}],
+        "rows": [{"party": f"Zeta{i} Corp"} for i in range(1000)],
+    })
+    src = name_sources_for([result])
+    started = time.monotonic()
+    check_names("Zeta Corp paid. " * 6000, src)
+    assert time.monotonic() - started < 5
+
+
+def test_bold_labels_that_name_no_record_stay() -> None:
+    text = "- **Accounts Receivable**: $12,500\n- **Q3 2026 Sales**: $9,000\n- **Operating Expenses**: $1\n"
+    assert _names(text) == {}
