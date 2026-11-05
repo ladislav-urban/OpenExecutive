@@ -48,9 +48,14 @@ def _names(items: list[Any]) -> set[str]:
     return out
 
 
+def _singular(text: str) -> str:
+    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in text.split())
+
+
 def _within(small: str, big: str) -> bool:
-    """``small`` as whole words of ``big`` (both normalised)."""
-    return f" {small} " in f" {big} "
+    """``small`` as whole words of ``big`` (both normalised), plurals aside
+    ("the Sales Invoices list" for Sales Invoice)."""
+    return f" {_singular(small)} " in f" {_singular(big)} "
 
 
 def _shown(name: str, allowed: set[str]) -> bool:
@@ -60,7 +65,7 @@ def _shown(name: str, allowed: set[str]) -> bool:
 
 
 # A sentence that warns off or offers instead isn't a claim about the screen.
-_KEEP_WORDS = re.compile(r"\b(?:don't|do not|never|instead|rather than|can't|cannot|unable)\b", re.I)
+_KEEP_WORDS = re.compile(r"\b(?:don['’]t|do not|never|instead|rather than|can['’]t|cannot|unable)\b", re.I)
 
 
 def drop_stale_screen(reply: str, page: Any, views: list[dict[str, Any]]) -> tuple[str, int]:
@@ -68,7 +73,10 @@ def drop_stale_screen(reply: str, page: Any, views: list[dict[str, Any]]) -> tup
     screen doesn't show it, and how many went (module docstring)."""
     if not reply or not _ON_SCREEN.search(reply):
         return reply, 0
-    if isinstance(page, dict) and page.get("screen") and not views:
+    if (
+        isinstance(page, dict) and isinstance(page.get("screen"), str) and page["screen"]
+        and not any(page.get(k) for k in ("doctype", "name", "report")) and not views
+    ):
         # Beside one of Dynocortex's own screens: SCREEN_RULE has the reply
         # say it can't see that screen, which names it.
         return reply, 0
@@ -82,7 +90,8 @@ def drop_stale_screen(reply: str, page: Any, views: list[dict[str, Any]]) -> tup
         if unit is None or unit in gone or unit.lead or unit.kind in ("heading", "header", "code", "row"):
             continue
         part = reply[unit.start:unit.end]
-        if _KEEP_WORDS.search(part) or any(_within(a, _norm(part)) for a in allowed if len(a) >= 3):
+        norm_part = _norm(part)
+        if _KEEP_WORDS.search(part) or any(_within(a, norm_part) for a in allowed if len(a) >= 3):
             # A warning, an alternative, or a sentence that also names what
             # is on screen: left as written.
             continue

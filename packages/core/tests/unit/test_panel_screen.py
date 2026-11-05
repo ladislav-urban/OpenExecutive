@@ -95,3 +95,10 @@ def test_what_it_leaves_alone() -> None:
         "- The Purchase Receipt report you have open, by date."
     )
     assert drop_stale_screen(items, LIST_PAGE, []) == (items, 0)
+
+
+def test_curly_apostrophes_and_plurals() -> None:
+    warning = "Three are late. Don’t use the Purchase Order list you have open; it lacks suppliers."
+    assert drop_stale_screen(warning, LIST_PAGE, []) == (warning, 0)
+    plural = "Twelve are unpaid. The Sales Invoices list you have open shows them by customer."
+    assert drop_stale_screen(plural, LIST_PAGE, []) == (plural, 0)
