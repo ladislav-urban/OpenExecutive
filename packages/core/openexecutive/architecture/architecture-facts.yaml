@@ -5308,6 +5308,9 @@ chat:
     outside the failed figures' units changed and every figure passes,
     else removes the sentence / list item / table row, or the whole reply
     becomes WHOLE_REPLY (erpnext_views / the panel reply get open_call).
+    Never WHOLE_REPLY when only names failed (the reply stands) or the
+    question is a projection (answer_check._PROJECTION_Q: known values
+    written in, the rest under PROJECTION_NOTE); audit `kept`.
     The gateway feeds every ERPNext read's result to the bound
     AnswerCheckTurn (note_erpnext_result); the web chat route, Executive.chat,
     the panel and the morning brief bind one. Web chat: reply_replaced event,
