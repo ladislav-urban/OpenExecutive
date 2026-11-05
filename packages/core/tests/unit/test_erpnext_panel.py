@@ -268,7 +268,9 @@ def test_both_panel_blocks_read_a_follow_up_with_the_turns_before_it() -> None:
         assert "rather than repeat it from an earlier answer" in block
         assert "over the same period and filters the earlier answer used" in block
         assert "haven't re-read or checked" in block
-        assert "give the right one plainly, marked \"corrected:\" at most" in block
+        assert "never add a \"Correction\" line, bullet or note" in block
+        assert "what still holds you don't restate" in block
+        assert "corrected:" not in block
         assert "worked out before you write it, never retried in the reply" in block
         assert "Never say you said something the earlier turns don't show." in block
         assert "may not see your earlier answers" not in block
