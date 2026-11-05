@@ -42,7 +42,10 @@ MAX_CHARS = 2500
 # How much of a document is read to find its front matter.
 HEAD_BYTES = 4096
 _SUFFIXES = frozenset({".md", ".markdown", ".txt"})
-_FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
+_FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*\r?\n", re.S)
+# The closing fence must end its line: a block found in a document's head is
+# then the same block in its full text, so what the upload check and the turn
+# read (the head) and what a bundle's writer strips (the whole) always agree.
 _TRUE = frozenset({"true", "yes", "on", "1"})
 
 _lock = threading.Lock()

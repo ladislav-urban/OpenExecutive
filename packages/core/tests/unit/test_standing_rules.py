@@ -161,3 +161,19 @@ def test_a_generated_client_bundles_documents_lose_the_flag(tmp_path: Path) -> N
     assert not any("always: true" in text for text in written.values())
     assert any("Rachel Dunmore" in text for text in written.values())
     assert standing_rules(tmp_path / "docs") == []
+
+
+def test_a_fence_across_the_head_is_read_the_same_whole_or_in_part(tmp_path: Path) -> None:
+    import json
+
+    from openexecutive.fixtures.generator import materialize_to_dir
+    from openexecutive.knowledge.standing_rules import HEAD_BYTES, is_standing, strip_standing
+
+    # The closing fence's trailing spaces straddle the head, then a letter.
+    pad = "\U0001F600" * ((HEAD_BYTES - 40) // 4)
+    text = "---\nalways: true\n" + pad + "\n---" + " " * 80 + "x\n# Who can approve\n\n- Up to $50,000: T alone.\n"
+    head = text.encode()[:HEAD_BYTES].decode("utf-8", errors="replace")
+    assert is_standing(split_front_matter(head)[0]) == is_standing(split_front_matter(text)[0]) is False
+    assert strip_standing(text) == text
+    materialize_to_dir({"docs_json": json.dumps({"stacked.md": text})}, tmp_path)
+    assert standing_rules(tmp_path / "docs") == []
