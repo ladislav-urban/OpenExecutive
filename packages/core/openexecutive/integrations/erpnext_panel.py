@@ -878,6 +878,10 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
     finally:
         _turn_views.reset(views_token)
         _in_flight.discard(email)
+    # What the reply says is on screen, held to the page or what it opened.
+    from openexecutive.integrations.panel_screen import drop_stale_screen
+
+    reply, _stale = drop_stale_screen(reply, data.get("page"), shown.views)
     payload = shown.payload()
     if checked.whole_replaced and shown.call is not None:
         # The reply says to open the report: the panel opens the last read.
