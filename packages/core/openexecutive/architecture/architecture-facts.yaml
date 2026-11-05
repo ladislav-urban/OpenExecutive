@@ -5285,6 +5285,29 @@ chat:
     iteration, fails open. Why: replies said "Done" or "I'll treat it as
     closed" with no tool call, and the brief kept the item.
     CLAIM_CHECK_ENABLED (default true).
+  answer_check: |
+    The answer check (orchestrator/answer_check.py; oe_connector's
+    docs/answer-check-plan.md, PR (a) numbers; decided Nov 4, 2026). On a
+    turn that read ERPNext, once the reply ends: answer_check_context
+    (oe_connector, hidden, CODE_ONLY_TOOLS; the gateway runs it only inside
+    erpnext_caller.answer_check_run, which runs nothing else) gives the
+    number format and numeric fields; figure_check (check 1, no model)
+    finds each figure's source; answer_review (check 2, ROUTING_MODEL) sees
+    only flagged ones and code works out every operation it names from
+    ERPNext's own numbers; answer_correct writes known values in by code,
+    calls the turn's model once (tools=[], constant prompt, draft as
+    untrusted content) only when needed, keeps the rewrite only if nothing
+    outside the failed figures' units changed and every figure passes,
+    else removes the sentence / list item / table row, or the whole reply
+    becomes WHOLE_REPLY (erpnext_views / the panel reply get open_call).
+    The gateway feeds every ERPNext read's result to the bound
+    AnswerCheckTurn (note_erpnext_result); the web chat route, Executive.chat,
+    the panel and the morning brief bind one. Web chat: reply_replaced event,
+    corrected text saved; stopped/timed-out replies checked before saving,
+    disconnected saved as streamed. Fails open on an internal error; code
+    alone when out of time. answer_check audit row, counts only.
+    ERPNEXT_ANSWER_CHECK=off|correct (default correct). Why: the pilot's
+    reshoots (oe_connector#413-#415) quoted figures ERPNext didn't hold.
   chat_review: |
     Conversation review (memory/chat_review.py). The post-turn block keeps a
     verified speaker's turn (principal on a people_tools-verified surface, or

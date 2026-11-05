@@ -58,6 +58,7 @@ _FULL_MAX_LEN = 64 * 1024
 # listed here so consumers know what to expect.
 EVENT_TYPES: tuple[str, ...] = (
     "chat_turn",
+    "answer_check",  # a reply's figures held to ERPNext's results that turn (counts only; orchestrator/answer_check.py)
     "specialist_consult",
     "tool_invocation",
     "scheduled_action",

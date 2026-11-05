@@ -8,7 +8,8 @@ the API description, so a client checks itself against the description alone
 it.
 
 A turn ends with ``done``, after ``stopped`` when the person stopped it and
-after ``error`` when it failed. ``debug_event`` rows trace the turn for the
+after ``error`` when it failed. ``reply_replaced``, when it comes, holds the
+whole reply in place of the chunks before it. ``debug_event`` rows trace the turn for the
 agent-activity panel.
 """
 from __future__ import annotations
@@ -119,6 +120,20 @@ class ErpnextViewsEvent(_Event):
     type: Literal["erpnext_views"]
     views: list[dict[str, Any]]
     call: dict[str, Any] | None = None
+    # True when the reply asks the person to open the report: the panel opens
+    # ``call``'s view beside it.
+    open_call: bool = False
+    session_id: str | None = None
+
+
+class ReplyReplacedEvent(_Event):
+    """The whole reply, once checked, in place of the text streamed so far;
+    sent before ``sources`` and ``done``, and the text that is saved. Figures
+    are held to what ERPNext returned that turn (``orchestrator.answer_check``).
+    It says nothing about what changed or why."""
+
+    type: Literal["reply_replaced"]
+    content: str
     session_id: str | None = None
 
 
@@ -167,6 +182,7 @@ ChatStreamEvent = Annotated[
     | SourcesEvent
     | MessageAddedEvent
     | ErpnextViewsEvent
+    | ReplyReplacedEvent
     | StoppedEvent
     | DebugEventEvent
     | ErrorEvent
@@ -177,7 +193,7 @@ ChatStreamEvent = Annotated[
 # The events' names, in the order a client reads about them.
 EVENT_TYPES: tuple[str, ...] = (
     "chunk", "thinking", "activity", "phase", "committee_critique", "action_taken", "form_patch",
-    "sources", "message_added", "erpnext_views", "stopped", "debug_event", "error", "done",
+    "reply_replaced", "sources", "message_added", "erpnext_views", "stopped", "debug_event", "error", "done",
 )
 
 

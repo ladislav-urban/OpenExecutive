@@ -305,11 +305,18 @@ class MorningBriefWorkflow(Workflow):
         # ERP NUMBERS: a few totals from ERPNext's own reports, for the
         # principal alone (ERPNEXT_BRIEF_COMPANY turns it on). Never raises.
         erp_numbers = ""
+        # The answer check's turn: the four reports' results, which the
+        # narrative's figures are held to before it goes (decided Nov 4, 2026,
+        # orchestrator.answer_check). Bound around the await alone.
+        from openexecutive.orchestrator import answer_check
+
+        erp_check = answer_check.AnswerCheckTurn(brief=True)
         if private_ok and _erp_ok():
             from openexecutive.briefing.erp_numbers import gather_erp_numbers
             from openexecutive.briefing.narrative_cache import local_today as local_date
 
-            erp_numbers = await gather_erp_numbers(datetime.fromisoformat(local_date(now)).date())
+            with answer_check.collect(erp_check):
+                erp_numbers = await gather_erp_numbers(datetime.fromisoformat(local_date(now)).date())
         # The first week's GETTING STARTED block (goals, departments with no
         # leader and, on the delivery to the principal alone, who wrote to
         # their own inbox), so a new install's first brief is never "quiet".
@@ -469,6 +476,16 @@ class MorningBriefWorkflow(Workflow):
             # The shared synthesizer's own quiet-day line, so the empty
             # fallback reads identically to a model-produced quiet brief.
             artifact_text = QUIET_PRINCIPAL
+
+        # The narrative's figures held to the ERP NUMBERS reports' results, and
+        # corrected, before grounding (orchestrator.answer_check). The rest of
+        # its context is text it may quote.
+        if erp_numbers and artifact_text != QUIET_PRINCIPAL:
+            from openexecutive.agents.utility_fast import get_fast_model
+
+            erp_check.note_texts([rendered.replace(erp_numbers, "")])
+            with set_turn(session_id=audit_session, turn_id=brief_turn):
+                artifact_text = await answer_check.check_reply(artifact_text, erp_check, model=get_fast_model())
 
         # Nobody reads this before it ships: hold back any line naming a
         # person or figure the context doesn't hold, and cite the figures.

@@ -34,7 +34,7 @@ from openexecutive.orchestrator.answer_sources import TurnSources
 from openexecutive.orchestrator.debug_events import DebugCollector
 from openexecutive.orchestrator.turn_inbox import TurnInbox
 from openexecutive.people import demo as people_demo
-from openexecutive.prompts.connected_systems import product_reply_stream
+from openexecutive.prompts.connected_systems import in_product_reply, product_reply_stream
 from openexecutive.workflows import turn_files
 from openexecutive.workflows.python_job import available as python_job_available
 from openexecutive.workflows.turn_files import bind as bind_turn_files
@@ -1670,6 +1670,11 @@ async def _chat_turn(
     from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
 
     turn_views = TurnViews() if session.host_page else None
+    # What this turn's figures may come from, for the answer check
+    # (orchestrator.answer_check); bound for the stream like the views.
+    from openexecutive.orchestrator import answer_check
+
+    check_turn = answer_check.AnswerCheckTurn()
 
     async def event_generator():
         # Bind the turn AND the session for the whole SSE body, not just its
@@ -1702,6 +1707,7 @@ async def _chat_turn(
             rows_for_person(caller_person_id) if own_rows else contextlib.nullcontext(),
             bind_turn_files(turn_files),
             collect_views(turn_views) if turn_views is not None else contextlib.nullcontext(),
+            answer_check.collect(check_turn),
         ):
             async with contextlib.aclosing(_sse_body()) as body:
                 async for evt in body:
@@ -1961,6 +1967,24 @@ async def _chat_turn(
 
                     if step.produced:
                         item = step.item
+                        if isinstance(item, dict) and item.get("type") == "reply_replaced":
+                            # The checked reply in place of what streamed
+                            # (orchestrator.answer_check): shown, mirrored and
+                            # saved instead. What the product's words held back
+                            # was the draft's, so it goes.
+                            if words is not None:
+                                words.flush()
+                            replaced = str(item.get("content") or "")
+                            full_response = in_product_reply(replaced) if words is not None else replaced
+                            replaced_evt = {
+                                "type": "reply_replaced",
+                                "content": full_response,
+                                "session_id": session.session_id,
+                            }
+                            if session.shared_chat:
+                                chat_live.turn_event(session.session_id, live_key, replaced_evt)
+                            yield f"data: {json.dumps(replaced_evt)}\n\n"
+                            continue
                         is_text = isinstance(item, str) and item != Executive._THINKING
                         if words is None:
                             text = item if is_text else ""
@@ -2039,6 +2063,25 @@ async def _chat_turn(
                     if session.shared_chat:
                         chat_live.turn_event(session.session_id, live_key, tail_evt)
                     yield f"data: {json.dumps(tail_evt)}\n\n"
+
+            # A stopped or timed-out reply never reached the Executive's own
+            # check, and is saved as the person last saw it: checked and
+            # corrected here first (decided Nov 4, 2026). A disconnected one is
+            # saved as streamed: nobody is there to show the correction to.
+            if (stopped or timed_out) and full_response.strip():
+                checked = await answer_check.check_reply(
+                    full_response, check_turn, question=message, budget_s=answer_check.STOPPED_BUDGET_S,
+                )
+                if checked != full_response:
+                    full_response = in_product_reply(checked) if words is not None else checked
+                    replaced_evt = {
+                        "type": "reply_replaced",
+                        "content": full_response,
+                        "session_id": session.session_id,
+                    }
+                    if session.shared_chat:
+                        chat_live.turn_event(session.session_id, live_key, replaced_evt)
+                    yield f"data: {json.dumps(replaced_evt)}\n\n"
 
             # Nothing more can reach this turn: anything still waiting in the
             # inbox was never seen, and the client sends it as the next turn.
@@ -2161,6 +2204,10 @@ async def _chat_turn(
                     "call": turn_views.call,
                     "session_id": session.session_id,
                 }
+                if check_turn.whole_replaced and turn_views.call is not None:
+                    # The reply says to open the report: the panel opens the
+                    # last read beside it (question 9 of the answer check).
+                    views_evt["open_call"] = True
                 yield f"data: {json.dumps(views_evt)}\n\n"
 
             done_payload: dict[str, Any] = {"type": "done", "session_id": session.session_id}

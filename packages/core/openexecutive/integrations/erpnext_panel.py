@@ -839,8 +839,14 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
     _in_flight.add(email)
     shown = _TurnViews()
     views_token = _turn_views.set(shown)
+    # The answer check's turn (orchestrator.answer_check), bound here so the
+    # reply can say to open the report it read.
+    from openexecutive.orchestrator import answer_check
+
+    checked = answer_check.AnswerCheckTurn()
     try:
-        reply = await _answer(person, email, conversation_id, message.strip(), data.get("page"))
+        with answer_check.collect(checked):
+            reply = await _answer(person, email, conversation_id, message.strip(), data.get("page"))
     except TimeoutError:
         return _error(504, "timeout", "That took too long to answer; try a narrower question.")
     except PanelRefused:
@@ -857,4 +863,8 @@ async def erpnext_panel_chat(request: Request) -> JSONResponse:
     finally:
         _turn_views.reset(views_token)
         _in_flight.discard(email)
-    return JSONResponse({"reply": in_product_reply(reply), **shown.payload()})
+    payload = shown.payload()
+    if checked.whole_replaced and shown.call is not None:
+        # The reply says to open the report: the panel opens the last read.
+        payload["open_call"] = True
+    return JSONResponse({"reply": in_product_reply(reply), **payload})

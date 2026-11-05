@@ -163,6 +163,9 @@ def turn_event(session_id: str, turn_key: str, event: dict[str, Any]) -> None:
     kind = event.get("type")
     if kind == "chunk":
         turn["reply"] += str(event.get("content") or "")
+    elif kind == "reply_replaced":
+        # The reply, checked, in place of what streamed (orchestrator.answer_check).
+        turn["reply"] = str(event.get("content") or "")
     elif kind == "action_taken":
         turn["actions"].append(event)
     publish(session_id, {**event, "turn_key": turn_key})

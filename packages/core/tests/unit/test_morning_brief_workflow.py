@@ -694,3 +694,48 @@ async def test_the_briefs_model_calls_share_a_turn_of_their_own(
     assert len(seen) == 2 and seen[0] == seen[1]
     assert (seen[0][1] or "").startswith("brief-")
     assert get_active_ids() == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_the_narratives_erp_figures_are_held_to_the_reports(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Decided Nov 4, 2026 (oe_connector's docs/answer-check-plan.md, question 7):
+    # the brief's narrative is checked against the ERP NUMBERS reports' results
+    # and corrected before it goes, never saying so.
+    import json
+
+    from openexecutive.briefing import erp_numbers
+    from openexecutive.orchestrator import answer_check, answer_review
+    from openexecutive.workflows import morning_brief
+
+    _stub_aggregators(monkeypatch)
+
+    async def synth(**_kw: object) -> str:
+        return "Payables stand at 12.00 USD today."
+
+    async def gather(_today: object) -> str:
+        answer_check.note_erpnext_result(
+            "erpnext__run_report", {"report_name": "Accounts Payable Summary"},
+            json.dumps({"report_name": "Accounts Payable Summary", "total_row": {"outstanding": 10.0}}),
+            failed=False,
+        )
+        return "ERP NUMBERS (ERPNext's own reports, Acme, USD):\n- Payables today: 10.00 USD outstanding."
+
+    async def no_context(_turn: object) -> dict[str, object]:
+        return {}
+
+    async def wrong(**_kw: object) -> list[answer_review.Review]:
+        return [answer_review.Review("wrong", 10.0)]
+
+    monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", synth)
+    monkeypatch.setattr(erp_numbers, "gather_erp_numbers", gather)
+    monkeypatch.setattr(answer_check, "_context", no_context)
+    monkeypatch.setattr(answer_review, "review", wrong)
+    token = morning_brief.PRINCIPAL_DELIVERY.set(True)
+    try:
+        events = [e async for e in MorningBriefWorkflow().run(MorningBriefInput(force_full=True), MagicMock())]
+    finally:
+        morning_brief.PRINCIPAL_DELIVERY.reset(token)
+    brief = next(e for e in events if e.type == "artifact").content
+    assert "10.00 USD" in brief and "12.00" not in brief

@@ -543,6 +543,10 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
           setIsConsulting(false);
           setActivityLabel(null);
           setStreamingContent(accumulated);
+        } else if (item.type === "reply_replaced") {
+          // The checked reply, in place of what streamed.
+          accumulated = item.content ?? "";
+          setStreamingContent(accumulated);
         } else if (item.type === "activity") {
           // Arrives immediately before `thinking`, so the label is in place
           // before the indicator turns on. Deliberately not cleared by

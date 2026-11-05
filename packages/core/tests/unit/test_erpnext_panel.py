@@ -648,12 +648,14 @@ class _Extensible:
 def test_every_erpnext_tool_the_model_calls_has_a_discovery_query() -> None:
     from openexecutive.orchestrator import erpnext_tool_pin
     from openexecutive.prompts.connected_systems import (
+        ERPNEXT_CODE_ONLY_TOOLS,
         ERPNEXT_DISCOVERY_QUERIES,
         ERPNEXT_SHOW_TOOL,
         PINNED_ERPNEXT_TOOLS,
     )
 
-    assert set(ERPNEXT_DISCOVERY_QUERIES) == PINNED_ERPNEXT_TOOLS | {ERPNEXT_SHOW_TOOL}
+    # And the answer check's own tool, which its code discovers on first use.
+    assert set(ERPNEXT_DISCOVERY_QUERIES) == PINNED_ERPNEXT_TOOLS | {ERPNEXT_SHOW_TOOL} | ERPNEXT_CODE_ONLY_TOOLS
     for name in ERPNEXT_DISCOVERY_QUERIES:
         assert name.removeprefix(erpnext_tool_pin.ERPNEXT_PREFIX) in erpnext_tool_pin.TOOL_DIGESTS
 

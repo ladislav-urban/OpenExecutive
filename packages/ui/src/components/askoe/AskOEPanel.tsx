@@ -176,6 +176,10 @@ export default function AskOEPanel() {
             content += item.content;
             setActivityLabel(null);
             setStreamingContent(content);
+          } else if (item.type === "reply_replaced") {
+            // The checked reply, in place of what streamed.
+            content = item.content ?? "";
+            setStreamingContent(content);
           } else if (item.type === "activity") {
             setActivityLabel(item.label);
           } else if (item.type === "form_patch") {
