@@ -10,6 +10,7 @@ import {
   hintOf,
   loginHint,
   otherPerson,
+  ownNavigation,
   returnTarget,
   signOutTarget,
 } from "../src/lib/signinReturn.ts";
@@ -152,12 +153,35 @@ test("the sign-in takes hint or login_hint, and replaces only someone else's ses
   // No hint: whoever is signed in stays, as before.
   assert.equal(otherPerson("a@example.com", undefined), false);
   const sso = read("../src/app/signin/sso/route.ts");
-  assert.match(sso, /if \(!otherPerson\(session\.user\?\.email, hint\)\) return Response\.redirect\(to\);\n\s*\/\/[^\n]*\n[^\n]*\n\s*await signOut\(\{ redirect: false \}\);/);
+  assert.match(
+    sso,
+    /if \(!otherPerson\(session\.user\?\.email, hint\) \|\| !ownNavigation\(request\.headers\)\) return Response\.redirect\(to\);\n\s*\/\/[^\n]*\n[^\n]*\n\s*await signOut\(\{ redirect: false \}\);/,
+  );
 });
 
-test("the sign-out answers only a navigation, ends the session with its time, and goes only to a host", () => {
+test("only the person's own tab, opened same-site or from the address bar, may end a session", () => {
+  const h = (o) => ({ get: (k) => o[k] ?? null });
+  const tab = { "sec-fetch-mode": "navigate", "sec-fetch-dest": "document", "sec-fetch-site": "same-site" };
+  assert.equal(ownNavigation(h(tab)), true);
+  assert.equal(ownNavigation(h({ ...tab, "sec-fetch-site": "none" })), true);
+  assert.equal(ownNavigation(h({ ...tab, "sec-fetch-site": "same-origin" })), true);
+  // A browser that sends no fetch metadata, as before.
+  assert.equal(ownNavigation(h({})), true);
+  for (const not of [
+    { ...tab, "sec-fetch-site": "cross-site" }, // another site's link
+    { ...tab, "sec-fetch-dest": "iframe" }, // a hidden frame on a sibling origin
+    { ...tab, "sec-fetch-dest": "image", "sec-fetch-mode": "no-cors" }, // an <img>
+    { ...tab, "sec-fetch-mode": "cors", "sec-fetch-dest": "empty" }, // a fetch
+    { ...tab, "sec-purpose": "prefetch" }, // a speculative prefetch
+    { ...tab, purpose: "prefetch" },
+  ]) {
+    assert.equal(ownNavigation(h(not)), false, JSON.stringify(not));
+  }
+});
+
+test("the sign-out answers only the person's own tab, ends the session with its time, and goes only to a host", () => {
   const out = read("../src/app/signout/sso/route.ts");
-  assert.match(out, /if \(mode && mode !== "navigate"\)/);
+  assert.match(out, /if \(!ownNavigation\(request\.headers\)\)/);
   assert.match(out, /signOutTarget\(new URL\(request\.url\)\.searchParams\.get\("to"\), HOST_ORIGINS\.origins\)/);
   assert.match(out, /sid: provider\.sid, sub: provider\.sub, ended_at: Math\.floor\(Date\.now\(\) \/ 1000\)/);
   assert.match(out, /await signOut\(\{ redirect: false \}\);/);

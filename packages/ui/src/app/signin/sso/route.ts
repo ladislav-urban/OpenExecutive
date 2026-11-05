@@ -10,6 +10,7 @@ import {
   failedTarget,
   hintOf,
   otherPerson,
+  ownNavigation,
   returnTarget,
 } from "@/lib/signinReturn";
 
@@ -58,7 +59,9 @@ export async function GET(request: Request): Promise<Response> {
   const hint = hintOf(params);
   const session = await auth();
   if (session && (await sessionStillAllowed(session, (await headers()).get("host")))) {
-    if (!otherPerson(session.user?.email, hint)) return Response.redirect(to);
+    // Ended only when the person's own tab opened this (ownNavigation): an
+    // image or a frame pointed here can't sign anyone out.
+    if (!otherPerson(session.user?.email, hint) || !ownNavigation(request.headers)) return Response.redirect(to);
     // Someone else's session at this browser: its cookie goes before the
     // host's user signs in, so a failed sign-in can't leave it in place.
     await signOut({ redirect: false });

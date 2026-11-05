@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { auth, signOut } from "@/auth";
 import { recordEndedSession, endedSessions } from "@/lib/endedSessionsServer";
 import { HOST_ORIGINS } from "@/lib/hostConfig";
-import { signOutTarget } from "@/lib/signinReturn";
+import { ownNavigation, signOutTarget } from "@/lib/signinReturn";
 
 // A host origin's page signs its user out of this app too, on its way to its
 // own sign-out (54.a, Nov 5, 2026). This app's session can outlive the
@@ -22,20 +22,21 @@ import { signOutTarget } from "@/lib/signinReturn";
 // - Then the tab goes to `to`, a page on one of the host origins
 //   (signOutTarget), else this app's /signin.
 //
-// A cross-site GET: anyone could link here, and following the link signs the
-// person out of this app. That is all it can do: it reads nothing, changes no
-// data, and the person signs straight back in (the next /signin/sso). It
-// answers only a top-level navigation (Sec-Fetch-Mode), so an image, a frame's
-// subresource or a fetch can't sign anyone out unseen, and it sends the tab
-// only to a listed host. Session-free (lib/middlewarePaths.ts): a tab with no
-// session, or an ended one, still goes on to the host's sign-out.
+// A GET anyone could link to. It answers only the person's own tab opening it
+// from a same-site page or the address bar (ownNavigation: a top-level
+// document navigation, not cross-site, not a prefetch), so an image, a frame,
+// a fetch, a prefetch or another site's link can't sign anyone out unseen;
+// the session cookie is SameSite=Lax, which alone would let a same-site frame
+// through. Even then it can only sign someone out of this app: it reads
+// nothing, changes no data, and the person signs straight back in. It sends
+// the tab only to a listed host. Session-free (lib/middlewarePaths.ts): a tab
+// with no session, or an ended one, still goes on to the host's sign-out.
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request): Promise<Response> {
-  const mode = request.headers.get("sec-fetch-mode");
-  if (mode && mode !== "navigate") {
+  if (!ownNavigation(request.headers)) {
     return new Response(JSON.stringify({ error: "a sign-out is a page the browser opens" }), {
       status: 403,
       headers: { "content-type": "application/json", "cache-control": "no-store" },

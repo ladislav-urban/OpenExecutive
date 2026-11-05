@@ -227,10 +227,14 @@ again.
   time (a record with both ends only the sessions on that `sid` that began by
   then, so the person can sign straight back in on a provider session that
   lives on), and sends the tab to `to`: any page on a host origin, else
-  `/signin`. It needs no session, and answers only a top-level navigation
-  (`Sec-Fetch-Mode: navigate`; anything else is 403). A link from anywhere can
-  sign someone out of Open Executive this way, and that is all it can do: it
-  reads and changes nothing, and they sign straight back in.
+  `/signin`. It needs no session, and answers only the person's own tab: a
+  top-level document navigation that isn't cross-site or a prefetch (fetch
+  metadata; anything else is 403). The session cookie is `SameSite=Lax`, so
+  this is what keeps a frame or an image on a sibling site from signing anyone
+  out unseen. A link the person follows can still sign them out of Open
+  Executive, and that is all it can do: it reads and changes nothing, and they
+  sign straight back in. `/signin/sso` ends someone else's session under the
+  same rule, and otherwise returns as before.
 
 At the provider, on the same client:
 

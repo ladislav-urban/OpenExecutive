@@ -81,6 +81,25 @@ export function signOutTarget(to: string | null | undefined, origins: readonly s
   return `${url.origin}${route}`;
 }
 
+/**
+ * Whether a request is the person's own tab opening this page: a top-level
+ * document navigation, not cross-site (a host origin is same-site by rule,
+ * lib/hostOrigins.ts; a typed address is `none`), and not a prefetch. Only
+ * then may /signout/sso, or /signin/sso for someone else, end a session: an
+ * image, a frame, a fetch, a speculative prefetch or another site's link
+ * can't. A browser that sends no fetch metadata is let through, as before.
+ */
+export function ownNavigation(headers: { get(name: string): string | null }): boolean {
+  const mode = headers.get("sec-fetch-mode");
+  const dest = headers.get("sec-fetch-dest");
+  const site = headers.get("sec-fetch-site");
+  const purpose = `${headers.get("sec-purpose") ?? ""} ${headers.get("purpose") ?? ""}`.toLowerCase();
+  if (mode && mode !== "navigate") return false;
+  if (dest && dest !== "document") return false;
+  if (site === "cross-site") return false;
+  return !purpose.includes("prefetch") && !purpose.includes("prerender");
+}
+
 /** The desk user /signin/sso was asked for: `hint`, or OpenID's `login_hint`. */
 export function hintOf(params: URLSearchParams): string | undefined {
   return loginHint(params.get("hint") ?? params.get("login_hint"));
