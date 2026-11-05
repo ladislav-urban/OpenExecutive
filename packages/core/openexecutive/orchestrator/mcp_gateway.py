@@ -3936,9 +3936,17 @@ class MCPGateway:
             mcp_client_withholds,
             mcp_rules_turn,
         )
+        from openexecutive.prompts.connected_systems import ERPNEXT_CODE_ONLY_TOOLS
 
         turn_session = current_session.get()
-        if mcp_rules_turn(turn_session) and mcp_client_withholds("call_tool", tool_input):
+        # The answer check's own calls on a host origin's turn (F1): its tools
+        # are no model's, and only its marker, which no tool sets, lets them
+        # through (the gate below holds them to it either way).
+        own_check = (
+            _normalize_tool_name(str(tool_input.get("name") or "")) in ERPNEXT_CODE_ONLY_TOOLS
+            and erpnext_caller.in_answer_check_run()
+        )
+        if mcp_rules_turn(turn_session) and not own_check and mcp_client_withholds("call_tool", tool_input):
             return mcp_client_withheld_error(
                 str(tool_input.get("name") or "call_tool")[:200],
                 acting=mcp_client_acting(turn_session),
