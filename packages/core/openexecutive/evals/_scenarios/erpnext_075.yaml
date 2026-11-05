@@ -1,0 +1,28 @@
+id: erpnext_075
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Order
+prior_turns:
+- page:
+    doctype: Sales Order
+  user: Where is Pinecrest's order?
+  assistant: 'Part-delivered: 6 of 73 16A breakers went out on Oct 19, and 67 are still owed. Stores holds 126 breakers, so the 67 can ship now.'
+description: 'Where-is-my-order step 2 (oe_connector''s help/try-where-is-my-order.md) in ERPNext''s panel as a demo person. The count in the lead is the number of customers the reply lists, every waiting customer has its row, and no figure is compared with one given before. Found in the pilot''s Nov 5, 2026 second retake (ac2b047b): "Six customers are waiting" over a four-row table with five customers, and "The 126 I quoted earlier is now 120".'
+query: Which customers are waiting on back orders, and for what?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Correction
+- I quoted earlier
+quality_criteria:
+  the_count_of_customers_in_the_lead_equals_the_customers_listed: true
+  every_waiting_customer_has_its_own_row_or_item: true
+  does_not_compare_a_figure_with_one_given_before: true

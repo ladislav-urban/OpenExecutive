@@ -1,0 +1,22 @@
+id: erpnext_076
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Job Card
+description: 'Production step 3 (oe_connector''s help/try-production.md) in ERPNext''s panel as a demo person. Before saying no batch had trouble in testing, the reply reads the job cards'' time logs and comments, the quality inspections and any rework, and names the batch whose tests waited for the test rig and the batch reworked after a failed test. Found in the pilot''s Nov 5, 2026 second retake (ac2b047b): "None of the five batches shows trouble in testing … it wasn''t logged".'
+query: Did any of the distribution board batches have trouble in testing?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- wasn't logged
+quality_criteria:
+  names_the_batch_whose_testing_waited_for_the_test_rig: true
+  names_the_batch_reworked_after_a_failed_test: true
+  does_not_say_no_batch_had_trouble: true
