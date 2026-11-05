@@ -1,0 +1,28 @@
+id: erpnext_073
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Order
+prior_turns:
+- page:
+    doctype: Sales Order
+  user: Which customers are waiting on back orders, and for what?
+  assistant: 'Five customers are waiting on back orders: Pinecrest and Northgate for 16A breakers, Keystone, Summit and Cedar & Pine for panels and lights. No purchase order is open for the 16A breakers.'
+description: 'Where-is-my-order step 3 (oe_connector''s help/try-where-is-my-order.md) in ERPNext''s panel as a demo person. The reply gives the late orders plainly, with no "Correction" line or "I earlier said" about something that still holds. Found in the pilot''s Nov 5, 2026 retake: "Correction: Summit''s SAL-ORD-2026-04954, due Nov 9, isn''t late yet. I earlier said every order except that one was past due, which holds."'
+query: Which of our orders are late against the date we promised?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- Correction
+- I earlier said
+- Earlier I said
+quality_criteria:
+  lists_the_orders_past_their_promised_date_with_their_value: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

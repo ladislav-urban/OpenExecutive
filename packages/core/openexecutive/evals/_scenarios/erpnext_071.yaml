@@ -1,0 +1,26 @@
+id: erpnext_071
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: 'Projects step 3 (oe_connector''s help/try-projects.md) in ERPNext''s panel as a demo person, beside the Keystone warehouse fit-out''s task list. Before saying the records don''t say why the job is late, the reply reads the project''s latest Friday Project Update and gives the reason it records. Found in the pilot''s Nov 5, 2026 retake: "The ERP records no reason for the delay", though the Friday Project Update holds it.'
+query: What's late on the Keystone job right now?
+page:
+  doctype: Task
+  filters:
+  - [project, "=", PROJ-0168]
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- records no reason
+- doesn't record why
+- don't say why
+quality_criteria:
+  names_the_late_tasks_with_their_planned_end_dates: true
+  gives_the_reason_the_latest_project_update_records_or_says_it_read_the_update: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
