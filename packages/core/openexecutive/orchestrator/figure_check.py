@@ -52,8 +52,25 @@ from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-Status = Literal["confirmed", "given", "from_text", "from_truncated", "unconfirmed"]
-FLAGGED: frozenset[str] = frozenset({"from_truncated", "unconfirmed"})
+Status = Literal["confirmed", "given", "from_text", "from_truncated", "unconfirmed", "wrong_currency"]
+FLAGGED: frozenset[str] = frozenset({"from_truncated", "unconfirmed", "wrong_currency"})
+
+# Number words a count may be written in ("six customers"), English only.
+_NUMBER_WORDS = {
+    "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "eleven": 11, "twelve": 12, "thirteen": 13, "fourteen": 14, "fifteen": 15, "sixteen": 16,
+    "seventeen": 17, "eighteen": 18, "nineteen": 19, "twenty": 20,
+}
+_WORD_NUMBER_RE = re.compile(r"\b(" + "|".join(_NUMBER_WORDS) + r")\b(?=[ ]+[A-Za-z])", re.I)
+# "N times the/as/more…": a multiple of one figure by another, not a frequency
+# ("chased 3 times this month").
+_MULTIPLE_NEXT = frozenset({"the", "as", "more", "larger", "bigger", "higher", "greater", "what", "that", "our"})
+# A currency symbol's codes when answer_check_context names none.
+_DEFAULT_SYMBOLS: dict[str, frozenset[str]] = {
+    "$": frozenset({"USD", "CAD", "AUD", "NZD", "SGD", "HKD", "MXN"}),
+    "€": frozenset({"EUR"}), "£": frozenset({"GBP"}), "₹": frozenset({"INR"}),
+    "¥": frozenset({"JPY", "CNY"}), "₩": frozenset({"KRW"}), "₽": frozenset({"RUB"}),
+}
 
 # A reply's figures past this many are left as they are: a reply that long is
 # a table dump, and the check must stay quick.
@@ -186,6 +203,12 @@ class Figure:
     # The format of the first reading.
     fmt: NumberFormat
     status: Status = "unconfirmed"
+    # "N times …": matched against ratios of two values.
+    multiple: bool = False
+    # The currency mark as written ("$", "€", "USD"), and for wrong_currency
+    # the mark the value's own currency takes.
+    currency_text: str = ""
+    currency_fix: str | None = None
     # The value it was matched to, when one was (a source value or a combination).
     matched: float | None = None
     how: str = ""
@@ -360,7 +383,8 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
             if not everything:
                 if _word_before(text, m.start()) in _MONTHS or _word_after(text, num_end) in _MONTHS:
                     continue  # "Nov 4", "4 November"
-                if not (_in_table_cell(text, num_start, num_end) or value >= 10_000):
+                multiple = _is_multiple(text, num_end)
+                if not (_in_table_cell(text, num_start, num_end) or value >= 10_000 or multiple):
                     # A plain whole number is a figure only as a count of
                     # something: "14 orders", never "30 days" or "top 5".
                     following = _word_after(text, num_end)
@@ -385,9 +409,42 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
                 pre=text[start:num_start], post=text[num_end:end],
                 readings=readings, scale=scale, scale_text=scale_text.strip() if scale_text else "",
                 percent=pct, fmt=used,
+                multiple=not marked and not everything and _is_multiple(text, num_end),
+                currency_text=(pre.strip() or post.strip()) if (pre.strip() or post.strip()) else "",
             )
         )
+    if not everything:
+        figures.extend(_word_figures(text, masked, figures))
+        figures.sort(key=lambda fig: fig.start)
     return figures
+
+
+def _is_multiple(text: str, end: int) -> bool:
+    """Whether the number ending at ``end`` reads "N times the/as/more…"."""
+    m = re.match(r"[ ]*(?:times|×)[ ]+([A-Za-z]+)", text[end:end + 40])
+    return bool(m and m.group(1).lower() in _MULTIPLE_NEXT) or text[end:end + 1] == "×"
+
+
+def _word_figures(text: str, masked: list[tuple[int, int]], found: list[Figure]) -> list[Figure]:
+    """Counts written as words ("six customers"), checked like "6 customers"."""
+    starts = [s for s, _ in masked]
+    out: list[Figure] = []
+    for m in _WORD_NUMBER_RE.finditer(text):
+        start, end = m.span(1)
+        if _is_masked(masked, starts, start, end) or any(f.start < end and start < f.end for f in found):
+            continue
+        following = _word_after(text, end)
+        multiple = _is_multiple(text, end)
+        if not multiple and (not following or following in _NOT_COUNTED or _word_before(text, start) in _LABEL_BEFORE):
+            continue
+        out.append(
+            Figure(
+                start=start, end=end, text=m.group(1), num=m.group(1), pre="", post="",
+                readings=((float(_NUMBER_WORDS[m.group(1).lower()]), 0),), scale=1.0, scale_text="",
+                percent=False, fmt=PLAIN, multiple=multiple,
+            )
+        )
+    return out
 
 
 def numbers_in(text: str, fmt: NumberFormat = PLAIN) -> list[float]:
@@ -502,6 +559,17 @@ class _Reader:
         self.cells: list[tuple[float, bool]] = []
         # Values outside any list of rows: totals, summaries, a document's fields.
         self.headline: list[float] = []
+        # Each value's currencies: its result's company currency for a
+        # `base_*` field or a report, else its document's or row's own.
+        self.currencies: dict[float, set[str]] = {}
+        self._company: str | None = None
+        self._document: str | None = None
+
+    def _note_currency(self, value: float, key: str, row_currency: object = None) -> None:
+        own = row_currency if isinstance(row_currency, str) and len(row_currency) == 3 else self._document
+        currency = self._company if key.startswith("base_") or not own else own
+        if currency:
+            self.currencies.setdefault(round(abs(value), 6), set()).add(currency)
 
     def rows(self, rows: list[Any], label: str, truncated: bool, numeric: frozenset[str]) -> None:
         table = _Rows(label=label, truncated=truncated, count=len(rows))
@@ -519,6 +587,7 @@ class _Reader:
                 if got is not None:
                     table.numeric.setdefault(key, [None] * len(rows))[i] = got
                     self.cells.append((got, truncated))
+                    self._note_currency(got, key, row.get("currency"))
                 elif isinstance(value, str) and value and len(value) <= 140:
                     table.text.setdefault(key, [None] * len(rows))[i] = value
         self.tables.append(table)
@@ -537,6 +606,7 @@ class _Reader:
             if got is not None:
                 self.cells.append((got, False))
                 self.headline.append(got)
+                self._note_currency(got, key)
 
     def result(self, result: ErpnextResult) -> None:
         payload = result.payload
@@ -545,6 +615,12 @@ class _Reader:
         truncated = payload.get("truncated") is True
         doctype = payload.get("doctype") or result.arguments.get("doctype")
         numeric = self.types.numeric(doctype) | _aggregate_names(result.arguments)
+        # list_records and reports give `currency` (the company's, or the
+        # report's presentation currency); get_record gives both.
+        company = payload.get("company_currency") or payload.get("currency")
+        self._company = company if isinstance(company, str) else None
+        document = payload.get("document_currency")
+        self._document = document if isinstance(document, str) else None
         columns = payload.get("columns")
         if isinstance(columns, list):
             numeric |= frozenset(
@@ -627,6 +703,11 @@ class Sources:
     changes: list[float] = field(default_factory=list)
     given: list[float] = field(default_factory=list)
     text: list[float] = field(default_factory=list)
+    # Each ERPNext value's currencies, and what each currency mark may stand for.
+    value_currencies: dict[float, set[str]] = field(default_factory=dict)
+    symbols: dict[str, frozenset[str]] = field(default_factory=dict)
+    # Each currency's own symbol, as answer_check_context gives it.
+    marks: dict[str, str] = field(default_factory=dict)
     _complete_keys: list[float] = field(default_factory=list)
     _truncated_keys: list[float] = field(default_factory=list)
 
@@ -705,6 +786,7 @@ def sources_for(
     texts: Iterable[str] = (),
     extra: Iterable[float] = (),
     fmt: NumberFormat = PLAIN,
+    currencies: Any = None,
 ) -> Sources:
     """Everything the turn's figures may come from. ``extra`` adds values that
     count as ERPNext's own (a correction's right values, found there by code)."""
@@ -716,6 +798,14 @@ def sources_for(
     cells = reader.cells[:MAX_VALUES]
     extra = [abs(v) for v in extra]
     src = Sources()
+    src.value_currencies = reader.currencies
+    src.symbols = _symbols(currencies)
+    src.marks = {
+        code: info["symbol"].strip()
+        for code, info in (currencies.items() if isinstance(currencies, dict) else ())
+        if isinstance(code, str) and isinstance(info, dict)
+        and isinstance(info.get("symbol"), str) and info["symbol"].strip()
+    }
     src.values = sorted({abs(v) for v, _ in cells} | set(extra))
     whole = {abs(v) for v, cut in cells if not cut} | set(extra)
     src.partial = {abs(v) for v, cut in cells if cut} - whole
@@ -762,6 +852,41 @@ def sources_for(
     return src
 
 
+def _symbols(currencies: Any) -> dict[str, frozenset[str]]:
+    """Each currency mark's codes: answer_check_context's ``currencies`` (code
+    -> symbol), over the common symbols; a code stands for itself."""
+    out: dict[str, set[str]] = {k: set(v) for k, v in _DEFAULT_SYMBOLS.items()}
+    if isinstance(currencies, dict):
+        for code, info in currencies.items():
+            symbol = info.get("symbol") if isinstance(info, dict) else None
+            if isinstance(code, str) and isinstance(symbol, str) and symbol.strip():
+                out.setdefault(symbol.strip(), set()).add(code)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+def _mark_for(currency: str, src: Sources) -> str:
+    """How a reply writes ``currency``: its own symbol, else its code."""
+    if currency in src.marks:
+        return src.marks[currency]
+    marks = [mark for mark, codes in src.symbols.items() if codes == frozenset({currency})]
+    return marks[0] if marks else currency
+
+
+def _check_currency(fig: Figure, src: Sources) -> None:
+    """A figure confirmed by one ERPNext value, written in another currency
+    than that value's own, is ``wrong_currency`` (a € sign on a dollar total)."""
+    if fig.status != "confirmed" or fig.matched is None or not fig.currency_text:
+        return
+    mark = fig.currency_text
+    written = frozenset({mark}) if mark.isalpha() and mark.isupper() else src.symbols.get(mark, frozenset())
+    known = src.value_currencies.get(round(abs(fig.matched), 6))
+    if not written or not known or written & known or len(known) != 1:
+        return
+    (actual,) = known
+    fig.status, fig.currency_fix = "wrong_currency", _mark_for(actual, src)
+    fig.how = f"a value in {actual}"
+
+
 def _pair(pool: list[float], fig: Figure) -> tuple[float, str] | None:
     """A difference, ratio or percentage change of two ``pool`` values that
     ``fig`` matches (the figures the reply already confirmed)."""
@@ -794,6 +919,13 @@ def _classify(fig: Figure, src: Sources) -> None:
         fig.status, fig.matched, fig.how = "confirmed", v, "a value in ERPNext's results"
     elif (v := first(src._complete_keys)) is not None:
         fig.status, fig.matched, fig.how = "confirmed", v, src.complete[v]
+    elif fig.multiple:
+        if (v := first(src.ratios)) is not None:
+            fig.status, fig.matched, fig.how = "confirmed", v, "one value as a multiple of another"
+        elif (v := first(src.text)) is not None:
+            fig.status, fig.matched, fig.how = "from_text", v, "other text the turn read"
+        else:
+            fig.status, fig.matched, fig.how = "unconfirmed", None, ""
     elif (v := first(src.differences)) is not None:
         fig.status, fig.matched, fig.how = "confirmed", v, "the difference of two values"
     elif fig.percent and (v := first(src.ratios)) is not None:
@@ -825,6 +957,7 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
     figures = find_figures(text, fmt)[:MAX_FIGURES]
     for fig in figures:
         _classify(fig, sources)
+        _check_currency(fig, sources)
     if not any(f.flagged for f in figures):
         return figures
     # What the reply worked out from figures it already gave ("together
@@ -877,7 +1010,12 @@ def format_like(fig: Figure, value: float) -> str:
     body = _group(int_digits, fig.fmt) if grouped else int_digits
     if frac:
         body += fig.fmt.decimal + frac
-    post = fig.post
+    pre, post = fig.pre, fig.post
+    if fig.currency_fix and fig.currency_text:
+        if fig.currency_text in pre:
+            pre = pre.replace(fig.currency_text, fig.currency_fix, 1)
+        else:
+            post = post.replace(fig.currency_text, fig.currency_fix, 1)
     if fig.scale_text and scale_text != fig.scale_text:
         post = post.replace(fig.scale_text, "", 1).lstrip() if post.lstrip().startswith(fig.scale_text) else post
-    return f"{fig.pre}{body}{post}"
+    return f"{pre}{body}{post}"
