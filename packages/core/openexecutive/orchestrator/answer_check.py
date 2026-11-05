@@ -38,15 +38,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 from collections.abc import Iterable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
+from datetime import date
 from typing import Any
 
-from openexecutive.orchestrator import answer_correct, figure_check, name_check
-from openexecutive.orchestrator.figure_check import ErpnextResult, NumberFormat, ResultTypes
+from openexecutive.orchestrator import answer_correct, figure_check, figure_confirm, name_check
+from openexecutive.orchestrator.figure_check import ErpnextResult, Figure, NumberFormat, ResultTypes
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,9 @@ STOPPED_BUDGET_S = 20.0
 CODE_ONLY_BUDGET_S = 10.0
 CONTEXT_TIMEOUT_S = 10.0
 CORRECTION_TIMEOUT_S = 45.0
+CONFIRM_TIMEOUT_S = 15.0
+# All of check 3's report runs in a turn, so checks 2 and the correction keep their time.
+CONFIRM_BUDGET_S = 20.0
 # The ERPNext reads whose results figures come from (gateway names).
 _FIGURE_TOOLS = frozenset({"erpnext__list_records", "erpnext__get_record", "erpnext__run_report"})
 # An ERPNext result as the model read it. A result cut to the reading budget
@@ -79,6 +84,8 @@ class AnswerCheckTurn:
     whole_replaced: bool = False
     _context: dict[str, Any] | None = None
     _sources: tuple[NumberFormat, figure_check.Sources, name_check.NameSources] | None = None
+    # Check 3's report runs this turn: the quick total asked about -> the report's total.
+    _reports: dict[str, float | None] = field(default_factory=dict)
     _done: tuple[str, str] | None = None
 
     def note_result(self, tool: str, arguments: Any, text: object) -> None:
@@ -174,6 +181,8 @@ class _Counts:
     whole_reply: int = 0
     names: int = 0
     names_flagged: int = 0
+    report_runs: int = 0
+    report_differs: int = 0
     code_only: bool = False
 
 
@@ -269,6 +278,75 @@ async def _sources(turn: AnswerCheckTurn) -> tuple[NumberFormat, figure_check.So
     return turn._sources
 
 
+async def _report(turn: AnswerCheckTurn, quick: figure_confirm.QuickTotal) -> float | None:
+    """oe_connector's ``confirm_figure`` for ``quick``: the report's total as
+    the turn's own caller, or None (refused, failed, cut off, not there)."""
+    from openexecutive.orchestrator import erpnext_caller
+    from openexecutive.orchestrator.mcp_gateway import gateway_server_names, get_active_gateway
+    from openexecutive.prompts.connected_systems import ERPNEXT_CONFIRM_TOOL, ERPNEXT_SERVER
+
+    gateway = get_active_gateway()
+    if gateway is None or ERPNEXT_SERVER not in gateway_server_names(gateway):
+        return None
+    try:
+        with erpnext_caller.answer_check_run():
+            raw = await asyncio.wait_for(
+                gateway.call_tool({"name": ERPNEXT_CONFIRM_TOOL, "arguments": quick.arguments()}), CONFIRM_TIMEOUT_S,
+            )
+    except Exception:
+        logger.warning("answer_check: confirm_figure failed; the figure stands as check 1 left it", exc_info=True)
+        return None
+    return figure_confirm.report_total(figure_check.parse_result(raw))
+
+
+async def _confirm(turn: AnswerCheckTurn, figures: list[Figure]) -> list[tuple[Figure, float]]:
+    """Check 3 (``figure_confirm``): each figure check 1 matched to a
+    measure's quick-way total, asked of its report, at most MAX_CONFIRMS
+    reports a turn. A figure the report agrees with is confirmed; the ones it
+    doesn't, with the report's total."""
+    from openexecutive.orchestrator import erpnext_caller
+
+    if not erpnext_caller.signing_setting():
+        # Phase 1: no person's caller to run the report as; oe_connector refuses.
+        return []
+    context = await _context(turn)
+    totals = figure_confirm.quick_totals(turn.results, context.get("measures"), date.today())
+    differs: list[tuple[Figure, float]] = []
+    deadline = asyncio.get_running_loop().time() + CONFIRM_BUDGET_S
+    for fig in figures:
+        if not totals or fig.matched is None or fig.status not in ("confirmed", "from_truncated"):
+            continue
+        quick = next(
+            (
+                q for q in totals
+                if abs(q.value - abs(fig.matched)) <= max(q.value, 1.0) * 1e-9
+                # A total added up from rows only for a figure check 1 read as
+                # that sum, never one row's value that happens to equal it.
+                and (not q.from_rows or fig.how.startswith("sum of "))
+            ),
+            None,
+        )
+        if quick is None:
+            continue
+        key = json.dumps(quick.arguments(), sort_keys=True)
+        if key not in turn._reports:
+            left = deadline - asyncio.get_running_loop().time()
+            if len(turn._reports) >= figure_confirm.MAX_CONFIRMS or left <= 0:
+                continue
+            try:
+                turn._reports[key] = await asyncio.wait_for(_report(turn, quick), left)
+            except TimeoutError:
+                turn._reports[key] = None
+        total = turn._reports[key]
+        if total is None:
+            continue
+        if fig.matches(total):
+            fig.status, fig.how = "confirmed", f"ERPNext's report for {quick.measure}"
+        else:
+            differs.append((fig, total))
+    return differs
+
+
 def _passes(text: str, sources: figure_check.Sources, names: name_check.NameSources, fmt: NumberFormat) -> bool:
     """Whether every figure and name of ``text`` passes, read as the first
     pass reads them (names never across a figure)."""
@@ -293,7 +371,16 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     wrong_names = [n for n in named if n.flagged]
     counts.names = len(named)
     counts.names_flagged = len(wrong_names)
-    if not flagged and not wrong_names:
+    # Check 3: a headline figure added up from a list read, held to its
+    # standard report. A report that agrees clears a total over a cut-off list
+    # too; one that differs gives the figure its right value.
+    reported = await _confirm(turn, figures) if models and not turn.brief else []
+    counts.report_runs = len(turn._reports)
+    counts.report_differs = len(reported)
+    differs = {id(fig) for fig, _ in reported}
+    flagged = [f for f in figures if f.flagged and id(f) not in differs]
+    counts.flagged = len(flagged) + len(reported)
+    if not flagged and not wrong_names and not reported:
         return text
     reviews = (
         await review(question=question, draft=text, flagged=flagged, results=turn.results, sources=sources)
@@ -307,6 +394,9 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         answer_correct.Correction(n, None) for n in wrong_names if n.status != "near"
     ]
     known: list[float] = []
+    for fig, total in reported:
+        corrections.append(answer_correct.Correction(fig, total))
+        known.append(total)
     for fig, verdict in zip(flagged, reviews, strict=True):
         if verdict.verdict == "supported" and verdict.right is not None:
             counts.supported += 1
@@ -385,6 +475,8 @@ def _audit(counts: _Counts, *, changed: bool) -> None:
             "whole_reply": counts.whole_reply,
             "names": counts.names,
             "names_flagged": counts.names_flagged,
+            "report_runs": counts.report_runs,
+            "report_differs": counts.report_differs,
             "code_only": counts.code_only,
             "changed": changed,
         },

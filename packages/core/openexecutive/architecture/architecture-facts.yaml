@@ -5314,6 +5314,13 @@ chat:
     edits by length) is written in by code; otherwise left out or removed.
     Source names only from name fields (answer_check_context's names, report
     Link/*_name columns, company), never remarks.
+    Check 3 (PR (c), orchestrator/figure_confirm.py): a figure matched to a
+    list_records total that is a MEASURES quick way (no other narrowing; GL
+    reads with named accounts for cash/COGS) is asked of oe_connector's
+    confirm_figure (CODE_ONLY_TOOLS, inside answer_check_run, the turn's own
+    person caller; never the brief), max 3 a turn; a differing report total
+    is the right value, written in by code; not_this_measure/error/truncated
+    change nothing.
   chat_review: |
     Conversation review (memory/chat_review.py). The post-turn block keeps a
     verified speaker's turn (principal on a people_tools-verified surface, or
