@@ -45,7 +45,9 @@ _DEPENDS = re.compile(
     r"twice|times|compared|versus|vs|than)\b",
     re.I,
 )
-_TOKEN = re.compile(r"\w+|[^\w\s]")
+# Line breaks are tokens too, so a rewrite can't add a line unseen.
+_TOKEN = re.compile(r"\w+|\n|[^\w\s]")
+_LIST_MARK = re.compile(r"(?m)^[ \t]*([-*+]|\d+[.)])[ \t]")
 _LINK = re.compile(
     r"(?i)[a-z][a-z0-9+.-]*:[^\s)>\]]+"  # any scheme: https:, mailto:, tel:
     r"|\]\([^)]*\)"
@@ -234,9 +236,13 @@ def changed_only_within(draft: str, rewrite: str, allowed: list[tuple[int, int]]
         return next((n for n, (a, b) in enumerate(allowed) if a <= pos < b), -1)
 
     # Sentence stops (a stop followed by a space or the end, never a decimal
-    # point), headings and table cells, by position.
-    marks_old = {m.start() for m in _STOP.finditer(draft)} | {i for i, c in enumerate(draft) if c in "#|"}
-    marks_new = {m.start() for m in _STOP.finditer(rewrite)} | {i for i, c in enumerate(rewrite) if c in "#|"}
+    # point), line breaks, list markers, headings and table cells, by position:
+    # none may be added, so no new sentence, paragraph or bullet.
+    def marks(text: str) -> set[int]:
+        found = {m.start() for m in _STOP.finditer(text)} | {i for i, c in enumerate(text) if c in "#|\n"}
+        return found | {m.start(1) for m in _LIST_MARK.finditer(text)}
+
+    marks_old, marks_new = marks(draft), marks(rewrite)
 
     def structure(marks: set[int], toks: list[tuple[str, int]], j1: int, j2: int) -> int:
         return sum(1 for k in range(j1, j2) if toks[k][1] in marks)
