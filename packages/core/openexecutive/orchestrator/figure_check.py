@@ -274,8 +274,9 @@ def _word_before(text: str, pos: int) -> str:
 
 
 def _word_after(text: str, pos: int) -> str:
-    words = _WORD_RE.findall(text[pos:pos + 40])
-    return words[0].lower() if words else ""
+    """The word right after ``pos`` (past spaces and emphasis), or ""."""
+    m = re.match(r"[ \t*_]*([A-Za-z][A-Za-z'’-]*)", text[pos:pos + 40])
+    return m.group(1).lower() if m else ""
 
 
 def _in_table_cell(text: str, start: int, end: int) -> bool:
@@ -332,6 +333,10 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
         if not marked and not separated:
             if 1900 <= value <= 2100 and len(num) == 4:
                 continue  # a year
+            if re.search(r"(?:\d[ \t]+|\+)$", text[max(0, num_start - 4):num_start]) or re.match(
+                r"[ \t]+\d", text[num_end:num_end + 3]
+            ):
+                continue  # one group of a phone number or a code ("+1 555 123 4567")
             if not everything:
                 if _word_before(text, m.start()) in _MONTHS or _word_after(text, num_end) in _MONTHS:
                     continue  # "Nov 4", "4 November"
@@ -690,6 +695,17 @@ def sources_for(
         for column in columns:
             present = [abs(v) for v in column if v is not None]
             _combine(zip(present, present[1:], strict=False), diffs, ratios, changes)
+            # Each row's share of the column's total, and the first and the
+            # largest rows' ("North holds 26%", "the top 3 hold 80%").
+            total = sum(present)
+            if total and len(present) >= 2:
+                shares = [*present]
+                for ordered in (present, sorted(present, reverse=True)):
+                    running = 0.0
+                    for v in ordered[:MAX_RUN]:
+                        running += v
+                        shares.append(running)
+                ratios.update(round(v / total, 12) for v in shares)
     src.differences, src.ratios, src.changes = sorted(diffs), sorted(ratios), sorted(changes)
     src.given = sorted({v for text in given for v in numbers_in(text, fmt)})
     src.text = sorted({v for text in texts for v in numbers_in(text, fmt)})

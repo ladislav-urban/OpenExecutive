@@ -17,12 +17,17 @@ from unittest.mock import patch
 
 import pytest
 
-from openexecutive.orchestrator import answer_check, answer_correct, answer_review, erpnext_caller, mcp_gateway
+from openexecutive.orchestrator import (
+    answer_check,
+    answer_correct,
+    answer_review,
+    erpnext_caller,
+    mcp_gateway,
+)
 from openexecutive.orchestrator.answer_review import CANNOT_TELL, Review
 from openexecutive.orchestrator.figure_check import (
     ErpnextResult,
     NumberFormat,
-    ResultTypes,
     check_figures,
     find_figures,
     format_like,
@@ -151,6 +156,16 @@ def test_sums_groups_and_changes_are_confirmed() -> None:
                                                                     {"label": "Last", "value": 1000.0}]})
     assert _statuses("Sales rose 15% to $1,150.", periods) == {"15%": "confirmed", "$1,150": "confirmed"}
     assert _statuses("Sales rose 12% to $1,150.", periods)["12%"] == "unconfirmed"
+
+
+def test_a_rows_share_of_its_column_is_confirmed() -> None:
+    # 12,500 of 48,200 is 25.9%; the largest one, 35,700, is 74%.
+    got = _statuses("Northwind holds 26% of receivables, and the largest debtor 74%.", RECEIVABLES)
+    assert got == {"26%": "confirmed", "74%": "confirmed"}
+
+
+def test_a_phone_number_before_a_name_is_not_a_count() -> None:
+    assert find_figures("Call +1 555 123 4567 Northwind about it.") == []
 
 
 def test_a_total_over_a_cut_off_list_is_from_truncated() -> None:
