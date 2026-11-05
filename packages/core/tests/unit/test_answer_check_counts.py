@@ -156,11 +156,20 @@ def test_a_weekday_is_put_right_only_where_it_is_plainly_the_dates() -> None:
         "- Northgate quotation, valid till Nov 8\n  - Follow-up call set for Friday",
         "```json\n{\"date\": \"2026-11-08\", \"day\": \"Sat\"}\n```",
         "See https://erp.example.com/report?date=2026-11-08&day=Sat for it.",
+        # Another event's day near the date (re-review of #165).
+        "SINV-2 is due Nov 10, I will chase on Friday.",
+        "Due Nov 10, follow up by Friday.",
+        "Due Nov 10, pay by this Friday.",
+        "The quote expires Nov 8, so call Monday.",
+        "Invoice SINV-1 (Nov 3) is overdue, chase them Friday.",
+        "Nov 8 delivery slipped to Friday.",
+        "Payment for Nov 3 came in Monday.",
     ]
     for text in unchanged:
         assert weekday_check.fix(text, today) == (text, 0), text
     assert weekday_check.fix("Due Saturday, Nov 8.", today) == ("Due Sunday, Nov 8.", 1)
     assert weekday_check.fix("Due Nov 8 (Sat).", today) == ("Due Nov 8 (Sun).", 1)
+    assert weekday_check.fix("Due Nov 8, which is a Saturday.", today) == ("Due Nov 8, which is a Sunday.", 1)
 
 
 def test_a_count_of_none_or_one_is_never_several(monkeypatch: pytest.MonkeyPatch) -> None:

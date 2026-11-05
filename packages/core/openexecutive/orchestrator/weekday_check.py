@@ -33,9 +33,17 @@ _WEEKDAY_RE = re.compile(
     r"\b(?P<day>(?:Mon|Tues|Wednes|Thurs|Fri|Satur|Sun)day|Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b", re.I,
 )
 # Code spans, fenced code and links: never edited.
-_SKIP_RE = re.compile(r"```.*?(?:```|\Z)|`[^`\n]*`|https?://\S+|\[[^\]\n]*\]\([^)\n]*\)", re.S)
+_SKIP_RE = re.compile(
+    r"```.*?(?:```|\Z)|`[^`\n]{0,500}`|https?://\S{0,2000}|\[[^\]\n]{0,200}\]\([^)\s]{0,2000}\)", re.S
+)
 _CLAUSE_RE = re.compile(r"[^.;:!?\n]+")
-_MAX_GAP_WORDS = 4
+# The only words that may stand between a date and its weekday: the date's
+# own ("valid till Nov 8, expires Saturday", "Nov 8, which is a Sunday").
+# Any other ("chase on Friday", "slipped to Friday") names another day's event.
+_GAP_WORDS = frozenset({
+    "expires", "expiring", "expire", "ends", "ending", "falls", "lands", "is", "was", "a", "which",
+    "that", "it", "that's", "it's", "thats", "its", "being", "due",
+})
 
 
 def _dates(clause: str, today: date) -> list[tuple[int, int, date]]:
@@ -58,6 +66,9 @@ def _dates(clause: str, today: date) -> list[tuple[int, int, date]]:
                     continue
             if candidates:
                 found.append((m.start(), m.end(), min(candidates, key=lambda d: abs((d - today).days))))
+                if len(found) > 1:
+                    # Two dates: the clause is left alone, so stop reading it.
+                    return found
     return found
 
 
@@ -76,7 +87,8 @@ def _beside(clause: str, day: re.Match[str], start: int, end: int) -> bool:
     if len(day.group("day")) <= 3:
         # An abbreviation only right beside the date: "Sat, Nov 8", "Nov 8 (Sat)".
         return re.fullmatch(r"[ \t]*[,(]?[ \t]*|[ \t]*\)?[ \t]*,?[ \t]*", gap) is not None
-    return len(re.findall(r"[A-Za-z]+", gap)) <= _MAX_GAP_WORDS
+    words = re.findall(r"[A-Za-z'’]+", gap)
+    return len(words) <= 4 and all(w.lower().replace("’", "'") in _GAP_WORDS for w in words)
 
 
 def fix(text: str, today: date) -> tuple[str, int]:

@@ -232,7 +232,13 @@ def vague(text: str, fig: Figure) -> tuple[int, int, str]:
     if before and before.group(1).lower() in _DROP_AFTER:
         end = fig.end + (1 if text[fig.end:fig.end + 1] == " " else 0)
         return fig.start, end, ""
-    starts = fig.text[:1].isupper() or re.search(r"(?:^|[.!?]\s+|\n\s*(?:[-*]\s+)?)$", text[:fig.start]) is not None
+    # A bounded look back: linear whatever the reply's length.
+    tail = text[max(0, fig.start - 40):fig.start]
+    starts = (
+        fig.text[:1].isupper()
+        or fig.start == 0
+        or re.search(r"(?:[.!?][ \t]+|\n[ \t]*(?:[-*][ \t]+)?|\*\*)$", tail) is not None
+    )
     return fig.start, fig.end, "Several" if starts else "several"
 
 
