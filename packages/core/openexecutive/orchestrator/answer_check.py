@@ -45,8 +45,8 @@ from contextvars import ContextVar
 from dataclasses import dataclass, field
 from typing import Any
 
-from openexecutive.orchestrator import answer_correct, figure_check
-from openexecutive.orchestrator.figure_check import ErpnextResult, Figure, NumberFormat, ResultTypes
+from openexecutive.orchestrator import answer_correct, figure_check, name_check
+from openexecutive.orchestrator.figure_check import ErpnextResult, NumberFormat, ResultTypes
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class AnswerCheckTurn:
     # Set by the check: the reply was replaced whole (answer_correct.WHOLE_REPLY).
     whole_replaced: bool = False
     _context: dict[str, Any] | None = None
-    _sources: tuple[NumberFormat, figure_check.Sources] | None = None
+    _sources: tuple[NumberFormat, figure_check.Sources, name_check.NameSources] | None = None
     _done: tuple[str, str] | None = None
 
     def note_result(self, tool: str, arguments: Any, text: object) -> None:
@@ -172,6 +172,8 @@ class _Counts:
     model_corrected: int = 0
     left_out: int = 0
     whole_reply: int = 0
+    names: int = 0
+    names_flagged: int = 0
     code_only: bool = False
 
 
@@ -245,42 +247,65 @@ async def _rewrite(question: str, draft: str, corrections: list[answer_correct.C
     return text or None
 
 
-async def _sources(turn: AnswerCheckTurn) -> tuple[NumberFormat, figure_check.Sources]:
-    """The turn's sources, read once (the code-only fallback reuses them)."""
+async def _sources(turn: AnswerCheckTurn) -> tuple[NumberFormat, figure_check.Sources, name_check.NameSources]:
+    """The turn's figure and name sources, read once (the code-only fallback
+    reuses them)."""
     if turn._sources is None:
         context = await _context(turn)
         fmt = NumberFormat.parse(context.get("number_format"))
         doctypes = context.get("doctypes")
-        types = ResultTypes(doctypes if isinstance(doctypes, dict) else {})
-        sources = await asyncio.to_thread(
-            lambda: figure_check.sources_for(turn.results, types=types, given=turn.given, texts=turn.texts, fmt=fmt)
-        )
-        turn._sources = (fmt, sources)
+        described = doctypes if isinstance(doctypes, dict) else {}
+        types = ResultTypes(described)
+
+        def read() -> tuple[figure_check.Sources, name_check.NameSources]:
+            figures = figure_check.sources_for(turn.results, types=types, given=turn.given, texts=turn.texts, fmt=fmt)
+            names = name_check.name_sources_for(
+                turn.results, doctypes=described, given=turn.given, texts=figure_check._capped(turn.texts),
+            )
+            return figures, names
+
+        sources, names = await asyncio.to_thread(read)
+        turn._sources = (fmt, sources, names)
     return turn._sources
 
 
-def _passes(text: str, sources: figure_check.Sources, fmt: NumberFormat) -> bool:
-    return not any(f.flagged for f in figure_check.check_figures(text, sources, fmt))
+def _passes(text: str, sources: figure_check.Sources, names: name_check.NameSources, fmt: NumberFormat) -> bool:
+    """Whether every figure and name of ``text`` passes, read as the first
+    pass reads them (names never across a figure)."""
+    figures = figure_check.check_figures(text, sources, fmt)
+    if any(f.flagged for f in figures):
+        return False
+    return not any(n.flagged for n in name_check.check_names(text, names, figures=[(f.start, f.end) for f in figures]))
 
 
 async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str, models: bool, counts: _Counts) -> str:
     from openexecutive.orchestrator.answer_review import CANNOT_TELL, review
 
-    fmt, sources = await _sources(turn)
+    fmt, sources, names = await _sources(turn)
     # Off the event loop: reading a long result or conversation takes time.
     figures = await asyncio.to_thread(figure_check.check_figures, text, sources, fmt)
+    named = await asyncio.to_thread(
+        lambda: name_check.check_names(text, names, figures=[(f.start, f.end) for f in figures])
+    )
     counts.figures = len(figures)
     flagged = [f for f in figures if f.flagged]
     counts.flagged = len(flagged)
-    if not flagged:
+    wrong_names = [n for n in named if n.flagged]
+    counts.names = len(named)
+    counts.names_flagged = len(wrong_names)
+    if not flagged and not wrong_names:
         return text
     reviews = (
         await review(question=question, draft=text, flagged=flagged, results=turn.results, sources=sources)
-        if models
+        if models and flagged
         else [CANNOT_TELL] * len(flagged)
     )
     counts.reviewed = len(flagged) if models else 0
-    corrections: list[answer_correct.Correction] = []
+    # A name close to exactly one source name is not known for any other
+    # name, for the correction to leave out.
+    corrections: list[answer_correct.Correction] = [
+        answer_correct.Correction(n, None) for n in wrong_names if n.status != "near"
+    ]
     known: list[float] = []
     for fig, verdict in zip(flagged, reviews, strict=True):
         if verdict.verdict == "supported" and verdict.right is not None:
@@ -290,14 +315,27 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
             corrections.append(answer_correct.Correction(fig, verdict.right if verdict.verdict == "wrong" else None))
             if verdict.right is not None:
                 known.append(verdict.right)
-    if not corrections:
-        return text
     checked = sources.plus(known)
+    # A name close to exactly one source name is that name, written in by code
+    # first: a source name, which a customer may have written, never reaches
+    # the correction call's prompt (answer_correct.write_names).
+    near = [answer_correct.Correction(n, n.right) for n in wrong_names if n.status == "near"]
+    checked_names = names.plus(str(c.right) for c in near)
+    if near:
+        text, corrections, figures = answer_correct.write_names(text, near, corrections, figures)
+        counts.substituted = len(near)
+    if not corrections:
+        if _passes(text, checked, checked_names, fmt):
+            return text
+        counts.whole_reply = 1
+        counts.substituted = 0
+        turn.whole_replaced = True
+        return answer_correct.WHOLE_REPLY
     failed = [c.figure for c in corrections]
     if not answer_correct.needs_rewrite(text, corrections):
         substituted = answer_correct.substitute(text, corrections)
-        if _passes(substituted, checked, fmt):
-            counts.substituted = len(corrections)
+        if _passes(substituted, checked, checked_names, fmt):
+            counts.substituted += len(corrections)
             return substituted
     if models:
         try:
@@ -308,22 +346,23 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         if (
             rewrite
             and answer_correct.changed_only_within(text, rewrite, answer_correct.allowed_spans(text, failed))
-            and _passes(rewrite, checked, fmt)
+            and _passes(rewrite, checked, checked_names, fmt)
         ):
             counts.model_corrected = len(corrections)
             return rewrite
     fixed = answer_correct.fallback(text, corrections, figures)
+    if fixed != answer_correct.WHOLE_REPLY and not _passes(fixed, checked, checked_names, fmt):
+        # What code wrote must pass as a rewrite must; else the decided sentence.
+        fixed = answer_correct.WHOLE_REPLY
     if fixed == answer_correct.WHOLE_REPLY:
         counts.whole_reply = 1
+        counts.substituted = 0
         turn.whole_replaced = True
     else:
-        counts.substituted = sum(1 for c in corrections if c.right is not None and format_in(fixed, c.figure, c.right))
-        counts.left_out = len(corrections) - counts.substituted
+        written = sum(1 for c in corrections if c.right is not None and answer_correct.written(c) in fixed)
+        counts.substituted += written
+        counts.left_out = len(corrections) - written
     return fixed
-
-
-def format_in(text: str, fig: Figure, value: float) -> bool:
-    return figure_check.format_like(fig, value) in text
 
 
 def _audit(counts: _Counts, *, changed: bool) -> None:
@@ -344,6 +383,8 @@ def _audit(counts: _Counts, *, changed: bool) -> None:
             "model_corrected": counts.model_corrected,
             "left_out": counts.left_out,
             "whole_reply": counts.whole_reply,
+            "names": counts.names,
+            "names_flagged": counts.names_flagged,
             "code_only": counts.code_only,
             "changed": changed,
         },
