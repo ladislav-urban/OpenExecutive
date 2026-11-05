@@ -1,0 +1,32 @@
+id: erpnext_072
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Purchase Order
+  filters:
+  - [supplier, "=", Orion Switchgear]
+prior_turns:
+- page:
+    doctype: Purchase Order
+    filters:
+    - [supplier, "=", Orion Switchgear]
+  user: I need to order about $6,000 of 12-way panels from Orion for the Keystone job. Who should place it, and who can approve it?
+  assistant: 'Nina Petrov places it. $6,000 is over her $2,000 limit, so Morgan Hale or Ellen Brooks approves it; above $10,000 it goes to Diane. Your last three orders of 12-way panels were 6, 13 and 23, so this is a much larger buy.'
+description: 'Who-approves step 2 (oe_connector''s help/try-who-approves.md) in ERPNext''s panel as a demo person. A multiple the reply gives is worked out from the two numbers it compares. Found in the pilot''s Nov 5, 2026 retake: "$12,000 buys about 101 panels... That is 8 times the last 12-way panel order of 6" (101 / 6 is about 17).'
+query: And if it were $12,000?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- 8 times
+- Earlier I said
+quality_criteria:
+  says_it_needs_the_founder_s_approval_and_nina_still_places_it: true
+  any_multiple_it_gives_matches_the_two_numbers_it_compares: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
