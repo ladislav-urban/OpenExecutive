@@ -90,3 +90,10 @@ def test_the_projection_test_reads_the_question_not_the_reply() -> None:
     assert projection.search("Show me the 13-week cash outlook")
     assert not projection.search("What's our cash position this month, and what's due in?")
     assert not projection.search("Who owes us the most?")
+    # Lookups whose figures stay held to their results.
+    assert not projection.search("How much have we spent on the Riverside project so far?")
+    assert not projection.search("List our open projects with their budgets")
+    assert not projection.search("Show me the budget vs actual for project PROJ-0001")
+    assert not projection.search("How many projectors are in stock?")
+    assert not projection.search("What would be our total overdue receivables right now?")
+    assert not projection.search("Sync this to my Outlook")

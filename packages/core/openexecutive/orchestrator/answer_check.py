@@ -71,15 +71,20 @@ _FIGURE_TOOLS = frozenset({"erpnext__list_records", "erpnext__get_record", "erpn
 # A question asking what will or would happen: its reply works figures out
 # from ERPNext's (a 13-week outlook, "what if Metro pays late"), which no
 # result holds, so the check never blanks it for those (_kept).
+# Phrases only, each closed by a word boundary: "project" (a DocType),
+# "what would be our total …" and "Outlook" (the mail app) are lookups, and a
+# lookup's figures stay held to its results (security review of #163).
 _PROJECTION_Q = re.compile(
-    r"\b(?:what if|what would|what will|forecast\w*|outlook|projection\w*|project(?:ed)?|scenario\w*"
-    r"|week[- ]by[- ]week|month[- ]by[- ]month|next \d+ (?:days|weeks|months)|will it look|would it look"
-    r"|as late as|if \w+ (?:pays?|paid|pay) )",
+    r"\b(?:what if|what happens if|forecasts?|forecasting|projections?|projected"
+    r"|cash outlook|outlook for|\d+[- ]week (?:outlook|forecast|view|cash)"
+    r"|week[- ]by[- ]week|month[- ]by[- ]month|next \d+ (?:days|weeks|months)"
+    r"|(?:will|would) (?:it|that|things|cash|we) look|as late as"
+    r"|if \w+ (?:pays?|paid) (?:late|later|as late|on time))\b",
     re.I,
 )
 PROJECTION_NOTE = (
-    "_The projected figures above are worked out from ERPNext's numbers; "
-    "they are estimates, not amounts ERPNext holds._"
+    "_The projected figures above are estimates; "
+    "they couldn't be checked against ERPNext's records._"
 )
 _ERPNEXT_BLOCK = re.compile(r'<untrusted_content source="erpnext"[^>]*>.*?(?:</untrusted_content>|\Z)', re.S)
 
@@ -439,6 +444,12 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     if not corrections:
         if _passes(text, checked, checked_names, fmt):
             return text
+        if any(f.flagged for f in figure_check.check_figures(text, checked, fmt)):
+            # A figure fails after all (the names written in moved it): as before.
+            counts.whole_reply = 1
+            counts.substituted = 0
+            turn.whole_replaced = True
+            return answer_correct.WHOLE_REPLY
         return _whole(text, [], turn, question=question, counts=counts)
     failed = [c.figure for c in corrections]
     if not answer_correct.needs_rewrite(text, corrections):
