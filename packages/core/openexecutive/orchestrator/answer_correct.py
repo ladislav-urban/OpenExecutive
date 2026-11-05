@@ -28,10 +28,11 @@ from __future__ import annotations
 
 import difflib
 import re
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from openexecutive.orchestrator.figure_check import Figure, format_like
+from openexecutive.orchestrator.name_check import Name
 
 # Decided Nov 4, 2026 (question 9). It never mentions checking.
 WHOLE_REPLY = "I couldn't get those figures from ERPNext reliably. Open the report to see them."
@@ -188,33 +189,45 @@ def unit_of(all_units: list[Unit], start: int, end: int) -> Unit | None:
 
 @dataclass(frozen=True)
 class Correction:
-    """A failed figure, and its right value when one is known."""
+    """A failed figure or name (``name_check``), and its right value when one
+    is known: a number for a figure, the source's name for a name."""
 
-    figure: Figure
-    right: float | None
+    figure: Figure | Name
+    right: float | str | None
+
+
+def written(c: Correction) -> str:
+    """The right value as the reply should write it."""
+    if isinstance(c.right, str):
+        return c.right
+    assert isinstance(c.figure, Figure) and c.right is not None
+    return format_like(c.figure, c.right)
+
+
+def _depends(text: str, all_units: list[Unit], c: Correction) -> bool:
+    """Whether a figure's sentence compares or ranks by it. A name's never
+    does: its right name reads the same."""
+    if not isinstance(c.figure, Figure):
+        return False
+    unit = unit_of(all_units, c.figure.start, c.figure.end)
+    return unit is not None and _DEPENDS.search(text[unit.start:unit.end]) is not None
 
 
 def substitute(text: str, corrections: Iterable[Correction]) -> str:
-    """``text`` with each correction's known value written in its figure's place."""
+    """``text`` with each correction's known value written in its place."""
     out = text
     for c in sorted(corrections, key=lambda c: c.figure.start, reverse=True):
         if c.right is None:
             continue
-        out = out[: c.figure.start] + format_like(c.figure, c.right) + out[c.figure.end:]
+        out = out[: c.figure.start] + written(c) + out[c.figure.end:]
     return out
 
 
 def needs_rewrite(text: str, corrections: Iterable[Correction]) -> bool:
     """Whether code alone can't fix these: a value that isn't known, or a
-    substituted one whose sentence compares or ranks by it."""
+    substituted figure whose sentence compares or ranks by it."""
     all_units = units(text)
-    for c in corrections:
-        if c.right is None:
-            return True
-        unit = unit_of(all_units, c.figure.start, c.figure.end)
-        if unit is not None and _DEPENDS.search(text[unit.start:unit.end]):
-            return True
-    return False
+    return any(c.right is None or _depends(text, all_units, c) for c in corrections)
 
 
 def _tokens(text: str) -> list[tuple[str, int]]:
@@ -270,18 +283,18 @@ def fallback(text: str, corrections: list[Correction], every: list[Figure]) -> s
     compares or ranks by it is removed too, since its words may no longer fit."""
     all_units = units(text)
     keep: list[Correction] = []
-    gone: list[Figure] = []
+    gone: list[Figure | Name] = []
     for c in corrections:
-        unit = unit_of(all_units, c.figure.start, c.figure.end)
-        depends = unit is not None and _DEPENDS.search(text[unit.start:unit.end]) is not None
-        if c.right is not None and not depends:
+        if c.right is not None and not _depends(text, all_units, c):
             keep.append(c)
         else:
             gone.append(c.figure)
     return remove(text, gone, every, keep=keep) if gone else substitute(text, keep)
 
 
-def remove(text: str, failed: list[Figure], every: list[Figure], *, keep: Iterable[Correction] = ()) -> str:
+def remove(
+    text: str, failed: list[Figure | Name], every: list[Figure], *, keep: Iterable[Correction] = ()
+) -> str:
     """``text`` without the unit holding each failed figure, or
     ``WHOLE_REPLY`` when leaving them out could mislead (module docstring).
     ``keep``'s known values are written in, in the same pass."""
@@ -303,7 +316,7 @@ def remove(text: str, failed: list[Figure], every: list[Figure], *, keep: Iterab
         return WHOLE_REPLY
     edits = [(u.start, u.end, "") for u in gone]
     edits += [
-        (c.figure.start, c.figure.end, format_like(c.figure, c.right))
+        (c.figure.start, c.figure.end, written(c))
         for c in keep
         if c.right is not None and not any(u.start <= c.figure.start and c.figure.end <= u.end for u in gone)
     ]
@@ -315,7 +328,7 @@ def remove(text: str, failed: list[Figure], every: list[Figure], *, keep: Iterab
     return out or WHOLE_REPLY
 
 
-def allowed_spans(text: str, failed: Iterable[Figure]) -> list[tuple[int, int]]:
+def allowed_spans(text: str, failed: Iterable[Figure | Name]) -> list[tuple[int, int]]:
     """The units of ``text`` a rewrite may change: those holding a failed figure."""
     all_units = units(text)
     spans: list[tuple[int, int]] = []
@@ -325,12 +338,14 @@ def allowed_spans(text: str, failed: Iterable[Figure]) -> list[tuple[int, int]]:
     return spans
 
 
-def describe(corrections: Iterable[Correction], write: Callable[[Figure, float], str] = format_like) -> str:
+def describe(corrections: Iterable[Correction]) -> str:
     """The corrections for the correction call, one per line, built in code."""
     lines = []
     for n, c in enumerate(corrections, start=1):
-        if c.right is None:
+        if c.right is None and isinstance(c.figure, Name):
+            lines.append(f'{n}. "{c.figure.text}": not a name in the results. Leave it out.')
+        elif c.right is None:
             lines.append(f'{n}. "{c.figure.text}": no known value. Leave it out.')
         else:
-            lines.append(f'{n}. "{c.figure.text}" should be "{write(c.figure, c.right)}".')
+            lines.append(f'{n}. "{c.figure.text}" should be "{written(c)}".')
     return "\n".join(lines)
