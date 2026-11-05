@@ -67,6 +67,16 @@ def is_standing(meta: dict[str, str]) -> bool:
     return meta.get("always", "").lower() in _TRUE
 
 
+def strip_standing(text: str) -> str:
+    """``text`` without any standing front matter, however many blocks are
+    stacked (one pass would leave the second block a standing rule)."""
+    meta, body = split_front_matter(text)
+    while is_standing(meta):
+        text = body
+        meta, body = split_front_matter(text)
+    return text
+
+
 def _docs_dir() -> Path:
     from openexecutive.config import get_settings
 
@@ -116,10 +126,15 @@ def _standing_body(path: Path) -> str | None:
     else None. Reads its head first, and no more than MAX_CHARS of its body."""
     try:
         with open(path, "rb") as f:
-            head = f.read(HEAD_BYTES).decode("utf-8", errors="replace")
-            if not is_standing(split_front_matter(head)[0]):
+            raw = f.read(HEAD_BYTES)
+            if not is_standing(split_front_matter(raw.decode("utf-8", errors="replace"))[0]):
                 return None
-            rest = f.read(MAX_CHARS + 1).decode("utf-8", errors="replace")
+            raw += f.read(MAX_CHARS + 1)
+            if f.read(1):
+                # Longer than a turn gets (counted in bytes, so a non-ASCII
+                # rule is never sent cut short): left out whole.
+                logger.warning("standing_rules: %s left out, past the %d characters a turn gets", path.name, MAX_CHARS)
+                return None
     except OSError:
         return None
-    return split_front_matter(head + rest)[1].strip()
+    return strip_standing(raw.decode("utf-8", errors="replace")).strip()

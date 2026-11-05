@@ -30,7 +30,7 @@ from typing import Any, Literal
 import yaml
 from pydantic import BaseModel, Field, ValidationError
 
-from openexecutive.knowledge.standing_rules import is_standing, split_front_matter
+from openexecutive.knowledge.standing_rules import strip_standing
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.people.models import AuthorityScope
 
@@ -623,8 +623,7 @@ def materialize_to_dir(record: dict[str, Any], target_dir: Path) -> None:
             seen.add(safe)
             # A generated document or an intake attachment never becomes a
             # standing rule (knowledge.standing_rules): its flag is dropped.
-            meta, body = split_front_matter(content or "")
-            (docs_dir / safe).write_text(body if is_standing(meta) else (content or ""), encoding="utf-8")
+            (docs_dir / safe).write_text(strip_standing(content or ""), encoding="utf-8")
 
 
 def _extract_tool_input(response: Any) -> dict[str, Any]:

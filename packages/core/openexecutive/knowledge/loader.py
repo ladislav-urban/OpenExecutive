@@ -300,11 +300,9 @@ async def ingest_file(
     if Path(name).suffix.lower() in (".md", ".markdown", ".txt"):
         # A standing rule's front matter (knowledge.standing_rules) is no
         # part of what it says.
-        from openexecutive.knowledge.standing_rules import is_standing, split_front_matter
+        from openexecutive.knowledge.standing_rules import strip_standing
 
-        meta, body = split_front_matter(text)
-        if is_standing(meta):
-            text = body
+        text = strip_standing(text)
     if not text.strip():
         return 0
 

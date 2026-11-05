@@ -54,6 +54,11 @@ def test_an_edit_counts_from_the_next_turn_and_the_cap_holds(docs: Path) -> None
     assert [n for n, _ in standing_rules()] == ["how_we_work_02_who_owns_what.md"]
     (docs / "zz_long.md").write_text("---\nalways: true\n---\n" + "x" * (MAX_CHARS + 1), encoding="utf-8")
     assert "zz_long.md" not in [n for n, _ in standing_rules()]
+    # Few characters, many bytes: left out whole, never cut short.
+    (docs / "zz_long.md").write_text("---\nalways: true\n---\n" + "中" * 5000, encoding="utf-8")
+    later += 5
+    os.utime(docs / "zz_long.md", (later, later))
+    assert "zz_long.md" not in [n for n, _ in standing_rules()]
 
 
 def test_every_chat_turn_gets_them_whatever_the_question(docs: Path) -> None:
@@ -149,7 +154,8 @@ def test_a_generated_client_bundles_documents_lose_the_flag(tmp_path: Path) -> N
 
     from openexecutive.fixtures.generator import materialize_to_dir
 
-    record = {"docs_json": json.dumps({"source_brief.md": OWNERS, "notes.md": PLAIN})}
+    stacked = "---\nalways: true\n---\n" + OWNERS
+    record = {"docs_json": json.dumps({"source_brief.md": OWNERS, "stacked.md": stacked, "notes.md": PLAIN})}
     materialize_to_dir(record, tmp_path)
     written = {p.name: p.read_text(encoding="utf-8") for p in (tmp_path / "docs").iterdir()}
     assert not any("always: true" in text for text in written.values())
