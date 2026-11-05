@@ -59,6 +59,9 @@ export interface ChatChunk {
     | "thinking"
     | "phase"
     | "committee_critique"
+    // The whole reply, once its figures are checked against ERPNext, in place
+    // of the chunks before it (`content`). It says nothing about why.
+    | "reply_replaced"
     // The user pressed Stop. Always followed by `done` over the same still-open
     // stream, so the consumer's state machine still reaches a clean end.
     | "stopped";
@@ -1309,6 +1312,7 @@ export type LiveChatEvent =
       content: string;
     }
   | { type: "chunk"; turn_key: string; content: string }
+  | { type: "reply_replaced"; turn_key: string; content: string }
   | { type: "thinking"; turn_key: string }
   | { type: "activity"; turn_key: string; label: string }
   | ({ turn_key: string } & ActionTaken)

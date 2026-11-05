@@ -43,6 +43,7 @@ from openexecutive.memory.workspace_settings import (
     pin_turn_workspace_mode,
 )
 from openexecutive.orchestrator import (
+    answer_check,
     app_control_catalog,  # noqa: F401  (fills the app tools' catalog)
     claim_check,
     department_gate,
@@ -1576,6 +1577,12 @@ class Executive:
                 attachment_blocks=attachment_blocks,
                 retrieved_context=retrieved_context,
             )
+            # The answer check's sources besides ERPNext's results: what the
+            # person gave, and the conversation the turn starts from.
+            check_turn = answer_check.current()
+            if check_turn is not None:
+                check_turn.note_given(memory_text or user_message, page_context_block)
+                check_turn.note_messages(messages, system_blocks)
             consulted: list[str] = []
             turn_calls: list[tuple[str, str]] = []
             try:
@@ -1599,6 +1606,14 @@ class Executive:
                     yield item
             finally:
                 outside_content.end_turn(outside_turn)
+            # Every figure held to this turn's ERPNext results, and the reply
+            # corrected in place when one isn't (orchestrator.answer_check).
+            checked = await answer_check.check_reply(
+                full_response, check_turn, question=memory_text or user_message, model=effective_model,
+            )
+            if checked != full_response:
+                full_response = checked
+                yield {"type": "reply_replaced", "content": checked, "session_id": session.session_id}
 
         if debug_collector:
             evt = debug_collector.emit("synthesis_done", {
@@ -1973,6 +1988,11 @@ class Executive:
             attachment_blocks=attachment_blocks,
             retrieved_context=retrieved_context,
         )
+        # The answer check's sources besides ERPNext's (see stream_chat).
+        check_turn = answer_check.current()
+        if check_turn is not None:
+            check_turn.note_given(memory_text or user_message, page_context_block)
+            check_turn.note_messages(messages, system_blocks)
         turn_calls: list[tuple[str, str]] = []
         try:
             async for item in self._stream_agent_loop(
@@ -2158,6 +2178,14 @@ class Executive:
                 model=effective_model,
                 actor="committee_revision",
             )
+        # The final revision held to the draft run's ERPNext results, as a
+        # reply is (orchestrator.answer_check).
+        checked = await answer_check.check_reply(
+            final_response, check_turn, question=memory_text or user_message, model=effective_model,
+        )
+        if checked != final_response:
+            final_response = checked
+            yield {"type": "reply_replaced", "content": checked, "session_id": session.session_id}
 
         if debug_collector:
             evt = debug_collector.emit("synthesis_done", {
@@ -3874,6 +3902,7 @@ class Executive:
                 # Audited by the inbox's owner (the web chat route), under
                 # the same privacy as the turn's own message.
                 yield {"type": "message_added", "ids": [m.id for m in added]}
+            answer_check.note_tool_results(tool_results)
             current_messages.append({"role": "user", "content": tool_results})
             # Bounded to the messages this loop appended: current_messages
             # is a shallow copy, so anything at a lower index is still owned
@@ -3968,11 +3997,18 @@ class Executive:
             else self.stream_chat(**common_kwargs)
         )
         result = ""
-        async for chunk in stream:
-            if isinstance(chunk, str) and chunk != self._THINKING:
-                result += chunk
-            elif cards is not None and isinstance(chunk, dict) and chunk.get("type") == "action_taken":
-                decision_id = chunk.get("decision_id")
-                if isinstance(decision_id, int) and not isinstance(decision_id, bool) and decision_id not in cards:
-                    cards.append(decision_id)
+        # The answer check's turn (orchestrator.answer_check): the caller's
+        # when it bound one (ERPNext's panel reads what it did), else its own.
+        bound = answer_check.current()
+        with answer_check.collect(answer_check.AnswerCheckTurn()) if bound is None else contextlib.nullcontext():
+            async for chunk in stream:
+                if isinstance(chunk, str) and chunk != self._THINKING:
+                    result += chunk
+                elif isinstance(chunk, dict) and chunk.get("type") == "reply_replaced":
+                    # The checked reply, in place of what streamed.
+                    result = str(chunk.get("content") or "")
+                elif cards is not None and isinstance(chunk, dict) and chunk.get("type") == "action_taken":
+                    decision_id = chunk.get("decision_id")
+                    if isinstance(decision_id, int) and not isinstance(decision_id, bool) and decision_id not in cards:
+                        cards.append(decision_id)
         return result

@@ -145,6 +145,28 @@ def in_oversight_run() -> bool:
     return _oversight_run.get()
 
 
+# Set only by orchestrator.answer_check, around its own context call.
+_answer_check_run: ContextVar[bool] = ContextVar("erpnext_answer_check_run", default=False)
+
+
+@contextmanager
+def answer_check_run() -> Iterator[None]:
+    """Mark the ERPNext call made inside as the answer check's own read of
+    the site's formats and field types (oe_connector's
+    ``answer_check_context``; the gateway lets only that tool through then,
+    and refuses it anywhere else). It keeps the turn's own caller: a person,
+    or the morning brief's ``service``. Code only: no tool sets it."""
+    token = _answer_check_run.set(True)
+    try:
+        yield
+    finally:
+        _answer_check_run.reset(token)
+
+
+def in_answer_check_run() -> bool:
+    return _answer_check_run.get()
+
+
 # Set only by integrations.erpnext_a2a, around its narrow agent's turn: the
 # Supplier whose registered key signed the request.
 _supplier_run: ContextVar[str] = ContextVar("erpnext_supplier_run", default="")

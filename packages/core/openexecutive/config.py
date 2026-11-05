@@ -936,6 +936,11 @@ class Settings(BaseSettings):
     # principal's morning brief shows (cash, receivables, payables, yesterday's
     # sales). Unset, the brief has no ERP NUMBERS block.
     erpnext_brief_company: str | None = Field(None, alias="ERPNEXT_BRIEF_COMPANY")
+    # The answer check (orchestrator/answer_check.py, oe_connector's
+    # docs/answer-check-plan.md): every figure in a reply that read ERPNext is
+    # held to that turn's results and corrected before the person keeps it.
+    # `off` leaves replies as the model wrote them.
+    erpnext_answer_check: Literal["off", "correct"] = Field("correct", alias="ERPNEXT_ANSWER_CHECK")
     # ERPNext phase 4 (integrations/erpnext_drafts.py): the principal may have
     # the Executive prepare ERPNext drafts (ERPNEXT_DRAFT_DOCTYPES) on an
     # approval card they tap; created only then, unsubmitted, as their own

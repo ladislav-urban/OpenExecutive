@@ -100,6 +100,7 @@ export function applyLiveEvent(
       });
     }
     case "chunk":
+    case "reply_replaced":
     case "thinking":
     case "activity":
     case "action_taken":
@@ -108,6 +109,10 @@ export function applyLiveEvent(
       if (!turn || turn.turnKey !== event.turn_key) return step({});
       if (event.type === "chunk") {
         return step({ state: { ...state, turn: { ...turn, reply: turn.reply + event.content, thinking: false, activity: null } } });
+      }
+      if (event.type === "reply_replaced") {
+        // The sender's reply, checked, in place of what streamed.
+        return step({ state: { ...state, turn: { ...turn, reply: event.content, thinking: false, activity: null } } });
       }
       if (event.type === "thinking") return step({ state: { ...state, turn: { ...turn, thinking: true } } });
       if (event.type === "activity") return step({ state: { ...state, turn: { ...turn, activity: event.label } } });

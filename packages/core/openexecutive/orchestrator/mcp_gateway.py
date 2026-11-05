@@ -3497,10 +3497,15 @@ def _drop_blocked_tools(text: object) -> Any:
     """``search_tools`` output without the tools `call_tool` always refuses
     here (the Microsoft 365 account tools; ERPNext's show tool off its panel;
     ERPNext's oversight tool, which runs only for the export; its supplier
-    tools, which run only for a supplier's agent; any ERPNext tool whose
-    definition doesn't match its pin), so the model is never offered them.
+    tools, which run only for a supplier's agent; its answer check's tools,
+    which only that check's code calls; any ERPNext tool whose definition
+    doesn't match its pin), so the model is never offered them.
     Output naming none of them comes back unchanged."""
-    from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL, ERPNEXT_SUPPLIER_TOOLS
+    from openexecutive.prompts.connected_systems import (
+        ERPNEXT_AUDIT_TOOL,
+        ERPNEXT_CODE_ONLY_TOOLS,
+        ERPNEXT_SUPPLIER_TOOLS,
+    )
     from openexecutive.workflows.tool_catalog import filter_search_results, parse_search_results
 
     changed = _erpnext_mismatches(text)
@@ -3512,6 +3517,7 @@ def _drop_blocked_tools(text: object) -> Any:
             or _show_outside_panel(normalized)
             or normalized == ERPNEXT_AUDIT_TOOL
             or normalized in ERPNEXT_SUPPLIER_TOOLS
+            or normalized in ERPNEXT_CODE_ONLY_TOOLS
             or name in changed
         )
 
@@ -3533,6 +3539,7 @@ def _is_undiscovered_refusal(
     the retry never searches up a same-named server from anywhere else."""
     from openexecutive.prompts.connected_systems import (
         ERPNEXT_AUDIT_TOOL,
+        ERPNEXT_CODE_ONLY_TOOLS,
         ERPNEXT_DRAFT_TOOLS,
         ERPNEXT_SERVER,
         ERPNEXT_SHOW_TOOL,
@@ -3549,6 +3556,7 @@ def _is_undiscovered_refusal(
         (
             tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS
             or tool_name in ERPNEXT_SUPPLIER_TOOLS
+            or tool_name in ERPNEXT_CODE_ONLY_TOOLS
             or tool_name in (ERPNEXT_AUDIT_TOOL, ERPNEXT_SHOW_TOOL)
         )
         and ERPNEXT_SERVER in server_names
@@ -3977,7 +3985,10 @@ class MCPGateway:
             # Before every gate and the caller's signature, so both see the
             # call as it will run.
             arguments = _erpnext_arguments(arguments, self._erpnext_schemas.get(normalized))
-            from openexecutive.prompts.connected_systems import ERPNEXT_AUDIT_TOOL
+            from openexecutive.prompts.connected_systems import (
+                ERPNEXT_AUDIT_TOOL,
+                ERPNEXT_CODE_ONLY_TOOLS,
+            )
 
             # The oversight tool runs only inside the export's own marker, and
             # that marker runs nothing else.
@@ -3985,6 +3996,12 @@ class MCPGateway:
                 return _refuse_erpnext_call(
                     tool_name, "audit-outside-export",
                     "This is OpenExecutive's own oversight export, not a tool to call here.",
+                )
+            # Likewise the answer check's own tools (orchestrator.answer_check).
+            if (normalized in ERPNEXT_CODE_ONLY_TOOLS) != erpnext_caller.in_answer_check_run():
+                return _refuse_erpnext_call(
+                    tool_name, "check-outside-answer-check",
+                    "This is OpenExecutive's own answer check, not a tool to call here.",
                 )
             # The supplier tools run only for a supplier's agent (above).
             if normalized in ERPNEXT_SUPPLIER_TOOLS and not erpnext_caller.in_supplier_run():
@@ -4253,12 +4270,12 @@ class MCPGateway:
         if erpnext_call:
             # On a panel turn, what the answer showed (integrations.erpnext_panel).
             from openexecutive.integrations.erpnext_panel import note_erpnext_call
+            from openexecutive.orchestrator.answer_check import note_erpnext_result
 
-            note_erpnext_call(
-                normalized,
-                arguments,
-                failed=bool(getattr(result, "isError", False)) or _is_error_payload(result_text),
-            )
+            failed = bool(getattr(result, "isError", False)) or _is_error_payload(result_text)
+            note_erpnext_call(normalized, arguments, failed=failed)
+            # On a turn being checked, what its figures may come from.
+            note_erpnext_result(normalized, arguments, result_text, failed=failed)
         return result_text
 
     def _refuse_changed_erpnext_tool(self, tool_name: str) -> str:
