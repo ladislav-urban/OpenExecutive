@@ -101,6 +101,8 @@ def quiet(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
 
     monkeypatch.setattr(answer_review, "review", no_review)
     monkeypatch.setattr(answer_check, "_rewrite", no_rewrite)
+    # Per-person access on: there is a person's caller to run a report as.
+    monkeypatch.setattr("openexecutive.orchestrator.erpnext_caller.signing_setting", lambda: "key")
     return rows
 
 
@@ -169,3 +171,40 @@ def test_the_model_is_never_offered_confirm_figure(monkeypatch: pytest.MonkeyPat
     pin_listing(monkeypatch, listing)
     kept = mcp_gateway._drop_blocked_tools(listing)
     assert "erpnext__run_report" in kept and "erpnext__confirm_figure" not in kept
+
+
+def test_a_sorted_or_limited_row_read_is_not_a_quick_way() -> None:
+    # "Which invoice owes the most?": its one row is never the receivables total.
+    top = _read({**OWED.arguments, "order_by": "outstanding_amount desc", "limit": 1},
+                [{"name": "SINV-0042", "outstanding_amount": 48200.0}], OWED.payload["filters"][::2])
+    limited = _read({**OWED.arguments, "limit": 1}, [{"name": "SINV-0042", "outstanding_amount": 48200.0}],
+                    OWED.payload["filters"][::2])
+    assert quick_totals([top, limited], MEASURES, TODAY) == []
+    # A SUM aggregate isn't cut by a row limit.
+    assert quick_totals([_read({**REVENUE.arguments, "limit": 1}, REVENUE.payload["rows"], REVENUE.payload["filters"])],
+                        MEASURES, TODAY)
+
+
+def test_a_period_bound_twice_or_no_filters_echoed_is_not_one() -> None:
+    twice = _read(REVENUE.arguments, REVENUE.payload["rows"],
+                  [*REVENUE.payload["filters"], ["posting_date", ">=", "2026-10-15"]])
+    assert quick_totals([twice], MEASURES, TODAY) == []
+    unechoed = ErpnextResult("erpnext__list_records", OWED.arguments,
+                             {"doctype": "Sales Invoice", "rows": OWED.payload["rows"], "company": COMPANY})
+    assert quick_totals([unechoed], MEASURES, TODAY) == []
+
+
+def test_one_rows_value_equal_to_a_row_total_is_never_held_to_the_report(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked = _reports(monkeypatch, {"receivables_outstanding": 999999.0})
+    one = _read(OWED.arguments, [{"name": "SINV-0001", "outstanding_amount": 30000.0},
+                                 {"name": "SINV-0002", "outstanding_amount": 0.0}], OWED.payload["filters"])
+    # 30,000 is one invoice's value and the rows' total alike: check 1 reads it as the value.
+    assert _check("SINV-0001 owes $30,000.", _turn(one)) == "SINV-0001 owes $30,000."
+    assert asked == []
+
+
+def test_no_report_runs_without_a_persons_caller(monkeypatch: pytest.MonkeyPatch) -> None:
+    asked = _reports(monkeypatch, {"revenue": 1.0})
+    monkeypatch.setattr("openexecutive.orchestrator.erpnext_caller.signing_setting", lambda: "")
+    assert _check("Revenue in October was $123,450.", _turn(REVENUE)) == "Revenue in October was $123,450."
+    assert asked == []

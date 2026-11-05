@@ -70,6 +70,9 @@ class QuickTotal:
     party: str | None = None
     accounts: tuple[str, ...] = ()
     truncated: bool = False
+    # Added up from the read's rows, not its SUM aggregate: check 1 must have
+    # matched the figure as that column's sum, never as one row's value.
+    from_rows: bool = False
 
     def arguments(self) -> dict[str, Any]:
         args: dict[str, Any] = {"measure": self.measure, "company": self.company, "to_date": self.to_date}
@@ -103,11 +106,12 @@ def _period(filters: list[tuple[str, str, Any]]) -> tuple[str | None, str | None
     for field, op, value in filters:
         if field != "posting_date":
             continue
-        if op == "between" and isinstance(value, list) and len(value) == 2:
+        # A bound given twice: ERPNext applies both, so the period isn't one.
+        if op == "between" and isinstance(value, list) and len(value) == 2 and start is None and end is None:
             start, end = str(value[0]), str(value[1])
-        elif op == ">=":
+        elif op == ">=" and start is None:
             start = str(value)
-        elif op == "<=":
+        elif op == "<=" and end is None:
             end = str(value)
         else:
             return None
@@ -195,10 +199,15 @@ def _quick(result: ErpnextResult, measure: dict[str, Any], quick: dict[str, Any]
         return None
     if quick.get("doctype") != (payload.get("doctype") or result.arguments.get("doctype")):
         return None
-    if result.arguments.get("group_by"):
+    # Grouped, sorted or cut to a few rows: the top one's figure, not the measure's.
+    if result.arguments.get("group_by") or result.arguments.get("order_by"):
+        return None
+    aggregated = bool(result.arguments.get("aggregates"))
+    if result.arguments.get("limit") and not aggregated:
         return None
     fields = quick.get("fields")
-    filters = _filters(payload.get("filters", []))
+    # Only the filters oe_connector says it ran; none echoed, no quick way.
+    filters = _filters(payload.get("filters")) if "filters" in payload else None
     if not isinstance(fields, list) or filters is None:
         return None
     name = str(measure.get("measure"))
@@ -255,7 +264,7 @@ def _quick(result: ErpnextResult, measure: dict[str, Any], quick: dict[str, Any]
     return QuickTotal(
         value=abs(value), measure=name, company=company, from_date=start, to_date=str(end),
         party_type=party_type if party else None, party=party, accounts=accounts,
-        truncated=payload.get("truncated") is True,
+        truncated=payload.get("truncated") is True, from_rows=not aggregated,
     )
 
 

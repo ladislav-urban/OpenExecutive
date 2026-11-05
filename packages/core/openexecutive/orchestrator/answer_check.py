@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import re
 from collections.abc import Iterable, Iterator
@@ -61,6 +62,8 @@ CODE_ONLY_BUDGET_S = 10.0
 CONTEXT_TIMEOUT_S = 10.0
 CORRECTION_TIMEOUT_S = 45.0
 CONFIRM_TIMEOUT_S = 15.0
+# All of check 3's report runs in a turn, so checks 2 and the correction keep their time.
+CONFIRM_BUDGET_S = 20.0
 # The ERPNext reads whose results figures come from (gateway names).
 _FIGURE_TOOLS = frozenset({"erpnext__list_records", "erpnext__get_record", "erpnext__run_report"})
 # An ERPNext result as the model read it. A result cut to the reading budget
@@ -82,7 +85,7 @@ class AnswerCheckTurn:
     _context: dict[str, Any] | None = None
     _sources: tuple[NumberFormat, figure_check.Sources, name_check.NameSources] | None = None
     # Check 3's report runs this turn: the quick total asked about -> the report's total.
-    _reports: dict[figure_confirm.QuickTotal, float | None] = field(default_factory=dict)
+    _reports: dict[str, float | None] = field(default_factory=dict)
     _done: tuple[str, str] | None = None
 
     def note_result(self, tool: str, arguments: Any, text: object) -> None:
@@ -301,20 +304,40 @@ async def _confirm(turn: AnswerCheckTurn, figures: list[Figure]) -> list[tuple[F
     measure's quick-way total, asked of its report, at most MAX_CONFIRMS
     reports a turn. A figure the report agrees with is confirmed; the ones it
     doesn't, with the report's total."""
+    from openexecutive.orchestrator import erpnext_caller
+
+    if not erpnext_caller.signing_setting():
+        # Phase 1: no person's caller to run the report as; oe_connector refuses.
+        return []
     context = await _context(turn)
     totals = figure_confirm.quick_totals(turn.results, context.get("measures"), date.today())
     differs: list[tuple[Figure, float]] = []
+    deadline = asyncio.get_running_loop().time() + CONFIRM_BUDGET_S
     for fig in figures:
         if not totals or fig.matched is None or fig.status not in ("confirmed", "from_truncated"):
             continue
-        quick = next((q for q in totals if abs(q.value - abs(fig.matched)) <= max(q.value, 1.0) * 1e-9), None)
+        quick = next(
+            (
+                q for q in totals
+                if abs(q.value - abs(fig.matched)) <= max(q.value, 1.0) * 1e-9
+                # A total added up from rows only for a figure check 1 read as
+                # that sum, never one row's value that happens to equal it.
+                and (not q.from_rows or fig.how.startswith("sum of "))
+            ),
+            None,
+        )
         if quick is None:
             continue
-        if quick not in turn._reports:
-            if len(turn._reports) >= figure_confirm.MAX_CONFIRMS:
+        key = json.dumps(quick.arguments(), sort_keys=True)
+        if key not in turn._reports:
+            left = deadline - asyncio.get_running_loop().time()
+            if len(turn._reports) >= figure_confirm.MAX_CONFIRMS or left <= 0:
                 continue
-            turn._reports[quick] = await _report(turn, quick)
-        total = turn._reports[quick]
+            try:
+                turn._reports[key] = await asyncio.wait_for(_report(turn, quick), left)
+            except TimeoutError:
+                turn._reports[key] = None
+        total = turn._reports[key]
         if total is None:
             continue
         if fig.matches(total):

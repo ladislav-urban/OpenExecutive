@@ -34,6 +34,7 @@ ERPNEXT_PREFIX = "erpnext__"
 TOOL_DIGESTS: dict[str, str] = {
     "answer_check_context": "e47289b5bb6c6d13adf87286a8faacb55014aaca18b752ae25a424f482db59b6",
     "audit_drafts": "086c6aaa377a06f3104d176d57cd9201ff14ab9e0f510a059e373df67d992149",
+    "confirm_figure": "7e92126de1a33bced94e4b247220bac4fddaf8c26f0ec141fd612011cf34102b",
     "describe_doctype": "857eb11de056c01ca1a85be1552e22e04068b63bf37ccdf7de15edfc99cc13a3",
     "describe_report": "702e1c25ef62f819c2efe0421270b83779f882ae709067cc2189696e32ff4f7c",
     "draft_check": "c97ed34120d93ce74bc8097e89416c98d19f59988ecd6fd812d36dc3e475e795",
@@ -51,7 +52,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "supplier_orders": "abfa94e11de532f9cf1531c221dd4f8e8120816c215fb4b2780fd2edc338c1f8",
 }
 # oe_connector's protocol.TOOLS_DIGEST for the definitions pinned above.
-TOOLS_DIGEST = "41d6b25cfbd193ba286ab364560db08b02513fa354ae46738252558fae6082d6"
+TOOLS_DIGEST = "602ef2e67dc44b23a5f0b7abb13a4b1d6f026a9263470c72ff652d487d287a2a"
 
 # The supplier tools as oe_connector serves them (its mcp/protocol.py
 # SUPPLIER_TOOLS), offered to the A2A agent from this copy rather than from
