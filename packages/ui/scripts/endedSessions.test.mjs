@@ -72,3 +72,15 @@ test("the proxy never forwards the store's own paths", () => {
   const routed = decodeURIComponent(new URL("http://api/auth/ended%2Dsessions").pathname);
   assert.equal(serverOnlyPath(routed.split("/").filter(Boolean)), true);
 });
+
+test("a host page's sign-out ends the sessions on its sid that began by then, not later ones", () => {
+  // Recorded with its person (app/signout/sso): the provider session may live on.
+  const signedOut = [{ iss: ISS, sid: "s1", sub: "u1", ended_at: 2000 }];
+  assert.equal(sessionEnded({ ...session, signedInAt: 1000 }, signedOut), true);
+  assert.equal(sessionEnded({ ...session, signedInAt: 2000 }, signedOut), true);
+  assert.equal(sessionEnded({ ...session, signedInAt: 2001 }, signedOut), false);
+  // Another sid of the same person is untouched.
+  assert.equal(sessionEnded({ ...session, sid: "s2", signedInAt: 1000 }, signedOut), false);
+  // The provider's own logout (a sid alone) still ends it whenever it began.
+  assert.equal(sessionEnded({ ...session, signedInAt: 9000 }, [{ iss: ISS, sid: "s1", ended_at: 2000 }]), true);
+});
