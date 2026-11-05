@@ -1,0 +1,21 @@
+id: erpnext_077
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Issue
+description: 'Service-desk step 1 (oe_connector''s help/try-service-desk.md) in ERPNext''s panel as a demo person. The reply counts this year''s issues by priority and by whether each met its service targets (agreement status Fulfilled or Failed), not only the one open issue. Found in the pilot''s Nov 5, 2026 second retake (ac2b047b), where only the open Brightline issue was covered.'
+query: How is the service desk doing against its response and resolution targets?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  counts_issues_by_priority: true
+  says_how_many_of_each_priority_met_or_missed_their_targets: true
+  mentions_the_open_high_priority_issue: true

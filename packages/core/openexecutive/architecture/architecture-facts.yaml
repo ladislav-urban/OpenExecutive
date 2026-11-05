@@ -5322,7 +5322,8 @@ chat:
     corrected text saved; stopped/timed-out replies checked before saving,
     disconnected saved as streamed. Fails open on an internal error; code
     alone when out of time. answer_check audit row, counts only.
-    ERPNEXT_ANSWER_CHECK=off|correct (default correct). Why: the pilot's
+    ERPNEXT_ANSWER_CHECK=off|correct|correct_keep (default correct;
+    correct_keep never replaces a reply whole, owner's decision 90.a). Why: the pilot's
     reshoots (oe_connector#413-#415) quoted figures ERPNext didn't hold.
     Names (PR (b), orchestrator/name_check.py): document names exact or not
     known; table cells under a name label and bold list openers with a figure

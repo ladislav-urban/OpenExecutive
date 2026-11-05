@@ -100,3 +100,20 @@ def test_the_projection_test_reads_the_question_not_the_reply() -> None:
     assert not projection.search("How many projectors are in stock?")
     assert not projection.search("What would be our total overdue receivables right now?")
     assert not projection.search("Sync this to my Outlook")
+
+
+def test_correct_keep_never_replaces_a_reply_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The owner's decision 90.a: figures put right in place, the reply kept.
+    monkeypatch.setenv("ERPNEXT_ANSWER_CHECK", "correct_keep")
+    _reviews(monkeypatch, *[CANNOT_TELL] * 10)
+    _rewrites(monkeypatch, None)
+    turn = _turn()
+    text = "Receivables are $77,777. Most of it is South's."
+    assert _ask(text, "Who owes us?", turn) == text
+    assert not turn.whole_replaced
+    # A known right value is still written in.
+    _reviews(monkeypatch, Review("wrong", 48200.0))
+    assert _ask(text, "Who owes us?", _turn()) == "Receivables are $48,200. Most of it is South's."
+    monkeypatch.setenv("ERPNEXT_ANSWER_CHECK", "correct")
+    _reviews(monkeypatch, *[CANNOT_TELL] * 10)
+    assert _ask(text, "Who owes us?", _turn()) == answer_correct.WHOLE_REPLY
