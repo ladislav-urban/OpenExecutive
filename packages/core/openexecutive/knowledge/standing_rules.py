@@ -14,6 +14,11 @@ says ``always: true`` is a standing rule:
     ---
     # Who owns what
 
+Only the account owner adds one: an upload with the flag from anyone else is
+refused (``api.routes.documents``), and a generated client bundle's documents
+lose it (``fixtures.generator``). ``GET /documents`` says which documents are
+standing rules.
+
 Every chat and panel turn gets the standing rules in its user turn (never a
 cached block), before the retrieved excerpts, up to ``MAX_CHARS`` in all; a
 rule past it is left out, with a log line. Retrieval leaves those documents out
@@ -34,6 +39,8 @@ logger = logging.getLogger(__name__)
 
 # What the standing rules may add to one turn, in all.
 MAX_CHARS = 2500
+# How much of a document is read to find its front matter.
+HEAD_BYTES = 4096
 _SUFFIXES = frozenset({".md", ".markdown", ".txt"})
 _FRONT_MATTER = re.compile(r"\A﻿?---[ \t]*\r?\n(.*?)\r?\n---[ \t]*(?:\r?\n|\Z)", re.S)
 _TRUE = frozenset({"true", "yes", "on", "1"})
@@ -72,28 +79,47 @@ def standing_rules(docs_dir: Path | None = None) -> list[tuple[str, str]]:
     global _cache
     folder = docs_dir or _docs_dir()
     try:
-        files = sorted(p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in _SUFFIXES)
+        # The listed documents only (loader._company_doc_names skips dot files).
+        files = sorted(
+            p for p in folder.iterdir()
+            if p.is_file() and not p.name.startswith(".") and p.suffix.lower() in _SUFFIXES
+        )
         stamp = tuple((p.name, p.stat().st_mtime) for p in files)
     except OSError:
         return []
+    # Held across the read, so a change is read once, not once per turn.
     with _lock:
         if _cache is not None and _cache[0] == stamp:
             return list(_cache[1])
-    rules: list[tuple[str, str]] = []
-    used = 0
-    for path in files:
-        try:
-            meta, body = split_front_matter(path.read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            continue
-        if not is_standing(meta):
-            continue
-        body = body.strip()
-        if used + len(body) > MAX_CHARS:
-            logger.warning("standing_rules: %s left out, past the %d characters a turn gets", path.name, MAX_CHARS)
-            continue
-        rules.append((path.name, body))
-        used += len(body)
-    with _lock:
+        rules: list[tuple[str, str]] = []
+        used = 0
+        for path in files:
+            body = _standing_body(path)
+            if body is None:
+                continue
+            if used + len(body) > MAX_CHARS:
+                logger.warning("standing_rules: %s left out, past the %d characters a turn gets", path.name, MAX_CHARS)
+                continue
+            rules.append((path.name, body))
+            used += len(body)
         _cache = (stamp, rules)
-    return list(rules)
+        return list(rules)
+
+
+def standing_names(docs_dir: Path | None = None) -> frozenset[str]:
+    """The filenames of the standing rules (``GET /documents`` marks them)."""
+    return frozenset(name for name, _ in standing_rules(docs_dir))
+
+
+def _standing_body(path: Path) -> str | None:
+    """``path``'s text without its front matter when it is a standing rule,
+    else None. Reads its head first, and no more than MAX_CHARS of its body."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(HEAD_BYTES).decode("utf-8", errors="replace")
+            if not is_standing(split_front_matter(head)[0]):
+                return None
+            rest = f.read(MAX_CHARS + 1).decode("utf-8", errors="replace")
+    except OSError:
+        return None
+    return split_front_matter(head + rest)[1].strip()

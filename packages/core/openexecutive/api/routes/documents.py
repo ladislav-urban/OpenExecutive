@@ -116,6 +116,24 @@ async def upload_document(
 
     tmp_path = await _stage_upload(file, ext)
 
+    # A standing rule (knowledge.standing_rules) reaches every person's turn,
+    # so only the owner may add one; anyone else's flag is refused.
+    if ext in (".md", ".markdown", ".txt"):
+        from openexecutive.api.routes.people import caller_is_principal
+        from openexecutive.knowledge.standing_rules import (
+            HEAD_BYTES,
+            is_standing,
+            split_front_matter,
+        )
+
+        front = (await asyncio.to_thread(_read_head, tmp_path, HEAD_BYTES)).decode("utf-8", errors="replace")
+        if is_standing(split_front_matter(front)[0]) and not caller_is_principal(request):
+            tmp_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=403,
+                detail="Only the account owner can add a standing rule (front matter always: true).",
+            )
+
     try:
         from openexecutive.config import get_settings
         from openexecutive.knowledge.isolated import IsolatedError
@@ -236,9 +254,17 @@ async def list_documents(request: Request = None) -> dict:  # type: ignore[assig
     docs_dir = settings.company_profile_path.parent / "docs"
     docs = list_company_docs(docs_dir)
     domains = await asyncio.to_thread(_upload_domains, _store(request)) if docs else {}
+    # Which are standing rules, in every chat turn (knowledge.standing_rules).
+    from openexecutive.knowledge.standing_rules import standing_names
+
+    standing = await asyncio.to_thread(standing_names, docs_dir) if docs else frozenset()
     return {
         "documents": [
-            {**doc, "source": "upload", "domain": domains.get(doc["filename"])} for doc in docs
+            {
+                **doc, "source": "upload", "domain": domains.get(doc["filename"]),
+                "standing": doc["filename"] in standing,
+            }
+            for doc in docs
         ]
     }
 

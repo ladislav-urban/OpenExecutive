@@ -95,3 +95,63 @@ def test_a_standing_rules_front_matter_is_not_indexed(tmp_path: Path) -> None:
     store = Store()
     asyncio.run(ingest_file(doc, store))  # type: ignore[arg-type]
     assert store.texts and not any("always: true" in t for t in store.texts)
+
+
+# ---------------------------------------------------------------------------
+# Who may add one (the security review of ladislav-urban/OpenExecutive#159)
+
+
+@pytest.fixture
+def upload_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Any:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from openexecutive.api.routes import documents
+
+    from ._fake_store import FakeStore
+
+    monkeypatch.setenv("VECTOR_STORE_PATH", str(tmp_path / "chroma"))
+    monkeypatch.setenv("COMPANY_PROFILE_PATH", str(tmp_path / "company" / "profile.yaml"))
+    monkeypatch.setattr("openexecutive.alerts.pipeline.schedule_evaluation", lambda *a, **k: None)
+    monkeypatch.setattr(rules_mod, "_cache", None)
+    app = FastAPI()
+    app.include_router(documents.router)
+    app.state.store = FakeStore()
+    return TestClient(app), tmp_path / "company" / "docs"
+
+
+def _post(client: Any, name: str, text: str) -> Any:
+    import io
+
+    return client.post("/documents", files={"file": (name, io.BytesIO(text.encode()), "text/markdown")})
+
+
+def test_only_the_owner_adds_a_standing_rule(upload_client: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    client, docs_dir = upload_client
+    monkeypatch.setattr("openexecutive.api.routes.people.caller_is_principal", lambda _r: False)
+    refused = _post(client, "rules.md", OWNERS)
+    assert refused.status_code == 403 and not (docs_dir / "rules.md").exists()
+    # A plain document from anyone, as before.
+    assert _post(client, "deals.md", PLAIN).status_code == 200
+    monkeypatch.setattr("openexecutive.api.routes.people.caller_is_principal", lambda _r: True)
+    assert _post(client, "rules.md", OWNERS).status_code == 200
+    listed = {d["filename"]: d["standing"] for d in client.get("/documents").json()["documents"]}
+    assert listed == {"deals.md": False, "rules.md": True}
+
+
+def test_a_hidden_file_is_never_a_standing_rule(docs: Path) -> None:
+    (docs / ".hidden.md").write_text(OWNERS, encoding="utf-8")
+    assert ".hidden.md" not in [name for name, _ in standing_rules()]
+
+
+def test_a_generated_client_bundles_documents_lose_the_flag(tmp_path: Path) -> None:
+    import json
+
+    from openexecutive.fixtures.generator import materialize_to_dir
+
+    record = {"docs_json": json.dumps({"source_brief.md": OWNERS, "notes.md": PLAIN})}
+    materialize_to_dir(record, tmp_path)
+    written = {p.name: p.read_text(encoding="utf-8") for p in (tmp_path / "docs").iterdir()}
+    assert not any("always: true" in text for text in written.values())
+    assert any("Rachel Dunmore" in text for text in written.values())
+    assert standing_rules(tmp_path / "docs") == []
