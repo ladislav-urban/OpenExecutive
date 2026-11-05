@@ -274,12 +274,7 @@ _ERPNEXT_ARGS = (
     "{\"field\": value or [\"operator\", value]} or [[\"field\", \"operator\", value], ...], "
     "group_by?, aggregates?: [{\"function\": \"SUM\", \"field\": ..., \"as\": ...}], "
     "order_by?, limit?}; "
-    "`run_report` {report_name, filters?: {fieldname from describe_report: value}, limit?}; "
-    "`show_in_erpnext` {view}, the view exactly one of: {\"kind\": \"list\", doctype, filters?, sort?}; "
-    "{\"kind\": \"report\", report_name, filters?: the report's own filter names}; "
-    "{\"kind\": \"form\", doctype, name}; or kind report_view, tree, calendar, gantt, kanban, "
-    "dashboard, workspace, page or chart. A report's name goes in `report_name`, never `report`, and "
-    "one document is kind `form`, never `record` or `doc`. "
+    "`run_report` {report_name, filters?: {fieldname from describe_report: value}, limit?}. "
     "An empty result means nothing matched: change the filter or the approach, "
     "never the shape of the same call."
 )

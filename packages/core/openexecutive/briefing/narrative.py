@@ -423,7 +423,17 @@ def _standing_rules_block() -> str:
         from openexecutive.knowledge.retriever import _standing_block
         from openexecutive.knowledge.standing_rules import standing_rules
 
-        return _standing_block(standing_rules())
+        rules = standing_rules()
+        if not rules:
+            return ""
+        # Quoted line by line, as other written text here is, so a rule's
+        # text can never begin a line that reads as another block's header.
+        header = _standing_block([("", "")]).splitlines()[0]
+        lines = [header]
+        for name, text in rules:
+            lines.append(f"  [{name}]")
+            lines.extend(_quoted_lines(text, max_lines=60))
+        return "\n".join(lines)
     except Exception:
         logger.warning("briefing_narrative: standing rules unreadable; left out", exc_info=True)
         return ""
