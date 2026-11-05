@@ -430,8 +430,10 @@ def _standing_rules_block() -> str:
         # text can never begin a line that reads as another block's header.
         header = _standing_block([("", "")]).splitlines()[0]
         lines = [header]
+        from openexecutive.briefing.live_signals import _one_line
+
         for name, text in rules:
-            lines.append(f"  [{name}]")
+            lines.append(f"  [{_one_line(name, 80)}]")
             lines.extend(_quoted_lines(text, max_lines=60))
         return "\n".join(lines)
     except Exception:
