@@ -353,6 +353,15 @@ def test_a_figure_with_no_known_value_is_left_out_by_the_correction_call(monkeyp
     assert calls == ['1. "$9,999": no known value. Leave it out.']
 
 
+def test_words_that_depend_on_a_wrong_figure_go_to_the_correction_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Substituting 12,500 for 52,500 would leave "more than South" standing.
+    _reviews(monkeypatch, Review("wrong", 12500.0))
+    fixed = "Receivables are $48,200. Northwind owes $12,500, less than South."
+    calls = _rewrites(monkeypatch, fixed)
+    assert _check("Receivables are $48,200. Northwind owes $52,500, more than South.") == fixed
+    assert calls == ['1. "$52,500" should be "$12,500".']
+
+
 def test_a_rewrite_that_changes_anything_else_is_thrown_away(monkeypatch: pytest.MonkeyPatch) -> None:
     _reviews(monkeypatch, CANNOT_TELL)
     _rewrites(monkeypatch, "Receivables are $48,200, all due now. North owes the smaller share.")
