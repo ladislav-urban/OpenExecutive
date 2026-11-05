@@ -464,6 +464,14 @@ function DocListRow({
           {row.domain && (
             <span className="hidden sm:inline flex-shrink-0 capitalize text-fg-subtle">· {row.domain}</span>
           )}
+          {row.standing && (
+            <span
+              className="flex-shrink-0 text-fg-subtle"
+              title="A standing rule: every conversation is given it, whatever the question."
+            >
+              · Standing rule
+            </span>
+          )}
           {details.length > 0 && <span className="truncate">· {details.join(" · ")}</span>}
         </p>
       </div>

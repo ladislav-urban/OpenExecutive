@@ -1168,7 +1168,7 @@ async def _chat_turn(
     Python job may take by name for this turn (workflows/turn_files.py).
     """
     from openexecutive.config import get_settings
-    from openexecutive.knowledge.retriever import retrieve
+    from openexecutive.knowledge.retriever import follow_up_query, retrieve
     from openexecutive.memory.episodic import format_for_prompt
     from openexecutive.memory.session_store import create_session
     from openexecutive.orchestrator.executive import Executive
@@ -1622,11 +1622,14 @@ async def _chat_turn(
             ) = await asyncio.gather(
                 asyncio.to_thread(
                     retrieve,
-                    query=message,
+                    # A short follow-up is searched with the question before it.
+                    query=follow_up_query(message, session.conversation_history),
                     specialist_name=None,
                     store=request.app.state.store if hasattr(request.app.state, "store") else None,
                     record_source=turn_sources.add,
                     max_chars=get_settings().knowledge_chat_max_chars,
+                    # Who owns and approves what, whatever the question.
+                    standing=True,
                 ),
                 _do_episodic(),
                 _do_prefetch(),

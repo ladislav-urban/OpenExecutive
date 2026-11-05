@@ -5285,6 +5285,14 @@ chat:
     iteration, fails open. Why: replies said "Done" or "I'll treat it as
     closed" with no tool call, and the brief kept the item.
     CLAIM_CHECK_ENABLED (default true).
+  standing_rules: |
+    Company documents with front matter `always: true` (knowledge/standing_rules.py)
+    are standing rules: the chat and panel pass retrieve(standing=True), which puts
+    them first in every turn's retrieved block (user turn, uncached; 2,500 chars
+    max; left out of the similarity results), even when the short-query bypass
+    skips the search. Front matter is stripped at indexing. Short messages (<80
+    chars) are searched with the previous user message (follow_up_query). Why:
+    Nov 5, 2026 retake, "Who owns what" never retrieved (0.66 vs the 0.55 cut).
   answer_check: |
     The answer check (orchestrator/answer_check.py; oe_connector's
     docs/answer-check-plan.md, PR (a) numbers; decided Nov 4, 2026). On a

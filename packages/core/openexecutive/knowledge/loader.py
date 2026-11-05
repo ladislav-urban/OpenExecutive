@@ -296,10 +296,16 @@ async def ingest_file(
     so a PDF met by busy parsers is a retry, not an empty "indexed" result.
     """
     text = await extract_text_from_file_async(path, busy_raises=busy_raises)
+    name = source_name or path.name
+    if Path(name).suffix.lower() in (".md", ".markdown", ".txt"):
+        # A standing rule's front matter (knowledge.standing_rules) is no
+        # part of what it says.
+        from openexecutive.knowledge.standing_rules import strip_standing
+
+        text = strip_standing(text)
     if not text.strip():
         return 0
 
-    name = source_name or path.name
     inferred_domain = domain or infer_domain_from_path(path)
     chunks = chunk_text(text, chunk_size=512, overlap=50)
 

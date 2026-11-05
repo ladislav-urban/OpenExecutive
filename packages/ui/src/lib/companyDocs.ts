@@ -12,6 +12,8 @@ export interface UploadedDocIn {
   /** Unix seconds (file mtime). */
   modified_at: number;
   domain?: string | null;
+  /** A standing rule: in every chat turn (front matter `always: true`). */
+  standing?: boolean;
 }
 
 export interface SyncedDocIn {
@@ -43,6 +45,8 @@ export interface DocRow {
   indexed: boolean;
   /** Why a synced file has no readable text, when known. */
   unreadableReason: string | null;
+  /** A standing rule: in every chat turn. */
+  standing: boolean;
 }
 
 export const SOURCE_LABELS: Record<DocSource, string> = {
@@ -76,6 +80,7 @@ export function mergeDocs(
       domain: shownDomain(d.domain),
       indexed: true,
       unreadableReason: null,
+      standing: d.standing === true,
     })),
     ...[
       ["drive", drive] as const,
@@ -94,6 +99,7 @@ export function mergeDocs(
         domain: null,
         indexed: f.indexed,
         unreadableReason: f.indexed ? null : (f.unreadable_reason ?? null),
+        standing: false,
       })),
     ),
   ];

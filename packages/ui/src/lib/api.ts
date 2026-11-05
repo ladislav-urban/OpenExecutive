@@ -619,6 +619,8 @@ export interface CompanyDoc {
   source?: "upload";
   /** The domain the upload was indexed under ("general" when untagged). */
   domain?: string | null;
+  /** A standing rule: in every chat turn (front matter `always: true`). */
+  standing?: boolean;
 }
 
 export async function listDocuments(): Promise<CompanyDoc[]> {
