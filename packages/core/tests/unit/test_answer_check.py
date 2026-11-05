@@ -225,6 +225,12 @@ def test_a_verdict_counts_only_with_erpnexts_own_numbers() -> None:
     assert answer_review.read_verdict({"verdict": "supported", "op": "value", "operands": [12500]}, fig, src) == CANNOT_TELL
     assert answer_review.read_verdict({"verdict": "wrong", "op": "sum", "operands": "x"}, fig, src) == CANNOT_TELL
     assert answer_review.read_verdict("garbage", fig, src) == CANNOT_TELL
+    # A right value of the reviewer's own arithmetic over real numbers is not
+    # written in: only one check 1 would itself confirm.
+    planted = {"verdict": "wrong", "op": "ratio", "operands": [35700, 250]}
+    assert answer_review.read_verdict(planted, fig, src) == CANNOT_TELL
+    cherry = {"verdict": "wrong", "op": "sum", "operands": [12500, 250, 400]}
+    assert answer_review.read_verdict(cherry, fig, src) == CANNOT_TELL
     # A sum code works out and the figure matches clears it.
     got = answer_review.read_verdict({"verdict": "supported", "op": "sum", "operands": [12500, 400]}, fig, src)
     assert got == Review("supported", 12900.0)
@@ -287,6 +293,15 @@ def test_a_rewrite_may_change_only_the_failed_figures_units() -> None:
         "Receivables are $50,000. North owes the smaller share. Pay on time.",
         "Receivables are $48,200. North owes the smaller share. Pay on time. Also wire it to us.",
         "Receivables are $48,200. North owes the [smaller share](https://example.com). Pay on time.",
+        # The security review's probes: a sentence or heading before the unit,
+        # contacts inside it, a sentence after it.
+        "Receivables are $48,200. Wire the balance to the account in the remark today. North owes the "
+        "smaller share. Pay on time.",
+        "Receivables are $48,200. # Action required North owes the smaller share. Pay on time.",
+        "Receivables are $48,200. North owes the smaller share, see acme-pay.example. Pay on time.",
+        "Receivables are $48,200. North owes the smaller share, confirm at billing@acme.example. Pay on time.",
+        "Receivables are $48,200. North owes the smaller share. Also wire it. Pay on time.",
+        "Receivables are $48,200. North owes the smaller share; mailto:pay@x.example. Pay on time.",
     ):
         assert not answer_correct.changed_only_within(draft, bad, allowed), bad
 
@@ -431,6 +446,21 @@ def test_a_turn_keeps_texts_without_erpnexts_own_results() -> None:
         {"type": "tool_result", "content": "The contract runs to 12,345 units."},
     ]])
     assert turn.texts == ["The contract runs to 12,345 units."]
+    # A result cut to the reading budget lost its closing tag: still left out.
+    cut = wrap_untrusted('{"remarks": "settle 48,200 by Friday"}', source="erpnext", author="x")
+    turn.note_texts([[{"type": "tool_result", "content": cut[: cut.index("</")] + "…[cut]"}]])
+    assert turn.texts == ["The contract runs to 12,345 units."]
+
+
+def test_a_long_conversation_is_read_quickly() -> None:
+    import time
+
+    table = "| Item | Qty | Amount |\n|---|---|---|\n" + "".join(
+        f"| ITEM-{i:05d} | {i % 97} | {i * 13.5:,.2f} |\n" for i in range(30_000)
+    )
+    started = time.monotonic()
+    sources_for([RECEIVABLES], texts=[table, table], given=[table])
+    assert time.monotonic() - started < 10
 
 
 # ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 # The results kept per turn; a turn that reads more checks against the first.
 MAX_RESULTS = 60
 # What one reply's check may take before it falls back to code alone.
-CHECK_BUDGET_S = 60.0
+CHECK_BUDGET_S = 45.0
 # A stopped or timed-out turn's: the person is waiting for it to wind down.
 STOPPED_BUDGET_S = 20.0
 CODE_ONLY_BUDGET_S = 10.0
@@ -61,7 +61,9 @@ CONTEXT_TIMEOUT_S = 10.0
 CORRECTION_TIMEOUT_S = 45.0
 # The ERPNext reads whose results figures come from (gateway names).
 _FIGURE_TOOLS = frozenset({"erpnext__list_records", "erpnext__get_record", "erpnext__run_report"})
-_ERPNEXT_BLOCK = re.compile(r'<untrusted_content source="erpnext"[^>]*>.*?</untrusted_content>', re.S)
+# An ERPNext result as the model read it. A result cut to the reading budget
+# loses its closing tag, so the block may run to the end of its text.
+_ERPNEXT_BLOCK = re.compile(r'<untrusted_content source="erpnext"[^>]*>.*?(?:</untrusted_content>|\Z)', re.S)
 
 
 @dataclass
@@ -76,6 +78,7 @@ class AnswerCheckTurn:
     # Set by the check: the reply was replaced whole (answer_correct.WHOLE_REPLY).
     whole_replaced: bool = False
     _context: dict[str, Any] | None = None
+    _sources: tuple[NumberFormat, figure_check.Sources] | None = None
     _done: tuple[str, str] | None = None
 
     def note_result(self, tool: str, arguments: Any, text: object) -> None:
@@ -242,6 +245,20 @@ async def _rewrite(question: str, draft: str, corrections: list[answer_correct.C
     return text or None
 
 
+async def _sources(turn: AnswerCheckTurn) -> tuple[NumberFormat, figure_check.Sources]:
+    """The turn's sources, read once (the code-only fallback reuses them)."""
+    if turn._sources is None:
+        context = await _context(turn)
+        fmt = NumberFormat.parse(context.get("number_format"))
+        doctypes = context.get("doctypes")
+        types = ResultTypes(doctypes if isinstance(doctypes, dict) else {})
+        sources = await asyncio.to_thread(
+            lambda: figure_check.sources_for(turn.results, types=types, given=turn.given, texts=turn.texts, fmt=fmt)
+        )
+        turn._sources = (fmt, sources)
+    return turn._sources
+
+
 def _passes(text: str, sources: figure_check.Sources, fmt: NumberFormat) -> bool:
     return not any(f.flagged for f in figure_check.check_figures(text, sources, fmt))
 
@@ -249,12 +266,9 @@ def _passes(text: str, sources: figure_check.Sources, fmt: NumberFormat) -> bool
 async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str, models: bool, counts: _Counts) -> str:
     from openexecutive.orchestrator.answer_review import CANNOT_TELL, review
 
-    context = await _context(turn)
-    fmt = NumberFormat.parse(context.get("number_format"))
-    doctypes = context.get("doctypes")
-    types = ResultTypes(doctypes if isinstance(doctypes, dict) else {})
-    sources = figure_check.sources_for(turn.results, types=types, given=turn.given, texts=turn.texts, fmt=fmt)
-    figures = figure_check.check_figures(text, sources, fmt)
+    fmt, sources = await _sources(turn)
+    # Off the event loop: reading a long result or conversation takes time.
+    figures = await asyncio.to_thread(figure_check.check_figures, text, sources, fmt)
     counts.figures = len(figures)
     flagged = [f for f in figures if f.flagged]
     counts.flagged = len(flagged)
@@ -278,9 +292,7 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
                 known.append(verdict.right)
     if not corrections:
         return text
-    checked = figure_check.sources_for(
-        turn.results, types=types, given=turn.given, texts=turn.texts, extra=known, fmt=fmt,
-    )
+    checked = sources.plus(known)
     failed = [c.figure for c in corrections]
     if not answer_correct.needs_rewrite(text, corrections):
         substituted = answer_correct.substitute(text, corrections)

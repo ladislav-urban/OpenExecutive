@@ -46,7 +46,13 @@ _DEPENDS = re.compile(
     re.I,
 )
 _TOKEN = re.compile(r"\w+|[^\w\s]")
-_LINK = re.compile(r"https?://[^\s)>\]]+|\]\([^)]*\)|www\.[^\s)>\]]+")
+_LINK = re.compile(
+    r"(?i)[a-z][a-z0-9+.-]*:[^\s)>\]]+"  # any scheme: https:, mailto:, tel:
+    r"|\]\([^)]*\)"
+    r"|[\w.+-]+@[\w-]+(?:\.[\w-]+)+"  # an email
+    r"|\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.[a-z]{2,}\b"  # a domain
+)
+_STOP = re.compile(r"[.!?](?=\s|$)")
 
 
 @dataclass(frozen=True)
@@ -216,29 +222,38 @@ def _tokens(text: str) -> list[tuple[str, int]]:
 def changed_only_within(draft: str, rewrite: str, allowed: list[tuple[int, int]]) -> bool:
     """Whether ``rewrite`` matches ``draft`` token for token outside the
     ``allowed`` spans of the draft (the units holding failed figures).
-    Whitespace and line breaks aside. An insertion counts as inside a span
-    when the token after it is in one; at a span's very end, only when it adds
-    no sentence of its own. A link the draft didn't have fails it anywhere."""
+    Whitespace and line breaks aside. A change must lie within one span; an
+    insertion between two of its tokens, or at its end before its closing
+    stop. No change may add a sentence, a heading, a table cell or a link (an
+    address, a domain or an email the draft didn't have)."""
     if set(_LINK.findall(rewrite)) - set(_LINK.findall(draft)):
         return False
     old, new = _tokens(draft), _tokens(rewrite)
 
-    def inside(pos: int) -> bool:
-        return any(a <= pos < b for a, b in allowed)
+    def span_of(pos: int) -> int:
+        return next((n for n, (a, b) in enumerate(allowed) if a <= pos < b), -1)
+
+    # Sentence stops (a stop followed by a space or the end, never a decimal
+    # point), headings and table cells, by position.
+    marks_old = {m.start() for m in _STOP.finditer(draft)} | {i for i, c in enumerate(draft) if c in "#|"}
+    marks_new = {m.start() for m in _STOP.finditer(rewrite)} | {i for i, c in enumerate(rewrite) if c in "#|"}
+
+    def structure(marks: set[int], toks: list[tuple[str, int]], j1: int, j2: int) -> int:
+        return sum(1 for k in range(j1, j2) if toks[k][1] in marks)
 
     matcher = difflib.SequenceMatcher(None, [t for t, _ in old], [t for t, _ in new], autojunk=False)
     for op, i1, i2, j1, j2 in matcher.get_opcodes():
         if op == "equal":
             continue
+        added = structure(marks_new, new, j1, j2)
         if i1 == i2:
-            if i1 < len(old) and inside(old[i1][1]):
-                continue
-            ends_unit = i1 > 0 and inside(old[i1 - 1][1])
-            added = [t for t, _ in new[j1:j2]]
-            if not ends_unit or any(t in ".!?\n|" for t in added[:-1]) or "#" in added:
+            before = span_of(old[i1 - 1][1]) if i1 > 0 else -1
+            after = span_of(old[i1][1]) if i1 < len(old) else -1
+            if before < 0 or (after != before and old[i1 - 1][1] in marks_old) or added:
                 return False
             continue
-        if not all(inside(old[k][1]) for k in range(i1, i2)):
+        spans = {span_of(old[k][1]) for k in range(i1, i2)}
+        if len(spans) != 1 or -1 in spans or added > structure(marks_old, old, i1, i2):
             return False
     return True
 

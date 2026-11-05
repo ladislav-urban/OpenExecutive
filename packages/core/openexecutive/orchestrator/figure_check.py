@@ -43,6 +43,7 @@ on a site that writes it so. Number words are English only for now (question
 from __future__ import annotations
 
 import bisect
+import dataclasses
 import functools
 import json
 import math
@@ -68,6 +69,12 @@ MAX_DERIVED = 200_000
 MAX_GROUPS = 30
 # The first and the largest rows summed together, up to this many.
 MAX_RUN = 50
+# Text read for numbers (the person's message, other tools' results, the
+# conversation): each piece's first MAX_TEXT_PIECE characters, and the turn's
+# pieces up to MAX_TEXT_CHARS in all, newest first, so a long conversation or
+# a pasted export can't stall the check.
+MAX_TEXT_PIECE = 60_000
+MAX_TEXT_CHARS = 300_000
 
 # ``answer_check_context``'s ``number_format`` when the site says nothing.
 PLAIN_FORMAT = "#,###.##"
@@ -265,7 +272,19 @@ def _masked(text: str) -> list[tuple[int, int]]:
     for date_re in _DATE_RES:
         spans += [m.span() for m in date_re.finditer(text)]
     spans += [m.span() for m in _LIST_NUMBER_RE.finditer(text)]
-    return spans
+    # Merged and sorted, so a number's overlap is one bisect (_is_masked).
+    merged: list[tuple[int, int]] = []
+    for start, end in sorted(spans):
+        if merged and start <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+        else:
+            merged.append((start, end))
+    return merged
+
+
+def _is_masked(masked: list[tuple[int, int]], starts: list[int], start: int, end: int) -> bool:
+    i = bisect.bisect_right(starts, end - 1) - 1
+    return i >= 0 and masked[i][1] > start
 
 
 def _word_before(text: str, pos: int) -> str:
@@ -296,11 +315,12 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
     that isn't a date, an id or list numbering (a source's text, where a plain
     "14" may be what the reply repeats)."""
     masked = _masked(text)
+    starts = [s for s, _ in masked]
     figures: list[Figure] = []
     for m in _figure_re(fmt.group == " ").finditer(text):
         num = m.group("num")
         num_start, num_end = m.span("num")
-        if any(s < num_end and num_start < e for s, e in masked):
+        if _is_masked(masked, starts, num_start, num_end):
             continue
         before = text[num_start - 1] if num_start > 0 else ""
         after = text[num_end] if num_end < len(text) else ""
@@ -618,6 +638,22 @@ class Sources:
         """Whether ``x`` appears only in rows of a result ERPNext cut off."""
         return any(abs(v - abs(x)) <= max(abs(x), 1.0) * 1e-9 for v in self.partial)
 
+    def knows(self, x: float, *, percent: bool = False) -> bool:
+        """Whether check 1 would itself confirm ``x``: one of ERPNext's values,
+        an aggregate of a whole list, a difference of two values, or (for a
+        percentage, in percent units) a share or a change. A right value check
+        2 names must be one of these: arithmetic of its own choosing over real
+        operands can reach almost any number."""
+        x = abs(x)
+        if _near(self.values, x, 1e-6) or _near(self._complete_keys, x, 1e-6) or _near(self.differences, x, 1e-6):
+            return True
+        return percent and (_near(self.ratios, x / 100.0, 1e-6) or _near(self.changes, x / 100.0, 1e-6))
+
+    def plus(self, extra: Iterable[float]) -> Sources:
+        """These sources with ``extra`` counted as ERPNext's own values."""
+        values = sorted({*self.values, *(abs(v) for v in extra)})
+        return dataclasses.replace(self, values=values)
+
 
 def _near(sorted_values: list[float], x: float, rel: float = 1e-9) -> bool:
     pad = max(abs(x), 1.0) * rel
@@ -645,6 +681,20 @@ def _combine(pairs: Iterable[tuple[float, float]], diffs: set[float], ratios: se
             changes.add(round(abs(b - a) / a, 12))
         if b:
             changes.add(round(abs(a - b) / b, 12))
+
+
+def _capped(texts: Iterable[str]) -> list[str]:
+    """``texts`` within MAX_TEXT_PIECE each and MAX_TEXT_CHARS in all, the
+    newest (last) first."""
+    out: list[str] = []
+    left = MAX_TEXT_CHARS
+    for text in reversed(list(texts)):
+        if left <= 0:
+            break
+        piece = text[: min(MAX_TEXT_PIECE, left)]
+        out.append(piece)
+        left -= len(piece)
+    return out
 
 
 def sources_for(
@@ -707,8 +757,8 @@ def sources_for(
                         shares.append(running)
                 ratios.update(round(v / total, 12) for v in shares)
     src.differences, src.ratios, src.changes = sorted(diffs), sorted(ratios), sorted(changes)
-    src.given = sorted({v for text in given for v in numbers_in(text, fmt)})
-    src.text = sorted({v for text in texts for v in numbers_in(text, fmt)})
+    src.given = sorted({v for text in _capped(given) for v in numbers_in(text, fmt)})
+    src.text = sorted({v for text in _capped(texts) for v in numbers_in(text, fmt)})
     return src
 
 

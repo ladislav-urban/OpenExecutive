@@ -13,7 +13,12 @@ code"): every number it names must be one of ERPNext's own values in the
 results, an operation over a cut-off result's rows can't add up to a total,
 and the operation is worked out here, never taken from the model. So it can
 neither confirm a figure nor supply a value that isn't in what ERPNext
-returned. A verdict that doesn't parse, names a number that isn't there, or
+returned, and a value it supplies must be one check 1 would itself confirm
+(``Sources.knows``): a value, a whole list's aggregate, a difference, or a
+share or change.
+
+The reviewer runs on ``ROUTING_MODEL``'s provider. When that isn't the turn's
+own model's provider, it is one more recipient of the turn's ERPNext results. A verdict that doesn't parse, names a number that isn't there, or
 doesn't add up is ``cannot_tell``.
 """
 from __future__ import annotations
@@ -130,9 +135,14 @@ def read_verdict(item: object, fig: Figure, sources: Sources) -> Review:
     value = _worked_out(op, numbers)
     if value is None:
         return CANNOT_TELL
+    if fig.percent and op == "ratio":
+        value *= 100.0  # a share, written as a percentage
     if fig.matches(value):
         return Review("supported", value)
-    if verdict == "wrong":
+    if verdict == "wrong" and sources.knows(value, percent=fig.percent):
+        # Only a value check 1 itself would confirm is written into the reply:
+        # arithmetic of the reviewer's choosing over real numbers can reach
+        # almost any figure, and ERPNext's free text can steer the reviewer.
         return Review("wrong", value)
     return CANNOT_TELL
 
