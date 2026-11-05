@@ -417,6 +417,30 @@ def _age_label(iso: str | None, now: datetime) -> str:
     return "raised <24h ago" if days == 0 else f"raised {days}d ago"
 
 
+def _standing_rules_block() -> str:
+    """The standing rules block a chat turn gets, or ""."""
+    try:
+        from openexecutive.knowledge.retriever import _standing_block
+        from openexecutive.knowledge.standing_rules import standing_rules
+
+        rules = standing_rules()
+        if not rules:
+            return ""
+        # Quoted line by line, as other written text here is, so a rule's
+        # text can never begin a line that reads as another block's header.
+        header = _standing_block([("", "")]).splitlines()[0]
+        lines = [header]
+        from openexecutive.briefing.live_signals import _one_line
+
+        for name, text in rules:
+            lines.append(f"  [{_one_line(name, 80)}]")
+            lines.extend(_quoted_lines(text, max_lines=60))
+        return "\n".join(lines)
+    except Exception:
+        logger.warning("briefing_narrative: standing rules unreadable; left out", exc_info=True)
+        return ""
+
+
 def _goal_line(goal: dict[str, Any]) -> str:
     """One at-risk goal: "<key result> (off track: 40 of 100)". Every field
     is collapsed to one line, so a goal's text can never start a new block."""
@@ -731,6 +755,13 @@ def render_briefing_context(
         standing_facts = render_facts_for_prompt()
     if standing_facts:
         parts.extend(["", standing_facts])
+    # The company's standing rules (knowledge.standing_rules): who owns and
+    # approves what, for the decisions' owners, as on every chat and panel
+    # turn (the pilot's Nov 5, 2026 retake). In the rendered context too, so
+    # an edited rule rewrites the header. Never fatal: "" on any error.
+    rules_block = _standing_rules_block()
+    if rules_block:
+        parts.extend(["", rules_block])
     if leave_out_block:
         parts.extend(["", leave_out_block])
 
