@@ -504,6 +504,31 @@ def test_the_context_tool_runs_only_inside_the_checks_marker(erp: Any, roster: A
     assert erp.claims()["sub"] == OWNER
 
 
+def test_on_a_host_origins_turn_the_check_still_reads_its_context(erp: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # F1, the docked panel through the web chat: a host turn may call only
+    # ERPNext's reads, but the check's own tools pass inside its marker.
+    from openexecutive.orchestrator.schedule_tools import set_session
+    from openexecutive.orchestrator.session import Session
+
+    monkeypatch.setattr(mcp_gateway, "_check_erpnext_caller", lambda _name: (None, None))
+    gateway = mcp_gateway.get_active_gateway()
+    assert gateway is not None
+    call = {"name": "erpnext__answer_check_context", "arguments": {"doctypes": ["Sales Invoice"]}}
+
+    async def go(marked: bool) -> str:
+        with set_session(Session(from_web_chat=True, from_host=True)):
+            if marked:
+                with erpnext_caller.answer_check_run():
+                    return await gateway.call_tool(call)
+            return await gateway.call_tool(call)
+
+    asyncio.run(go(False))
+    assert erp.calls == []  # the model's own call is refused there as anywhere
+    erp.replies.append(json.dumps({"number_format": "#,###.##"}))
+    assert json.loads(asyncio.run(go(True)))["number_format"] == "#,###.##"
+    assert [name for name, _ in erp.calls] == ["erpnext__answer_check_context"]
+
+
 def test_the_model_is_never_offered_the_context_tool(monkeypatch: pytest.MonkeyPatch) -> None:
     from tests.unit._erpnext_pins import pin_listing
 
