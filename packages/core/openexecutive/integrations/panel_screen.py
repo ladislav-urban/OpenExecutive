@@ -48,9 +48,19 @@ def _names(items: list[Any]) -> set[str]:
     return out
 
 
+def _within(small: str, big: str) -> bool:
+    """``small`` as whole words of ``big`` (both normalised)."""
+    return f" {small} " in f" {big} "
+
+
 def _shown(name: str, allowed: set[str]) -> bool:
     n = _norm(name)
-    return any(n == a or n in a or a in n for a in allowed if a)
+    # Whole words, three letters or more: a document named "e" shows nothing.
+    return any(_within(n, a) or _within(a, n) for a in allowed if len(a) >= 3) if len(n) >= 3 else False
+
+
+# A sentence that warns off or offers instead isn't a claim about the screen.
+_KEEP_WORDS = re.compile(r"\b(?:don't|do not|never|instead|rather than|can't|cannot|unable)\b", re.I)
 
 
 def drop_stale_screen(reply: str, page: Any, views: list[dict[str, Any]]) -> tuple[str, int]:
@@ -58,19 +68,35 @@ def drop_stale_screen(reply: str, page: Any, views: list[dict[str, Any]]) -> tup
     screen doesn't show it, and how many went (module docstring)."""
     if not reply or not _ON_SCREEN.search(reply):
         return reply, 0
+    if isinstance(page, dict) and page.get("screen") and not views:
+        # Beside one of Dynocortex's own screens: SCREEN_RULE has the reply
+        # say it can't see that screen, which names it.
+        return reply, 0
     # Once the answer opens a view, that is what the screen shows; the page
     # it was asked from is gone (SCREEN_RULE).
     allowed = _names(views) if views else _names([page] if isinstance(page, dict) else [])
-    gone: list[answer_correct.Unit] = []
+    gone: set[answer_correct.Unit] = set()
     all_units = answer_correct.units(reply)
     for m in _ON_SCREEN.finditer(reply):
         unit = answer_correct.unit_of(all_units, m.start(), m.end())
-        if unit is None or unit in gone or unit.kind in ("heading", "header", "code", "row"):
+        if unit is None or unit in gone or unit.lead or unit.kind in ("heading", "header", "code", "row"):
             continue
         part = reply[unit.start:unit.end]
+        if _KEEP_WORDS.search(part) or any(_within(a, _norm(part)) for a in allowed if len(a) >= 3):
+            # A warning, an alternative, or a sentence that also names what
+            # is on screen: left as written.
+            continue
         named = [n.group("name") for n in _NAMED.finditer(part)]
         if named and not any(_shown(name, allowed) for name in named):
-            gone.append(unit)
+            gone.add(unit)
+    # Only the outermost of nested units: a child inside a removed parent
+    # goes with it (spliced twice, it would cut what follows).
+    gone = {u for u in gone if not any(o is not u and o.start <= u.start and u.end <= o.end for o in gone)}
+    # Never every item of a list: its lead-in would be left with nothing.
+    for block in {u.block for u in gone if u.block >= 0}:
+        members = [u for u in all_units if u.block == block and u.kind in ("item", "row")]
+        if members and all(any(g.start <= u.start and u.end <= g.end for g in gone) for u in members):
+            gone = {u for u in gone if u.block != block}
     if not gone:
         return reply, 0
     out = reply
