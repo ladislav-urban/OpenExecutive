@@ -5308,6 +5308,12 @@ chat:
     alone when out of time. answer_check audit row, counts only.
     ERPNEXT_ANSWER_CHECK=off|correct (default correct). Why: the pilot's
     reshoots (oe_connector#413-#415) quoted figures ERPNext didn't hold.
+    Names (PR (b), orchestrator/name_check.py): document names exact or not
+    known; table cells under a name label and bold list openers with a figure
+    must be a source name; near one source name (case/punctuation, or 0/1/2
+    edits by length) is written in by code; otherwise left out or removed.
+    Source names only from name fields (answer_check_context's names, report
+    Link/*_name columns, company), never remarks.
   chat_review: |
     Conversation review (memory/chat_review.py). The post-turn block keeps a
     verified speaker's turn (principal on a people_tools-verified surface, or
