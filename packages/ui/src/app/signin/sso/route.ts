@@ -1,6 +1,6 @@
 import { cookies, headers } from "next/headers";
 
-import { OIDC, auth, sessionStillAllowed, signIn } from "@/auth";
+import { OIDC, auth, sessionStillAllowed, signIn, signOut } from "@/auth";
 import { HOST_ORIGINS } from "@/lib/hostConfig";
 import { OIDC_PROVIDER_ID } from "@/lib/oidc";
 import {
@@ -8,7 +8,8 @@ import {
   RETURN_COOKIE_MAX_AGE_S,
   RETURN_COOKIE_PATH,
   failedTarget,
-  loginHint,
+  hintOf,
+  otherPerson,
   returnTarget,
 } from "@/lib/signinReturn";
 
@@ -16,11 +17,14 @@ import {
 // level and without a popup (lib/signinReturn.ts; oe_connector's
 // docs/single-sign-in-plan.md, step 2):
 //
-//   GET /signin/sso?to=<host page>[&hint=<email>]
+//   GET /signin/sso?to=<host page>[&hint=<email>]   (or login_hint=<email>)
 //
 // - `to` that isn't a host desk page (returnTarget) goes to this app's Home.
-// - Signed in already, with a session the middleware still accepts: straight
-//   back to `to`.
+// - Signed in already as the host's user (or with no hint), with a session the
+//   middleware still accepts: straight back to `to`.
+// - Signed in as someone else (54.a, Nov 5, 2026: the session outlived the
+//   provider session it came from, and the desk showed A's assistant beside
+//   B's desk): that session is ended here, and the sign-in below runs.
 // - Otherwise the identity provider's sign-in starts at once (OIDC only), with
 //   the host's user as `login_hint`. It returns through /signin/return, which
 //   checks `to` again. A cookie remembers `to` for ten minutes, so that a
@@ -51,9 +55,13 @@ export async function GET(request: Request): Promise<Response> {
   const to = returnTarget(params.get("to"), HOST_ORIGINS.origins);
   if (!to || !OIDC) return home(request);
 
+  const hint = hintOf(params);
   const session = await auth();
   if (session && (await sessionStillAllowed(session, (await headers()).get("host")))) {
-    return Response.redirect(to);
+    if (!otherPerson(session.user?.email, hint)) return Response.redirect(to);
+    // Someone else's session at this browser: its cookie goes before the
+    // host's user signs in, so a failed sign-in can't leave it in place.
+    await signOut({ redirect: false });
   }
 
   jar.set(RETURN_COOKIE, to, {
@@ -63,7 +71,6 @@ export async function GET(request: Request): Promise<Response> {
     path: RETURN_COOKIE_PATH,
     maxAge: RETURN_COOKIE_MAX_AGE_S,
   });
-  const hint = loginHint(params.get("hint"));
   // Throws Next's redirect to the provider, with Auth.js's state and PKCE cookies.
   await signIn(
     OIDC_PROVIDER_ID,

@@ -35,7 +35,14 @@ test("the manifest names the one-pass sign-in, at a route this app has", () => {
   const { signIn } = embedManifest().pieces;
   assert.equal(signIn.path, "/signin/sso");
   assert.equal(signIn.failed, "oe_signin=failed");
+  assert.equal(signIn.replacesOtherUser, true);
   for (const route of ["sso", "return"]) {
     assert.ok(existsSync(new URL(`../src/app/signin/${route}/route.ts`, import.meta.url)), route);
   }
+});
+
+test("the manifest names the sign-out a host's page passes through, at a route this app has", () => {
+  const { signOut } = embedManifest().pieces;
+  assert.deepEqual(signOut, { path: "/signout/sso", query: "?to={hostPage}" });
+  assert.ok(existsSync(new URL("../src/app/signout/sso/route.ts", import.meta.url)));
 });

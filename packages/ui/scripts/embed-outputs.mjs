@@ -6,7 +6,8 @@
 //                        the User Guide's section ids (/guide?section=<id>)
 //                        and the pieces a host places on its own screens
 //                        (the inline Approve, /embed/approve/{alertId}, and
-//                        the one-pass sign-in, /signin/sso)
+//                        the one-pass sign-in, /signin/sso, and its
+//                        sign-out, /signout/sso)
 //   host-list.json       the calls a host origin's page may make
 //
 // The third, openapi.json, comes from the API (scripts/export-openapi.py).
@@ -42,7 +43,11 @@ export function embedManifest() {
     pieces: {
       approve: { path: "/embed/approve/{alertId}", query: "?embed=1", maxHeight: MAX_APPROVE_HEIGHT },
       // Sign in and come back to the host's page in one pass (app/signin/sso).
-      signIn: { path: "/signin/sso", query: "?to={hostPage}&hint={email}", failed: "oe_signin=failed" },
+      // A session for anyone but `hint` is ended and the sign-in runs (54.a).
+      signIn: { path: "/signin/sso", query: "?to={hostPage}&hint={email}", failed: "oe_signin=failed", replacesOtherUser: true },
+      // Sign out here on the way to the host's own sign-out (app/signout/sso);
+      // a top-level navigation only.
+      signOut: { path: "/signout/sso", query: "?to={hostPage}" },
     },
   };
 }

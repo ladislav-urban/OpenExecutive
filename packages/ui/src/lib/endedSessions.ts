@@ -34,7 +34,11 @@ export function sessionEnded(session: ProviderSession, ended: readonly EndedReco
   return ended.some(
     (e) =>
       e.iss === session.iss &&
-      ((e.sid && session.sid && e.sid === session.sid) ||
+      // A provider's logout ends its sid outright. A sign-out from a host's
+      // page (app/signout/sso) records the sid with its person, and ends only
+      // the sessions on it that began by then: the provider session may live
+      // on, and signing in again on it must work.
+      ((e.sid && session.sid && e.sid === session.sid && (!e.sub || session.signedInAt <= e.ended_at)) ||
         // A whole person signed out: every session of theirs that began
         // before the provider said so.
         (!e.sid && e.sub && session.sub && e.sub === session.sub && session.signedInAt <= e.ended_at)),

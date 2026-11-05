@@ -4,7 +4,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-import { FAILED_PARAM, failedTarget, loginHint, returnTarget } from "../src/lib/signinReturn.ts";
+import {
+  FAILED_PARAM,
+  failedTarget,
+  hintOf,
+  loginHint,
+  otherPerson,
+  returnTarget,
+  signOutTarget,
+} from "../src/lib/signinReturn.ts";
 
 const HOSTS = ["http://erp.dynocortex.localhost:8088", "https://erp.example.com"];
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -107,4 +115,50 @@ test("a card answered top level offers the way back to the host's own page for i
 test("the frame takes a return base only from the very host that framed it", () => {
   const provider = read("../src/components/embed/EmbedProvider.tsx");
   assert.match(provider, /returnBase && new URL\(returnBase\)\.origin !== event\.origin\) return;/);
+});
+
+test("signing out goes on to any page of a host, and nowhere else", () => {
+  assert.equal(
+    signOutTarget("https://erp.example.com/api/method/logout?next=%2Flogin", HOSTS),
+    "https://erp.example.com/api/method/logout?next=%2Flogin",
+  );
+  assert.equal(signOutTarget("https://erp.example.com/desk/x#y", HOSTS), "https://erp.example.com/desk/x");
+  // The parser resolves dot segments first, so they stay on the host.
+  assert.equal(signOutTarget("https://erp.example.com/a/../b", HOSTS), "https://erp.example.com/b");
+  for (const to of [
+    "",
+    null,
+    "/desk/x",
+    "https://evil.example.com/logout",
+    "https://erp.example.com.evil.example/logout",
+    "https://user:pw@erp.example.com/logout",
+    "javascript:alert(1)",
+    "https://erp.example.com//evil.example.com",
+    "https://erp.example.com/a%2fb",
+    "https://erp.example.com/a%5Cb",
+    "https://erp.example.com/a\\b",
+  ]) {
+    assert.equal(signOutTarget(to, HOSTS), null, String(to));
+  }
+});
+
+test("the sign-in takes hint or login_hint, and replaces only someone else's session", () => {
+  assert.equal(hintOf(new URLSearchParams("hint=B@Example.com")), "b@example.com");
+  assert.equal(hintOf(new URLSearchParams("login_hint=b@example.com")), "b@example.com");
+  assert.equal(hintOf(new URLSearchParams("hint=not-an-email")), undefined);
+  assert.equal(otherPerson("A@example.com", "b@example.com"), true);
+  assert.equal(otherPerson(null, "b@example.com"), true);
+  assert.equal(otherPerson(" B@Example.com ", "b@example.com"), false);
+  // No hint: whoever is signed in stays, as before.
+  assert.equal(otherPerson("a@example.com", undefined), false);
+  const sso = read("../src/app/signin/sso/route.ts");
+  assert.match(sso, /if \(!otherPerson\(session\.user\?\.email, hint\)\) return Response\.redirect\(to\);\n\s*\/\/[^\n]*\n[^\n]*\n\s*await signOut\(\{ redirect: false \}\);/);
+});
+
+test("the sign-out answers only a navigation, ends the session with its time, and goes only to a host", () => {
+  const out = read("../src/app/signout/sso/route.ts");
+  assert.match(out, /if \(mode && mode !== "navigate"\)/);
+  assert.match(out, /signOutTarget\(new URL\(request\.url\)\.searchParams\.get\("to"\), HOST_ORIGINS\.origins\)/);
+  assert.match(out, /sid: provider\.sid, sub: provider\.sub, ended_at: Math\.floor\(Date\.now\(\) \/ 1000\)/);
+  assert.match(out, /await signOut\(\{ redirect: false \}\);/);
 });

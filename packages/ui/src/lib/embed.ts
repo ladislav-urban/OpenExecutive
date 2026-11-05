@@ -106,6 +106,7 @@ export const APP_ROUTES = [
   "review",
   "settings",
   "signin",
+  "signout",
   "skills",
   "today",
   "watchlist",

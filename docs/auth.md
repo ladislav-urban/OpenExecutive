@@ -216,6 +216,21 @@ again.
   account menu's Sign out ends this session, then sends the browser to the
   provider's end-session endpoint with the ID token as the hint, and back to
   `/signin`.
+- **A host's page signs someone out → so does Open Executive, on the way.**
+  This app's session can outlive the provider session it came from: when the
+  next person signs in to the host, this app takes no part in their provider
+  session, so no back-channel logout reaches the old one (54.a, Nov 5, 2026,
+  found on the pilot). So the host's sign-out passes through
+  `/signout/sso?to=<its page>` (`app/signout/sso`; `pieces.signOut` in
+  `embed-manifest.json`) before the provider's end-session. It clears this
+  app's cookie, records the session's `sid` as ended with its person and the
+  time (a record with both ends only the sessions on that `sid` that began by
+  then, so the person can sign straight back in on a provider session that
+  lives on), and sends the tab to `to`: any page on a host origin, else
+  `/signin`. It needs no session, and answers only a top-level navigation
+  (`Sec-Fetch-Mode: navigate`; anything else is 403). A link from anywhere can
+  sign someone out of Open Executive this way, and that is all it can do: it
+  reads and changes nothing, and they sign straight back in.
 
 At the provider, on the same client:
 
@@ -692,9 +707,11 @@ parent window, and every `init` field is validated. In a frame:
   - `to` must be an absolute URL on exactly one of the host origins, with no user info,
     and a desk path (`/desk/…` or `/app/…`, no `..` or `//`). Anything else goes to this
     app's Home.
-  - Signed in already, the tab goes straight back. Otherwise the SSO sign-in starts at
-    once, with `hint` as the provider's `login_hint` when it is a plain email. With the
-    provider's session still open there is nothing to type.
+  - Signed in already as `hint` (or with no `hint`), the tab goes straight back. Signed
+    in as anyone else, that session ends here first (its cookie cleared) and the sign-in
+    below runs (`pieces.signIn.replacesOtherUser`; 54.a). Otherwise the SSO sign-in starts
+    at once, with `hint` (or `login_hint`) as the provider's `login_hint` when it is a
+    plain email. With the provider's session still open there is nothing to type.
   - The way back, `/signin/return`, checks `to` again and needs the new session.
   - A sign-in the provider refuses comes back to `to` with `oe_signin=failed`, so the host
     can say why: a ten-minute http-only cookie on `/signin` remembers `to`, and `/signin`

@@ -59,6 +59,38 @@ export function returnTarget(to: string | null | undefined, origins: readonly st
   return `${url.origin}${route}`;
 }
 
+/**
+ * Where /signout/sso sends the tab: any page on one of the host origins (its
+ * own sign-out, which goes on to the identity provider's), rebuilt from its
+ * parts, or null. Not only desk routes, but never user info, an encoded
+ * separator, a backslash, `..` or `//`.
+ */
+export function signOutTarget(to: string | null | undefined, origins: readonly string[]): string | null {
+  if (typeof to !== "string" || !to || to.length > MAX_TO_CHARS || to.includes("\\")) return null;
+  let url: URL;
+  try {
+    url = new URL(to);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  if (url.username || url.password || !origins.includes(url.origin)) return null;
+  const route = `${url.pathname}${url.search}`;
+  if (!route.startsWith("/") || route.includes("..") || route.includes("//")) return null;
+  if (ENCODED_SEPARATOR_RE.test(url.pathname)) return null;
+  return `${url.origin}${route}`;
+}
+
+/** The desk user /signin/sso was asked for: `hint`, or OpenID's `login_hint`. */
+export function hintOf(params: URLSearchParams): string | undefined {
+  return loginHint(params.get("hint") ?? params.get("login_hint"));
+}
+
+/** Whether a session for `email` belongs to someone other than the desk user. */
+export function otherPerson(email: string | null | undefined, hint: string | undefined): boolean {
+  return Boolean(hint) && (typeof email !== "string" || email.trim().toLowerCase() !== hint);
+}
+
 /** `to` with the failed mark added, for the host's page to show why. */
 export function failedTarget(to: string): string {
   const url = new URL(to);
