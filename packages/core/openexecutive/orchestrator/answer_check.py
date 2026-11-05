@@ -267,7 +267,10 @@ async def _sources(turn: AnswerCheckTurn) -> tuple[NumberFormat, figure_check.So
         types = ResultTypes(described)
 
         def read() -> tuple[figure_check.Sources, name_check.NameSources]:
-            figures = figure_check.sources_for(turn.results, types=types, given=turn.given, texts=turn.texts, fmt=fmt)
+            figures = figure_check.sources_for(
+                turn.results, types=types, given=turn.given, texts=turn.texts, fmt=fmt,
+                currencies=context.get("currencies"),
+            )
             names = name_check.name_sources_for(
                 turn.results, doctypes=described, given=turn.given, texts=figure_check._capped(turn.texts),
             )
@@ -378,6 +381,10 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     counts.report_runs = len(turn._reports)
     counts.report_differs = len(reported)
     differs = {id(fig) for fig, _ in reported}
+    # A figure in the wrong currency has its own value; only its mark changes.
+    recurrenced = [f for f in figures if f.status == "wrong_currency" and f.matched is not None]
+    differs |= {id(f) for f in recurrenced}
+    reported = [*reported, *((f, abs(f.matched)) for f in recurrenced if f.matched is not None)]
     flagged = [f for f in figures if f.flagged and id(f) not in differs]
     counts.flagged = len(flagged) + len(reported)
     if not flagged and not wrong_names and not reported:
