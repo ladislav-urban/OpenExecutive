@@ -26,6 +26,14 @@ def _own_people_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture(autouse=True)
 def _shipped_prices(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MODEL_PRICES_PATH", raising=False)
+    # Each test reads the price files afresh. The module remembers a file it
+    # found unusable by (path, mtime), and with tmp_path_retention_policy =
+    # "failed" a passed test's directory is removed, so the next parametrized
+    # case gets the same path back; on /dev/shm two quick writes can share an
+    # mtime too, and the second bad file then read as the first, unlogged
+    # (CI on main, Nov 5, 2026: test_a_bad_operator_file_falls_back...[gpt-6]).
+    monkeypatch.setattr(pricing, "_failed", set())
+    monkeypatch.setattr(pricing, "_cache", {})
 
 
 @pytest.fixture
