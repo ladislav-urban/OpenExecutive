@@ -129,6 +129,7 @@ PINNED_ERPNEXT_TOOLS: frozenset[str] = frozenset(ERPNEXT_TOOLS)
 # definition (pinned in orchestrator/erpnext_tool_pin.py) rank it first.
 ERPNEXT_DISCOVERY_QUERIES: dict[str, str] = {
     "erpnext__answer_check_context": "Formats and field types for OpenExecutive's answer check",
+    "erpnext__confirm_figure": "A headline figure's total from its standard ERPNext report, for the answer check",
     "erpnext__describe_doctype": "Fields, child tables and status meaning of an ERPNext DocType",
     "erpnext__describe_report": "The filters an ERPNext report takes",
     "erpnext__get_record": "One ERPNext document with its child tables",
@@ -162,7 +163,9 @@ ERPNEXT_AUDIT_TOOL = "erpnext__audit_drafts"
 # listed to the model; the gateway lets them through only inside
 # erpnext_caller.answer_check_run, as the turn's own caller.
 ERPNEXT_ANSWER_CHECK_TOOL = "erpnext__answer_check_context"
-ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL})
+# Its check 3: a headline figure's standard report, run as the turn's caller.
+ERPNEXT_CONFIRM_TOOL = "erpnext__confirm_figure"
+ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, ERPNEXT_CONFIRM_TOOL})
 
 # The tool ERPNext's panel uses to open what an answer talks about beside it
 # (oe_connector's views.py). Named only in the panel's own channel block
