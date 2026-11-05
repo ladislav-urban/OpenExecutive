@@ -241,6 +241,35 @@ def _with_general(domains: list[str] | None) -> list[str] | None:
     return domains if GENERAL_DOMAIN in domains else [*domains, GENERAL_DOMAIN]
 
 
+# A message this short is read with the question before it ("And if it were
+# $12,000?" names nothing to search for on its own).
+FOLLOW_UP_CHARS = 80
+
+
+def follow_up_query(message: str, history: list[dict[str, Any]]) -> str:
+    """What to search the knowledge for: ``message``, and for a short one the
+    person's previous message before it (its last 400 characters)."""
+    if len(message.strip()) >= FOLLOW_UP_CHARS:
+        return message
+    previous = next(
+        (
+            m["content"] for m in reversed(history)
+            if m.get("role") == "user" and isinstance(m.get("content"), str) and m["content"].strip()
+        ),
+        "",
+    )
+    return f"{previous[-400:]}\n{message}" if previous else message
+
+
+def _standing_block(rules: list[tuple[str, str]]) -> str:
+    """The standing rules as a block of the turn's context, or ""."""
+    if not rules:
+        return ""
+    lines = ["### Your company's standing rules (always in force; who owns and approves what comes from here):"]
+    lines += [f"[{name}] {text}" for name, text in rules]
+    return "\n".join(lines)
+
+
 def retrieve(
     query: str,
     domain_filter: list[str] | None = None,
@@ -254,6 +283,7 @@ def retrieve(
     record_source: Callable[..., None] | None = None,
     n_synced: int = 3,
     max_chars: int | None = None,
+    standing: bool = False,
 ) -> str:
     """Retrieve knowledge for ``query`` as a prompt-ready block ("" for none).
 
@@ -268,10 +298,23 @@ def retrieve(
     every collection are kept until it is reached (``_fit_to_budget``). The
     chat surfaces pass ``KNOWLEDGE_CHAT_MAX_CHARS``; ``None`` or ``0`` keeps
     every chunk that passed the gate.
+
+    ``standing`` (the chat surfaces) puts the company's standing rules
+    (``knowledge.standing_rules``) first, whatever the question, on their own
+    budget, and leaves those documents out of the results below.
     """
     effective_domains = domain_filter
     if effective_domains is None and specialist_name:
         effective_domains = DOMAIN_ALIASES.get(specialist_name)
+
+    rules: list[tuple[str, str]] = []
+    if standing:
+        from openexecutive.knowledge.standing_rules import standing_rules
+
+        rules = standing_rules()
+        if rules and record_source is not None:
+            for name, _ in rules:
+                record_source("company", name)
 
     # Short-message bypass: greetings and acknowledgements never benefit
     # from semantic retrieval and reliably surface noise. Skip the ChromaDB
@@ -288,7 +331,7 @@ def retrieve(
             annotation_count=0,
             collection="builtin+company (bypassed: short query)",
         )
-        return ""
+        return _standing_block(rules)
 
     # Resolve tunable retrieval params from settings when not explicitly
     # passed. Callers that pass values (e.g. the report workflows) keep
@@ -371,6 +414,10 @@ def retrieve(
         ]
     else:
         company_results = []
+    if rules:
+        # Already in the turn as a standing rule: never quoted twice.
+        named = {name for name, _ in rules}
+        company_results = [r for r in company_results if r["metadata"].get("filename") not in named]
 
     # Synced Notion wiki — isolated from COMPANY because a Notion share is
     # multi-writer and unreviewed. Ranked below curated company docs and
@@ -480,7 +527,7 @@ def retrieve(
         and not research_results
         and not active_annotations
     ):
-        return ""
+        return _standing_block(rules)
 
     if notion_results or drive_results or onedrive_results or confluence_results:
         # A synced folder is multi-writer: a turn that reads one counts as
@@ -501,7 +548,7 @@ def retrieve(
             confluence_results,
         )
 
-    parts: list[str] = []
+    parts: list[str] = [_standing_block(rules)] if rules else []
 
     if company_results:
         parts.append("### From your company documents:")

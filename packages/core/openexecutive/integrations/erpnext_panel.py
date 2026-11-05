@@ -708,7 +708,7 @@ def _person_for(email: str) -> Any:
 async def _answer(person: Any, email: str, conversation_id: str, message: str, page: Any) -> str:
     from openexecutive.audit import log_event as audit_log
     from openexecutive.config import get_settings
-    from openexecutive.knowledge.retriever import retrieve
+    from openexecutive.knowledge.retriever import follow_up_query, retrieve
     from openexecutive.onboarding.profile_builder import load_or_create_profile
     from openexecutive.orchestrator.executive import Executive
     from openexecutive.orchestrator.mcp_gateway import get_active_gateway
@@ -754,8 +754,13 @@ async def _answer(person: Any, email: str, conversation_id: str, message: str, p
                 "in_brief": False,
             },
         )
+        # A short follow-up is searched with the question before it; the
+        # company's standing rules come whatever the question.
         retrieved_context = await asyncio.to_thread(
-            retrieve, query=message, max_chars=get_settings().knowledge_chat_max_chars
+            retrieve,
+            query=follow_up_query(message, session.conversation_history),
+            max_chars=get_settings().knowledge_chat_max_chars,
+            standing=True,
         )
         where = page_block(page)
         reply = await asyncio.wait_for(
