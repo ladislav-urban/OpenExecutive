@@ -832,6 +832,12 @@ class Sources:
     _complete_keys: list[float] = field(default_factory=list)
     _truncated_keys: list[float] = field(default_factory=list)
 
+    def currency_codes(self) -> frozenset[str]:
+        """Every currency code a mark here may stand for (USD, EUR, …)."""
+        codes = {c for group in _DEFAULT_SYMBOLS.values() for c in group}
+        codes |= {c for group in self.symbols.values() for c in group}
+        return frozenset(c for c in codes if re.fullmatch(r"[A-Z]{3}", c))
+
     def has_value(self, x: float) -> bool:
         """Whether ``x`` is one of ERPNext's own values."""
         return _near(self.values, abs(x))
@@ -1108,14 +1114,22 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
         if not fig.flagged:
             continue
         # "5 × $71.00 = $355.00": held to its own arithmetic, not to the
-        # records (a product is in none of them).
-        worked = own_arithmetic(text, fig.start, fmt)
+        # records (a product is in none of them), when every figure in the
+        # expression itself passed (as _run_sum asks of a running sum).
+        worked = own_arithmetic(text, fig.start, fmt, sources.currency_codes())
         if worked is not None:
-            if fig.matches(worked):
-                fig.status, fig.matched, fig.how = "confirmed", worked, "the reply's own arithmetic"
-            else:
-                fig.arithmetic = worked
-            continue
+            results, expr_start = worked
+            operands = [g for g in figures if expr_start <= g.start and g.end <= fig.start]
+            if all(g.status in ("confirmed", "given") for g in operands):
+                if any(fig.matches(r) for r in results):
+                    fig.status, fig.matched, fig.how = (
+                        "confirmed", next(r for r in results if fig.matches(r)), "the reply's own arithmetic",
+                    )
+                    continue
+                if len(results) == 1:
+                    # One reading, one value: the figure should be it.
+                    fig.arithmetic = results[0]
+                    continue
         run = _run_sum(figures[:i], fig)
         if run is not None:
             fig.status, fig.matched, fig.how = "confirmed", run, "the sum of the figures before it"
@@ -1127,49 +1141,82 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
 
 
 # What may stand in an expression the reply works out: numbers, operators,
-# brackets and spaces, once currency marks and codes are taken out.
+# brackets and spaces, once currency marks and known currency codes are out.
 _EXPR_OPS = str.maketrans({"×": "*", "x": "*", "X": "*", "·": "*", "÷": "/", "−": "-", "–": "-"})
-_EXPR_CURRENCY = re.compile(r"[" + _CURRENCY_SYMBOLS + r"]|\b[A-Z]{3}\b")
+_EXPR_SYMBOLS = re.compile(r"[" + _CURRENCY_SYMBOLS + r"]")
 # Where a clause starts: punctuation and a space, or a new line (a decimal
 # point or a thousands comma has no space after it).
 _EXPR_BOUNDARY = re.compile(r"[.;:!?,]\s|\n")
+# A Markdown list marker at the clause's start, never a sign.
+_EXPR_LIST_MARK = re.compile(r"\A\s*(?:[-–*+•]|\d+[.)])\s+")
+_EXPR_NUMBER = re.compile(r"\d[\d.,'’]*\d|\d")
 _EXPR_MAX = 120
 
 
-def own_arithmetic(text: str, start: int, fmt: NumberFormat = PLAIN) -> float | None:
-    """The value of the arithmetic the reply writes right before ``start`` and
-    an "=" ("13 × ($73.84 − $71.00) = …"), or None when there is none to work
-    out: only numbers, + − × ÷ and brackets, nothing else, at most _EXPR_MAX
-    characters back to the clause's start. Never evaluates anything but that."""
-    before = text[max(0, start - _EXPR_MAX - 2):start]
-    stripped = before.rstrip()
+def own_arithmetic(
+    text: str, start: int, fmt: NumberFormat = PLAIN, codes: frozenset[str] = frozenset(),
+) -> tuple[tuple[float, ...], int] | None:
+    """The values the arithmetic the reply writes right before ``start`` and
+    an "=" ("13 × ($73.84 − $71.00) = …") may have, one per way its numbers
+    read (the site's format, then the plain one, as figures are read), and
+    where the expression starts; None when there is none to work out: only
+    numbers, + − × ÷ and brackets, after currency marks and the codes in
+    ``codes``, starting with a number or a bracket (a list marker before it
+    is no sign), at most _EXPR_MAX characters back. Never evaluates anything
+    else."""
+    window_start = max(0, start - _EXPR_MAX - 2)
+    stripped = text[window_start:start].rstrip()
     if not stripped.endswith("="):
         return None
     clause = stripped[:-1]
     last = None
     for found in _EXPR_BOUNDARY.finditer(clause):
         last = found
-    if last is None and start - _EXPR_MAX - 2 > 0:
+    if last is None and window_start > 0:
         return None  # longer than the window: never a number cut in half
-    expr = clause[last.end():] if last else clause
-    expr = _EXPR_CURRENCY.sub("", expr).translate(_EXPR_OPS)
-    if fmt.group:
-        expr = expr.replace(fmt.group, "") if fmt.group != " " else expr
-    if fmt.decimal != ".":
-        expr = expr.replace(fmt.decimal, ".")
-    expr = expr.strip()
-    if not expr or not re.fullmatch(r"[\d.\s*/+\-()]+", expr) or not re.search(r"\d\s*[*/+\-]\s*[\d(]", expr):
+    offset = last.end() if last else 0
+    mark = _EXPR_LIST_MARK.match(clause, offset)
+    if mark:
+        offset = mark.end()
+    expr = clause[offset:]
+    lead = len(expr) - len(expr.lstrip())
+    expr_start = window_start + offset + lead
+    expr = _EXPR_SYMBOLS.sub(" ", expr)
+    if codes:
+        expr = re.sub(r"\b(?:" + "|".join(re.escape(c) for c in sorted(codes)) + r")\b", " ", expr)
+    expr = expr.translate(_EXPR_OPS).strip()
+    if not expr or not re.fullmatch(r"[\d.,'’\s*/+\-()]+", expr) or expr[0] not in "0123456789(":
         return None
-    try:
-        value = _evaluate(expr)
-    except (ValueError, ZeroDivisionError, RecursionError):
+    numbers = list(_EXPR_NUMBER.finditer(expr))
+    if not numbers or not re.search(r"[*/+\-]", _EXPR_NUMBER.sub("", expr)):
         return None
-    return abs(value) if value is not None else None
+    # Every number read one way, the site's format then the plain one, as
+    # figures are read; a way some number can't be read in is no reading.
+    results: list[float] = []
+    for candidate in (fmt, PLAIN) if fmt != PLAIN else (fmt,):
+        values = [_reading(m.group(0), candidate) for m in numbers]
+        if any(v is None for v in values):
+            continue
+        parts: list[str] = []
+        pos = 0
+        for m, got in zip(numbers, values, strict=True):
+            assert got is not None
+            parts.append(expr[pos:m.start()])
+            parts.append(repr(got[0]))
+            pos = m.end()
+        parts.append(expr[pos:])
+        try:
+            value = abs(_evaluate("".join(parts)))
+        except (ValueError, ZeroDivisionError, RecursionError, OverflowError):
+            continue
+        if not any(abs(value - r) <= 1e-9 * max(1.0, value) for r in results):
+            results.append(value)
+    return (tuple(results), expr_start) if results else None
 
 
 def _evaluate(expr: str) -> float:
     """``expr`` (numbers, + - * /, brackets) worked out by a small parser."""
-    tokens = re.findall(r"\d+(?:\.\d+)?|[*/+\-()]", expr)
+    tokens = re.findall(r"\d+(?:\.\d+)?(?:e[+-]?\d+)?|[*/+\-()]", expr)
     if "".join(tokens) != re.sub(r"\s+", "", expr) or len(tokens) > 40:
         raise ValueError("not an expression")
     pos = 0
@@ -1193,7 +1240,7 @@ def _evaluate(expr: str) -> float:
             return value
         if tok == "-":
             return -atom()
-        if re.fullmatch(r"\d+(?:\.\d+)?", tok):
+        if re.fullmatch(r"\d+(?:\.\d+)?(?:e[+-]?\d+)?", tok):
             return float(tok)
         raise ValueError("unexpected " + tok)
 

@@ -1,0 +1,36 @@
+id: erpnext_085
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Purchase Invoice
+prior_turns:
+- page:
+    doctype: Purchase Invoice
+  user: Are there any supplier invoices that don't match what we ordered or received?
+  assistant: 'Two supplier invoices don''t match.
+
+
+    - **Orion Switchgear**: two invoices for the same delivery. One of them is a duplicate.
+
+    - **Vanta Cable Mills**: an invoice bills more than its order and receipt.
+
+
+    Every other submitted supplier invoice in the last three months matches its order and receipt.'
+description: 'Invoice-mismatch (oe_connector''s help/try-invoice-mismatch.md) in ERPNext''s panel as a demo person: asked what each mismatch costs, the reply works the amounts out and shows them right. Every product or difference it writes ("5 × $71.00 = $355.00", "13 × ($73.84 − $71.00) = 13 × $2.84 = $36.92") carries its own correct result; an overbilling is never called the invoice''s total; and the larger exposure is the larger amount at risk (the Orion duplicate bill over the Vanta overbilling). Found in the pilot''s Nov 6, 2026 rerun, where the answer check wrote "5 × $71.00 = $5.00", dropped the results from "13 × ($73.84 − $71.00) = 13 × $2.84", called $406.12 the invoice total ($3,001.12) and named Vanta the larger exposure.'
+query: How much does each of those cost us, and which is the bigger exposure?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- × $71.00 = $5.00
+quality_criteria:
+  every_product_or_difference_shown_has_its_correct_result_written_out: true
+  does_not_call_the_overbilling_amount_the_invoice_total: true
+  names_the_orion_duplicate_as_the_larger_exposure_when_its_amount_is_larger: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
