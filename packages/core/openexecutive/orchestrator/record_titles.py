@@ -75,30 +75,30 @@ def add_titles(text: str, results: Iterable[Any], *, limit: int = 40) -> tuple[s
         return text, 0
     skipped = [m.span() for m in _SKIP_RE.finditer(text)]
     skip_starts = [s for s, _ in skipped]
-    # Longest ids first, each mention's span claimed: an id inside a longer
-    # one, or inside a path, is never matched on its own.
-    claimed: list[tuple[int, int]] = []
     edits: list[tuple[int, str]] = []
 
     def in_skipped(pos: int) -> bool:
         i = bisect.bisect_right(skip_starts, pos) - 1
         return i >= 0 and skipped[i][1] > pos
 
-    for record_id in sorted(titles, key=len, reverse=True)[:500]:
-        title = titles[record_id]
-        pattern = re.compile(r"(?<![\w/.-])" + re.escape(record_id) + r"(?![\w-]|[/.]\w)")
-        # Every mention claims its span, so a shorter id never matches inside it.
-        mentions = [m for m in pattern.finditer(text) if not any(s < m.end() and m.start() < e for s, e in claimed)]
-        claimed.extend(m.span() for m in mentions)
-        if len(edits) >= limit:
+    # One pass over every id, longest first in the alternation: at each place
+    # the longest id that fits matches and the scan moves past it, so an id
+    # inside a longer one ("Acme" in "Big Acme") is never seen on its own.
+    # Linear in the reply, whatever the number of ids or mentions.
+    ids = sorted(titles, key=len, reverse=True)[:500]
+    pattern = re.compile(r"(?<![\w/.-])(?:" + "|".join(re.escape(i) for i in ids) + r")(?![\w-]|[/.]\w)")
+    done: set[str] = set()
+    for m in pattern.finditer(text):
+        record_id = m.group(0)
+        if record_id in done or record_id not in titles or in_skipped(m.start()):
             continue
-        for m in mentions:
-            if in_skipped(m.start()):
-                continue
-            line = _context(text, m.start(), m.end())
-            if title.casefold() in line.casefold() or text[m.end():m.end() + 2].lstrip().startswith("("):
-                break  # already named, or bracketed: nothing to add
-            edits.append((m.end(), f" ({title})"))
+        done.add(record_id)
+        title = titles[record_id]
+        line = _context(text, m.start(), m.end())
+        if title.casefold() in line.casefold() or text[m.end():m.end() + 2].lstrip().startswith("("):
+            continue  # already named, or bracketed: nothing to add
+        edits.append((m.end(), f" ({title})"))
+        if len(edits) >= limit:
             break
     out = text
     for at, new in sorted(edits, reverse=True):

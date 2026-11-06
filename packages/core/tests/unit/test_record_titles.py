@@ -86,3 +86,11 @@ def test_ids_inside_longer_ids_or_paths_get_no_title() -> None:
     assert "ITEM-001/A (Widget A) is low" in out
     path = "See erp.example.com/app/purchase-order/ITEM-001 for it."
     assert add_titles(path, results) == (path, 0)
+
+
+def test_many_ids_and_mentions_stay_one_pass() -> None:
+    titles = {f"PO-{n:04d}": f"Supplier {n}" for n in range(500)}
+    text = " ".join(f"PO-{n % 500:04d} is due." for n in range(10_000))
+    out, n = add_titles(text, [_with(titles)])
+    assert n == 40
+    assert out.startswith("PO-0000 (Supplier 0) is due. PO-0001 (Supplier 1) is due.")
