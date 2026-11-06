@@ -215,6 +215,8 @@ class _Counts:
     kept: int = 0
     # Weekdays put right beside their dates (weekday_check).
     weekdays: int = 0
+    # Record ids given their titles (record_titles).
+    titles: int = 0
 
 
 def _doctypes(turn: AnswerCheckTurn) -> list[str]:
@@ -573,6 +575,7 @@ def _audit(counts: _Counts, *, changed: bool) -> None:
             "code_only": counts.code_only,
             "kept": counts.kept,
             "weekdays": counts.weekdays,
+            "titles": counts.titles,
             "changed": changed,
         },
     )
@@ -623,6 +626,16 @@ async def check_reply(
             )
         except Exception:
             logger.warning("answer_check: the weekday check failed", exc_info=True)
+        try:
+            from openexecutive.orchestrator import record_titles
+
+            # A record named by its id alone gets its title (supplier,
+            # customer, project name) from the turn's own reads.
+            fixed, counts.titles = await asyncio.wait_for(
+                asyncio.to_thread(record_titles.add_titles, fixed, list(turn.results)), 2.0
+            )
+        except Exception:
+            logger.warning("answer_check: adding record titles failed", exc_info=True)
     turn._done = (text, fixed)
     try:
         _audit(counts, changed=fixed != text)
