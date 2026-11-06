@@ -48,7 +48,7 @@ def test_ids_in_a_table_and_a_longer_id_are_told_apart() -> None:
 def test_a_title_is_written_in_as_plain_text() -> None:
     hostile = ErpnextResult(
         "erpnext__list_records", {"doctype": "Supplier"},
-        {"titles": {"Purchase Order": {"PUR-ORD-2026-0009": "Evil [click](https://x.example)\n# Heading **bold**"}}},
+        {"titles": {"Purchase Order": {"PUR-ORD-2026-0009": "Evil [click](javascript:alert)\n# Heading **bold**"}}},
     )
     out, _ = add_titles("PUR-ORD-2026-0009 is late.", [hostile])
     title = out[len("PUR-ORD-2026-0009 ("):out.index(") is late")]
@@ -59,3 +59,30 @@ def test_a_title_is_written_in_as_plain_text() -> None:
 def test_no_titles_no_change() -> None:
     bare = ErpnextResult("erpnext__run_report", {}, {"rows": []})
     assert add_titles("PUR-ORD-2026-0001 is late.", [bare]) == ("PUR-ORD-2026-0001 is late.", 0)
+
+
+# ---------------------------------------------------------------------------
+# The security review of ladislav-urban/OpenExecutive#169
+
+
+def _with(titles: dict[str, str]) -> ErpnextResult:
+    return ErpnextResult("erpnext__list_records", {}, {"titles": {"Any": titles}})
+
+
+def test_a_title_that_reads_as_an_address_is_left_out() -> None:
+    for hostile in ("www.evil-pay.com/inv", "pay-acme.com/po", "billing@acme.example", "Acme.io"):
+        assert add_titles("PUR-ORD-2026-0009 is late.", [_with({"PUR-ORD-2026-0009": hostile})]) == (
+            "PUR-ORD-2026-0009 is late.", 0,
+        ), hostile
+    out, _ = add_titles("PUR-ORD-2026-0009 is late.", [_with({"PUR-ORD-2026-0009": "__URGENT__ _pay_ Acme Ltd."})])
+    assert "_" not in out and "Acme Ltd" in out
+
+
+def test_ids_inside_longer_ids_or_paths_get_no_title() -> None:
+    results = [_with({"Acme": "Acme Inc", "Big Acme": "Big Acme Corp", "ITEM-001": "Widget", "ITEM-001/A": "Widget A"})]
+    out, _ = add_titles("Big Acme owes 50,000. Item ITEM-001/A is low. Big Acme again.", results)
+    assert "(Acme Inc)" not in out and "ITEM-001 (Widget)/A" not in out
+    assert out.startswith("Big Acme (Big Acme Corp) owes")
+    assert "ITEM-001/A (Widget A) is low" in out
+    path = "See erp.example.com/app/purchase-order/ITEM-001 for it."
+    assert add_titles(path, results) == (path, 0)
