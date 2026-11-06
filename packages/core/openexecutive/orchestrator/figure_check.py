@@ -1148,8 +1148,9 @@ _EXPR_BOUNDARY = re.compile(r"[.;:!?,]\s|\n")
 # A Markdown list marker at the clause's start, never a sign.
 _EXPR_LIST_MARK = re.compile(r"\s*(?:[-–*+•]|\d+[.)])\s+")
 _EXPR_NUMBER = re.compile(r"\d[\d.,'’]*\d|\d")
-# A number in an expression that is no figure: a bare quantity ("5 ×").
-_EXPR_QUANTITY = re.compile(r"\d{1,3}")
+# A number in an expression that is no figure: a bare quantity ("5 ×"),
+# never one led by a zero ("01/10" is a date).
+_EXPR_QUANTITY = re.compile(r"[1-9]\d{0,2}")
 _EXPR_MAX = 120
 
 
@@ -1271,6 +1272,8 @@ def _held_results(worked: Worked, figures: list[Figure]) -> list[float]:
     operands = [g for g in figures if g.start < worked.end and worked.start < g.end]
     if not operands or any(g.status not in ("confirmed", "given") for g in operands):
         return []
+    if any(g.text.startswith("(") for g in operands):
+        return []  # "($923.00)" is a negative the expression would read as positive
     out: list[float] = []
     for value, numbers in worked.readings:
         held = True

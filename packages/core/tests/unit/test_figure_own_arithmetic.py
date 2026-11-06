@@ -232,3 +232,13 @@ def test_a_mark_at_the_expressions_edge_still_makes_its_figure_an_operand(
 ) -> None:
     got = _check(text, NumberFormat.parse(fmt) if fmt else None)
     assert got[result].arithmetic == pytest.approx(right)
+
+
+@pytest.mark.parametrize("text", [
+    "Net: ($923.00) + $1,329.12 + $71.00 = $477.12 owed.",
+    "Net: ($923.00) + $1,329.12 = $406.12 owed.",
+    "Net: $1,329.12 + ($923.00) + $71.00 = $477.12 owed.",
+    "Rate: 01/10 × $71.00 = $5.00 due.",
+])
+def test_a_bracketed_negative_or_a_zero_led_number_is_never_worked_out(text: str) -> None:
+    assert all(f.arithmetic is None and f.how != "the reply's own arithmetic" for f in _check(text).values())
