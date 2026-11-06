@@ -434,6 +434,11 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
         separated = any(c in num for c in ",.'’ " + _SPACES)
         value = readings[0][0]
         if not marked and not separated:
+            if len(num) > 1 and num.startswith("0"):
+                # "03469": a short id (an invoice's number), never a figure or
+                # a count ("so 03469 bills goods we already have" became
+                # "so several bills goods…" on the pilot, Nov 6, 2026).
+                continue
             if 1900 <= value <= 2100 and len(num) == 4:
                 continue  # a year
             if re.search(r"(?:\d[ \t]+|\+)$", text[max(0, num_start - 4):num_start]) or re.match(

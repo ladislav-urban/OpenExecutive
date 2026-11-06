@@ -197,3 +197,12 @@ def test_a_group_or_a_text_value_never_confirms_another_records_count() -> None:
     assert got == {"Three": "unconfirmed"}
     # "per invoice" is a rate, not a count of invoices.
     assert _statuses("Birch Co took 52 units per invoice.") == {"52": "confirmed"}
+
+
+def test_a_short_id_with_a_leading_zero_is_never_a_count() -> None:
+    # The pilot's Nov 6, 2026 check: "so 03469 bills goods we already have"
+    # (a short invoice id) came out "so several bills goods…".
+    from openexecutive.orchestrator.figure_check import find_figures
+
+    assert find_figures("So 03469 bills goods we already have; hold 03469 or pay it.") == []
+    assert _statuses("Seven customers are waiting.") == {"Seven": "unconfirmed"}
