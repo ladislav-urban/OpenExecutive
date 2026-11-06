@@ -1,0 +1,21 @@
+id: erpnext_081
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Invoice
+description: 'Collections step 3 (oe_connector''s help/try-collections.md) in ERPNext''s panel as a demo person. It ranks whom to chase by each customer''s own payment record: Cedar & Pine Interiors, late for the first time at 44 days, comes before customers that are always a few days late (Brightline, Summit). Found in the pilot''s Nov 6, 2026 check, which judged "usually pays on time" across the whole company.'
+query: Which overdue customers should we chase first, and why?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- I can't change records
+quality_criteria:
+  ranks_cedar_and_pine_first_as_a_first_time_late_payer: true
+  judges_each_customer_against_its_own_record: true
