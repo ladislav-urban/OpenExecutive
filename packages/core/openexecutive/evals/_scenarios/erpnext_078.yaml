@@ -1,0 +1,20 @@
+id: erpnext_078
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Project
+description: 'Projects step 2 (oe_connector''s help/try-projects.md) in ERPNext''s panel as a demo person. The reply reads the project''s own notes and gives Summit''s fixed price ($17,500) and the hours quoted (about 160) against the hours spent, and names Keystone''s Friday Project Updates when asked how it went. Found in the local pre-retake check of Nov 6, 2026 (a399bb80): the fixed price and the updates, both in the records, were not read.'
+query: Why did Summit's LED retrofit take longer than quoted, and what did it cost us?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  gives_the_fixed_price_of_17500_from_the_projects_notes: true
+  compares_the_hours_spent_with_about_160_quoted: true
