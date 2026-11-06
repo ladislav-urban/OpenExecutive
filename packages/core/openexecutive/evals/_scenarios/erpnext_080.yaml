@@ -1,0 +1,21 @@
+id: erpnext_080
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  screen: /
+description: 'Monday morning step 4 (oe_connector''s help/try-monday-morning.md) in ERPNext''s panel beside Dynocortex Home, as a demo person. The overdue total it gives is the Accounts Receivable report''s, net of the $114.75 credit note ($20,933.07 in the demo), so it agrees with the 13-week outlook''s week 1; a total added up from invoices says it is before credit notes. Found in the pilot''s Nov 6, 2026 check: this answer said $21,047.82 while the outlook said $20,933.07.'
+query: What's our cash position this month, and what's due in?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- couldn't read
+quality_criteria:
+  the_overdue_total_is_the_receivable_reports_net_of_credit_notes_or_says_before_credit_notes: true
+  names_the_largest_overdue_customer: true

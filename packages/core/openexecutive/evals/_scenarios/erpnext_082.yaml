@@ -1,0 +1,20 @@
+id: erpnext_082
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Invoice
+description: 'Margin drop step 4 (oe_connector''s help/try-margin-drop.md) in ERPNext''s panel as a demo person. The reply states the drop in the drop''s own units (from 56.9% to 19.1% is 37.8 points) and says how much the clearance explains only as its figures add up, never "all of it" when they don''t. Found in the pilot''s Nov 6, 2026 round: "about 9 of the 21 points" for a 37.8-point drop.'
+query: How much of last week's margin drop was the clearance, and was it a one-off?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  states_the_drop_as_37_8_points: true
+  the_clearances_share_adds_up_with_the_figures_given: true
