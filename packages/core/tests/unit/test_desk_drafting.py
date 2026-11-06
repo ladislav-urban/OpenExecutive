@@ -107,3 +107,20 @@ def test_only_the_cards_own_marked_check_reaches_erpnext_from_the_desk(
     assert [c[0] for c in erp.calls] == ["erpnext__draft_check"]
     claims = erp.claims()
     assert (claims["tool"], claims["sub"]) == ("draft_check", OWNER)
+
+
+def test_a_desk_card_says_where_it_was_asked(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    # Signed in, but the words came through another app's page: the card,
+    # its payload and its audit row say so, as a panel card does.
+    from openexecutive.delegation.settings import pin_turn_delegation
+
+    from .test_erpnext_drafts import CHECKED_RESTOCK, RESTOCK, _propose
+
+    erp.replies.append(json.dumps(CHECKED_RESTOCK))
+    desk = _desk(roster.principal)
+    pin_turn_delegation(desk, "restock ITEM-1 for Stores")
+    proposed = _propose(desk, {"why": "Restock ITEM-1", "doctype": "Material Request", "fields": RESTOCK})
+    assert "decision_id" in proposed, proposed
+    (card,) = drafts.cards(people_store.get_person(roster.principal))
+    assert card.asked_in == drafts.ASKED_IN_DESK and drafts.DESK_NOTE in card.notes
+    assert drafts.PANEL_NOTE not in card.notes

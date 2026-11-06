@@ -199,11 +199,14 @@ export function ErpnextDraftCardItem({
         <span className="text-[12px] font-medium text-fg-muted">ERPNext {card.doctype} draft</span>
         {when && <span className="text-sm text-fg-subtle tabular-nums">{when}</span>}
       </div>
-      {card.asked_in === "erpnext_panel" && (
-        // ERPNext's word named you here, not a sign-in: said before its
-        // headline, which whoever asked wrote.
+      {(card.asked_in === "erpnext_panel" || card.asked_in === "erpnext_desk") && (
+        // Asked outside this app's own chat: ERPNext's word named you (the
+        // panel), or another app's page sent the words (the desk). Said
+        // before its headline, which whoever asked wrote.
         <div className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-sm text-amber-800 dark:text-amber-200">
-          Asked for in ERPNext&apos;s panel. Approve it only if you asked for it there.
+          {card.asked_in === "erpnext_desk"
+            ? "Asked for from ERPNext's desk. Approve it only if you asked for it there."
+            : "Asked for in ERPNext's panel. Approve it only if you asked for it there."}
         </div>
       )}
       {card.why && (

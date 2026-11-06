@@ -2669,7 +2669,8 @@ export interface ErpnextDraftCard {
   // Why the last approval didn't make it; approving again is safe.
   last_error: string;
   // "erpnext_panel" when it was asked for in ERPNext's panel, whose word
-  // named you; "" or absent otherwise.
+  // named you; "erpnext_desk" when from ERPNext's desk, whose page sent the
+  // words; "" or absent otherwise.
   asked_in?: string;
 }
 

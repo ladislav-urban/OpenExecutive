@@ -101,6 +101,15 @@ PANEL_NOTE = (
     "Asked for in ERPNext's panel. Approve it only if you asked for it there; "
     "otherwise dismiss it."
 )
+# On a card asked for from ERPNext's desk (114.a): signed in, but the turn's
+# words came through another app's page, which a script there may have written.
+DESK_NOTE = (
+    "Asked for from ERPNext's desk. Approve it only if you asked for it there; "
+    "otherwise dismiss it."
+)
+# Where a card was asked for, when not in this app's own chat.
+ASKED_IN_PANEL = "erpnext_panel"
+ASKED_IN_DESK = "erpnext_desk"
 # What the card shows of any one ERPNext value, and of a failure.
 SHOWN_MAX = 300
 
@@ -157,7 +166,8 @@ class DraftCard:
     # Why the last approval didn't make it, when it was tried.
     last_error: str = ""
     # Where it was asked for when that was not OpenExecutive itself:
-    # "erpnext_panel" (ERPNext's word named the person), else "".
+    # "erpnext_panel" (ERPNext's word named the person), "erpnext_desk"
+    # (ERPNext's desk page sent the words, signed in), else "".
     asked_in: str = ""
 
 
@@ -795,7 +805,7 @@ def cards(person: Any) -> list[DraftCard]:
             lines=[ln for ln in view.get("lines") or [] if isinstance(ln, dict)],
             notes=[str(n) for n in view.get("notes") or []],
             last_error=str(payload.get("last_error") or ""),
-            asked_in="erpnext_panel" if payload.get("asked_in") == "erpnext_panel" else "",
+            asked_in=str(payload.get("asked_in")) if payload.get("asked_in") in (ASKED_IN_PANEL, ASKED_IN_DESK) else "",
         ))
     return out
 
@@ -995,8 +1005,15 @@ async def _check_and_leave(
         ), False
     view = card_view(doctype, checked.get("summary"), fields)
     from_panel = erpnext_panel_turn(session)
-    if from_panel:
+    from openexecutive.orchestrator.schedule_tools import host_turn
+
+    # Where it was asked, said on the card, its payload and its audit row: a
+    # panel's word or a desk page's turn, never this app's own chat.
+    asked_in = ASKED_IN_PANEL if from_panel else ASKED_IN_DESK if host_turn(session) else ""
+    if asked_in == ASKED_IN_PANEL:
         view["notes"] = [*view["notes"], PANEL_NOTE]
+    elif asked_in == ASKED_IN_DESK:
+        view["notes"] = [*view["notes"], DESK_NOTE]
     # Read again after the check, with no await before the card is stored,
     # so calls made together never pass OPEN_CARDS_MAX.
     full = _cards_full(person.id, doctype, fields)
@@ -1006,7 +1023,7 @@ async def _check_and_leave(
         decision_id, new, view = propose(
             person, doctype, fields, view, why,
             asked_by=email, session_id=getattr(session, "session_id", None),
-            asked_in="erpnext_panel" if from_panel else "", fingerprint=fingerprint_of(checked),
+            asked_in=asked_in, fingerprint=fingerprint_of(checked),
         )
     except Exception:
         logger.warning("erpnext_drafts: couldn't store the card", exc_info=True)
@@ -1021,7 +1038,7 @@ async def _check_and_leave(
     if new:
         audit("erpnext_draft_proposed", f"Left person {person.id} an ERPNext {doctype} draft card", {
             "person_id": person.id, "decision_id": decision_id, "doctype": doctype,
-            **({"asked_in": "erpnext_panel"} if from_panel else {}),
+            **({"asked_in": asked_in} if asked_in else {}),
         })
     return json.dumps({
         "status": "waiting_for_approval",
