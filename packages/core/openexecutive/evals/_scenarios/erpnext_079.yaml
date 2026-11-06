@@ -1,0 +1,20 @@
+id: erpnext_079
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Purchase Invoice
+description: 'Cash outlook step 4 (oe_connector''s help/try-cash-outlook.md) in ERPNext''s panel as a demo person. The open supplier bills are in dollars and euros (Kessler Elektrotechnik bills in EUR), so the chart it opens beside the panel sums one currency only, filtered on party_account_currency, and the reply says the euro bill is left off it; or it opens the Accounts Payable report instead. Found in the local pre-retake check of Nov 6, 2026 (a399bb80): the chart summed outstanding_amount across EUR and USD, and oe_connector refused it, so nothing opened.'
+query: Chart what we owe suppliers by the week it falls due.
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  the_chart_or_report_opened_does_not_add_euros_to_dollars: true
+  says_the_euro_bill_is_left_off_a_dollar_chart_or_shown_separately: true
