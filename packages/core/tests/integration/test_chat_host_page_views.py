@@ -172,9 +172,11 @@ def test_the_show_tool_stays_off_the_persons_own_page() -> None:
         current_session.reset(token)
 
 
-def test_a_host_turn_is_refused_a_draft(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_a_host_turn_proposes_only_as_a_signed_in_person(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The owner's decision 114.a: the desk may propose a draft card, but only
+    # as the person signed in to this app (tests/unit/test_desk_drafting.py);
+    # a page that names no signed-in person is refused.
     monkeypatch.setattr(erpnext_drafts, "drafts_on", lambda: True)
     host = SimpleNamespace(from_host=True, host_page=True, unattended=False)
-    refusal = erpnext_drafts.offer_refusal(host)
-    assert refusal is not None and "another app's page" in refusal
+    assert erpnext_drafts.offer_refusal(host) is not None
     assert erpnext_drafts.offered(host) is False

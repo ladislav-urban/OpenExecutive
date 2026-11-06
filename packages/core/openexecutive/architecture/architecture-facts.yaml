@@ -8118,7 +8118,11 @@ auth:
     removed. Before done the stream sends {type: "erpnext_views", views,
     call, session_id} (api.chat_events.ErpnextViewsEvent, in EVENT_TYPES),
     not a _LIVE_STEPS step; a shared chat is never a host page turn.
-    erpnext_drafts.offer_refusal refuses every from_host turn explicitly.
+    Desk drafting (owner's 114.a, Nov 6, 2026): a from_host turn may propose an
+    ERPNext draft card as the signed web caller (_proposer uses the host
+    caller; executive offers only PROPOSE of the extension tools on a host
+    turn; the gateway's mcp_rules let through only the draft_check the
+    proposal path marks). Approval stays in this app, signed in.
     Session origin (F1 PR 3): sessions.origin ("erpnext_panel" or NULL)
     and sessions.origin_ref (JSON {report} | {doctype, name} | {doctype},
     never filters), set by chat on a host page turn's first turn from

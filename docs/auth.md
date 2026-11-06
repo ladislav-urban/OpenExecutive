@@ -646,6 +646,9 @@ acknowledging, snoozing, reopening and reviewing alerts; chatting (send, stop, a
 (describe, add, approve or decline a proposal, edit, delete). Never approving, rejecting
 or cancelling a card, preparing a draft, Act as me's Send, edits or answers, and
 everything else under delegation, settings or People.
+A chat turn from a host origin may still *propose* an ERPNext draft card, as the person
+signed in here and only them (the owner's decision 114.a, Nov 6, 2026); approving it stays
+in this app, never on the host's page.
 `tests/unit/test_host_list.py` checks every entry against the API's routes and against
 that rule. The proxy enforces it:
 

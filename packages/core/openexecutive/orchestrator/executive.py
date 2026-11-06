@@ -173,6 +173,7 @@ from openexecutive.orchestrator.schedule_tools import (
     erpnext_panel_withheld_error,
     erpnext_panel_withholds,
     filter_tools_for_workspace_mode,
+    host_turn,
     mcp_client_acting,
     mcp_client_withheld_error,
     mcp_client_withholds,
@@ -2501,9 +2502,20 @@ class Executive:
         extra_tools: list[extensions.ExtraTool] = []
         if not unattended_withheld and not private_turn and not mcp_client and not replaying:
             extra_tools = extensions.offered_tools(current_session.get())
-            if extra_tools:
-                delegation_tools = [*delegation_tools, *(t.definition for t in extra_tools)]
-                turn_handlers = {**turn_handlers, **{t.name: t.handler for t in extra_tools}}
+        elif (
+            not unattended_withheld and not private_turn and not replaying
+            and host_turn(current_session.get())
+        ):
+            # ERPNext's desk (114.a): of the extension tools, only the draft
+            # card, and only where erpnext_drafts.offered agrees (the person
+            # signed in, on a private conversation). Approving stays in this
+            # app; everything else a host turn can't do stays withheld.
+            extra_tools = [
+                t for t in extensions.offered_tools(current_session.get()) if t.name == erpnext_drafts.PROPOSE
+            ]
+        if extra_tools:
+            delegation_tools = [*delegation_tools, *(t.definition for t in extra_tools)]
+            turn_handlers = {**turn_handlers, **{t.name: t.handler for t in extra_tools}}
         # In ERPNext's panel, the ERPNext draft tool as well when this turn is
         # offered it (integrations.erpnext_extension; phase 4b: its card is
         # approved in the app, signed in).

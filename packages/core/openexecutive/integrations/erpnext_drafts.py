@@ -387,15 +387,25 @@ def _proposer(session: Any) -> tuple[Any, str] | str:
     from openexecutive.orchestrator import erpnext_caller
     from openexecutive.orchestrator.content_trust import principal_speaking
     from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
-    from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
-    from openexecutive.people.store import find_person_by_email, find_principal_person
+    from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn, host_turn
+    from openexecutive.people.store import find_person_by_email, find_principal_person, get_person
 
     panel_person: Any = None
+    host_person: Any = None
     if erpnext_panel_turn(session):
         panel_person = find_person_by_email(str(session.erpnext_panel_email).strip().lower())
         if panel_person is None or not panel_person.active or panel_person.kind != "team":
             return "This ERPNext user is not on the team in OpenExecutive, so no draft can be proposed for them."
         principal = bool(panel_person.is_principal)
+    elif host_turn(session):
+        # ERPNext's desk (114.a): the person signed in to this app, whom
+        # caller_for below holds to a signed sign-in and a private
+        # conversation (erpnext_caller._host_caller). The page names no one.
+        pid = getattr(session, "caller_person_id", None)
+        host_person = get_person(pid) if isinstance(pid, int) and not isinstance(pid, bool) else None
+        if host_person is None or not host_person.active or host_person.kind != "team":
+            return "Who is asking could not be matched to someone on the team, so no draft can be proposed."
+        principal = bool(host_person.is_principal)
     else:
         principal = principal_speaking(session)
     if not principal and not teammates_on():
@@ -408,6 +418,8 @@ def _proposer(session: Any) -> tuple[Any, str] | str:
         return "ERPNext drafts are made only as a person's own ERPNext user."
     if panel_person is not None:
         person = panel_person
+    elif host_person is not None:
+        person = host_person
     else:
         person = find_principal_person() if principal else teammate_on_verified_surface(session)
     email = (getattr(person, "email", None) or "").strip().lower()
@@ -428,10 +440,12 @@ def offer_refusal(session: Any) -> str | None:
             return "ERPNext drafts are not turned on here."
         if session is None or getattr(session, "unattended", False) is True:
             return "ERPNext drafts are proposed only in a conversation with the person, never in a run nobody is watching."
-        # A host origin's page (ERPNext's docked panel and the desk's Chats
-        # among them) only reads and advises; F1 leaves drafts out of it.
-        if getattr(session, "from_host", False) is True:
-            return "ERPNext drafts are proposed only in OpenExecutive's own chat, never from another app's page such as ERPNext's panel."
+        # A host origin's page (ERPNext's desk: its Conversations screen and
+        # the docked panel's chat) may propose, as the person signed in to
+        # this app (``_proposer``: erpnext_caller's host caller, signed, on a
+        # conversation private to them). It never approves: a card is
+        # approved only in this app's own page or frame (``approve``), signed
+        # in (the owner's decision 114.a, Nov 6, 2026).
         if getattr(session, "private_to_principal", False) is True or str(getattr(session, "origin_channel", "") or "") == "email":
             return "ERPNext drafts are proposed only when the person asks in a chat, never from an email."
         who = _proposer(session)
