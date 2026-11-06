@@ -418,6 +418,11 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     recurrenced = [f for f in figures if f.status == "wrong_currency" and f.matched is not None]
     differs |= {id(f) for f in recurrenced}
     reported = [*reported, *((f, abs(f.matched)) for f in recurrenced if f.matched is not None)]
+    # A result the reply's own arithmetic gives another value for ("5 × $71.00
+    # = $5.00"): written in by code, never reviewed, rewritten or left out.
+    reworked = [f for f in figures if f.flagged and f.arithmetic is not None and id(f) not in differs]
+    differs |= {id(f) for f in reworked}
+    reported = [*reported, *((f, f.arithmetic) for f in reworked if f.arithmetic is not None)]
     flagged = [f for f in figures if f.flagged and id(f) not in differs]
     counts.flagged = len(flagged) + len(reported)
     if not flagged and not wrong_names and not reported:

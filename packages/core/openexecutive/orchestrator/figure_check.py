@@ -229,6 +229,9 @@ class Figure:
     # The record a count counts ("six customers": "customer"), held to counts
     # of that record only; "" for any other figure.
     count: str = ""
+    # What the reply's own arithmetic before it gives ("5 × $71.00 = …"),
+    # when it gives another value: the value it should be (own_arithmetic).
+    arithmetic: float | None = None
     # The currency mark as written ("$", "€", "USD"), and for wrong_currency
     # the mark the value's own currency takes.
     currency_text: str = ""
@@ -493,7 +496,13 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
 def _is_multiple(text: str, end: int) -> bool:
     """Whether the number ending at ``end`` reads "N times the/as/more…"."""
     m = re.match(r"[ ]*(?:times|×)[ ]+([A-Za-z]+)", text[end:end + 40])
-    return bool(m and m.group(1).lower() in _MULTIPLE_NEXT) or text[end:end + 1] == "×"
+    if m and m.group(1).lower() in _MULTIPLE_NEXT:
+        return True
+    # "12×" alone is a multiple; "5 × $71.00" is an operand of the reply's
+    # own arithmetic (own_arithmetic), a quantity, not "N times as large".
+    if text[end:end + 1] == "×":
+        return re.match(r"×[ ]*[\d(" + _CURRENCY_SYMBOLS + r"]", text[end:end + 4]) is None
+    return False
 
 
 def _word_figures(text: str, masked: list[tuple[int, int]], found: list[Figure]) -> list[Figure]:
@@ -1098,6 +1107,15 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
     for i, fig in enumerate(figures):
         if not fig.flagged:
             continue
+        # "5 × $71.00 = $355.00": held to its own arithmetic, not to the
+        # records (a product is in none of them).
+        worked = own_arithmetic(text, fig.start, fmt)
+        if worked is not None:
+            if fig.matches(worked):
+                fig.status, fig.matched, fig.how = "confirmed", worked, "the reply's own arithmetic"
+            else:
+                fig.arithmetic = worked
+            continue
         run = _run_sum(figures[:i], fig)
         if run is not None:
             fig.status, fig.matched, fig.how = "confirmed", run, "the sum of the figures before it"
@@ -1106,6 +1124,101 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
         if pair is not None:
             fig.status, fig.matched, fig.how = "confirmed", pair[0], pair[1]
     return figures
+
+
+# What may stand in an expression the reply works out: numbers, operators,
+# brackets and spaces, once currency marks and codes are taken out.
+_EXPR_OPS = str.maketrans({"×": "*", "x": "*", "X": "*", "·": "*", "÷": "/", "−": "-", "–": "-"})
+_EXPR_CURRENCY = re.compile(r"[" + _CURRENCY_SYMBOLS + r"]|\b[A-Z]{3}\b")
+# Where a clause starts: punctuation and a space, or a new line (a decimal
+# point or a thousands comma has no space after it).
+_EXPR_BOUNDARY = re.compile(r"[.;:!?,]\s|\n")
+_EXPR_MAX = 120
+
+
+def own_arithmetic(text: str, start: int, fmt: NumberFormat = PLAIN) -> float | None:
+    """The value of the arithmetic the reply writes right before ``start`` and
+    an "=" ("13 × ($73.84 − $71.00) = …"), or None when there is none to work
+    out: only numbers, + − × ÷ and brackets, nothing else, at most _EXPR_MAX
+    characters back to the clause's start. Never evaluates anything but that."""
+    before = text[max(0, start - _EXPR_MAX - 2):start]
+    stripped = before.rstrip()
+    if not stripped.endswith("="):
+        return None
+    clause = stripped[:-1]
+    last = None
+    for found in _EXPR_BOUNDARY.finditer(clause):
+        last = found
+    if last is None and start - _EXPR_MAX - 2 > 0:
+        return None  # longer than the window: never a number cut in half
+    expr = clause[last.end():] if last else clause
+    expr = _EXPR_CURRENCY.sub("", expr).translate(_EXPR_OPS)
+    if fmt.group:
+        expr = expr.replace(fmt.group, "") if fmt.group != " " else expr
+    if fmt.decimal != ".":
+        expr = expr.replace(fmt.decimal, ".")
+    expr = expr.strip()
+    if not expr or not re.fullmatch(r"[\d.\s*/+\-()]+", expr) or not re.search(r"\d\s*[*/+\-]\s*[\d(]", expr):
+        return None
+    try:
+        value = _evaluate(expr)
+    except (ValueError, ZeroDivisionError, RecursionError):
+        return None
+    return abs(value) if value is not None else None
+
+
+def _evaluate(expr: str) -> float:
+    """``expr`` (numbers, + - * /, brackets) worked out by a small parser."""
+    tokens = re.findall(r"\d+(?:\.\d+)?|[*/+\-()]", expr)
+    if "".join(tokens) != re.sub(r"\s+", "", expr) or len(tokens) > 40:
+        raise ValueError("not an expression")
+    pos = 0
+
+    def peek() -> str | None:
+        return tokens[pos] if pos < len(tokens) else None
+
+    def take() -> str:
+        nonlocal pos
+        if pos >= len(tokens):
+            raise ValueError("cut short")
+        pos += 1
+        return tokens[pos - 1]
+
+    def atom() -> float:
+        tok = take()
+        if tok == "(":
+            value = sum_()
+            if take() != ")":
+                raise ValueError("unclosed")
+            return value
+        if tok == "-":
+            return -atom()
+        if re.fullmatch(r"\d+(?:\.\d+)?", tok):
+            return float(tok)
+        raise ValueError("unexpected " + tok)
+
+    def product() -> float:
+        value = atom()
+        while peek() in ("*", "/"):
+            if take() == "*":
+                value *= atom()
+            else:
+                value /= atom()
+        return value
+
+    def sum_() -> float:
+        value = product()
+        while peek() in ("+", "-"):
+            if take() == "+":
+                value += product()
+            else:
+                value -= product()
+        return value
+
+    value = sum_()
+    if pos != len(tokens):
+        raise ValueError("trailing")
+    return value
 
 
 # ---------------------------------------------------------------------------
