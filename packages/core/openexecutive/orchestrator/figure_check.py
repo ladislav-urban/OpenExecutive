@@ -1186,7 +1186,9 @@ def own_arithmetic(
     if last is None and window_start > 0:
         return None  # longer than the window: never a number cut in half
     offset = last.end() if last else 0
-    mark = _EXPR_LIST_MARK.match(clause, offset)
+    # A list marker only opens a line; after ": " or ", " a dash is a sign
+    # (which the check below then refuses).
+    mark = _EXPR_LIST_MARK.match(clause, offset) if last is None or last.group(0).endswith("\n") else None
     if mark:
         offset = mark.end()
     # Same length throughout, so positions in it are positions in the text.
@@ -1263,8 +1265,10 @@ def _held_results(worked: Worked, figures: list[Figure]) -> list[float]:
     """The values of ``worked`` whose numbers are what the reply's figures
     were held to: at least one figure is in it and every one passed, each
     number in a figure reads as that figure's value, and any other number is
-    a bare quantity ("5 ×"), never a date, a range or a record id."""
-    operands = [g for g in figures if worked.start <= g.start and g.end <= worked.end]
+    a bare quantity ("5 ×"), never a date, a range or a record id. A figure
+    counts as in it when it overlaps it at all ("$500" where the "$" lies
+    before the expression's first digit), so no figure passes as a quantity."""
+    operands = [g for g in figures if g.start < worked.end and worked.start < g.end]
     if not operands or any(g.status not in ("confirmed", "given") for g in operands):
         return []
     out: list[float] = []
@@ -1272,6 +1276,9 @@ def _held_results(worked: Worked, figures: list[Figure]) -> list[float]:
         held = True
         for n_start, n_end, raw, n_value in numbers:
             owner = next((g for g in operands if g.start <= n_start and n_end <= g.end), None)
+            if owner is None and any(g.start < n_end and n_start < g.end for g in figures):
+                held = False  # part of a figure it doesn't lie wholly in
+                break
             if owner is None:
                 held = _EXPR_QUANTITY.fullmatch(raw) is not None
             else:

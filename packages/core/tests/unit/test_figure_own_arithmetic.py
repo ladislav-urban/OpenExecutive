@@ -203,3 +203,32 @@ def test_numbers_read_as_their_figures_were_held() -> None:
     )
     got = _check("Total: 5 × $1.329 + $71.00 = $5.00 due.", eu, [invoice])
     assert got["$5.00"].arithmetic in (None, 6716.0)
+
+
+@pytest.mark.parametrize("text", [
+    "Net: - 923.00 + 1,329.12 + 71.00 = 477.12 owed.",
+    "Owed, – 923.00 + 1,329.12 + 71.00 = 477.12 owed.",
+    "Net: - $923.00 + $1,329.12 + $71.00 = $477.12 owed.",
+])
+def test_a_dash_after_a_colon_or_comma_is_a_sign_and_never_dropped(text: str) -> None:
+    assert all(f.arithmetic is None for f in _check(text).values())
+
+
+def test_a_figure_the_records_dont_hold_never_passes_as_a_quantity() -> None:
+    wrong = _check("Owed: $500 − $71.00 = $5.00 after the credit.")
+    assert wrong["$5.00"].arithmetic is None
+    right = _check("Owed: $500 − $71.00 = $429.00 after the credit.")
+    assert right["$429.00"].how != "the reply's own arithmetic"
+
+
+@pytest.mark.parametrize(("text", "fmt", "result", "right"), [
+    ("Net: $1,329.12 − $923.00 = $5.00.", None, "$5.00", 406.12),
+    ("Net: USD 1,329.12 − USD 923.00 = USD 5.00.", None, "USD 5.00", 406.12),
+    ("Net: 5 × 71.00 USD = 5.00 USD.", None, "5.00 USD", 355.0),
+    ("Net: 5 × 71,00 € = 5,00 €.", "#.###,##", "5,00 €", 355.0),
+])
+def test_a_mark_at_the_expressions_edge_still_makes_its_figure_an_operand(
+    text: str, fmt: str | None, result: str, right: float,
+) -> None:
+    got = _check(text, NumberFormat.parse(fmt) if fmt else None)
+    assert got[result].arithmetic == pytest.approx(right)
