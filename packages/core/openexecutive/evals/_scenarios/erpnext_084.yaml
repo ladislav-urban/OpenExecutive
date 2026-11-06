@@ -1,0 +1,27 @@
+id: erpnext_084
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Dunning
+prior_turns:
+- page:
+    doctype: Dunning
+  user: Has anyone chased Metro Transit Works about its overdue invoice?
+  assistant: 'Yes, by letter twice: a first reminder on Sep 28 and a final reminder on Oct 22. $4,710 is still outstanding and nothing has been paid.'
+description: 'Monday morning step 3 (oe_connector''s help/try-monday-morning.md) in ERPNext''s panel as a demo person. Asked for the next step, it names it and who takes it: a call to Metro''s accounts payable, by Ellen Brooks; and it counts the days since the final reminder exactly (Oct 22 to Nov 6 is 15). Found in the pilot''s Nov 6, 2026 third retake: "14 days", and only "Ellen Brooks owns the chase and decides the next step".'
+query: What should happen next?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- decides the next step
+quality_criteria:
+  names_a_call_as_the_next_step: true
+  names_ellen_brooks_as_making_the_call: true
+  any_day_count_since_oct_22_is_15: true

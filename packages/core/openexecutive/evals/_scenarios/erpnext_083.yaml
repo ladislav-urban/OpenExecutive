@@ -1,0 +1,21 @@
+id: erpnext_083
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Quality Review
+description: 'Quality step 1 (oe_connector''s help/try-quality.md) in ERPNext''s panel as a demo person. It counts the Quality Reviews themselves (each dated review covers the month before it): ten failed on-time delivery against the 95% target and one passed, and it names the latest review by its title, not by id and record name inline. Found in the pilot''s Nov 6, 2026 third retake: "failed nine straight monthly reviews ... only January passed", where the passing review dated Jan 2 is December''s.'
+query: Why do we keep failing the on-time delivery goal, and what are we doing about it?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- nine straight
+quality_criteria:
+  counts_ten_failed_reviews_and_one_passed: true
+  gives_back_orders_as_the_main_cause_now: true
