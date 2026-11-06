@@ -345,6 +345,15 @@ def _word_after(text: str, pos: int) -> str:
     return m.group(1).lower() if m else ""
 
 
+# ERPNext's Rating fields are stored as a fraction of this many stars.
+RATING_STARS = 5
+
+
+def _is_rating(key: str) -> bool:
+    name = key.lower()
+    return name == "rating" or name.endswith("_rating") or name.startswith("rating_")
+
+
 def _counts_records(text: str, end: int) -> str:
     """The record the number ending at ``end`` counts, or "": the last record
     noun within the next four words, before any punctuation or number ("nine
@@ -642,6 +651,9 @@ class _Reader:
 
     def rows(self, rows: list[Any], label: str, truncated: bool, numeric: frozenset[str]) -> None:
         table = _Rows(label=label, truncated=truncated, count=len(rows))
+        # Each child table's rows across all the parents, read as one table:
+        # four feedback records' ratings, grouped by question.
+        children: dict[str, list[Any]] = {}
         for i, row in enumerate(rows):
             if not isinstance(row, dict):
                 continue
@@ -650,7 +662,7 @@ class _Reader:
                     continue
                 if isinstance(value, list):
                     if value and all(isinstance(v, dict) for v in value):
-                        self.rows(value, f"{label}.{key}", False, frozenset())
+                        children.setdefault(key, []).extend(value)
                     continue
                 got = _number(value, key in numeric)
                 if got is not None:
@@ -659,9 +671,17 @@ class _Reader:
                     self._note_currency(got, key, row.get("currency"))
                     if not truncated:
                         self._note_count(got, key)
+                    if _is_rating(key) and 0 <= got <= 1:
+                        # ERPNext keeps a Rating as a fraction (0.8); people
+                        # and replies give it out of five (4).
+                        stars = round(got * RATING_STARS, 6)
+                        table.numeric.setdefault(f"{key} out of {RATING_STARS}", [None] * len(rows))[i] = stars
+                        self.cells.append((stars, truncated))
                 elif isinstance(value, str) and value and len(value) <= 140:
                     table.text.setdefault(key, [None] * len(rows))[i] = value
         self.tables.append(table)
+        for key, child_rows in children.items():
+            self.rows(child_rows, f"{label}.{key}", False, frozenset())
 
     def scalars(self, value: Any, numeric: frozenset[str], key: str = "") -> None:
         if key in _SKIP_KEYS or key.startswith("_"):
@@ -755,8 +775,17 @@ def _aggregates(table: _Rows) -> Iterator[tuple[float, str, bool]]:
                 label = labels[i]
                 if label is not None:
                     sums[label] = sums.get(label, 0.0) + v
+            counted: dict[str, int] = {}
+            for i, _v in present:
+                label = labels[i]
+                if label is not None:
+                    counted[label] = counted.get(label, 0) + 1
             for group, s in sums.items():
                 yield s, f"sum of {key} in {table.label} where {group_key} is {group}", False
+                # Each group's average too: "kept to the schedule, average 4.5"
+                # over four feedback records (the pilot's Nov 6, 2026 retake).
+                if counted.get(group, 0) >= 2:
+                    yield s / counted[group], f"average of {key} in {table.label} where {group_key} is {group}", False
 
 
 @dataclass
