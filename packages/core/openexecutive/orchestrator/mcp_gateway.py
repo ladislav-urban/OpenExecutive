@@ -3942,9 +3942,19 @@ class MCPGateway:
         # The answer check's own calls on a host origin's turn (F1): its tools
         # are no model's, and only its marker, which no tool sets, lets them
         # through (the gate below holds them to it either way).
+        called = _normalize_tool_name(str(tool_input.get("name") or ""))
+        raw_args = tool_input.get("arguments")
         own_check = (
-            _normalize_tool_name(str(tool_input.get("name") or "")) in ERPNEXT_CODE_ONLY_TOOLS
-            and erpnext_caller.in_answer_check_run()
+            called in ERPNEXT_CODE_ONLY_TOOLS and erpnext_caller.in_answer_check_run()
+        ) or (
+            # The draft card's own draft_check on ERPNext's desk (114.a):
+            # code marks exactly this call (erpnext_caller.draft_check_run);
+            # no model sets the marker, and _check_erpnext_draft still holds it.
+            called.startswith(erpnext_caller.DRAFT_TOOL_PREFIX)
+            and isinstance(raw_args, dict)
+            and erpnext_caller.draft_call_for(
+                called, {k: v for k, v in raw_args.items() if k != erpnext_caller.ASSERTION_ARG}
+            ) is not None
         )
         if mcp_rules_turn(turn_session) and not own_check and mcp_client_withholds("call_tool", tool_input):
             return mcp_client_withheld_error(

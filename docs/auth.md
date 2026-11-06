@@ -646,6 +646,9 @@ acknowledging, snoozing, reopening and reviewing alerts; chatting (send, stop, a
 (describe, add, approve or decline a proposal, edit, delete). Never approving, rejecting
 or cancelling a card, preparing a draft, Act as me's Send, edits or answers, and
 everything else under delegation, settings or People.
+A chat turn from a host origin may still *propose* an ERPNext draft card, as the person
+signed in here and only them (the owner's decision 114.a, Nov 6, 2026); approving it stays
+in this app, never on the host's page.
 `tests/unit/test_host_list.py` checks every entry against the API's routes and against
 that rule. The proxy enforces it:
 
@@ -670,10 +673,12 @@ otherwise); without them it reads the header, as it does `x-caller-email`. A cha
 that surface (`Session.from_host`) only reads and advises: it is offered the specialists,
 the read tools and the gateway's reads, never anything that sends, posts, books,
 schedules, runs or changes stored state (`MCP_CLIENT_WITHHELD_TOOLS`), the principal-only
-tools, Act as me, `recall_history`, scripts or extension tools. A call the model makes
+tools, Act as me, `recall_history`, scripts or extension tools but one: since the owner's
+decision 114.a it may propose an ERPNext draft card (`propose_erpnext_draft`) for the person
+signed in, marked on the card as asked for from ERPNext's desk. A call the model makes
 anyway is refused, telling the person to start a new chat in the product itself (named by
 `OE_PRODUCT_NAME` on the API too). Of an ERP's tools it may call only ERPNext's reads
-(never a draft), signed as the person signed in here, from their verified sign-in alone,
+(never a draft through the model; the card's own marked check aside), signed as the person signed in here, from their verified sign-in alone,
 under signed callers and only in a chat nobody else reads, so ERPNext answers it with
 what that person may see. A script on the host's page already runs as that ERPNext user,
 so the reads expose nothing new; what it may still steer into a reply is this app's own

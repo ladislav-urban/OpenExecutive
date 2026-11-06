@@ -81,7 +81,8 @@ class DraftCardOut(BaseModel):
     lines: list[DraftLineOut]
     notes: list[str]
     last_error: str
-    # "erpnext_panel" when asked for in ERPNext's panel, else "".
+    # "erpnext_panel" when asked for in ERPNext's panel, "erpnext_desk" when
+    # from ERPNext's desk, else "".
     asked_in: str = ""
 
 
