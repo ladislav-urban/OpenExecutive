@@ -83,7 +83,7 @@ def shows(monkeypatch: pytest.MonkeyPatch, temp_db: Path) -> list[dict[str, Any]
             }
             for name, arguments, failed in step.get("calls", []):
                 note_erpnext_call(name, arguments, failed=failed)
-            yield "ok"
+            yield step.get("reply", "ok")
 
     monkeypatch.setattr(exec_mod, "Executive", _Executive)
     return script
@@ -180,3 +180,23 @@ def test_a_host_turn_proposes_only_as_a_signed_in_person(monkeypatch: pytest.Mon
     host = SimpleNamespace(from_host=True, host_page=True, unattended=False)
     assert erpnext_drafts.offer_refusal(host) is not None
     assert erpnext_drafts.offered(host) is False
+
+
+def test_a_stale_screen_sentence_is_dropped_from_a_host_page_reply(shows: list[dict[str, Any]]) -> None:
+    # The pilot's retake, learning-2: the answer opened the Accounts
+    # Receivable report beside the panel, yet pointed at the Sales Invoice
+    # list "you have open" (integrations.panel_screen, now on this route too).
+    report = {"kind": "report", "report_name": "Accounts Receivable"}
+    shows.append({
+        "calls": [_show(report)],
+        "reply": (
+            "The Accounts Receivable report is open beside you, aged by due date. "
+            "The Sales Invoice list you have open also works: filter it to that customer."
+        ),
+    })
+    body = _client().post(
+        "/chat", json={"message": "Where do I see what a customer owes?", "erpnext_page": {"doctype": "Sales Invoice"}},
+        headers=HOST,
+    ).text
+    replaced = [e for e in _events(body) if e["type"] == "reply_replaced"]
+    assert replaced and replaced[-1]["content"] == "The Accounts Receivable report is open beside you, aged by due date."

@@ -2086,6 +2086,23 @@ async def _chat_turn(
                         chat_live.turn_event(session.session_id, live_key, replaced_evt)
                     yield f"data: {json.dumps(replaced_evt)}\n\n"
 
+            # A host page's turn (ERPNext's docked panel through this chat):
+            # a sentence naming a list, report or form as on the person's
+            # screen when it isn't (the page the answer replaced by opening a
+            # view, or one never open) goes, as on the panel's own route
+            # (integrations.panel_screen; the pilot's retake, learning-2).
+            if turn_views is not None and full_response.strip():
+                from openexecutive.integrations.panel_screen import drop_stale_screen
+
+                trimmed, dropped = drop_stale_screen(
+                    full_response, erpnext_page.as_page() if erpnext_page is not None else None, turn_views.views,
+                )
+                if dropped:
+                    full_response = trimmed
+                    screen_evt = {"type": "reply_replaced", "content": full_response, "session_id": session.session_id}
+                    if not client_disconnected:
+                        yield f"data: {json.dumps(screen_evt)}\n\n"
+
             # Nothing more can reach this turn: anything still waiting in the
             # inbox was never seen, and the client sends it as the next turn.
             if inbox is not None:
