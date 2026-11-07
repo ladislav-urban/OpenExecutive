@@ -863,11 +863,12 @@ async def _create_erpnext_draft(
     person's tap (``integrations.erpnext_drafts``, which checks the caller
     and claims the card first). Nothing on the card is edited here."""
     from openexecutive.integrations.erpnext_drafts import ApproveRefused, approve
+    from openexecutive.prompts.connected_systems import in_product_reply
 
     if body.edits:
         raise HTTPException(
             status_code=422,
-            detail={"code": "no_edits", "message": "A draft card is approved as it is; change it in ERPNext."},
+            detail={"code": "no_edits", "message": in_product_reply("A draft card is approved as it is; change it in ERPNext.")},
         )
     try:
         await approve(instance, caller=api_caller.caller(request), resolver=resolver)

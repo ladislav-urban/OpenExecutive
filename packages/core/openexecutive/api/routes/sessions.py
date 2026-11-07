@@ -378,6 +378,10 @@ def get_session_messages(session_id: str, request: Request) -> list[dict]:
     names = {pid: name for pid, name, _ in people}
     owner_id = next((pid for pid, _, is_owner in people if is_owner), None)
     messages = load_messages(session_id, with_senders=bool(names))
+    # A card's chip says what became of the card, not how it was when left.
+    from openexecutive.orchestrator.action_chips import refresh_chips
+
+    refresh_chips(messages)
     for msg in messages:
         sender = msg.get("sender_person_id")
         if sender is None and msg.get("role") == "user" and owner_id is not None:

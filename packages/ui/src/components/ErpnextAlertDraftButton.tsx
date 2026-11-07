@@ -3,6 +3,8 @@
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { reloadErpnextDraftCards } from "@/components/ErpnextDraftCards";
+import { useErpNamed } from "@/components/embed/EmbedProvider";
+import { erpName } from "@/lib/erpnextDraftWords";
 import Button from "@/components/ui/Button";
 import { getErpnextAlertDrafts, prepareErpnextAlertDraft, type ErpnextAlertDraft } from "@/lib/api";
 
@@ -45,6 +47,7 @@ export default function ErpnextAlertDraftButton({ alertId }: { alertId: number }
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const erp = erpName(useErpNamed());
   useEffect(() => {
     void load();
   }, []);
@@ -59,7 +62,7 @@ export default function ErpnextAlertDraftButton({ alertId }: { alertId: number }
       setDone(
         prepared.already_waiting
           ? "Its draft card is already waiting in Your decision."
-          : "Its draft card is in Your decision. Nothing is in ERPNext until you approve it.",
+          : `Its draft card is in Your decision. Nothing is in ${erp} until you approve it.`,
       );
       void reloadErpnextDraftCards();
     } catch (err) {
@@ -75,7 +78,7 @@ export default function ErpnextAlertDraftButton({ alertId }: { alertId: number }
         <p className="text-sm text-emerald-700 dark:text-emerald-300">{done}</p>
       ) : (
         <Button variant="secondary" onClick={prepare} disabled={busy}>
-          {busy ? "Asking ERPNext…" : suggestion.label}
+          {busy ? `Asking ${erp}…` : suggestion.label}
         </Button>
       )}
       {error && <p className="text-sm text-red-600 dark:text-red-400 break-words">{error}</p>}

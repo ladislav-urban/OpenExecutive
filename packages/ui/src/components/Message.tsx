@@ -15,7 +15,8 @@ import { hostOf } from "@/lib/url";
 import { initials } from "@/lib/initials";
 import FeatureName from "@/components/FeatureName";
 import { ChatActionCards } from "@/components/ActionCards";
-import { ChatErpnextDraftCards } from "@/components/ErpnextDraftCards";
+import { ChatErpnextDraftCards, useDraftOutcomes } from "@/components/ErpnextDraftCards";
+import { chipSummary } from "@/lib/erpnextDraftWords";
 import { useExecutiveName } from "@/components/executive/ExecutiveStatusContext";
 
 interface MessageProps {
@@ -205,6 +206,19 @@ function ChipDetails({ group, onClose }: { group: ChipGroup; onClose: () => void
   );
 }
 
+// A reply's chips when it left draft cards: each draft card's chip follows
+// what became of the card (approved, dismissed or closed), not the moment it
+// was left. A reloaded chat gets the same from the API (``refresh_chips``).
+function DraftAwareChips({ actions }: { actions: ActionTaken[] }) {
+  const outcomeOf = useDraftOutcomes();
+  const shown = actions.map((a) =>
+    a.tool === "propose_erpnext_draft" && typeof a.decision_id === "number"
+      ? { ...a, summary: chipSummary(a.summary, outcomeOf(a.decision_id)) }
+      : a,
+  );
+  return <ActionChips actions={shown} />;
+}
+
 function ActionChips({ actions }: { actions: ActionTaken[] }) {
   const groups = useMemo(() => groupActions(actions), [actions]);
   const [open, setOpen] = useState<string | null>(null);
@@ -370,7 +384,7 @@ export default function Message({
 
         {status && <div className="mt-3">{status}</div>}
 
-        {actions && actions.length > 0 && <ActionChips actions={actions} />}
+        {actions && actions.length > 0 && (draftIds.length > 0 ? <DraftAwareChips actions={actions} /> : <ActionChips actions={actions} />)}
 
         {cardIds.length > 0 && <ChatActionCards ids={cardIds} />}
 

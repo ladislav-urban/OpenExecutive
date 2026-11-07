@@ -145,6 +145,11 @@ class ApproveRefused(Exception):
     """Why an approval was refused: an HTTP status, a code and what to tell them."""
 
     def __init__(self, status: int, code: str, message: str) -> None:
+        # Shown to the person as it is: in the product's words on an install
+        # with a name ("changed in the ERP", never the part's name).
+        from openexecutive.prompts.connected_systems import in_product_reply
+
+        message = in_product_reply(message)
         super().__init__(message)
         self.status = status
         self.code = code
@@ -497,6 +502,11 @@ def _live(card: Any, now: datetime) -> bool:
     return created is not None and now - created <= CARD_TTL
 
 
+def card_live(card: Any, now: datetime | None = None) -> bool:
+    """Whether a draft card is within its time (``CARD_TTL``)."""
+    return _live(card, now or datetime.now(UTC))
+
+
 # Cards an approval in this process is carrying out right now. The API runs
 # as one process (docker/Dockerfile, make dev), so a draft card left
 # `executing` and not in here was abandoned mid-approval: a cancelled
@@ -787,8 +797,52 @@ def propose(
     ), True, view
 
 
+# How many of a conversation's earlier cards a new card's result names.
+EARLIER_CARDS_MAX = 10
+
+
+def earlier_cards(person_id: int, session_id: Any, *, leaving: int) -> list[dict[str, Any]]:
+    """``person_id``'s other draft cards left in this conversation, oldest
+    first, each with what became of it (``action_chips.card_outcome``) and,
+    once approved, the draft's name: so a reply speaks of each as it stands,
+    never "still waiting" for one approved or closed (S14, Nov 7, 2026).
+    Cards from other conversations are left out."""
+    from openexecutive.memory.decision_ledger import list_instances
+    from openexecutive.orchestrator.action_chips import card_outcome
+
+    if not isinstance(session_id, str) or not session_id:
+        return []
+    found = [
+        c for c in list_instances(DECISION_CLASS, approver_person_id=person_id, limit=1000)
+        if c.originating_session_id == session_id and c.id != leaving
+    ]
+    out: list[dict[str, Any]] = []
+    for card in sorted(found, key=lambda c: c.id)[-EARLIER_CARDS_MAX:]:
+        entry: dict[str, Any] = {
+            "decision_id": card.id,
+            "doctype": str(_payload(card).get("doctype") or ""),
+            "status": card_outcome(card),
+        }
+        if entry["status"] == "approved":
+            try:
+                final = json.loads(card.final_payload_json or "{}")
+            except (TypeError, ValueError):
+                final = {}
+            made = final.get("created") if isinstance(final, dict) else None
+            name = made.get("name") if isinstance(made, dict) else None
+            if isinstance(name, str) and _DOC_NAME_RE.fullmatch(name):
+                entry["name"] = name
+        out.append(entry)
+    return out
+
+
 def cards(person: Any) -> list[DraftCard]:
-    """``person``'s waiting draft cards, for ``GET /erpnext/drafts``."""
+    """``person``'s waiting draft cards, for ``GET /erpnext/drafts``. What the
+    card says in words (its reason, notes and last error) is in the product's
+    words on an install with a name (``in_product_reply``); ERPNext's own
+    values in its fields and lines are shown as they are."""
+    from openexecutive.prompts.connected_systems import in_product_reply as words
+
     out: list[DraftCard] = []
     for card in open_cards(person.id):
         payload = _payload(card)
@@ -799,12 +853,12 @@ def cards(person: Any) -> list[DraftCard]:
             decision_id=card.id,
             created_at=card.created_at,
             expires_at=(created + CARD_TTL).isoformat() if created else "",
-            why=str(payload.get("why") or ""),
+            why=words(str(payload.get("why") or "")),
             doctype=str(payload.get("doctype") or ""),
             fields=[f for f in view.get("fields") or [] if isinstance(f, dict)],
             lines=[ln for ln in view.get("lines") or [] if isinstance(ln, dict)],
-            notes=[str(n) for n in view.get("notes") or []],
-            last_error=str(payload.get("last_error") or ""),
+            notes=[words(str(n)) for n in view.get("notes") or []],
+            last_error=words(str(payload.get("last_error") or "")),
             asked_in=str(payload.get("asked_in")) if payload.get("asked_in") in (ASKED_IN_PANEL, ASKED_IN_DESK) else "",
         ))
     return out
@@ -1040,17 +1094,27 @@ async def _check_and_leave(
             "person_id": person.id, "decision_id": decision_id, "doctype": doctype,
             **({"asked_in": asked_in} if asked_in else {}),
         })
+    try:
+        earlier = earlier_cards(person.id, getattr(session, "session_id", None), leaving=decision_id)
+    except Exception:
+        logger.warning("erpnext_drafts: couldn't read this conversation's earlier cards", exc_info=True)
+        earlier = []
     return json.dumps({
         "status": "waiting_for_approval",
         "decision_id": decision_id,
         "doctype": doctype,
         "card": wrap_untrusted(json.dumps(view, ensure_ascii=False), source="erpnext", author="draft_check"),
+        # Only what this conversation left, as each stands now.
+        "earlier_cards": earlier,
         "note": (
             ("" if new else "This is the card already waiting for the same draft. ")
             + "Nothing is in ERPNext yet. The card is on Today in the OpenExecutive web app, "
             "and under this reply in its chat, for them to approve; it then becomes an "
             "unsubmitted draft they review and submit in ERPNext. Outside the web app, say "
-            "where to find it."
+            "where to find it. Speak of this conversation's earlier cards only as "
+            "`earlier_cards` gives them (approved, dismissed, closed with nothing made, "
+            "expired, or waiting), or not at all; never call one waiting that isn't, "
+            "and never count cards from other conversations."
         ),
     }), new
 
@@ -1067,9 +1131,11 @@ def chip(tool_input: dict[str, Any], parsed: dict[str, Any] | None) -> dict[str,
     if (parsed or {}).get("status") != "waiting_for_approval":
         return None
     doctype = (parsed or {}).get("doctype")
+    from openexecutive.prompts.connected_systems import in_product_reply
+
     noun = doctype if doctype in DRAFT_TOOLS else "ERPNext"
     return {
-        "summary": f"Waiting for your approval: {noun} draft",
+        "summary": in_product_reply(f"Waiting for your approval: {noun} draft"),
         "link": "/",
         "decision_id": (parsed or {}).get("decision_id"),
     }

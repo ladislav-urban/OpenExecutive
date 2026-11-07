@@ -66,6 +66,15 @@ export function useProductName(): string {
   return useContext(ProductNameContext);
 }
 
+/** Whether this install is one product to the person: it has a name of its
+ * own (OE_PRODUCT_NAME), or a host's frame gave it one. Then ERPNext is "the
+ * ERP" to them (lib/erpnextDraftWords.ts), as in the Executive's replies. */
+export function useErpNamed(): boolean {
+  const product = useContext(ProductNameContext);
+  const { init } = useContext(EmbedContext);
+  return product !== DEFAULT_PRODUCT_NAME || Boolean(init?.productName);
+}
+
 /** Whether a request is the very one passed: same method, same address. */
 function isPassed(pass: { method: string; url: string }, method: string, url: string): boolean {
   return pass.method === method.toUpperCase() && new URL(pass.url, location.href).href === new URL(url, location.href).href;

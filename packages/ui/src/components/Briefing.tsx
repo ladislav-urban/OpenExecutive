@@ -35,7 +35,7 @@ import { reviewRanLabel } from "@/lib/rhythmCards";
 import InfoTip from "./InfoTip";
 import HeldBack from "./briefing/HeldBack";
 import { ACTION_CARDS_TIP, ActionCardItem, useActionCards } from "./ActionCards";
-import { ERPNEXT_DRAFTS_TIP, ErpnextDraftCardItem, useErpnextDraftCards } from "./ErpnextDraftCards";
+import { ErpnextDraftCardItem, useErpnextDraftCards, useErpnextDraftsTip } from "./ErpnextDraftCards";
 import { REPLIES_WAITING_TIP, ReplyCardItem, useReplyCards } from "./RepliesWaiting";
 import Icon from "./Icon";
 import {
@@ -442,6 +442,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   const actionCards = useActionCards();
   // ERPNext drafts it prepared at the caller's request, to approve.
   const draftCards = useErpnextDraftCards();
+  const draftsTip = useErpnextDraftsTip();
   // Solo's own sections load on their own, so their tiles can count them.
   const principalId = solo ? principalIdOf(today?.people ?? []) : null;
   const projects = useActiveProjects(solo);
@@ -868,7 +869,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                   </h2>
                   {replies.cards.length > 0 && <InfoTip align="left">{REPLIES_WAITING_TIP}</InfoTip>}
                   {actionCards.cards.length > 0 && <InfoTip align="left">{ACTION_CARDS_TIP}</InfoTip>}
-                  {draftCards.cards.length > 0 && <InfoTip align="left">{ERPNEXT_DRAFTS_TIP}</InfoTip>}
+                  {draftCards.cards.length > 0 && <InfoTip align="left">{draftsTip}</InfoTip>}
                   <div className="ml-auto flex items-center gap-1">
                     {hasBrief && (
                       <button

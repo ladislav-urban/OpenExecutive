@@ -5,11 +5,14 @@ import { useEffect, useState } from "react";
 import { getPeopleViewer } from "@/lib/api";
 import { downloadOversightCsv, oversightCsvUrl } from "@/lib/oversight";
 import { buttonClass } from "@/components/ui/Button";
+import { useErpNamed } from "@/components/embed/EmbedProvider";
+import { erpName } from "@/lib/erpnextDraftWords";
 
 // The audit log's "Download oversight record (CSV)", for the principal only:
 // the record names everyone who asked for an ERPNext draft, so the route
 // refuses anyone else, and the page doesn't offer it to them either.
 export default function OversightExport() {
+  const named = useErpNamed();
   const [principal, setPrincipal] = useState(false);
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
@@ -52,11 +55,11 @@ export default function OversightExport() {
       className="mb-6 rounded-xl border border-line bg-surface-elevated px-4 py-3"
     >
       <h2 id="oversight-heading" className="text-[15px] font-semibold text-fg">
-        ERPNext draft oversight record
+        {named ? "Draft oversight record" : "ERPNext draft oversight record"}
       </h2>
       <p className="mt-1 text-sm text-fg-muted">
-        Every ERPNext draft card in the range: who asked, what it showed, who decided, and what became of it in
-        ERPNext. Leave a date empty for an open end.
+        Every {named ? "" : "ERPNext "}draft card in the range: who asked, what it showed, who decided, and what
+        became of it in {erpName(named)}. Leave a date empty for an open end.
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
         <label className="text-xs text-fg-muted flex flex-col gap-1">
