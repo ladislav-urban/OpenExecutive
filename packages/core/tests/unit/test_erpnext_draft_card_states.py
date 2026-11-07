@@ -191,9 +191,28 @@ def test_a_reloaded_chat_shows_each_chip_as_its_card_stands(
         {"role": "user", "content": "y"},
         {"role": "assistant", "content": "z", "actions": [{"summary": "Waiting for your approval", "decision_id": 999999}]},
     ]
-    refresh_chips(messages)
+    refresh_chips(messages, viewer_person_id=roster.principal)
     first, second = messages[0]["actions"]
     assert first["summary"] == "Approved: Material Request draft"
     assert second["summary"] == "Waiting for your approval: Material Request draft"
     # A card that can't be found is left as saved.
     assert messages[2]["actions"][0]["summary"] == "Waiting for your approval"
+
+
+def test_someone_the_chat_is_shared_with_never_learns_what_its_owner_decided(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    raw = _card_in(erp, _owner_turn(roster))
+    card = get_decision_instance(raw["decision_id"])
+    assert card is not None
+    assert mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=roster.principal)
+    chip = summarize_action(tool_name=drafts.PROPOSE, tool_input={}, tool_result=json.dumps(raw))
+    assert chip is not None
+    for viewer, expected in (
+        (roster.teammate, "Waiting for your approval: Material Request draft"),
+        (None, "Waiting for your approval: Material Request draft"),
+        (roster.principal, "Dismissed: Material Request draft"),
+    ):
+        messages: list[dict[str, Any]] = [{"role": "assistant", "content": "x", "actions": [dict(chip)]}]
+        refresh_chips(messages, viewer_person_id=viewer)
+        assert messages[0]["actions"][0]["summary"] == expected

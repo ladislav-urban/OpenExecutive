@@ -637,11 +637,15 @@ def summary_for_outcome(summary: str, outcome: str) -> str:
     return f"{lead}: {rest}" if rest else lead
 
 
-def refresh_chips(messages: list[dict[str, Any]]) -> None:
+def refresh_chips(messages: list[dict[str, Any]], *, viewer_person_id: int | None) -> None:
     """Each saved chip for a card, in place, as the card stands now (a chat
     reloaded after its cards were approved or closed): the chip was saved
-    while the card waited. Only the chips' own cards are read, and only the
-    summary changes. Never raises: a chip it can't check is left as saved."""
+    while the card waited. Only cards ``viewer_person_id`` approves are read
+    as they stand; any other chip (the owner's, in a chat shared with the
+    viewer) is left as saved, so what someone else decided never shows. Only
+    the summary changes. Never raises: a chip it can't check is left as saved."""
+    if viewer_person_id is None:
+        return
     from openexecutive.memory.decision_ledger import get_decision_instance
 
     seen: dict[int, str] = {}
@@ -659,7 +663,8 @@ def refresh_chips(messages: list[dict[str, Any]]) -> None:
             if decision_id not in seen:
                 try:
                     instance = get_decision_instance(decision_id)
-                    seen[decision_id] = card_outcome(instance) if instance is not None else "waiting"
+                    mine = instance is not None and instance.approver_person_id == viewer_person_id
+                    seen[decision_id] = card_outcome(instance) if mine else "waiting"
                 except Exception:
                     logger.warning("action_chips: couldn't read card %s for its chip", decision_id, exc_info=True)
                     seen[decision_id] = "waiting"

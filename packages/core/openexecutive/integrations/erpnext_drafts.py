@@ -1133,9 +1133,9 @@ def chip(tool_input: dict[str, Any], parsed: dict[str, Any] | None) -> dict[str,
     doctype = (parsed or {}).get("doctype")
     from openexecutive.prompts.connected_systems import in_product_reply
 
-    noun = doctype if doctype in DRAFT_TOOLS else "ERPNext"
+    noun = f"{doctype} draft" if doctype in DRAFT_TOOLS else "ERPNext draft"
     return {
-        "summary": in_product_reply(f"Waiting for your approval: {noun} draft"),
+        "summary": in_product_reply(f"Waiting for your approval: {noun}").replace(": the ERP draft", ": a draft"),
         "link": "/",
         "decision_id": (parsed or {}).get("decision_id"),
     }
