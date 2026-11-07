@@ -2,7 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 
-import { useEmbed } from "@/components/embed/EmbedProvider";
+import { useEmbed, useErpNamed } from "@/components/embed/EmbedProvider";
 import Button from "@/components/ui/Button";
 import {
   approveErpnextDraft,
@@ -12,7 +12,14 @@ import {
   type ErpnextDraftCreated,
 } from "@/lib/api";
 import { openMessage } from "@/lib/embed";
-import { draftMadeLine } from "@/lib/erpnextDraftWords";
+import {
+  askedInNote,
+  type CardOutcome,
+  draftKind,
+  draftMadeLine,
+  draftsTip,
+  openDraftLabel,
+} from "@/lib/erpnextDraftWords";
 import { erpnextLink } from "@/lib/erpnextLinks";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
@@ -131,11 +138,32 @@ const approveCard = (id: number) =>
     update((s) => ({ ...s, made: { ...s.made, [id]: created } }));
   }, "Couldn't make the draft.");
 
+// Cards dismissed here: a dismissed card leaves the store, but its chip
+// still says what became of it.
+const dismissed = new Set<number>();
+
 const dismissCard = (id: number) =>
   act(id, "Dismissing…", async () => {
     await dismissErpnextDraft(id);
+    dismissed.add(id);
     gone(id);
   }, "Couldn't dismiss that draft.");
+
+/** What became of a card in this view, for its chip: approved here, dismissed
+ * here, or closed (refused after its last try, or handled elsewhere); none
+ * while it waits or before the list has loaded. */
+export function useDraftOutcomes(): (id: number) => CardOutcome | undefined {
+  const s = useSyncExternalStore(subscribe, read, readOnServer);
+  useEffect(() => {
+    void load();
+  }, []);
+  return (id: number) => {
+    if (id in s.made) return "approved";
+    if (dismissed.has(id)) return "dismissed";
+    if (id in s.closed) return "closed";
+    return undefined;
+  };
+}
 
 export function useErpnextDraftCards() {
   const s = useSyncExternalStore(subscribe, read, readOnServer);
@@ -146,10 +174,9 @@ export function useErpnextDraftCards() {
 }
 
 // What the draft cards are, for the Needs you header's tip.
-export const ERPNEXT_DRAFTS_TIP =
-  "ERPNext drafts you asked the Executive to prepare. Each shows exactly what will be written, " +
-  "and ERPNext has already checked it. Nothing is created until you tap Approve, and then only an unsubmitted " +
-  "draft, as your own ERPNext user, for you to review and submit in ERPNext. Only you see these.";
+export function useErpnextDraftsTip(): string {
+  return draftsTip(useErpNamed());
+}
 
 export function ErpnextDraftCardItem({
   card,
@@ -162,6 +189,7 @@ export function ErpnextDraftCardItem({
 }) {
   const s = useSyncExternalStore(subscribe, read, readOnServer);
   const { hostOrigin } = useEmbed();
+  const named = useErpNamed();
   const id = card.decision_id;
   const busy = s.busy[id] ?? null;
   const done = id in s.made;
@@ -196,7 +224,7 @@ export function ErpnextDraftCardItem({
         <span className="inline-flex items-center rounded-lg bg-surface-overlay px-2 py-0.5 text-[13px] font-medium text-fg-muted">
           To approve
         </span>
-        <span className="text-[12px] font-medium text-fg-muted">ERPNext {card.doctype} draft</span>
+        <span className="text-[12px] font-medium text-fg-muted">{draftKind(card.doctype, named)}</span>
         {when && <span className="text-sm text-fg-subtle tabular-nums">{when}</span>}
       </div>
       {(card.asked_in === "erpnext_panel" || card.asked_in === "erpnext_desk") && (
@@ -204,9 +232,7 @@ export function ErpnextDraftCardItem({
         // panel), or another app's page sent the words (the desk). Said
         // before its headline, which whoever asked wrote.
         <div className="mb-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-sm text-amber-800 dark:text-amber-200">
-          {card.asked_in === "erpnext_desk"
-            ? "Asked for from ERPNext's desk. Approve it only if you asked for it there."
-            : "Asked for in ERPNext's panel. Approve it only if you asked for it there."}
+          {askedInNote(card.asked_in, named)}
         </div>
       )}
       {card.why && (
@@ -258,7 +284,7 @@ export function ErpnextDraftCardItem({
       {done ? (
         <div className="mt-4 space-y-2">
           <p className="text-sm text-emerald-700 dark:text-emerald-300">
-            {draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false)}
+            {draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {link && (
@@ -269,7 +295,7 @@ export function ErpnextDraftCardItem({
                 onClick={openInHost}
                 className="text-sm font-medium text-accent underline"
               >
-                Open in ERPNext
+                {openDraftLabel(card.doctype, named)}
               </a>
             )}
             <Button variant="secondary" onClick={() => onGone(card.decision_id)}>

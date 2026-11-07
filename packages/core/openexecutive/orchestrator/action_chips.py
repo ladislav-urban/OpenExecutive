@@ -580,3 +580,92 @@ def summarize_action(
         payload["summary"] = payload["summary"][:77] + "…"
 
     return payload
+
+
+# ---------------------------------------------------------------------------
+# A chip that follows its card
+# ---------------------------------------------------------------------------
+
+# What a chip for a card says while the card waits (``summarize_action``,
+# ``erpnext_drafts.chip``): rewritten once the card is decided.
+WAITING_LEAD = "Waiting for your approval"
+# What became of a card, and how its chip then starts (the web app's
+# lib/erpnextDraftWords.ts says the same for a card decided in view).
+OUTCOME_LEADS: dict[str, str] = {
+    "approved": "Approved",
+    "dismissed": "Dismissed",
+    "closed": "Closed, nothing made",
+    "expired": "Expired",
+}
+
+
+def card_outcome(instance: Any) -> str:
+    """What became of an approval card (a ``DecisionInstance``): ``waiting``
+    while it can still be approved, else ``approved``, ``dismissed``,
+    ``closed`` (refused or failed: nothing was made) or ``expired``. An
+    ERPNext draft card past its time is expired though still stored as
+    proposed (``erpnext_drafts.CARD_TTL``)."""
+    from openexecutive.memory import decision_ledger as ledger
+
+    status = getattr(instance, "status", None)
+    if status in (ledger.STATUS_PROPOSED, ledger.STATUS_EXECUTING):
+        if getattr(instance, "decision_class", None) == "erpnext_draft":
+            from openexecutive.integrations.erpnext_drafts import card_live
+
+            if not card_live(instance):
+                return "expired"
+        return "waiting"
+    if status in (ledger.STATUS_APPROVED_UNCHANGED, ledger.STATUS_APPROVED_WITH_EDIT, ledger.STATUS_EXECUTED):
+        return "approved"
+    if status == ledger.STATUS_REJECTED:
+        return "dismissed"
+    if status == ledger.STATUS_AUTO_NO_RESPONSE or (
+        status == ledger.STATUS_CLOSED_EXTERNALLY and getattr(instance, "reversal_reason", None) == "expired"
+    ):
+        return "expired"
+    return "closed"
+
+
+def summary_for_outcome(summary: str, outcome: str) -> str:
+    """``summary`` as its chip says it once the card is ``outcome``:
+    "Waiting for your approval: Quotation draft" → "Approved: Quotation
+    draft". Unchanged while it waits, or for a chip that never waited."""
+    lead = OUTCOME_LEADS.get(outcome)
+    if lead is None or not summary.startswith(WAITING_LEAD):
+        return summary
+    rest = summary[len(WAITING_LEAD):].lstrip(": ").strip()
+    return f"{lead}: {rest}" if rest else lead
+
+
+def refresh_chips(messages: list[dict[str, Any]], *, viewer_person_id: int | None) -> None:
+    """Each saved chip for a card, in place, as the card stands now (a chat
+    reloaded after its cards were approved or closed): the chip was saved
+    while the card waited. Only cards ``viewer_person_id`` approves are read
+    as they stand; any other chip (the owner's, in a chat shared with the
+    viewer) is left as saved, so what someone else decided never shows. Only
+    the summary changes. Never raises: a chip it can't check is left as saved."""
+    if viewer_person_id is None:
+        return
+    from openexecutive.memory.decision_ledger import get_decision_instance
+
+    seen: dict[int, str] = {}
+    for msg in messages:
+        for chip in msg.get("actions") or []:
+            if not isinstance(chip, dict):
+                continue
+            decision_id = chip.get("decision_id")
+            summary = chip.get("summary")
+            if (
+                not isinstance(decision_id, int) or isinstance(decision_id, bool)
+                or not isinstance(summary, str) or not summary.startswith(WAITING_LEAD)
+            ):
+                continue
+            if decision_id not in seen:
+                try:
+                    instance = get_decision_instance(decision_id)
+                    mine = instance is not None and instance.approver_person_id == viewer_person_id
+                    seen[decision_id] = card_outcome(instance) if mine else "waiting"
+                except Exception:
+                    logger.warning("action_chips: couldn't read card %s for its chip", decision_id, exc_info=True)
+                    seen[decision_id] = "waiting"
+            chip["summary"] = summary_for_outcome(summary, seen[decision_id])
