@@ -49,6 +49,14 @@ logger = logging.getLogger("openexecutive.orchestrator.gateway_boot")
 # that has to clone extensible-mcp can genuinely take a couple of minutes, so
 # the early retries are not wasted on a child that just needed longer.
 BACKOFF_S: tuple[float, ...] = (30.0, 60.0, 120.0, 300.0, 600.0)
+# Seconds to wait before each quick retry of a failed boot start, before the
+# backoff above takes over: a child that exits at once because the server it
+# connects to isn't reachable yet (the pilot's demo reset starts the API
+# while ERPNext is still coming back, Nov 6-7, 2026: "Connection closed" 5 s
+# in, up 30 s later) usually comes up within seconds. Meanwhile the gateway is
+# "starting", each miss is one quiet line, and work that needs the gateway
+# waits for these retries rather than failing.
+BOOT_RETRY_S: tuple[float, ...] = (3.0, 5.0, 10.0, 15.0)
 # How long one attempt may take. The child is `uvx --from git+…`, which
 # resolves and may clone on a cold start, so this is generous; what it must
 # not be is unbounded: `ClientSession.initialize()` waits forever on a child
@@ -126,8 +134,15 @@ class GatewaySupervisor:
         start_timeout_s: float = START_TIMEOUT_S,
         backoff_s: Sequence[float] = BACKOFF_S,
         ensure_cooldown_s: float = ENSURE_COOLDOWN_S,
+        boot_retry_s: Sequence[float] = BOOT_RETRY_S,
         why: str = "",
     ) -> None:
+        self._boot_retry_s = tuple(boot_retry_s)
+        # The quick retries after a failed boot start (``_boot_retries``).
+        self._boot_task: asyncio.Task[bool] | None = None
+        # The last failure ran out the start timeout: a silent child, not
+        # one that exited at once, so no quick retry would help.
+        self._last_timed_out = False
         self._ensure_cooldown_s = ensure_cooldown_s
         self._config_path = config_path
         self._servers = tuple(servers)
@@ -154,10 +169,13 @@ class GatewaySupervisor:
     def is_up(self) -> bool:
         return self.gateway is not None
 
+    def _booting(self) -> bool:
+        return self._boot_task is not None and not self._boot_task.done()
+
     def status(self) -> GatewayStatus:
         if self.gateway is not None:
             state: GatewayState = "up"
-        elif self._attempt is not None and not self._attempt.done():
+        elif self._booting() or (self._attempt is not None and not self._attempt.done()):
             state = "starting"
         else:
             state = "down"
@@ -179,7 +197,7 @@ class GatewaySupervisor:
             return None
         if self.attempts == 0:
             return "the MCP gateway has not started yet"
-        if self._attempt is not None and not self._attempt.done():
+        if self._booting() or (self._attempt is not None and not self._attempt.done()):
             return f"the MCP gateway is starting (attempt {self.attempts + 1})"
         detail = f": {self.last_error}" if self.last_error and with_error else ""
         return f"the MCP gateway failed to start ({self.attempts} attempt{'s' if self.attempts != 1 else ''}){detail}"
@@ -187,20 +205,55 @@ class GatewaySupervisor:
     # -- attempts ------------------------------------------------------------
 
     async def start(self) -> bool:
-        """The boot attempt. On failure the background retries begin."""
-        ok = await self.attempt()
+        """The boot attempt. On failure the quick boot retries begin in the
+        background (``BOOT_RETRY_S``), then, if those fail too, the backoff."""
+        ok = await self.attempt(quiet=bool(self._boot_retry_s))
         if not ok and not self._closed:
-            self._schedule_retry()
+            if self._boot_retry_s and not self._last_timed_out:
+                self._boot_task = asyncio.create_task(self._boot_retries(), name="mcp-gateway-boot")
+            else:
+                self._schedule_retry()
         return ok
 
-    async def attempt(self) -> bool:
+    async def _boot_retries(self) -> bool:
+        """Retry a failed boot start a few times, quickly and quietly; the
+        last miss is logged in full and hands over to the backoff."""
+        try:
+            for i, delay in enumerate(self._boot_retry_s):
+                last = i == len(self._boot_retry_s) - 1
+                logger.info(
+                    "MCP gateway not ready at boot (attempt %d: %s); trying again in %.0fs. "
+                    "config=%s servers=[%s]",
+                    self.attempts, self.last_error, delay, self._config_path, ", ".join(self._servers),
+                )
+                await asyncio.sleep(delay)
+                if self.gateway is not None or self._closed:
+                    return self.gateway is not None
+                if await self.attempt(quiet=not last):
+                    return True
+                if self._last_timed_out:
+                    break
+            if not self._closed:
+                self._schedule_retry()
+            return False
+        except asyncio.CancelledError:
+            raise
+        except BaseException:
+            logger.exception("MCP gateway boot retry failed unexpectedly")
+            if not self._closed:
+                self._schedule_retry()
+            return False
+
+    async def attempt(self, *, quiet: bool = False) -> bool:
         """One start, serialized: a second caller waits for the running one
-        and gets its outcome rather than starting a second child."""
+        and gets its outcome rather than starting a second child. ``quiet``
+        logs a failure as one line, for a boot start that will be retried
+        within seconds."""
         if self.gateway is not None:
             return True
         if self._attempt is not None and not self._attempt.done():
             return await asyncio.shield(self._attempt)
-        self._attempt = asyncio.ensure_future(self._attempt_once())
+        self._attempt = asyncio.ensure_future(self._attempt_once(quiet=quiet))
         return await asyncio.shield(self._attempt)
 
     async def ensure(self) -> MCPGateway | None:
@@ -209,6 +262,16 @@ class GatewaySupervisor:
         out should not wait ten minutes for the next scheduled retry when the
         child may well come up now."""
         if self.gateway is not None or self._closed:
+            return self.gateway
+        if self._boot_task is not None and not self._boot_task.done():
+            # Still coming up after boot: wait for those quick retries (half
+            # a minute at most) rather than fail now.
+            try:
+                await asyncio.shield(self._boot_task)
+            except asyncio.CancelledError:
+                raise
+            except BaseException:
+                logger.exception("MCP gateway boot retries failed unexpectedly")
             return self.gateway
         if (
             self.last_failed_at is not None
@@ -226,7 +289,7 @@ class GatewaySupervisor:
             logger.exception("MCP gateway re-check failed unexpectedly")
         return self.gateway
 
-    async def _attempt_once(self) -> bool:
+    async def _attempt_once(self, *, quiet: bool = False) -> bool:
         async with self._lock:
             if self.gateway is not None:
                 return True
@@ -244,6 +307,11 @@ class GatewaySupervisor:
             except BaseException as exc:
                 self.last_error = _error_text(exc)
                 self.last_failed_at = datetime.now(UTC)
+                self._last_timed_out = isinstance(exc, (TimeoutError, asyncio.TimeoutError))
+                if quiet and not self._last_timed_out:
+                    # Retried within seconds (``_boot_retries``), which says so.
+                    await _close_quietly(gateway)
+                    return False
                 logger.exception(
                     "MCP gateway failed to start within %.0fs (attempt %d); continuing WITHOUT "
                     "MCP tools and without the email poller until a retry succeeds. "
@@ -276,7 +344,8 @@ class GatewaySupervisor:
 
         self.poller_task = asyncio.create_task(run_email_poller(gateway))
         if attempt > 1:
-            logger.warning(
+            # Up within the quick boot retries is the expected path, not news.
+            (logger.info if self._booting() else logger.warning)(
                 "MCP gateway came up on attempt %d; MCP tools and the email poller are on",
                 attempt,
             )
@@ -319,7 +388,7 @@ class GatewaySupervisor:
     async def close(self) -> None:
         """Stop retrying, stop the poller and priming, and close the gateway."""
         self._closed = True
-        for task in (self._retry_task, self._attempt, self.poller_task, self.prime_task):
+        for task in (self._boot_task, self._retry_task, self._attempt, self.poller_task, self.prime_task):
             if task is not None and not task.done():
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
