@@ -1,0 +1,32 @@
+id: erpnext_086
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Purchase Invoice
+prior_turns:
+- page:
+    doctype: Purchase Invoice
+  user: Are there any supplier invoices that don't match what we ordered or received?
+  assistant: 'I checked all 37 submitted supplier invoices, Aug 1 to Nov 2. Two don''t match.
+
+
+    - **Orion Switchgear**: two invoices for the same delivery. One of them is a duplicate.
+
+    - **Vanta Cable Mills**: an invoice bills more than its order and receipt.'
+description: 'Invoice-mismatch step 4 (oe_connector''s help/try-invoice-mismatch.md) in ERPNext''s panel as a demo person, after step 1 counted 37 invoices from Aug 1 to Nov 2. Asked about the last three months, a count of a narrower set says it is part of the earlier one ("34 of those 37 fall in the last three months, Aug 7 to Nov 7"), never a second count with no link to the first. Found in the pilot''s Nov 7, 2026 rerun (OE 27881b1), where step 4 said "34 invoices Aug 7 to Nov 7" after step 1''s "37 invoices Aug 1 to Nov 2".'
+query: Have we been billed twice for anything in the last three months?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  a_count_that_differs_from_the_earlier_37_says_it_is_the_part_in_the_last_three_months: true
+  names_the_period_it_counted_with_its_dates: true
+  finds_the_orion_pair_and_calls_it_a_likely_duplicate: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
