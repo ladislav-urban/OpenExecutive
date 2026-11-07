@@ -1,0 +1,32 @@
+id: erpnext_087
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Purchase Invoice
+prior_turns:
+- page:
+    doctype: Purchase Invoice
+  user: Are there any supplier invoices that don't match what we ordered or received?
+  assistant: 'Two supplier invoices don''t match.
+
+
+    - **Orion Switchgear**: two invoices for the same delivery. One of them is a duplicate.
+
+    - **Vanta Cable Mills**: an invoice bills more than its order and receipt.'
+description: 'Invoice-mismatch step 5 (oe_connector''s help/try-invoice-mismatch.md) in ERPNext''s panel as a demo person: asked who acts on each, the reply names Nina for the suppliers and Ellen for the payments, and says any deadline as what must be done by it, in plain words ("ask Vanta before the invoice falls due"), never a coined phrase. Found in the pilot''s Nov 7, 2026 rerun (OE 27881b1), where step 5 wrote "so the Vanta due date doesn''t pass unmade".'
+query: Who should contact each supplier, and who holds the payments?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- pass unmade
+quality_criteria:
+  names_nina_to_contact_the_suppliers_and_ellen_to_hold_the_payments: true
+  says_each_deadline_as_what_must_be_done_by_it_in_plain_words: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
