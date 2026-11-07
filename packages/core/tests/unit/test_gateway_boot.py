@@ -85,9 +85,13 @@ def _stub(monkeypatch: pytest.MonkeyPatch, gateway: Any) -> list[Any]:
 
 
 def _supervisor(app_state: Any = None, **kw: Any) -> GatewaySupervisor:
+    """A supervisor with short waits; no quick boot retries unless a test
+    passes ``boot_retry_s``."""
+    kw.setdefault("boot_retry_s", ())
+    kw.setdefault("backoff_s", (0.01, 0.02))
+    kw.setdefault("ensure_cooldown_s", 0.0)
     return GatewaySupervisor(
-        config_path=CONFIG, servers=("google_workspace",), app_state=app_state,
-        start_timeout_s=1.0, backoff_s=(0.01, 0.02), ensure_cooldown_s=0.0, **kw,
+        config_path=CONFIG, servers=("google_workspace",), app_state=app_state, start_timeout_s=1.0, **kw,
     )
 
 
@@ -209,7 +213,7 @@ def test_ensure_waits_out_a_fresh_failure(monkeypatch: pytest.MonkeyPatch) -> No
     async def _run() -> tuple[Any, int, str | None, str | None]:
         sup = GatewaySupervisor(
             config_path=CONFIG, servers=("google_workspace",), start_timeout_s=1.0,
-            backoff_s=(3600.0,), ensure_cooldown_s=3600.0,
+            backoff_s=(3600.0,), ensure_cooldown_s=3600.0, boot_retry_s=(),
         )
         assert await sup.start() is False
         got = await sup.ensure()
@@ -232,7 +236,7 @@ def test_module_hooks_reach_the_supervisor(monkeypatch: pytest.MonkeyPatch) -> N
         assert mcp_gateway.gateway_problem() == "the MCP gateway is not running"
         sup = GatewaySupervisor(
             config_path=CONFIG, servers=("google_workspace",), start_timeout_s=1.0, backoff_s=(3600.0,),
-            ensure_cooldown_s=0.0,
+            ensure_cooldown_s=0.0, boot_retry_s=(),
         )
         mcp_gateway.set_gateway_supervisor(sup)
         out: list[Any] = [mcp_gateway.gateway_problem()]
@@ -324,3 +328,105 @@ def test_health_without_a_supervisor() -> None:
 def test_status_serializes_to_json() -> None:
     sup = _supervisor()
     json.dumps(sup.status().as_dict())
+
+
+# -- quick boot retries ----------------------------------------------------------
+
+
+async def _until(cond: Any, limit: int = 400) -> None:
+    for _ in range(limit):
+        if cond():
+            return
+        await asyncio.sleep(0.005)
+
+
+def test_a_boot_start_that_fails_at_once_is_retried_quickly_and_quietly(
+    monkeypatch: pytest.MonkeyPatch, oe_logs: list[str],
+) -> None:
+    """The pilot's demo reset: the child exits 5 s in ("Connection closed")
+    while ERPNext comes back, and is up seconds later. It reads as starting,
+    never down, and logs no error."""
+    gateway = _Flaky(fail_times=2)
+    _stub(monkeypatch, gateway)
+    # The quiet line is INFO; let the collector see it, and put the level back.
+    oe = logging.getLogger("openexecutive")
+    level = oe.level
+    oe.setLevel(logging.INFO)
+
+    async def _run() -> list[str]:
+        sup = _supervisor(MagicMock(), boot_retry_s=(0.01, 0.01, 0.01))
+        assert await sup.start() is False
+        seen = [sup.status().state]
+        assert sup.status().next_retry_at is None
+        assert sup.problem() is not None and "starting" in sup.problem()
+        await _until(lambda: sup.is_up)
+        seen.append(sup.status().state)
+        await sup.close()
+        return seen
+
+    try:
+        assert asyncio.run(_run()) == ["starting", "up"]
+    finally:
+        oe.setLevel(level)
+    assert gateway.starts == 3
+    assert not any("failed to start" in m for m in oe_logs), "no error while the quick retries run"
+    assert sum("not ready at boot" in m for m in oe_logs) == 2
+
+
+def test_boot_retries_that_all_fail_log_once_and_hand_over_to_the_backoff(
+    monkeypatch: pytest.MonkeyPatch, oe_logs: list[str],
+) -> None:
+    gateway = _Flaky(fail_times=3)
+    _stub(monkeypatch, gateway)
+
+    async def _run() -> GatewaySupervisor:
+        sup = _supervisor(MagicMock(), boot_retry_s=(0.01, 0.01), backoff_s=(0.01,))
+        assert await sup.start() is False
+        await _until(lambda: sup.is_up)
+        await sup.close()
+        return sup
+
+    sup = asyncio.run(_run())
+    # Boot, two quick retries (the last one logged in full), then the backoff.
+    assert gateway.starts == 4 and sup.attempts == 4
+    assert sum("failed to start" in m for m in oe_logs) == 1
+
+
+def test_work_that_needs_the_gateway_waits_for_the_boot_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A question in that window gets the gateway, not "MCP is down"."""
+    gateway = _Flaky(fail_times=1)
+    _stub(monkeypatch, gateway)
+
+    async def _run() -> Any:
+        sup = _supervisor(MagicMock(), boot_retry_s=(0.05,), ensure_cooldown_s=30.0)
+        assert await sup.start() is False
+        got = await sup.ensure()
+        await sup.close()
+        return got
+
+    assert asyncio.run(_run()) is gateway
+
+
+def test_a_silent_child_gets_no_quick_retries(monkeypatch: pytest.MonkeyPatch, oe_logs: list[str]) -> None:
+    """A start that ran out its timeout wasn't refused at once; trying it
+    again within seconds would only hold work for another timeout."""
+
+    class _Silent(_Flaky):
+        async def start(self, _path: Path) -> None:
+            self.starts += 1
+            await asyncio.Event().wait()
+
+    gateway = _Silent(fail_times=0)
+    _stub(monkeypatch, gateway)
+
+    async def _run() -> str:
+        sup = _supervisor(MagicMock(), boot_retry_s=(0.01,), backoff_s=(3600.0,))
+        sup._start_timeout_s = 0.05
+        assert await sup.start() is False
+        state = sup.status().state
+        await sup.close()
+        return state
+
+    assert asyncio.run(_run()) == "down"
+    assert gateway.starts == 1
+    assert any("failed to start within" in m for m in oe_logs)
