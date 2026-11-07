@@ -2,7 +2,8 @@
 
 How this fork, `ladislav-urban/OpenExecutive` (Dynocortex's OpenExecutive),
 takes in the 164 commits that `SenteLabsAI/OpenExecutive` has gained since the
-two split. This is a plan only: nothing here has been merged yet.
+two split. The owner accepted this plan on Nov 7, 2026 (see Decisions at the
+end); the sync starts Wed Nov 11.
 
 Measured on Nov 7, 2026, against upstream main `7fbeff93`
 (`SenteLabsAI/OpenExecutive#724`) and this fork's main `aaa81fe0`
@@ -280,9 +281,8 @@ second session speeds up only the oe_connector and eval steps.
   the Apache-2.0 lineage in the public history, as the licence asks. Add a
   `NOTICE` and a README line saying this is Dynocortex's fork of
   `SenteLabsAI/OpenExecutive`. Keep upstream's licence unchanged.
-- **The name.** The fork and upstream would both be "OpenExecutive". Whether
-  the public fork keeps the name or ships under its product name
-  (`OE_PRODUCT_NAME`) is the owner's call (question 6).
+- **The name.** The public fork keeps the name "OpenExecutive", labelled as
+  Dynocortex's fork (decision 6).
 - **Self-hosted CI runners.** This fork's CI runs on two self-hosted runners
   on one WSL host. On a public repo, a pull request from anyone could run
   code on that host. Before going public:
@@ -302,30 +302,25 @@ second session speeds up only the oe_connector and eval steps.
   with upstream plus our work. Publishing before means upstream's 164
   commits arrive later as one large public merge. After is cleaner.
 
-## Questions for the owner
+## Decisions
 
-1. **Merge, in batches, as above?** Recommended: yes. Rebasing would rewrite
-   every SHA the pilot and the evals use and need a force-push. A selective
-   port would lose the merge base for every later sync.
-2. **May the sync land on `main` as a merge commit, not a squash?**
-   Recommended: yes, this once and for each later sync. A squash throws away
-   the merge base. Every other PR stays squash-merged.
-3. **Sync before phase 0's OpenExecutive card work?** Recommended: yes. Start
-   Wed Nov 11, merge about Nov 20, and phase 0's card code starts on the
-   merged `main`, with phase 0 design and oe_connector work in parallel.
-   Otherwise phase 0's card code is written against the old card model and
-   then merged into the new one.
-4. **Keep the Home fields the native Dynocortex Home reads, and adopt Needs
-   you / Done for you later?** Recommended: keep them in the merge. Moving
-   the native Home to the new layout is its own change in oe_connector, with
-   a re-pin.
-5. **Pilot deploy only after the rehearsal on erpnext-9a's bench pair, with
-   your go?** Recommended: yes, and never in the week of a reshoot before
-   the reshoot has run.
-6. **Public name: "OpenExecutive" (with "Dynocortex's fork" in the README)
-   or the product name?** No recommendation; it's a naming and trademark
-   question. The sync doesn't depend on it.
-7. **Publish after the sync, with the runner and history checks done
-   first?** Recommended: yes.
-8. **Sync weekly from then on?** Recommended: yes, the day after each
-   reshoot.
+The owner accepted the recommendations on Nov 7, 2026 (through the
+coordinator, Control Room 132; the name in oe-connector-63's window):
+
+1. **Merge in five batches**, as above. No rebase, no selective port.
+2. **The sync lands on `main` as a merge commit**, this time and at each
+   later sync. Every other PR stays squash-merged.
+3. **The sync goes before phase 0's OpenExecutive card work.** Batches start
+   Wed Nov 11, after Tuesday's reshoot. Phase 0's card code starts on the
+   merged `main`, about Nov 19.
+4. **Home's pinned fields stay** (`tiles`, `needs_you_count`,
+   `dismiss_older`, `quiet_banner`). Moving the native Home to Needs you /
+   Done for you is a later change in oe_connector.
+5. **The pilot gets the sync only after the rehearsal on erpnext-9a's bench
+   pair and the owner's go**, and never in a reshoot week before that
+   reshoot has run.
+6. **The public fork keeps the name "OpenExecutive"**, labelled as
+   Dynocortex's fork of `SenteLabsAI/OpenExecutive`.
+7. **The fork is published after the sync**, once the history audit and the
+   self-hosted runner change are done.
+8. **Syncs are weekly from then on**, the day after each reshoot.
