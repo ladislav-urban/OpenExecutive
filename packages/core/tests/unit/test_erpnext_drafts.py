@@ -401,8 +401,10 @@ def test_a_teammate_or_a_mail_reading_turn_cannot_propose(
     teammate = Session(from_web_chat=True, caller_person_id=roster.teammate)
     pin_turn_delegation(teammate, "make a todo")
     assert "account owner" in _propose(teammate, {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})["error"]
-    monkeypatch.setattr("openexecutive.delegation.settings.turn_read_delegate_mail", lambda: True)
-    out = _propose(_owner_turn(roster), {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
+    owner = _owner_turn(roster)
+    # The turn read the owner's mail: the lock reads the pinned turn's flag.
+    owner.turn_delegation.read_mail = True  # type: ignore[attr-defined]
+    out = _propose(owner, {"why": "x", "doctype": "ToDo", "fields": FOLLOW_UP})
     assert "read the user's own mail" in out["error"]
     assert erp.calls == []
 
