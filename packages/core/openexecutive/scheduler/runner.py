@@ -195,6 +195,19 @@ def _maybe_release_held(now: datetime) -> bool:
         return False
 
 
+def _maybe_clear_answer_check_text(now: datetime) -> int:
+    """Once a day, clear the text of the answer check's change records past
+    their 30 days (orchestrator/answer_check.py), so a quiet install keeps
+    none longer. Never raises."""
+    try:
+        from openexecutive.orchestrator.answer_check import clear_old_changes
+
+        return clear_old_changes(now)
+    except Exception:
+        logger.exception("scheduler: clearing old answer-check text failed")
+        return 0
+
+
 def _maybe_sweep_alerts(now: datetime) -> int:
     """Run the expiry sweep if the interval has elapsed. Returns rows expired.
 
@@ -328,6 +341,8 @@ async def run_scheduler(
             # Alert expiry is pure DB hygiene and must not wait for
             # onboarding or a client rotation — it runs before both gates.
             _maybe_sweep_alerts(now)
+            # Hygiene too: the answer check's old text goes whatever the gates.
+            _maybe_clear_answer_check_text(now)
             if not _company_profile_active():
                 # No active company profile — don't claim or run anything.
                 # Due rows stay 'pending' and fire once onboarding completes.

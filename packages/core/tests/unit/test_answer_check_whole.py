@@ -49,7 +49,7 @@ def test_a_reply_whose_only_failures_are_names_stands(
     turn = _turn()
     assert _ask(CASH_POSITION, "What's our cash position this month, and what's due in?", turn) == CASH_POSITION
     assert not turn.whole_replaced
-    details = audit_rows[0][2]
+    details = [r for r in audit_rows if r[0] == "answer_check"][0][2]
     assert details["whole_reply"] == 0 and details["kept"] == 1 and details["names_flagged"] == 2
 
 

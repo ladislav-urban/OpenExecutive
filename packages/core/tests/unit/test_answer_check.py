@@ -366,7 +366,7 @@ def test_a_misread_figure_is_written_in_by_code(monkeypatch: pytest.MonkeyPatch,
     calls = _rewrites(monkeypatch, "unused")
     assert _check("Northwind Supplies owes $12,900 of $48,200.") == "Northwind Supplies owes $12,500 of $48,200."
     assert calls == []
-    ((kind, summary, details),) = audit_rows
+    ((kind, summary, details),) = [r for r in audit_rows if r[0] == "answer_check"]
     assert kind == "answer_check" and details["substituted"] == 1 and details["changed"] is True
     # Counts only: no figure or text in the row.
     assert "12,900" not in summary + json.dumps(details) and "Northwind" not in summary + json.dumps(details)
