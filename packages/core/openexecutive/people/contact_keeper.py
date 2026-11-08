@@ -329,7 +329,7 @@ def apply_change(change: changes.ContactChange) -> int | None:
             )
         else:
             person = people_store.get_person(change.person_id) if change.person_id is not None else None
-            if person is None or person.archived or person.is_principal:
+            if person is None or not person.active or person.is_principal:
                 return None
             # A team member gets only what their own signature says.
             if person.kind != "contact" and change.field not in TEAM_FIELDS:
@@ -620,9 +620,9 @@ async def _run(client: Any, mode: str, email: str, now: datetime) -> RunResult:
     own.add(changes.norm(get_settings().exec_email_address))
     everyone = people_store.list_people(include_archived=True, include_contacts=True)
     known = {changes.norm(a) for p in everyone for a in [p.email, *p.email_aliases] if a}
-    contacts = [p for p in everyone if p.kind == "contact" and not p.archived and p.id is not None]
+    contacts = [p for p in everyone if p.kind == "contact" and p.active and p.id is not None]
     # Everyone but the principal, for signatures and notes: the team too.
-    people = [p for p in everyone if not p.archived and p.id is not None and not p.is_principal]
+    people = [p for p in everyone if p.active and p.id is not None and not p.is_principal]
     watch = frozenset(changes.norm(a) for p in people for a in [p.email, *p.email_aliases] if a)
     seen = await gather(client, own=own, known=known, now=now, watch=watch, result=result)
 

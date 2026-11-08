@@ -327,7 +327,7 @@ def _check_owner(person_id: int | None) -> None:
 
     person = people_store.get_person(person_id)
     # A goal is owned by someone on the team, never an outside contact.
-    if person is None or person.archived or person.kind != "team":
+    if person is None or not person.active or person.kind != "team":
         raise HTTPException(status_code=422, detail="Unknown owner")
 
 

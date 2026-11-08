@@ -421,6 +421,9 @@ class ChatMessage(BaseModel):
     stopped: bool | None = None
     # A host origin's page wrote this line (a script there may have).
     from_host: bool | None = None
+    # The last reply only: the steps its turn held after an outside read,
+    # still waiting on the caller's go (outside_content.pending_held).
+    held_steps: list[str] | None = None
 
 
 class TargetCustomerData(BaseModel):

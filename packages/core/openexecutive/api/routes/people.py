@@ -140,9 +140,14 @@ def _demo_viewer(request: Request) -> tuple[bool, int | None]:
     from openexecutive.api.routes.chat import _resolve_caller_person_id
     from openexecutive.people.demo import is_demo_person
 
-    if caller_is_principal(request):
-        return False, None
-    viewer = _resolve_caller_person_id(request)
+    try:
+        if caller_is_principal(request):
+            return False, None
+        viewer = _resolve_caller_person_id(request)
+    except Exception:
+        # Who is asking can't be told: shown as to a demo person (fails closed).
+        logger.warning("people: caller check failed — shown as to a demo person", exc_info=True)
+        return True, None
     return (viewer is not None and is_demo_person(viewer)), viewer
 
 

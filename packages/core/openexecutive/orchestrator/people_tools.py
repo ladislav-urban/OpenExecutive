@@ -882,7 +882,7 @@ async def handle_list_people(tool_input: dict[str, Any]) -> str:
     # What is remembered about each person, from the principal's own mail and
     # meetings: on the principal's own turn only, for contacts and team alike.
     notes = contact_notes.get_many(
-        p.id for p in people if p.id is not None and not p.archived and not p.is_principal
+        p.id for p in people if p.id is not None and p.active and not p.is_principal
     ) if include_contacts else {}
     out = [
         {
@@ -1388,7 +1388,7 @@ def _contact_note_answer(person_id: int, target_person_id: int | None) -> str | 
         person = people_store.get_person(person_id)
     except Exception:
         return None
-    if person is None or person.kind != "contact" or person.archived:
+    if person is None or person.kind != "contact" or not person.active:
         return None
     known = contact_notes.for_model(contact_notes.get_many([person_id]).get(person_id))
     return json.dumps(

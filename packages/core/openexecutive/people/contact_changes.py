@@ -387,7 +387,7 @@ def undo(change_id: int, db_path: Path | None = None) -> ContactChange:
         raise UndoRefused("nothing to undo")
     person = people_store.get_person(change.person_id)
     if change.action == "add":
-        if person is not None and person.kind == "contact" and not person.archived:
+        if person is not None and person.kind == "contact" and person.active:
             people_store.archive_person(change.person_id)
         block(change.email, "contact", db_path=db_path)
     elif person is not None and (person.kind == "contact" or change.field == "role" or change.field in DETAIL_FIELDS):

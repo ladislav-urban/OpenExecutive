@@ -102,6 +102,6 @@ def get_contact_note(person_id: int, request: Request) -> contact_notes.ContactN
 
     person = people_store.get_person(person_id)
     note = contact_notes.get(person_id) if person is not None and not person.is_principal else None
-    if note is None or person is None or person.archived:
+    if note is None or person is None or not person.active:
         raise HTTPException(status_code=404, detail="Not found")
     return note

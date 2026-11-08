@@ -728,7 +728,7 @@ async def answer(
     payload = _payload(instance)
     person_id = payload.get("person_id")
     person = get_person(person_id) if isinstance(person_id, int) else None
-    if person is None or person.id is None or person.archived or person.id != instance.approver_person_id:
+    if person is None or person.id is None or not person.active or person.id != instance.approver_person_id:
         raise AnswerRefused(404, "gone", "This invite is no longer here.")
     email = normalize_email(person.email or "")
     refused = caller_refusal(caller, email)

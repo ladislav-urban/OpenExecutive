@@ -73,7 +73,7 @@ def list_goal_views(db_path: Path | None = None) -> list[GoalView]:
             person = people_store.get_person(owner_id, db_path=db_path)
             # Only a current teammate is named: a contact is private to the
             # principal, and these views reach teammates too.
-            on_team = person is not None and not person.archived and person.kind == "team"
+            on_team = person is not None and person.active and person.kind == "team"
             names[owner_id] = person.full_name if on_team and person is not None else ""
         views.append(
             GoalView(

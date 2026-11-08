@@ -681,7 +681,7 @@ async def handle_create_goal(tool_input: dict[str, Any]) -> str:
         from openexecutive.people import store as people_store
 
         owner = people_store.get_person(owner_id)
-        if owner is None or owner.archived or owner.kind != "team":
+        if owner is None or not owner.active or owner.kind != "team":
             return _bad(
                 f"owner_person_id {owner_id} is not on the team — resolve the "
                 "name with list_people, or leave the owner out",
