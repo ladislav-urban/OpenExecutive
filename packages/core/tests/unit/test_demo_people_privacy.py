@@ -228,6 +228,14 @@ def test_the_goals_page_names_no_other_demo_person_nor_the_principal(
     assert "Olivia" not in str(demo) and "Pete" not in str(demo)
     team = client.get("/goals", headers=_as("tom@example.com")).json()
     assert [g["owner_name"] for g in team] == ["Pete Prospect", "Olivia Owner", "Tom Team"]
+    # Someone signed in whom the roster doesn't place sees nothing once there
+    # is a principal; nor does a demo person when the principal's name can't
+    # be checked.
+    assert client.get("/goals", headers=_as("stranger@nowhere.example")).json() == []
+    from openexecutive.api.routes import today
+
+    monkeypatch.setattr(today, "principal_by_role_for", lambda _caller, _value: None)
+    assert client.get("/goals", headers=_as("dana@prospect.example")).json() == []
 
 
 def test_homes_goals_name_no_other_demo_person(roster: SimpleNamespace) -> None:

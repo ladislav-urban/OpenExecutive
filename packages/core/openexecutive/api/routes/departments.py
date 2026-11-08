@@ -426,14 +426,29 @@ def list_all_goals(request: Request) -> list[GoalView]:
 def _goals_for_demo_viewer(request: Request, views: list[GoalView]) -> list[GoalView]:
     """``views`` as the caller may read them. For a demo caller: an owner who
     is another demo person is left out, and the principal is named by role.
-    Fails closed: a roster that can't be read leaves every owner out."""
+    Fails closed: when the roster can't be read, nothing is shown."""
+    from openexecutive.api import caller as api_caller
     from openexecutive.api.routes.chat import _resolve_caller_person_id
     from openexecutive.api.routes.today import principal_by_role_for
     from openexecutive.people.demo import is_demo_person
     from openexecutive.people.store import list_people
 
     caller = _resolve_caller_person_id(request)
-    if caller is None or not is_demo_person(caller):
+    if caller is None:
+        # Someone signed in whom the roster can't place (or can't be read
+        # for) is no one's to show the principal's goals to, once there is a
+        # principal; before one, everyone signed in may see them.
+        if not api_caller.signed_in(request):
+            return views
+        try:
+            from openexecutive.people.store import find_principal_person
+
+            claimed = find_principal_person() is not None
+        except Exception:
+            logger.warning("goals: reading the principal failed — withholding the goals", exc_info=True)
+            return []
+        return [] if claimed else views
+    if not is_demo_person(caller):
         return views
     try:
         others = {
@@ -447,11 +462,8 @@ def _goals_for_demo_viewer(request: Request, views: list[GoalView]) -> list[Goal
         if others is None or view.owner_id in others:
             view.owner_id, view.owner_name = None, ""
     shown = principal_by_role_for(caller, views)
-    if shown is None:
-        for view in views:
-            view.owner_id, view.owner_name = None, ""
-        return views
-    return shown
+    # The principal's name couldn't be checked: their texts could hold it.
+    return [] if shown is None else shown
 
 
 @router.post("/goals", response_model=Goal, status_code=status.HTTP_201_CREATED)
