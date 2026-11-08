@@ -2497,6 +2497,11 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
                 setattr(response, field, empty() if callable(empty) else empty)
     response.people = [p for p in response.people if p.id not in hidden_ids]
     response.awaiting = [a for a in response.awaiting if a.person_id not in hidden_ids]
+    # A goal another demo person owns or heads shows with no owner.
+    for dept in getattr(response, "departments", None) or []:
+        for goal in getattr(dept, "attention_goals", None) or []:
+            if getattr(goal, "owner_id", None) in hidden_ids:
+                goal.owner_id, goal.owner_name = None, ""
     response.in_flight = [i for i in response.in_flight if i.target not in hidden_names]
     response.handled_overnight = [h for h in response.handled_overnight if h.target not in hidden_names]
     # A target that isn't a name they may see (a raw address or chat id,

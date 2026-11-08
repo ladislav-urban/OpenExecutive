@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from openexecutive.departments import registry, store
@@ -405,11 +405,13 @@ def create_goal(slug: str, body: GoalCreate) -> Goal:
 
 
 @router.get("/goals", response_model=list[GoalView])
-def list_all_goals() -> list[GoalView]:
-    """Every goal, with or without a department, with its owner resolved."""
+def list_all_goals(request: Request) -> list[GoalView]:
+    """Every goal, with or without a department, with its owner resolved. A
+    demo person reads no other demo person as an owner and the principal by
+    role only (people.demo), as on Home."""
     from openexecutive.departments.goals import list_goal_views
 
-    return [
+    views = [
         GoalView(
             **v.goal.model_dump(),
             owner_id=v.owner_id,
@@ -418,6 +420,38 @@ def list_all_goals() -> list[GoalView]:
         )
         for v in list_goal_views()
     ]
+    return _goals_for_demo_viewer(request, views)
+
+
+def _goals_for_demo_viewer(request: Request, views: list[GoalView]) -> list[GoalView]:
+    """``views`` as the caller may read them. For a demo caller: an owner who
+    is another demo person is left out, and the principal is named by role.
+    Fails closed: a roster that can't be read leaves every owner out."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.api.routes.today import principal_by_role_for
+    from openexecutive.people.demo import is_demo_person
+    from openexecutive.people.store import list_people
+
+    caller = _resolve_caller_person_id(request)
+    if caller is None or not is_demo_person(caller):
+        return views
+    try:
+        others = {
+            p.id for p in list_people(include_archived=True, include_suspended=True)
+            if p.demo and p.id != caller
+        }
+    except Exception:
+        logger.warning("goals: reading the demo people failed — leaving owners out", exc_info=True)
+        others = None
+    for view in views:
+        if others is None or view.owner_id in others:
+            view.owner_id, view.owner_name = None, ""
+    shown = principal_by_role_for(caller, views)
+    if shown is None:
+        for view in views:
+            view.owner_id, view.owner_name = None, ""
+        return views
+    return shown
 
 
 @router.post("/goals", response_model=Goal, status_code=status.HTTP_201_CREATED)

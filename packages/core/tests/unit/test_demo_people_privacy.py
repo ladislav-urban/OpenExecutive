@@ -193,6 +193,57 @@ def test_right_now_never_names_another_demo_person_either(roster: SimpleNamespac
     assert other.narrative_points == [] and other.narrative_points is not named.narrative_points
 
 
+def _goal_views(roster: SimpleNamespace) -> list[SimpleNamespace]:
+    from openexecutive.departments.models import Goal
+
+    def view(owner: int, name: str, key_result: str) -> SimpleNamespace:
+        goal = Goal(id=owner, period_value="Q4 2026", key_result=key_result, target="10")
+        return SimpleNamespace(goal=goal, owner_id=owner, owner_name=name, department_title=None)
+
+    return [
+        view(roster.pete, "Pete Prospect", "Close the pilot"),
+        # A goal with no owner and no department is the principal's.
+        view(roster.principal, "Olivia Owner", "Olivia Owner's margin plan"),
+        view(roster.teammate, "Tom Team", "Ship the kits"),
+    ]
+
+
+def test_the_goals_page_names_no_other_demo_person_nor_the_principal(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Upstream's GET /goals (merged Nov 2026) names each goal's owner, the
+    principal by default: a demo person reads neither them nor another demo
+    person."""
+    from openexecutive.api.routes import departments as departments_route
+    from openexecutive.departments import goals
+
+    monkeypatch.setattr(goals, "list_goal_views", lambda: _goal_views(roster))
+    app = FastAPI()
+    app.include_router(departments_route.router)
+    client = TestClient(app)
+    demo = client.get("/goals", headers=_as("dana@prospect.example")).json()
+    assert [(g["owner_id"], g["owner_name"]) for g in demo] == [
+        (None, ""), (roster.principal, "The principal"), (roster.teammate, "Tom Team"),
+    ]
+    assert "Olivia" not in str(demo) and "Pete" not in str(demo)
+    team = client.get("/goals", headers=_as("tom@example.com")).json()
+    assert [g["owner_name"] for g in team] == ["Pete Prospect", "Olivia Owner", "Tom Team"]
+
+
+def test_homes_goals_name_no_other_demo_person(roster: SimpleNamespace) -> None:
+    from openexecutive.api.routes import today
+
+    goal = SimpleNamespace(owner_id=roster.pete, owner_name="Pete Prospect")
+    mine = SimpleNamespace(owner_id=roster.teammate, owner_name="Tom Team")
+    response = SimpleNamespace(
+        people=[], awaiting=[], in_flight=[], handled_overnight=[], proposals=[],
+        departments=[SimpleNamespace(attention_goals=[goal, mine])],
+    )
+    today._hide_other_demo_people(response, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert (goal.owner_id, goal.owner_name) == (None, "")
+    assert (mine.owner_id, mine.owner_name) == (roster.teammate, "Tom Team")
+
+
 def test_setup_status_is_refused_to_a_demo_person(roster: SimpleNamespace) -> None:
     from openexecutive.api.routes import setup_status
 
