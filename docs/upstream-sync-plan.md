@@ -343,6 +343,19 @@ second session speeds up only the oe_connector and eval steps.
 
   Each of those is listed too, so the owner can decide whether to keep it,
   reword it or rewrite history before going public.
+
+  The owner's decision (Nov 8, 2026), after the first search: the commit
+  history stays as it is. A pilot host name in one commit message, a
+  personal address in one co-author line and working-session names in a few
+  messages are accepted. The published tree is cleaned instead, in this
+  publishing step, after the sync and together with the full gitleaks run:
+  - this plan's Decisions section reworded, with no decision numbers and no
+    working-session names;
+  - every other file in the tree that names a working session, a decision
+    number, a pilot host or a personal address, reworded or the reference
+    removed;
+  - gitleaks with the extended config run over the tree and the whole
+    history, and anything new it finds listed for the owner first.
 - **Order.** Publishing after the sync means the public fork starts level
   with upstream plus our work. Publishing before means upstream's 164
   commits arrive later as one large public merge. After is cleaner.
