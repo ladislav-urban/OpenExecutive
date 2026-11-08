@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -325,3 +326,21 @@ def test_the_show_tool_is_refused_off_erpnexts_panel(phase2: Any) -> None:
     assert "only a turn from that panel" in json.loads(out)["error"]
     assert forwarded.await_count == 0
     assert phase2.audited[-1]["address"] == "<show-outside-panel>"
+
+
+def test_a_teammates_own_erpnext_read_counts_on_their_chats_next_message(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A teammate's own turn writes its audit rows as theirs (private_to_person);
+    # a channel adapter's next message is a new Session that only the audit
+    # log can tell.
+    from openexecutive.audit import logger as audit_logger
+    from openexecutive.audit.logger import AuditLogger
+    from openexecutive.orchestrator.executive import _conversation_read_erpnext
+
+    log = AuditLogger(db_path=tmp_path / "audit.db")
+    monkeypatch.setattr(audit_logger, "_default_logger", log)
+    log.log("tool_invocation", "mcp:erpnext__get_report Accounts Receivable",
+            session_id="telegram:42", private_to_person=5)
+    assert _conversation_read_erpnext(SimpleNamespace(session_id="telegram:42", read_erpnext=False)) is True
+    assert _conversation_read_erpnext(SimpleNamespace(session_id="telegram:43", read_erpnext=False)) is False
