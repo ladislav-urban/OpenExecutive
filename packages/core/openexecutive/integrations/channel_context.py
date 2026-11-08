@@ -155,7 +155,7 @@ def attach_briefing_context(session: object, *, is_dm: bool, person: object) -> 
     teammate = (
         not getattr(person, "is_principal", False)
         and getattr(person, "kind", "") == "team"
-        and not getattr(person, "archived", False)
+        and getattr(person, "active", False) is True
         and isinstance(getattr(person, "id", None), int)
     )
     if not getattr(person, "is_principal", False) and not teammate:
