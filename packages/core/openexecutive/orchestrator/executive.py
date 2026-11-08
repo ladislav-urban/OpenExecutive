@@ -926,9 +926,13 @@ def _conversation_read_erpnext(session: Any) -> bool:
     try:
         from openexecutive.audit.logger import get_audit_logger
 
+        # Every owner's rows: a teammate's own turn writes its rows as theirs
+        # (private_to_person), which the default owner filter leaves out, so
+        # their channel chat's next message (a new Session) read as unread.
         found = bool(
             get_audit_logger().query(
-                event_type="tool_invocation", session_id=session_id, q="mcp:erpnext__", limit=1
+                event_type="tool_invocation", session_id=session_id, q="mcp:erpnext__", limit=1,
+                all_owners=True,
             )
         )
     except Exception:
