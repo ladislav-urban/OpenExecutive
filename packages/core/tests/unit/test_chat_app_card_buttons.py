@@ -106,6 +106,8 @@ def test_a_slack_tap_anywhere_else_is_ignored(chat_apps: list[Any], monkeypatch:
 
 def test_slack_cards_go_out_as_plain_text_with_buttons(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(channel_cards, "card_text", lambda decision_id: f"*card* {decision_id}")
+    # No ledger here: the labels are the default pair.
+    monkeypatch.setattr(channel_cards, "card_buttons", lambda decision_id: ("Approve", "Skip"))
     client = FakeSlack()
     asyncio.run(slack_bot._send_cards(client, "D1", [3]))
     blocks = client.posts[0]["blocks"]

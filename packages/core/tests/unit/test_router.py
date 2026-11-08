@@ -163,7 +163,7 @@ def test_a_panel_turns_specialists_read_no_standing_facts(monkeypatch) -> None:
     monkeypatch.setattr("openexecutive.orchestrator.router.load_company_stage", lambda: "")
     monkeypatch.setattr("openexecutive.orchestrator.router.load_principal_role", lambda: "")
     monkeypatch.setattr(
-        "openexecutive.memory.facts.render_facts_for_prompt", lambda: "runway: 4 months (per Sam Lee)"
+        "openexecutive.memory.facts.render_facts_for_prompt", lambda **_kw: "runway: 4 months (per Sam Lee)"
     )
 
     def facts_seen(session: Session) -> str:

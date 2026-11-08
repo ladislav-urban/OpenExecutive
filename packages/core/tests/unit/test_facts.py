@@ -866,4 +866,5 @@ def test_both_chat_paths_sort_facts_by_the_message() -> None:
     from openexecutive.orchestrator import executive
 
     for method in (executive.Executive.stream_chat, executive.Executive.stream_chat_with_committee):
-        assert "render_facts_for_prompt, query=user_message" in inspect.getsource(method), method.__name__
+        # With attributed= too: a demo turn reads them without who said them.
+        assert "render_facts_for_prompt(query=user_message" in inspect.getsource(method), method.__name__
