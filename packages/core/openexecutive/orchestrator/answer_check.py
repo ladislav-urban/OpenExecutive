@@ -619,7 +619,12 @@ def _audit_changes(before: str, after: str, counts: _Counts) -> None:
     (never a team member's own row), their text kept CHANGES_KEPT_DAYS days
     (clear_old_changes)."""
     from openexecutive.audit import log_event as audit_log
+    from openexecutive.audit.logger import _mailbox_scope
 
+    if _mailbox_scope():
+        # A turn that read someone's own mailbox is theirs alone, the
+        # principal included: its sentences could quote their mail.
+        return
     changes = changed_sentences(before, after, counts.reasons)
     if not changes:
         return

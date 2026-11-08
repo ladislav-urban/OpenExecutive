@@ -128,3 +128,19 @@ def test_the_scheduler_clears_old_text_once_a_day(audit: AuditLogger, monkeypatc
     assert runner._maybe_clear_answer_check_text(now) == 1
     assert _rows(audit, "answer_check_changes")[0]["full_json"] is None
     assert runner._maybe_clear_answer_check_text(now) == 0  # once a day
+
+
+def test_a_turn_that_read_someones_mailbox_records_no_sentences(
+    audit: AuditLogger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A teammate's own mailbox work is theirs alone, the principal included:
+    # its sentences could quote their mail, so the check records none.
+    monkeypatch.setattr("openexecutive.delegation.settings.turn_touched_delegate_mail", lambda *_a: True)
+    _check("Receivables are $48,200. Northwind Supplies owes $12,900 of it.", monkeypatch)
+    assert _rows(audit, "answer_check_changes") == []
+    # And the logger never makes such a row the principal's, whoever asks.
+    row = audit.log("answer_check_changes", "x", full={"changes": [{"before": "mail"}]}, principal_only=True)
+    with sqlite3.connect(audit._db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        got = conn.execute("SELECT private_to_principal FROM audit_log WHERE id = ?", (row,)).fetchone()
+    assert got["private_to_principal"] == 1  # private as before, and its owner by the usual rule

@@ -249,6 +249,20 @@ def _owner_clause(
     return "(private_to_person IS NULL OR private_to_person = ?)"
 
 
+def _mailbox_scope() -> bool:
+    """Whether rows written now are someone's own mailbox work (a scope
+    ``rows_for_person`` opened, or a turn that read their mail). Fails
+    closed: a check that cannot run answers yes."""
+    try:
+        from openexecutive.audit.context import rows_owner
+        from openexecutive.delegation.settings import turn_touched_delegate_mail
+
+        return rows_owner() is not None or turn_touched_delegate_mail()
+    except Exception:
+        logger.warning("audit.mailbox_scope_check_failed — treated as mailbox work", exc_info=True)
+        return True
+
+
 def _row_owner(private_to_person: int | None) -> int | None:
     """The team member a row written now belongs to alone — see
     ``people_tools.audit_row_owner``. Fails closed: a check that cannot run
@@ -536,6 +550,10 @@ class AuditLogger:
             # ``principal_only``: the principal's alone, whoever's turn wrote
             # it, never a team member's own row (the answer check's record of
             # what it changed: the owner, Nov 8, 2026).
+            # Never over someone's own mailbox work, which is theirs alone,
+            # the principal included: the usual rule then (fails closed).
+            if principal_only and _mailbox_scope():
+                principal_only = False
             owner = None if principal_only else _row_owner(private_to_person)
             is_private = principal_only or (
                 bool(private) or owner is not None or _private_to_principal(summary, details, full)
