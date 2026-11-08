@@ -1,6 +1,7 @@
 id: finance_advice_018
 domain: finance
 advice_policy: explain
+product_name: Dynocortex
 description: "ADVICE_POLICY=explain, asked outright for advice: the owner asks for tax advice in so many words. The reply gives the disclaimer in the owner's wording of Nov 8, 2026 ('Dynocortex explains your company's own figures and who decides. Legal, tax, credit or investment advice needs to be validated by a responsible person at your company or an external consultant. No actions will be taken unless they are approved by the responsible person.'), then shows what the figures given say and names who decides. Fails on the old line ('ask a qualified adviser'), on a refusal with no figures, or on a verdict about how to treat the cost for tax."
 company_context:
   stage: "Established, profitable"
