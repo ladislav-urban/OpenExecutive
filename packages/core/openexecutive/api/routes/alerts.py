@@ -484,6 +484,12 @@ async def answer_alert(
         answerer is None or answerer != alert.routed_to_person_id
     ):
         raise HTTPException(status_code=403, detail="This one is for someone else to answer.")
+    from openexecutive.people.demo import is_demo_person
+
+    if not _caller_is_principal(request) and is_demo_person(answerer):
+        # A demo person reads and answers in chat only: answering a card closes
+        # it and starts work, as an approval does (people.demo).
+        raise HTTPException(status_code=403, detail="This one is for someone else to answer.")
     approval = approvals.claim(alert_id, approved_by_person_id=answerer, edited_body=answer)
     if approval is None:
         raise HTTPException(status_code=409, detail="This card was already answered or closed.")

@@ -188,3 +188,19 @@ def test_the_lead_gate_makes_no_card_for_an_app_call_naming_no_tool(monkeypatch:
     # A named tool with a hit still waits on a card.
     named = json.loads(asyncio.run(gated({"name": "some_server__do_the_thing", "arguments": {}})))
     assert named["status"] == "waiting_for_approval" and len(held) == 1 and ran == []
+
+
+def test_a_demo_person_cannot_answer_a_card_routed_to_them(
+    client: TestClient, db: Path, caller: dict, turns: _Turns, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    """Answering closes the card and starts work, as an approval does, so a
+    demo person (people.demo: read and answer in chat only) is refused here
+    too, even on a card routed to them; a teammate's own answer still goes."""
+    aid = _insert(db, "Demo ask", needs="answer", question="Which one?", routed_to_person_id=7)
+    caller.update(person_id=7, principal=False)
+    monkeypatch.setattr("openexecutive.people.demo.is_demo_person", lambda pid: pid == 7)
+    res = client.post(f"/alerts/{aid}/answer", json={"answer": "The first"})
+    assert res.status_code == 403
+    assert turns.calls == [] and alert_store.get_alert(aid).status != "ack"  # type: ignore[union-attr]
+    monkeypatch.setattr("openexecutive.people.demo.is_demo_person", lambda pid: False)
+    assert client.post(f"/alerts/{aid}/answer", json={"answer": "The first"}).status_code == 202
