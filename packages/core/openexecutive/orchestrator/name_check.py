@@ -309,6 +309,9 @@ def _clean_cell(cell: str) -> str:
     return text.strip().strip("*_`~ ").strip()
 
 
+_TOTAL_LABEL = re.compile(r"(?i)(?:grand\s+|sub-?\s*)?totals?(?:\s*\(.*\))?")
+
+
 def _table_cells(text: str, labels: set[str]) -> list[tuple[int, int, str]]:
     """The cells of each table column whose header is a name label."""
     out: list[tuple[int, int, str]] = []
@@ -338,6 +341,9 @@ def _table_cells(text: str, labels: set[str]) -> list[tuple[int, int, str]]:
             for n, cell in enumerate(cells):
                 if n in columns:
                     value = _clean_cell(cell)
+                    # A total row's label ("Total", "Grand total") names no record.
+                    if _TOTAL_LABEL.fullmatch(value):
+                        value = ""
                     if value and value not in ("-", "—", "–") and not re.fullmatch(r"[\d\s.,%$€£¥₹()+-]+", value):
                         start = text.find(value, cursor, cursor + len(cell) + 1)
                         if start != -1:
