@@ -62,7 +62,7 @@ async def dispatch_slack_dm(alert: Alert) -> bool:
     try:
         principal = find_principal_person()
         person = get_person(alert.routed_to_person_id) if alert.routed_to_person_id is not None else None
-        if person is None or person.archived or is_private_alert(alert):
+        if person is None or not person.active or is_private_alert(alert):
             person = principal
         if person is None:
             return False

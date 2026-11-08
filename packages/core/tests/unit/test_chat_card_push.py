@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import sqlite3
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -349,3 +350,19 @@ def test_a_card_that_cant_be_read_is_not_left_busy(owner: int, monkeypatch: pyte
     monkeypatch.setattr(ledger, "get_decision_instance", locked)
     assert asyncio.run(channel_cards.resolve(card, get_person(owner), approve=False)).startswith("Not done")
     assert card not in channel_cards._resolving
+
+
+@pytest.mark.parametrize("column", ["suspended", "directory_demo"])
+def test_no_card_goes_to_a_suspended_or_demo_approver(owner: int, pushed: list[Any], column: str) -> None:
+    # The card's text goes out whole and outside the outbound guard, so only
+    # someone who still has access gets it, and never a demo person.
+    approver = people_store.upsert_person(full_name="Ben Teammate", email="ben@acme.example", telegram_chat_id="77")
+    with sqlite3.connect(episodic.DB_PATH) as conn:
+        conn.execute(f"UPDATE people SET {column} = 1 WHERE id = ?", (approver,))  # noqa: S608 - fixed names.
+    people_registry.invalidate()
+    _card("department_action", {
+        "tool": "send_email", "summary": "Email the vendor", "requested_by": "Ann", "reason": "it's money",
+        "input": {"to": "vendor@example.com", "body": "Please send the invoice."},
+    }, approver, session="ann-chat")
+    assert asyncio.run(channel_cards.push_waiting(NOW)) == 0
+    assert pushed == []

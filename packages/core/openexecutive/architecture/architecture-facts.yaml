@@ -5626,6 +5626,12 @@ chat:
     by shared words with the message, labelled data and "from before", only
     on the person's own turn: never shared_chat, unattended, from_mcp_client
     or from_host. A mail turn's figures are marked private and stay theirs.
+    Never on a demo turn (read or kept), nor kept from a conversation that
+    read ERPNext (audit/erpnext_reads.py, fail closed), whose figures would
+    reach a later chat with no read_erpnext mark. search_past_chats sets
+    read_erpnext on the turn when a hit's chat read ERPNext; channel cards go
+    only to an active, non-demo approver; an old decision from an ERPNext
+    conversation is copied in proposed (sync batch 3 security review).
     GET / DELETE /memories/worked-out (api/routes/worked_out.py), the
     caller's own only.
   chat_review: |

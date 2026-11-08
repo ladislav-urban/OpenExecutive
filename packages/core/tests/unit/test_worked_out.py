@@ -175,6 +175,48 @@ def test_a_verified_speaker_in_a_channel_others_read_gets_nothing(monkeypatch: p
     assert wo._their_own_turn(_session(shared_chat=True), 1) is False
 
 
+def _started(session: Any, calls: list[tuple[str, str]], monkeypatch: pytest.MonkeyPatch) -> bool:
+    """Whether the pass started for this turn, on a running loop with the
+    feature on (the pass needs both)."""
+    started: list[Any] = []
+
+    async def fake(*a: Any, **kw: Any) -> None:
+        started.append(a)
+
+    monkeypatch.setattr(wo, "_enabled", lambda: True)
+    monkeypatch.setattr(wo, "keep_worked_out", fake)
+
+    async def go() -> None:
+        wo.schedule_worked_out_pass(REPLY, calls, session=session, person_id=1, private=False)
+        await asyncio.sleep(0)
+
+    asyncio.run(go())
+    return bool(started)
+
+
+def test_a_demo_person_keeps_and_reads_no_figures(own_turn: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    # What was read for them can name the principal, and nothing scrubs this block.
+    _keep(1, "Reserves held", "$330,241")
+    monkeypatch.setattr(wo, "_enabled", lambda: True)
+    demo = _session(demo_caller=True, read_erpnext=False)
+    assert wo.build_worked_out_block(1, "how much do we hold in reserves", session=demo) == ""
+    assert wo.build_worked_out_block(1, "how much do we hold in reserves", session=_session()) != ""
+    assert _started(demo, [("read_document", READ)], monkeypatch) is False
+    assert _started(_session(read_erpnext=False), [("read_document", READ)], monkeypatch) is True
+
+
+@pytest.mark.parametrize(("label", "session", "calls"), [
+    ("an ERPNext read this turn", _session(read_erpnext=False), [("erpnext__get_report", READ)]),
+    ("an earlier turn of the conversation read it", _session(read_erpnext=True), [("read_document", READ)]),
+])
+def test_no_figure_is_kept_from_a_conversation_that_read_erpnext(
+    label: str, session: Any, calls: list[tuple[str, str]], own_turn: None, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A figure kept here would come back in a later chat that read no ERPNext.
+    assert _started(session, calls, monkeypatch) is False, label
+    assert _started(_session(read_erpnext=False), [("read_document", READ)], monkeypatch) is True
+
+
 def test_it_can_be_turned_off(monkeypatch: pytest.MonkeyPatch, own_turn: None) -> None:
     _keep(1, "Reserves held", "$330,241")
     monkeypatch.setattr(wo, "_enabled", lambda: False)

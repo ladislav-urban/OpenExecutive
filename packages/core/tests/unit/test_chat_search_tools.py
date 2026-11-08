@@ -194,6 +194,51 @@ def test_a_hit_from_a_mail_private_chat_keeps_the_turn_theirs(roster: SimpleName
     assert session.turn_delegation.touched_mail is True and session.turn_delegation.read_mail is True
 
 
+def _erp_audit(monkeypatch: pytest.MonkeyPatch, read: set[str]) -> None:
+    """An audit log that has ERPNext reads for the conversations in ``read``."""
+    class _Audit:
+        def query(self, **kw: Any) -> list[Any]:
+            assert kw["q"] == "mcp:erpnext__"
+            return [object()] if kw["session_id"] in read else []
+
+    monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", lambda: _Audit())
+
+
+def test_a_hit_from_a_chat_that_read_erpnext_makes_this_one_count_as_reading_it(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chat("erp", roster.teammate, ("assistant", "Acme owes $12,340 on Maple Court."))
+    _erp_audit(monkeypatch, {"erp"})
+    session = _web(roster.teammate)
+    assert _search(session, "maple")["hits"] == 1
+    # Its replies now stay out of what other people's turns read.
+    assert session.read_erpnext is True
+
+
+def test_a_hit_from_a_chat_that_read_no_erpnext_leaves_it_unmarked(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chat("old", roster.teammate, ("assistant", "Maple Court is 52 units."))
+    _erp_audit(monkeypatch, set())
+    session = _web(roster.teammate)
+    assert _search(session, "maple")["hits"] == 1
+    assert session.read_erpnext is False
+
+
+def test_an_unreadable_audit_log_counts_as_having_read_erpnext(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chat("old", roster.teammate, ("assistant", "Maple Court is 52 units."))
+
+    def broken() -> Any:
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", broken)
+    session = _web(roster.teammate)
+    assert _search(session, "maple")["hits"] == 1
+    assert session.read_erpnext is True
+
+
 # --------------------------------------------------------------------------- #
 # Registries and the loop
 # --------------------------------------------------------------------------- #

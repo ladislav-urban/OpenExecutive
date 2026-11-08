@@ -155,3 +155,35 @@ def test_a_reason_alone_is_kept_on_the_decision() -> None:
     assert now.summary == "Raise prices 5%. Costs rose 8%."
     assert episodic.update_decision(now.id, domain="legal", tags="x")
     assert [d.id for d in episodic.list_decisions()] == [now.id], "nothing else is kept, so nothing changes"
+
+
+def test_an_old_decision_from_a_conversation_that_read_erpnext_waits_for_the_ok(db: Path) -> None:
+    # A decision fact is read on everyone's turn, and one taken in a chat that
+    # read ERPNext can hold the principal's ERPNext figures.
+    from openexecutive.audit import get_audit_logger
+
+    get_audit_logger().log("tool_invocation", "mcp:erpnext__get_report Accounts Receivable", session_id="web-erp")
+    _old_decision(db, "Write off the Acme balance of $12,340.", days_ago=5, session_id="web-erp")
+    _old_decision(db, "Move the offsite to March.", days_ago=5, session_id="web-plain")
+
+    facts.ensure_ready(db)
+    [waiting] = [f for f in facts.list_facts(include_inactive=True) if f.status == "proposed"]
+    assert waiting.statement.startswith("Write off the Acme balance")
+    assert [f.statement for f in facts.decision_rows()] == ["Move the offsite to March."]
+    assert "Acme" not in facts.render_facts_for_prompt()
+
+
+def test_an_unreadable_audit_log_holds_every_old_decision_from_a_conversation(
+    db: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken() -> Any:
+        raise RuntimeError("db locked")
+
+    monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", broken)
+    _old_decision(db, "Move the offsite to March.", days_ago=5, session_id="web-plain")
+    _old_decision(db, "Slow hiring through Q3.", days_ago=5)
+    facts.ensure_ready(db)
+    assert [f.statement for f in facts.list_facts(include_inactive=True) if f.status == "proposed"] == [
+        "Move the offsite to March."
+    ]
+    assert [f.statement for f in facts.decision_rows()] == ["Slow hiring through Q3."]

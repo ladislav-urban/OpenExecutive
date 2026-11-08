@@ -965,31 +965,13 @@ def _artifact_row_owner(tool_name: str) -> int | None:
 
 
 def _conversation_read_erpnext(session: Any) -> bool:
-    """Whether this conversation has read ERPNext in any turn: the session's
-    flag, else the audit log's ``mcp:erpnext__`` rows for its id (a channel
-    adapter builds a new Session per message, and a restart rebuilds them
-    all). Its replies can restate the asker's own ERPNext figures, so they
-    stay out of everything other people's turns read. Fails closed: an
-    unreadable audit log answers yes."""
-    if getattr(session, "read_erpnext", False) is True:
-        return True
-    session_id = getattr(session, "session_id", None)
-    if not session_id:
-        return False
-    try:
-        from openexecutive.audit.logger import get_audit_logger
+    """Whether this conversation has read ERPNext in any turn
+    (``audit.erpnext_reads``). Its replies can restate the asker's own
+    ERPNext figures, so they stay out of everything other people's turns
+    read. Fails closed."""
+    from openexecutive.audit.erpnext_reads import conversation_read_erpnext
 
-        found = bool(
-            get_audit_logger().query(
-                event_type="tool_invocation", session_id=session_id, q="mcp:erpnext__", limit=1
-            )
-        )
-    except Exception:
-        logger.warning("couldn't check whether the conversation read ERPNext — keeping it private", exc_info=True)
-        return True
-    if found:
-        session.read_erpnext = True
-    return found
+    return conversation_read_erpnext(session)
 
 
 def _pushback_for_turn(

@@ -753,7 +753,7 @@ def _speakers_own_ref(session: Any, channel: str, channel_ref: str) -> bool:
     except Exception:
         logger.warning("schedule: couldn't read the speaker", exc_info=True)
         return False
-    if person is None or getattr(person, "archived", False):
+    if person is None or getattr(person, "active", False) is not True:
         return False
     own = {
         "email": getattr(person, "email", None),

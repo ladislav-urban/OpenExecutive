@@ -345,6 +345,30 @@ def _line(fig: dict[str, Any]) -> str:
     return no_tags(f"{fig['subject']}: {fig['figure']} (from {fig['source']}, {when})")
 
 
+def _demo(session: Any) -> bool:
+    """Whether this is a demo person's turn. Fails closed."""
+    try:
+        from openexecutive.people.demo import demo_turn
+
+        return demo_turn(session)
+    except Exception:
+        logger.debug("worked_out: couldn't tell whether this is a demo turn", exc_info=True)
+        return True
+
+
+def _read_erpnext(session: Any, calls: list[tuple[str, str]] | None) -> bool:
+    """Whether this turn or its conversation read ERPNext. Fails closed."""
+    try:
+        if any("erpnext__" in str(name) for name, _ in calls or []):
+            return True
+        from openexecutive.audit.erpnext_reads import conversation_read_erpnext
+
+        return conversation_read_erpnext(session)
+    except Exception:
+        logger.debug("worked_out: couldn't tell whether ERPNext was read", exc_info=True)
+        return True
+
+
 def _their_own_turn(session: Any, person_id: int) -> bool:
     """Whether this turn is ``person_id``'s own, on a surface that verified
     it is them, in a conversation nobody else reads: the History notes' rule
@@ -371,7 +395,9 @@ def build_worked_out_block(person_id: int | None, message: str, *, session: Any,
     try:
         if not _enabled() or person_id is None or session is None:
             return ""
-        if not _their_own_turn(session, person_id):
+        # A demo person keeps no figures: what was read for them can name
+        # the principal, and nothing scrubs this block (people.demo).
+        if _demo(session) or not _their_own_turn(session, person_id):
             return ""
         figs = [f for f in figures_for(person_id, message, db_path=db_path) if not _denied(_line(f))]
         if not figs:
@@ -519,7 +545,12 @@ def schedule_worked_out_pass(reply: str, calls: list[tuple[str, str]] | None, *,
             return
         # Kept only from a turn that is theirs alone, so a forged From line
         # or a shared thread can't write into someone's figures.
-        if not _their_own_turn(session, person_id):
+        if _demo(session) or not _their_own_turn(session, person_id):
+            return
+        # Nor from a conversation that read ERPNext: a figure kept here comes
+        # back in a later chat that never read ERPNext, whose reply then
+        # reaches what other people's turns read (audit.erpnext_reads).
+        if _read_erpnext(session, calls):
             return
         snapshot = list(calls or [])
         session_id = str(getattr(session, "session_id", "") or "")

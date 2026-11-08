@@ -246,15 +246,40 @@ _OLD_DECISION_CHANNELS = {
 _COPIED_PREFIX = "decisions:"
 
 
+def _old_decision_sessions_that_read_erpnext(conn: sqlite3.Connection) -> set[str]:
+    """The conversations of the older decisions that read ERPNext
+    (``audit.erpnext_reads``). A decision taken there can hold the
+    principal's ERPNext figures, and a decision fact is read on everyone's
+    turn, so it is copied in ``proposed``: not read until the principal
+    OKs it. An unreadable audit log counts each one as having read it."""
+    has_table = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='decisions'"
+    ).fetchone()
+    if not has_table:
+        return set()
+    if "session_id" not in {r[1] for r in conn.execute("PRAGMA table_info(decisions)").fetchall()}:
+        return set()
+    from openexecutive.audit.erpnext_reads import session_read_erpnext
+
+    sessions = {
+        str(r[0]) for r in conn.execute("SELECT DISTINCT session_id FROM decisions").fetchall() if r[0]
+    }
+    return {sid for sid in sessions if session_read_erpnext(sid)}
+
+
 def _copy_old_decisions(conn: sqlite3.Connection) -> None:
     """Copy the rows of the older ``decisions`` table in as decision facts,
     once per database (a ``facts_meta`` marker, set in the same
     transaction). Each keeps its date, department, outcome and conversation;
     a row's own subject key (``decision <id>``) means none supersedes
-    another. One from mail or a chat app waits for the principal's OK."""
+    another. One from mail or a chat app, or from a conversation that read
+    ERPNext, waits for the principal's OK."""
     conn.execute("CREATE TABLE IF NOT EXISTS facts_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
     if conn.execute("SELECT 1 FROM facts_meta WHERE key=?", (_OLD_DECISIONS_COPIED,)).fetchone():
         return
+    # Asked of the audit log before the write lock is taken, which that
+    # read would otherwise wait on.
+    erp_sessions = _old_decision_sessions_that_read_erpnext(conn)
     conn.execute("BEGIN IMMEDIATE")
     try:
         if conn.execute("SELECT 1 FROM facts_meta WHERE key=?", (_OLD_DECISIONS_COPIED,)).fetchone():
@@ -283,7 +308,8 @@ def _copy_old_decisions(conn: sqlite3.Connection) -> None:
                 (
                     subject, f"decision {d['id']}", statement,
                     _COPIED_PREFIX + (prefix if from_channel else ""),
-                    session or None, d["timestamp"], "proposed" if from_channel else "active",
+                    session or None, d["timestamp"],
+                    "proposed" if from_channel or session in erp_sessions else "active",
                     (d["department"] if "department" in keys else "") or "",
                     _clean(d["outcome"], STATEMENT_MAX),
                 ),

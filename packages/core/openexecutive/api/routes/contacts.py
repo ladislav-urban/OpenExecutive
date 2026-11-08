@@ -152,7 +152,7 @@ def get_last_contacts(request: Request) -> LastContactsOut:
     ids = [
         p.id
         for p in people_store.list_people(include_contacts=True)
-        if p.id is not None and not p.is_principal and not p.archived
+        if p.id is not None and not p.is_principal and p.active
     ]
     out = [lc for note in contact_notes.get_many(ids).values() if (lc := last_contact(note)) is not None]
     return LastContactsOut(people=sorted(out, key=lambda lc: lc.person_id))
@@ -174,7 +174,7 @@ def _note_person(person_id: int) -> None:
     from openexecutive.people import store as people_store
 
     person = people_store.get_person(person_id)
-    if person is None or person.is_principal or person.archived:
+    if person is None or person.is_principal or not person.active:
         raise HTTPException(status_code=404, detail="Not found")
 
 

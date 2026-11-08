@@ -458,7 +458,9 @@ async def push_waiting(now: datetime | None = None, *, db_path: Path | None = No
         if card.id in done:
             continue
         person = get_person(card.approver_person_id) if card.approver_person_id is not None else principal
-        if person is None or person.id is None or person.archived:
+        # Only someone who still has access, and never a demo person: the
+        # card's text goes out whole, outside the outbound guard.
+        if person is None or person.id is None or not person.active or person.demo:
             continue
         if per_person.get(person.id, 0) >= PUSH_PER_PASS:
             continue

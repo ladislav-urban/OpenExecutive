@@ -15,8 +15,8 @@ from openexecutive.people import store as people_store
 from openexecutive.scheduler import runner
 from openexecutive.scheduler.runner import PrincipalDelivery
 
-OWNER = SimpleNamespace(id=1, full_name="Olivia Owner", archived=False)
-BEN = SimpleNamespace(id=2, full_name="Ben Teammate", archived=False)
+OWNER = SimpleNamespace(id=1, full_name="Olivia Owner", archived=False, active=True)
+BEN = SimpleNamespace(id=2, full_name="Ben Teammate", archived=False, active=True)
 
 
 def _alert(severity: str = "high", routed: int | None = None, tags: list[str] | None = None) -> Alert:

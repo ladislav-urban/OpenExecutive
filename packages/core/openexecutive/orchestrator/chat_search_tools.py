@@ -103,6 +103,13 @@ def render_hits(hits: list[dict[str, Any]]) -> str:
     return "<past_chats>\n" + "\n".join(lines) + "\n</past_chats>"
 
 
+def _any_read_erpnext(session_ids: set[str]) -> bool:
+    """Whether any of these conversations read ERPNext. Fails closed."""
+    from openexecutive.audit.erpnext_reads import session_read_erpnext
+
+    return any(session_read_erpnext(sid) for sid in session_ids if sid) or "" in session_ids
+
+
 async def handle_search_past_chats(tool_input: dict[str, Any]) -> str:
     from openexecutive.memory.session_store import search_past_messages
     from openexecutive.orchestrator.history_tools import _keep_private
@@ -121,6 +128,14 @@ async def handle_search_past_chats(tool_input: dict[str, Any]) -> str:
         return json.dumps({"hits": 0, "result": "No earlier chat matches. Look it up in the source."})
     if any(hit["mail_private"] for hit in hits) and not _keep_private(session, person):
         return _error("I couldn't keep this conversation private, so I didn't search your chats. Try again.")
+    # A hit from a chat that read ERPNext can carry its figures into this one:
+    # this conversation then counts as having read ERPNext, so its replies
+    # stay out of what other people's turns read (audit.erpnext_reads).
+    if session is not None and _any_read_erpnext({str(hit.get("session_id") or "") for hit in hits}):
+        try:
+            session.read_erpnext = True
+        except Exception:
+            return _error("I couldn't keep this conversation private, so I didn't search your chats. Try again.")
     return json.dumps({
         "hits": len(hits),
         "result": render_hits(hits),

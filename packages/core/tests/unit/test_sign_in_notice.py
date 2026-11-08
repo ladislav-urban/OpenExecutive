@@ -20,7 +20,7 @@ def sent(monkeypatch: pytest.MonkeyPatch) -> list[tuple[Any, str]]:
     from openexecutive.scheduler import runner
 
     out: list[tuple[Any, str]] = []
-    person = SimpleNamespace(id=7, archived=False, is_principal=True)
+    person = SimpleNamespace(id=7, archived=False, active=True, is_principal=True)
     monkeypatch.setattr(people_store, "find_person_by_email", lambda email: person if email == OWNER else None)
 
     async def deliver(who: Any, text: str, *, label: str = "") -> Any:

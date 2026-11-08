@@ -104,7 +104,7 @@ async def _send(email: str, db_path: Path | None) -> None:
 
     try:
         person = find_person_by_email(email)
-        if person is None or person.archived:
+        if person is None or not person.active:
             return
         rows = private_rows() if person.is_principal else rows_for_person(person.id)
         with rows:
