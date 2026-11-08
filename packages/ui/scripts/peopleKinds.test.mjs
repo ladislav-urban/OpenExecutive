@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canClaimPrincipal,
   defaultKindForTab,
   defaultPeopleTab,
   effectiveKind,
@@ -94,4 +95,12 @@ test("a suspended person's card says so, and who suspended them", () => {
     "Suspended (directory)",
   );
   assert.equal(personCardStatus({ ...base, suspended: false }, "2026-10-03").label, "On leave until 2026-10-10");
+});
+
+test("This is me is offered only while nobody is the principal", () => {
+  assert.equal(canClaimPrincipal([TEAMMATE, CLIENT], false), true);
+  assert.equal(canClaimPrincipal([], false), true);
+  assert.equal(canClaimPrincipal(ROSTER, false), false);
+  // Not while the list is loading: it may hold the principal.
+  assert.equal(canClaimPrincipal([], true), false);
 });

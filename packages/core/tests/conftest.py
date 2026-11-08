@@ -282,3 +282,15 @@ def pytest_terminal_summary(terminalreporter) -> None:  # type: ignore[no-untype
         "its own DB. Its rows can break other modules' tests in a full run. Find it "
         "with a serial run of the modules you changed, then delete the file."
     )
+
+
+@pytest.fixture(autouse=True)
+def _email_replies_in_tmp(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """The replies the email poller mails are kept per thread
+    (integrations.email_replies). Keep them in this test's own file, so one
+    test's thread never shows up in another's turn, and nothing is written
+    to ./episodic_memory.db."""
+    monkeypatch.setattr(
+        "openexecutive.integrations.email_replies.DB_PATH_OVERRIDE", tmp_path / "email_replies.db"
+    )
+    yield

@@ -38,6 +38,22 @@ export interface ChatDraft {
   subject: string;
   // The start of the draft's text, as saved.
   preview: string;
+  // Earlier drafts' rows this one replaced (written again in the same reply).
+  replaces?: number[];
+}
+
+// A chat draft as its card shows it now (GET /delegation/drafts/{row}):
+// waiting in your Drafts ("open", with who it goes to and its words),
+// changed in your mailbox since, sent, replaced by a newer version, or gone.
+export interface ChatDraftState {
+  status: "open" | "changed" | "sent" | "replaced" | "gone";
+  to: string[];
+  cc: string[];
+  subject: string;
+  body: string;
+  // After a change: the sentences that are new, and a line on what changed.
+  changed_sentences: string[];
+  note: string;
 }
 
 // Names the round of tool calls currently in flight, so the progress line can
@@ -2854,6 +2870,45 @@ export async function sendChatDraft(row: number, threadMovedOn = false): Promise
   throw new ReplySendError(message, code);
 }
 
+// The draft as it is now. null when the backend predates it (404 on the
+// route itself) or it isn't yours.
+export async function getChatDraft(row: number, signal?: AbortSignal): Promise<ChatDraftState | null> {
+  const res = await fetch(`${API_BASE}/delegation/drafts/${row}`, { signal });
+  if (res.status === 403 || res.status === 404) return null;
+  if (!res.ok) throw await delegationError(res, "Couldn't read the draft.");
+  return (await res.json()) as ChatDraftState;
+}
+
+async function chatDraftError(res: Response, fallback: string): Promise<ReplySendError> {
+  const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  const detail = (body.detail && typeof body.detail === "object" ? body.detail : {}) as Record<string, unknown>;
+  const message = typeof detail.message === "string" ? detail.message : fallback;
+  return new ReplySendError(message, typeof detail.code === "string" ? detail.code : "error");
+}
+
+// Your own words in the draft, here and in your Drafts. Sends nothing.
+export async function setChatDraftText(row: number, text: string): Promise<ChatDraftState> {
+  const res = await fetch(`${API_BASE}/delegation/drafts/${row}/text`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw await chatDraftError(res, "Couldn't save your change.");
+  return (await res.json()) as ChatDraftState;
+}
+
+// Rewrite the draft the way you asked ("Make it shorter", or your own
+// words), here and in your Drafts. Sends nothing.
+export async function changeChatDraft(row: number, text: string): Promise<ChatDraftState> {
+  const res = await fetch(`${API_BASE}/delegation/drafts/${row}/change`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw await chatDraftError(res, "Couldn't change the email.");
+  return (await res.json()) as ChatDraftState;
+}
+
 // A card of actions the Executive suggested from your email (Act as me),
 // yours alone. Nothing on it happens until you approve it here: Approve
 // (POST /decisions/{id}/approve) does the ticked actions exactly as shown;
@@ -5610,6 +5665,9 @@ export interface ProposalItem {
   // /decisions endpoints (which book/cancel server-side) instead of the
   // ack-and-handoff-to-chat flow. Null/absent for ordinary alert proposals.
   decision_instance_id?: number | null;
+  // Approvals one request held together (same chat turn, same kind of step)
+  // share this key; Needs you shows them as one card. Null on a lone card.
+  group_key?: string | null;
   // A scheduled run that failed: the run its Run again queues once more.
   failed_run_id?: string | null;
   // Set when the card is a roster request ("who is this new sender?"): the
@@ -5635,6 +5693,12 @@ export interface ProposalItem {
   superseded_count?: number;
   // Registry workflow the review suggested as the next step ('' = none).
   suggested_workflow?: string;
+  // What the card needs from its reader: "answer" (a box on the card),
+  // "choice" (a button per choice), "ok" (Approve), "fyi" (Got it). '' or
+  // absent keeps the card's own buttons.
+  needs?: CardNeeds;
+  question?: string;
+  choices?: string[];
   // Drafted artifacts only: the format (body is already Markdown for every
   // format) and, for "link" artifacts, the URL in the connected app.
   artifact_format?: ArtifactFormat | null;
@@ -5805,6 +5869,43 @@ export interface PointSource {
   alert_id?: number | null;
 }
 
+// One row of Home's Right now list: what it is, who it is from or to, its
+// subject, the newest activity on it (ISO UTC), why it is listed, and what
+// Home can open from it. `key` is what dismissRightNowRow takes.
+// One row of Home's Done for you (GET /today `done_for_you`): a card the
+// viewer approved (`kind` "approval", one row per card, its status changing
+// in place) or something the Executive did on its own in the last day.
+export interface DoneRow {
+  key: string;
+  kind: string;
+  title: string;
+  detail: string;
+  status: "working" | "done" | "failed";
+  at: string;
+  session_id?: string | null;
+  alert_id?: number | null;
+  approval_id?: number | null;
+  artifact_id?: string | null;
+}
+
+export interface RightNowRow {
+  key: string;
+  kind: "mail" | "draft" | "chat";
+  who: string;
+  subject: string;
+  at: string;
+  note?: string;
+  source?: {
+    kind: "mail" | "alert" | "link";
+    message_id?: string | null;
+    thread_id?: string | null;
+    decision_id?: number | null;
+    alert_id?: number | null;
+    url?: string | null;
+    app?: string | null;
+  } | null;
+}
+
 export interface MorningBriefItem {
   at: string;
   text: string;
@@ -5843,6 +5944,10 @@ export interface Today {
   // own inbox from people they don't deal with. Optional for older API builds.
   narrative_checked_at?: string | null;
   inbox_also?: string[];
+  // The owner's Right now list (empty for anyone else, and from older API builds).
+  right_now?: RightNowRow[];
+  // Done for you: what the Executive did or is doing for the viewer today.
+  done_for_you?: DoneRow[];
   inbox_also_total?: number;
   // The owner's own: today's delivered morning brief and the meetings still
   // ahead today.
@@ -5926,13 +6031,13 @@ export async function markTodaySeen(): Promise<string | null> {
   return body.seen_at ?? null;
 }
 
-// The reader cleared a Right now point: gone for the rest of the day, and
-// the Executive doesn't raise it again. True when it was kept.
-export async function dismissTodayPoint(text: string): Promise<boolean> {
-  const res = await fetch(`${API_BASE}/today/dismiss`, {
+// The owner cleared a Right now row: gone until something newer lands on it.
+// True when it was kept.
+export async function dismissRightNowRow(key: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/today/right-now/dismiss`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ key }),
   });
   if (!res.ok) return false;
   const body = (await res.json()) as { dismissed?: boolean };
@@ -6105,6 +6210,14 @@ export interface ActivityItem {
 
 export interface ActivityResponse {
   items: ActivityItem[];
+}
+
+// The lines grounding left out of the principal's briefs in the last day
+// (Memory, What it does). Anyone else gets an empty list.
+export async function getHeldBack(signal?: AbortSignal): Promise<HeldBackItem[]> {
+  const res = await fetch(`${API_BASE}/today/held-back`, { signal });
+  if (!res.ok) throw new Error(`Failed to load what was left out of your brief: ${res.status}`);
+  return res.json();
 }
 
 export async function getActivity(limit: number = 20): Promise<ActivityResponse> {
@@ -6607,6 +6720,34 @@ export async function approveAlert(alertId: number, editedBody?: string): Promis
     throw new Error(`Failed to approve: ${res.statusText}${text ? ` — ${text}` : ""}`);
   }
   return res.json();
+}
+
+// What a Needs you card asks of its reader (ProposalItem.needs).
+export type CardNeeds = "" | "answer" | "choice" | "ok" | "fyi";
+
+// Answer a card that asks something; the Executive carries on
+// with the work it was for in a new chat (like an approval).
+export async function answerAlert(alertId: number, answer: string): Promise<AlertApproval> {
+  const res = await fetch(`${API_BASE}/alerts/${alertId}/answer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ answer }),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(text ? detailOf(text) : `Couldn't send your answer: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+function detailOf(text: string): string {
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (typeof parsed.detail === "string") return parsed.detail;
+  } catch {
+    // not JSON: the text itself
+  }
+  return text;
 }
 
 export async function getAlertApproval(approvalId: number): Promise<AlertApproval> {

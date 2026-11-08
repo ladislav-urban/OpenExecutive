@@ -31,6 +31,7 @@ from openexecutive.audit import log_event as audit_log
 from openexecutive.audit import principal_turn_rows, rows_for_person
 from openexecutive.integrations.attachments import build_attachment_output
 from openexecutive.orchestrator import outside_content
+from openexecutive.orchestrator.action_chips import drop_replaced
 from openexecutive.orchestrator.answer_sources import TurnSources
 from openexecutive.orchestrator.debug_events import DebugCollector
 from openexecutive.orchestrator.turn_inbox import TurnInbox
@@ -1169,6 +1170,7 @@ async def _chat_turn(
     erpnext_page: ErpnextPage | None = None,
     card_id: int | None = None,
     host_slot: host_limit.HostSlot | None = None,
+    background: bool = False,
 ) -> StreamingResponse:
     """Shared streaming-chat handler for both the JSON and multipart routes.
 
@@ -1753,9 +1755,13 @@ async def _chat_turn(
         timed_out = False
         client_disconnected = False
         stopped = False
+        # Broadcast to pages that have the chat open: a shared chat's others,
+        # and the owner watching a turn run on the server with no page of its
+        # own (``start_background_turn``: an approved card's Watch).
+        live_turn = session.shared_chat or background
 
         try:
-            if session.shared_chat:
+            if live_turn:
                 chat_live.turn_started(
                     session.session_id,
                     turn_key=live_key,
@@ -2003,7 +2009,7 @@ async def _chat_turn(
                                 "content": full_response,
                                 "session_id": session.session_id,
                             }
-                            if session.shared_chat:
+                            if live_turn:
                                 chat_live.turn_event(session.session_id, live_key, replaced_evt)
                             yield f"data: {json.dumps(replaced_evt)}\n\n"
                             continue
@@ -2022,7 +2028,7 @@ async def _chat_turn(
                                 "content": text,
                                 "session_id": session.session_id,
                             }
-                            if session.shared_chat:
+                            if live_turn:
                                 chat_live.turn_event(session.session_id, live_key, text_evt)
                             yield f"data: {json.dumps(text_evt)}\n\n"
                         if item == Executive._THINKING:
@@ -2030,14 +2036,16 @@ async def _chat_turn(
                                 "type": "thinking",
                                 "session_id": session.session_id,
                             }
-                            if session.shared_chat:
+                            if live_turn:
                                 chat_live.turn_event(session.session_id, live_key, live_evt)
                             yield f"data: {json.dumps(live_evt)}\n\n"
                         elif not is_text:
                             if isinstance(item, dict) and item.get("type") == "action_taken":
-                                action_chips.append(item)
+                                # A draft written again in this reply replaces
+                                # the earlier one's chip and card.
+                                action_chips[:] = drop_replaced([*action_chips, item])
                             if (
-                                session.shared_chat
+                                live_turn
                                 and isinstance(item, dict)
                                 and item.get("type") in _LIVE_STEPS
                             ):
@@ -2082,7 +2090,7 @@ async def _chat_turn(
                 if not client_disconnected:
                     chunk_count += 1
                     tail_evt = {"type": "chunk", "content": tail, "session_id": session.session_id}
-                    if session.shared_chat:
+                    if live_turn:
                         chat_live.turn_event(session.session_id, live_key, tail_evt)
                     yield f"data: {json.dumps(tail_evt)}\n\n"
 
@@ -2101,7 +2109,7 @@ async def _chat_turn(
                         "content": full_response,
                         "session_id": session.session_id,
                     }
-                    if session.shared_chat:
+                    if live_turn:
                         chat_live.turn_event(session.session_id, live_key, replaced_evt)
                     yield f"data: {json.dumps(replaced_evt)}\n\n"
 
@@ -2297,7 +2305,7 @@ async def _chat_turn(
                 # conversation running past the lock's deadline mustn't
                 # inherit it from the cached session.
                 session.host_page = False
-            if session.shared_chat:
+            if live_turn:
                 # Saved by now (every path persists before it ends): the
                 # other pages read the chat again.
                 chat_live.turn_ended(session.session_id, live_key)
@@ -2434,6 +2442,7 @@ async def start_background_turn(
             attachment_blocks=None,
             request=_StaysConnected(request.scope, request.receive),
             memory_text=memory_text,
+            background=True,
         )
     except BaseException:
         _release_background_slot(owner)

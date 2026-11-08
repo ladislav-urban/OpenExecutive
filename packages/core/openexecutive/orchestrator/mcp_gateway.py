@@ -4470,6 +4470,12 @@ class MCPGateway:
                     session, tool_name, arguments, self._discover, tapped=_tapped_drive_admits(tool_input),
                 )
                 if blocked is not None:
+                    # A call built in code (save_my_email_attachment) gets the
+                    # refusal itself: its caller recovers (a remembered folder
+                    # it can't reach is forgotten and made again), and Approve
+                    # on a card would make a bare copy it never records or shares.
+                    if code_built:
+                        return blocked
                     return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
         if tool_name in _GATED_GMAIL_TOOLS:
             if not relaxed:
@@ -4545,6 +4551,9 @@ class MCPGateway:
                 session, tool_name, normalized, arguments, self._discover
             )
             if blocked is not None:
+                # As for Google: a call built in code gets the refusal itself.
+                if code_built:
+                    return blocked
                 return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
         if normalized == _M365_MOVE_TOOL and not relaxed:
             blocked = _check_m365_move_destination(tool_name, arguments)
@@ -4818,9 +4827,10 @@ MCP_TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_tools",
         "description": (
-            "Search the MCP tool catalog by natural language query. "
-            "Returns ranked tool names and descriptions. "
-            "Call this first to discover what external tools are available before calling them."
+            "Search the connected tool servers' catalog (mail, calendar, documents and the like) "
+            "by natural language query. Returns ranked tool names and descriptions. Call this "
+            "to find a server's tool before calling it. It does not cover the tool groups "
+            "open_tools opens: look there too before saying a tool isn't available."
         ),
         "input_schema": {
             "type": "object",
