@@ -166,6 +166,33 @@ def test_homes_other_lists_name_no_other_demo_person(roster: SimpleNamespace) ->
     assert [c.routed_to_person_id for c in response.proposals] == [roster.dana]  # not Pete's own card
 
 
+def test_right_now_never_names_another_demo_person_either(roster: SimpleNamespace) -> None:
+    """Home's Right now card shows the header split into its lead, points and
+    move (upstream's Home, merged Nov 2026): when the header names another
+    demo person, none of the split is shown either."""
+    from openexecutive.api.routes import today
+
+    def home(text: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            people=[], awaiting=[], in_flight=[], handled_overnight=[], proposals=[],
+            narrative=text, narrative_lead=text, narrative_points=[SimpleNamespace(text=text)],
+            narrative_move="Call them.",
+        )
+
+    named = home("Pete Prospect asked about the Q3 margin.")
+    today._hide_other_demo_people(named, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert (named.narrative, named.narrative_lead, named.narrative_points, named.narrative_move) == (
+        None, None, [], None,
+    )
+    plain = home("The Q3 margin fell two points.")
+    today._hide_other_demo_people(plain, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert plain.narrative_lead == "The Q3 margin fell two points." and plain.narrative_move == "Call them."
+    # A fresh list each time, never one shared between responses.
+    other = home("Pete Prospect again.")
+    today._hide_other_demo_people(other, caller=roster.dana, principal=False)  # type: ignore[arg-type]
+    assert other.narrative_points == [] and other.narrative_points is not named.narrative_points
+
+
 def test_setup_status_is_refused_to_a_demo_person(roster: SimpleNamespace) -> None:
     from openexecutive.api.routes import setup_status
 

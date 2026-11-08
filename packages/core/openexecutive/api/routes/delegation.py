@@ -45,6 +45,8 @@ Routes:
   GET    /delegation/replies      — the reply cards waiting for the caller
                                     (from the database; no Gmail call)
   PUT    /delegation/replies/{id}/text — {text}: change a reply's words
+  PUT    /delegation/replies/{id}/recipients — {everyone}: the sender only,
+         or everyone the email went to
                                     before Send, on its card and in their
                                     Drafts when it is there too. Needs a
                                     caller the API knows is that person, like
@@ -66,14 +68,15 @@ Routes:
                                     turning it on needs Draft replies to my
                                     inbox on (409). Turning the inbox watcher
                                     off turns it off too
-  PUT    /delegation/training     — {replies?, follow_ups?, actions?, drafts?}:
-                                    put Act as me's settings in or out of
-                                    training (delegation.training). Needs a
+  PUT    /delegation/training     — {replies?, follow_ups?, actions?, drafts?,
+                                    actions_on?}: put Act as me's settings in
+                                    or out of training, or Suggested actions
+                                    On (delegation.training). Needs a
                                     caller the API knows is that person, but
                                     for a change that only holds more back
   DELETE /delegation/learned/{id} — forget one thing it learned in training
-                                    (Send + allow, Approve + allow, an
-                                    example). The caller's own only
+                                    (the "on its own next time" tick on a
+                                    card, or an example). The caller's own only
   PUT    /delegation/take-the-lead — {enabled}: Take the lead as you, the
                                     owner's alone for now: Handle it for
                                     me's setting gives way to the added rules
@@ -82,9 +85,16 @@ Routes:
   GET|POST /delegation/take-the-lead/rules, DELETE …/rules/{id}
                                   — the caller's own rules for it (removing
                                     one needs the same provable caller)
+  GET    /delegation/invites      — the meeting invite cards waiting for the
+                                    caller (delegation.invites; from the
+                                    database, no calendar call). Accept and
+                                    Decline are POST /decisions/{id}/approve
+                                    with edits.answer
   GET    /delegation/handled      — the caller's replies sent on its own in
                                     the last 7 days, with the questions each
-                                    left for them
+                                    left for them, and the invites it
+                                    accepted on its own (source "invite",
+                                    with a one-line summary)
   GET    /delegation/voice        — "How I write"
   POST   /delegation/voice/learn  — learn it from the caller's sent mail (409
                                     in_progress / locked / too_soon /
@@ -176,8 +186,17 @@ def _waiting_actions(person: Person) -> int:
     return len(open_cards(person.id)) if person.id is not None and can_delegate(person) else 0
 
 
+def _waiting_invites(person: Person) -> int:
+    """Meeting invite cards waiting for ``person``, as GET /delegation/invites
+    lists them (the live ones: not past their meeting or the card's TTL)."""
+    from openexecutive.delegation.invites import cards
+
+    return len(cards(person)) if person.id is not None and can_delegate(person) else 0
+
+
 register_waiting_cards("delegation_replies", _waiting_replies)
 register_waiting_cards("delegation_actions", _waiting_actions)
+register_waiting_cards("delegation_invites", _waiting_invites)
 
 # Gmail status -> the 409 code a caller gets when it blocks turning it on.
 _BLOCKING_CODES = BLOCKING_CODES
@@ -240,6 +259,8 @@ class TrainingOut(BaseModel):
     follow_ups: bool
     actions: bool
     drafts: bool
+    # Suggested actions On: carried out with no allow (false while in training).
+    actions_on: bool = False
     # The caller's own, newest first.
     learned: list[LearnedOut] = []
 
@@ -251,6 +272,7 @@ class TrainingUpdate(BaseModel):
     follow_ups: bool | None = None
     actions: bool | None = None
     drafts: bool | None = None
+    actions_on: bool | None = None
 
 
 class HandleItOut(BaseModel):
@@ -342,8 +364,12 @@ class HandledReplyOut(BaseModel):
     body: str
     open_questions: list[str]
     gmail_link: str
-    # "follow_up" for a follow-up to the caller's own unanswered email.
+    # "follow_up" for a follow-up to the caller's own unanswered email;
+    # "invite" for a meeting invite it accepted on its own.
     source: str = ""
+    # What it did, in one line, for an invite: "Accepted Dana's Pilot
+    # review, Wed 21 Oct, 14:30".
+    summary: str = ""
 
 
 class HandledOut(BaseModel):
@@ -430,6 +456,12 @@ class ReplyCardOut(BaseModel):
     questions_settled: bool = False
     # POST .../answer only: the sentences its rewrite added or changed.
     changed_sentences: list[str] = Field(default_factory=list)
+    # Everyone else the email went to: Reply to: Everyone adds them. Empty
+    # when there is no choice to make.
+    reply_others: list[str] = Field(default_factory=list)
+    # What the email asks and what the draft says, in a line or two, for the
+    # card's closed view ("" on a card drafted before it).
+    gist: str = ""
 
 
 class RepliesOut(BaseModel):
@@ -440,6 +472,13 @@ class ReplyTextUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(max_length=20_000)
+
+
+class ReplyRecipientsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # True: everyone the email went to; False: the sender only.
+    everyone: bool
 
 
 class ReplyAnswerIn(BaseModel):
@@ -462,6 +501,37 @@ class CardActionOut(BaseModel):
     summary: str
     # A message's text as it will be sent, or a meeting's description.
     text: str
+
+
+class InviteCardOut(BaseModel):
+    decision_id: int
+    status: str
+    created_at: str
+    from_name: str
+    from_email: str
+    relation: str
+    title: str
+    # When, as the caller reads it: "Wed 21 Oct, 14:30–15:00".
+    when: str
+    start: str
+    end: str
+    all_day: bool
+    # Busy times on their calendar that overlap it ("14:00–14:30"); times only.
+    clashes: list[str]
+    # False: their calendar couldn't be read for clashes.
+    clash_checked: bool
+    # False: their sign-in reads the calendar but can't answer invites, so the
+    # card says to connect again (connect_command) instead of offering Accept.
+    can_answer: bool
+    # In training: the "Accept from them on its own next time" tick.
+    can_allow: bool
+    # Why Handle it for me left it for them, in words ("" when it was off).
+    waited_because: str
+    connect_command: str
+
+
+class InviteCardsOut(BaseModel):
+    cards: list[InviteCardOut]
 
 
 class ActionCardOut(BaseModel):
@@ -736,7 +806,7 @@ def _training_out(person_id: int) -> TrainingOut:
         learned = []
     return TrainingOut(
         replies=switches.replies, follow_ups=switches.follow_ups, actions=switches.actions,
-        drafts=switches.drafts, learned=learned,
+        drafts=switches.drafts, actions_on=switches.actions_without_asking, learned=learned,
     )
 
 
@@ -969,6 +1039,40 @@ async def update_delegation_reply_text(request: Request, decision_id: int, body:
     return ReplyCardOut(**{k: v for k, v in asdict(card).items() if k in ReplyCardOut.model_fields})
 
 
+@router.put("/delegation/replies/{decision_id}/recipients", response_model=ReplyCardOut)
+async def update_delegation_reply_recipients(
+    request: Request, decision_id: int, body: ReplyRecipientsUpdate,
+) -> ReplyCardOut:
+    """Send one of the caller's replies to the sender only, or to everyone the
+    email went to: on the card, and in their mailbox's Drafts when it is there
+    too (``delegation.card_drafts.set_recipients``). Only the lists the card
+    was written with; no address comes from the request. Their own cards
+    only; sends nothing."""
+    from openexecutive.delegation import card_drafts
+    from openexecutive.delegation.inbox import DECISION_CLASS
+    from openexecutive.delegation.replies import cards
+    from openexecutive.delegation.reply_send import SendRefused
+    from openexecutive.memory.decision_ledger import get_decision_instance
+
+    person = _caller(request)
+    person_id = _person_id(person)
+    instance = get_decision_instance(decision_id)
+    if instance is None or instance.decision_class != DECISION_CLASS or instance.approver_person_id != person_id:
+        raise _refuse(404, "not_found", "That reply isn't waiting for you any more.")
+    try:
+        await card_drafts.set_recipients(
+            instance, caller=api_caller.caller(request), resolver=person_id, everyone=body.everyone,
+        )
+    except SendRefused as refused:
+        raise HTTPException(
+            status_code=refused.status, detail={"code": refused.code, "message": refused.message, **refused.extra},
+        ) from None
+    card = next((c for c in cards(person) if c.decision_id == decision_id), None)
+    if card is None:
+        raise _refuse(404, "not_found", "That reply isn't waiting for you any more.")
+    return ReplyCardOut(**{k: v for k, v in asdict(card).items() if k in ReplyCardOut.model_fields})
+
+
 @router.post("/delegation/replies/{decision_id}/answer", response_model=ReplyCardOut)
 async def answer_delegation_reply(request: Request, decision_id: int, body: ReplyAnswersIn) -> ReplyCardOut:
     """Answer what one of the caller's reply cards left them to decide:
@@ -1026,6 +1130,22 @@ def get_delegation_actions(request: Request) -> ActionCardsOut:
         )
         for card in found
     ])
+
+
+@router.get("/delegation/invites", response_model=InviteCardsOut)
+def get_delegation_invites(request: Request) -> InviteCardsOut:
+    """The meeting invite cards waiting for the caller to accept or decline.
+    Their own only: everyone else gets the 403 every route here gives."""
+    from openexecutive.delegation.invites import cards
+
+    person = _caller(request)
+    _person_id(person)
+    try:
+        found = cards(person)
+    except Exception as exc:
+        logger.exception("delegation: reading the invite cards failed")
+        raise _refuse(503, "unavailable", "Couldn't read the invites waiting for you.") from exc
+    return InviteCardsOut(cards=[InviteCardOut(**asdict(card)) for card in found])
 
 
 def _set_handle_it(person_id: int, *, enabled: bool | None, mode: str | None) -> None:
@@ -1154,16 +1274,25 @@ async def update_delegation_disclosure(request: Request, body: DisclosureUpdate)
 
 @router.put("/delegation/training", response_model=DelegationOut)
 async def update_delegation_training(request: Request, body: TrainingUpdate) -> DelegationOut:
-    """Put Act as me's settings in or out of training. Putting Replies or
-    Follow-ups in only holds more back, and taking Suggested actions out
-    stops cards being carried out on their own, so those need no signed
-    sign-in; anything else does. Putting Replies or Follow-ups in turns Take
+    """Put Act as me's settings in or out of training, or Suggested actions
+    On (``actions_on``: carried out with no allow). Putting Replies or
+    Follow-ups in only holds more back, and taking Suggested actions out of
+    training or On stops cards being carried out on their own, so those need
+    no signed sign-in; anything else does. Putting Replies or Follow-ups in turns Take
     the lead as you off: in training only what the person allowed goes."""
     from openexecutive.delegation import training
 
     changes = {k: v for k, v in body.model_dump().items() if v is not None}
+    # Suggested actions is one of Always ask, In training or On: picking one
+    # leaves the other.
+    if changes.get(training.ACTIONS_ON) is True:
+        changes[training.ACTIONS] = False
+    elif training.ACTIONS in changes:
+        # Out of training without asking for On is Always ask, never On.
+        changes[training.ACTIONS_ON] = False
     narrowing = all(
-        (v is True and k in (training.REPLIES, training.FOLLOW_UPS)) or (v is False and k == training.ACTIONS)
+        (v is True and k in (training.REPLIES, training.FOLLOW_UPS))
+        or (v is False and k in (training.ACTIONS, training.ACTIONS_ON))
         for k, v in changes.items()
     )
     person = _signed_caller(request, narrowing=narrowing)
@@ -1391,6 +1520,7 @@ def get_delegation_handled(request: Request) -> HandledOut:
             subject=h.subject, body=h.body, open_questions=h.open_questions,
             gmail_link=mailbox_link(email, thread_id=h.thread_id) if email and h.thread_id else "",
             source=h.source,
+            summary=h.summary,
         )
         for h in found
     ])

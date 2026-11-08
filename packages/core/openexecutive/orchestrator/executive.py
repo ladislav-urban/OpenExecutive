@@ -2804,6 +2804,8 @@ class Executive:
                 current_messages.append(
                     {"role": "user", "content": [{"type": "text", "text": claim_check.nudge(claim)}]}
                 )
+                # The retry's text gets its paragraph break from
+                # _round_separator, like any other round's.
                 reply_before_nudge = reply_so_far
                 continue
 
@@ -2861,6 +2863,26 @@ class Executive:
                         },
                     )
                     group_results[tu["id"]] = erpnext_panel_withheld_error(label, demo=demo_speaker)
+            # A read of the company's own Drive item is not outside content:
+            # look those up first, so source_of (and defers_read) pass them.
+            await outside_content.vet_reads(
+                [tu for tu in tool_uses if tu["id"] not in group_results], self._mcp_gateway
+            )
+            # The person just said go to what the last turn held: the first
+            # round that reads runs its other calls without those reads, so a
+            # re-read doesn't hold the approved steps again
+            # (orchestrator.outside_content.defers_read).
+            deferred = [
+                tu for tu in tool_uses
+                if tu["id"] not in group_results and outside_content.defers_read(tu["name"], tu["input"])
+            ]
+            if deferred:
+                for tu in deferred:
+                    named = tu["input"].get("name") if isinstance(tu["input"], dict) else None
+                    label = named[:200] if tu["name"] == "call_tool" and isinstance(named, str) and named else tu["name"]
+                    group_results[tu["id"]] = outside_content.go_first_error(label)
+                outside_content.go_first_round_done()
+                logger.info("go_first: deferred %d read(s) until the held steps ran", len(deferred))
             dispatch_uses = [tu for tu in tool_uses if tu["id"] not in group_results]
 
             specialist_tool_uses = [tu for tu in dispatch_uses if tu["name"] == "consult_specialist"]
@@ -2930,9 +2952,11 @@ class Executive:
             # list stays as it is, so the cached prefix never changes
             # mid-turn.
             mail_touched_uses: list[dict[str, Any]] = []
-            if pinned_delegation is not None and (
+            # Under "Don't ask", on the principal's own turn, reading their
+            # mail holds nothing (orchestrator.outside_mode).
+            if pinned_delegation is not None and not outside_content.trusted_turn() and (
                 pinned_delegation.read_mail
-                or any(tu["name"] in MAILBOX_TOOL_NAMES or tu["name"] in HISTORY_TOOL_NAMES for tu in tool_uses)
+                or any(tu["name"] in MAILBOX_TOOL_NAMES or tu["name"] in HISTORY_TOOL_NAMES for tu in dispatch_uses)
             ):
                 mail_touched_uses = [
                     tu for tu in [*skill_tool_uses, *mcp_tool_uses, *script_tool_uses]
@@ -2961,7 +2985,9 @@ class Executive:
                 outside_uses = [
                     tu for tu in [*skill_tool_uses, *mcp_tool_uses, *script_tool_uses]
                     if (read_before_round or tu["id"] not in round_source_ids)
-                    and outside_content.outside_withholds(tu["name"], tu["input"])
+                    and outside_content.outside_withholds(
+                        tu["name"], tu["input"], pending=[source for _, source in round_sources]
+                    )
                 ]
             if outside_uses:
                 skill_tool_uses = [tu for tu in skill_tool_uses if tu not in outside_uses]
@@ -3620,6 +3646,10 @@ class Executive:
                         probe_name, probe_input
                     ):
                         return outside_content.outside_withheld_error(tool[:200]), True
+                    if not own:
+                        await outside_content.vet_reads(
+                            [{"name": probe_name, "input": probe_input}], self._mcp_gateway
+                        )
                     source = outside_content.source_of(probe_name, probe_input)
                     try:
                         if own:
@@ -3655,7 +3685,7 @@ class Executive:
                             outside_content.mark(source)
                         return text, True
                     if source is not None:
-                        outside_content.mark(source)
+                        await outside_content.mark_read(source, probe_input, text, self._mcp_gateway)
                     _made.append((call_input, text, None))
                     return text, looks_like_error(text)
 
@@ -3867,7 +3897,9 @@ class Executive:
             # results: from the next round on the turn is held.
             for tu, source in round_sources:
                 if tu not in outside_uses and tu not in mail_touched_uses and tu not in withheld_uses:
-                    outside_content.mark(source)
+                    await outside_content.mark_read(
+                        source, tu["input"], results_by_id.get(tu["id"], ""), self._mcp_gateway
+                    )
 
             current_messages.append({"role": "assistant", "content": response_content})
             # Cap here, at the single point every result reaches the model,

@@ -42,7 +42,10 @@ function artifactBadge(format: ProposalItem["artifact_format"]): string {
 // the chip row (age, seen ×N, why-now / due, likely-stale, folded-in,
 // draft-ready) and the muted "Reviewed <ago>" footer. A pure builder (no
 // hooks) so ProposalCard stays a layout function.
-function buildProposalLifecycle(proposal: ProposalItem): {
+function buildProposalLifecycle(
+  proposal: ProposalItem,
+  ageShown: boolean,
+): {
   reviewLine: React.ReactNode;
   lifecycleRow: React.ReactNode;
   reviewedFooter: React.ReactNode;
@@ -60,7 +63,8 @@ function buildProposalLifecycle(proposal: ProposalItem): {
     </p>
   ) : null;
   const chips: { label: string; tone: "neutral" | "amber" | "sky"; title?: string }[] = [];
-  if (age) chips.push({ label: age, tone: "neutral", title: `Raised ${new Date(proposal.created_at).toLocaleString()}` });
+  // The status chip already reads "2m old" when nothing is due.
+  if (age && !ageShown) chips.push({ label: age, tone: "neutral", title: `Raised ${new Date(proposal.created_at).toLocaleString()}` });
   if ((proposal.occurrence_count ?? 1) > 1)
     chips.push({
       label: `seen ×${proposal.occurrence_count}`,
@@ -164,7 +168,7 @@ export default function ProposalCard({
     );
   }
   // A Take the lead card from training is answered on its own card too:
-  // Approve, Approve + allow, Edit and Decline (LeadTrainingCard).
+  // Approve (with the "on its own next time" tick), Edit and Decline (LeadTrainingCard).
   if (proposal.card_kind === "lead_training") {
     return <LeadTrainingCard proposal={proposal} emphasized={emphasized} onResolved={() => onDismiss?.(proposal)} />;
   }
@@ -306,8 +310,12 @@ export default function ProposalCard({
   const showActions = Boolean(onApprove || onDismiss || onApproveWithEdits);
 
   const status = isMonitoring ? null : proposalStatusChip(proposal);
-  const visibleTags = proposal.topic_tags.filter((t) => t !== "artifact" && !t.startsWith("failed_run:"));
-  const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal);
+  // "private:" tags only route the card; they mean nothing to the reader.
+  const visibleTags = proposal.topic_tags.filter(
+    (t) => t !== "artifact" && !t.startsWith("failed_run:") && !t.startsWith("private:"),
+  );
+  const ageShown = status != null && status.label.endsWith(" old");
+  const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal, ageShown);
   const surfacedNote = proposal.surfaced_reason ? (
     <p className="text-sm text-fg-muted leading-snug">{proposal.surfaced_reason}</p>
   ) : null;

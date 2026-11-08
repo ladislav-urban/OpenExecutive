@@ -169,6 +169,25 @@ def _is_roster_sender(address: str) -> bool:
         return False
 
 
+def _named(address: str, include_private: bool) -> str:
+    """``Mara Quinn (mquinn@x.com)`` when the address is someone on the roster
+    (or, with ``include_private``, one of the principal's contacts), so the
+    header calls them by name instead of guessing one from the address.
+    Otherwise the address as given."""
+    from openexecutive.people.store import find_person_by_address
+
+    bare = address.strip()
+    if "@" not in bare or " " in bare:
+        return address
+    try:
+        person = find_person_by_address(bare, include_contacts=include_private)
+    except Exception:
+        logger.exception("live_signals: name lookup failed")
+        return address
+    name = " ".join(str(getattr(person, "full_name", "") or "").split()) if person else ""
+    return f"{name} ({bare})" if name else address
+
+
 @dataclass(frozen=True)
 class LiveSignals:
     """The reader's live world over one window. Empty when nothing moved."""
@@ -179,6 +198,9 @@ class LiveSignals:
     inbound_shown: int = 0
     stuck: tuple[str, ...] = ()
     drafts: int = 0
+    # One line per waiting draft: when, to whom, its subject (as far as the
+    # last settle pass read them).
+    draft_lines: tuple[str, ...] = ()
     conversations: tuple[str, ...] = ()
     # The reader's own messages to the Executive, newest first. Background,
     # so they never make the window non-empty on their own.
@@ -266,7 +288,8 @@ def _inbound(
             if sender and key not in stuck_seen:
                 stuck_seen.add(key)
                 stuck.append(
-                    f"[{_local_hhmm(ev.ts, tz, now)}] {sender} is not on the roster, so the "
+                    f"[{_local_hhmm(ev.ts, tz, now)}] {_named(sender, include_private)} is not "
+                    "on the roster, so the "
                     "Executive could not reply to their email — they may be waiting"
                 )
             continue
@@ -332,6 +355,8 @@ def _inbound(
             # Someone else whose display name holds the reader's name: the
             # brief masks that name, so say plainly it isn't them.
             sender = _IMPOSTOR
+        elif channel == "email":
+            sender = _named(sender, include_private)
         total += 1
         group_key = (sender.lower(), re.sub(r"^(re|fwd?):\s*", "", topic.lower()))
         group = groups.get(group_key)
@@ -401,28 +426,54 @@ def _outbound_blocked(
             continue
         seen.add(address.lower())
         out.append(
-            f"[{_local_hhmm(ev.ts, tz, now)}] an email to {address} was held at the outbound "
+            f"[{_local_hhmm(ev.ts, tz, now)}] an email to {_named(address, include_private)} "
+            "was held at the outbound "
             "gate (not on the allow-list) — it did not go out"
         )
     return out
 
 
-def _drafts(since: datetime, include_private: bool) -> int:
+def _drafts(
+    since: datetime, include_private: bool, tz: tzinfo, now: datetime | None = None,
+) -> tuple[int, list[str]]:
     """The reader's chat drafts from the window still in their Drafts, as
-    far as the last ``delegation.drafts.settle_waiting`` saw: one they sent
-    or deleted in Gmail stops counting once a settle pass finds it gone."""
+    far as the last ``delegation.drafts.settle_waiting`` saw (one they sent
+    or deleted in Gmail stops counting once a settle pass finds it gone),
+    and a line naming each: when it was saved, who it goes to, its subject."""
     if not include_private:
-        return 0  # every delegation row is private to the principal
+        return 0, []  # every delegation row is private to the principal
     from openexecutive.delegation import drafts
     from openexecutive.memory import episodic
     from openexecutive.people.store import find_principal_person
 
     principal = find_principal_person()
     if principal is None or principal.id is None:
-        return 0
+        return 0, []
     if not episodic._resolve_db_path(None).exists():
-        return 0  # a read must not create the database
-    return drafts.count_waiting(principal.id, since)
+        return 0, []  # a read must not create the database
+    count = drafts.count_waiting(principal.id, since)
+    if not count:
+        return 0, []
+    # Only the ones a settle pass has read: a bare time names nothing (the
+    # count still covers them).
+    return count, [
+        draft_line(d, tz, now)
+        for d in drafts.waiting_drafts(principal.id, since)
+        if d.to or d.subject
+    ]
+
+
+def draft_line(draft: Any, tz: tzinfo, now: datetime | None = None) -> str:
+    """``[09:07] to Dana Lee (dana@example.com) — "Q3 numbers"``; the parts
+    not read yet are left out, and an address no one on the roster or in the
+    contacts has stays bare."""
+    line = f"[{_local_hhmm(draft.created_at, tz, now)}]"
+    if draft.to:
+        # Drafts are private to the principal, so their contacts' names too.
+        line += f" to {_one_line(', '.join(_named(a, True) for a in draft.to), 160)}"
+    if draft.subject:
+        line += f' — "{_one_line(draft.subject, 120)}"'
+    return line
 
 
 def _conversations(
@@ -453,7 +504,8 @@ def _conversations(
         title = _one_line(row["title"], 100)
         if title.lower() in _UNTITLED:
             continue
-        lines.append(f"[{_local_hhmm(row['updated_at'], tz, now)}] {title}")
+        # No time: the header pointed back at "the 13:26 chat" by it.
+        lines.append(title)
         keys.append(title.lower())
         if len(lines) >= _CONVERSATIONS_MAX:
             break
@@ -604,8 +656,9 @@ def gather_live_signals(
     except Exception:
         logger.exception("live_signals: outbound-blocked read failed")
     drafts = 0
+    draft_lines: list[str] = []
     try:
-        drafts = _drafts(since, include_private)
+        drafts, draft_lines = _drafts(since, include_private, tz, now)
     except Exception:
         logger.exception("live_signals: drafts read failed")
     conversations: list[str] = []
@@ -641,6 +694,7 @@ def gather_live_signals(
         inbound_shown=shown,
         stuck=tuple(stuck),
         drafts=drafts,
+        draft_lines=tuple(draft_lines),
         conversations=tuple(conversations),
         own=tuple(own),
         calendar=calendar_lines,
@@ -648,6 +702,7 @@ def gather_live_signals(
             "inbound": sorted(inbound_keys),
             "stuck": sorted(s.split("] ", 1)[-1] for s in stuck),
             "drafts": drafts,
+            "draft_lines": sorted(line.split("] ", 1)[-1] for line in draft_lines),
             "conversations": sorted(conversation_keys),
             "calendar": calendar_key,
         },
@@ -681,7 +736,18 @@ def render_live_blocks(signals: LiveSignals, *, window: str) -> list[str]:
             parts.append(
                 f"- {n} email draft{'s' if n != 1 else ''} saved in the reader's own "
                 "Gmail (Act as me), waiting for them to review and send"
+                + (
+                    "; name each by who it goes to and its subject:"
+                    if signals.draft_lines else ""
+                )
             )
+            if signals.draft_lines:
+                from openexecutive.orchestrator.content_trust import wrap_untrusted
+
+                # A reply draft's subject is the sender's own ("Re: …").
+                parts.append(wrap_untrusted(
+                    "\n".join(f"- {line}" for line in signals.draft_lines), source="email",
+                ))
         parts.append("")
     background = "background only: what the reader already said and asked, never news"
     if signals.own:

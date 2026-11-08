@@ -87,6 +87,17 @@ def _no_ai_disclosure(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _outside_content_asks(monkeypatch: pytest.MonkeyPatch):
+    """Hold every outside read, as "Ask every time" does
+    (orchestrator.outside_mode), whatever the test database stores, so the
+    hold tests don't depend on the default. test_outside_mode.py picks the
+    other settings."""
+    from openexecutive.orchestrator import outside_mode
+
+    monkeypatch.setattr(outside_mode, "get_mode", lambda **_: outside_mode.ASK)
+
+
+@pytest.fixture(autouse=True)
 def _no_claim_check(monkeypatch: pytest.MonkeyPatch):
     """Keep the end-of-turn claim check (orchestrator.claim_check) from making
     a provider call in tests that script a turn; test_claim_check.py turns it
@@ -94,6 +105,20 @@ def _no_claim_check(monkeypatch: pytest.MonkeyPatch):
     nothing and schedules no review; test_chat_review.py turns it on."""
     monkeypatch.setenv("CLAIM_CHECK_ENABLED", "false")
     monkeypatch.setenv("CHAT_REVIEW_ENABLED", "false")
+
+
+@pytest.fixture(autouse=True)
+def _no_logfire_tracing(monkeypatch: pytest.MonkeyPatch):
+    """Keep a developer's LOGFIRE_TOKEN (in .env) from turning tracing on.
+
+    Settings reads .env directly, so popping the env var is not enough; with
+    tracing on, get_provider() returns a wrapper and registry identity tests
+    fail for a reason nothing in them mentions.
+    """
+    import openexecutive.observability as observability
+
+    monkeypatch.setattr(observability, "_logfire_token", lambda: None)
+    monkeypatch.setattr(observability, "_enabled", False)
 
 
 @pytest.fixture(autouse=True)

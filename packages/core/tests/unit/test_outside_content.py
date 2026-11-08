@@ -575,3 +575,216 @@ def test_upsert_person_holds_a_new_person_and_a_new_address_only(monkeypatch: py
 
     assert asyncio.run(readdress()) == {existing}
 
+
+
+# --- the person's go to what a turn held -----------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_held_steps() -> Iterator[None]:
+    oc._HELD.clear()
+    yield
+    oc._HELD.clear()
+
+
+def _any_result(provider: ScriptedProvider, use_id: str) -> str:
+    """A tool result anywhere in the turn (the loop appends to one list)."""
+    for message in provider.calls[-1]["messages"]:
+        for block in message["content"] if isinstance(message.get("content"), list) else []:
+            if isinstance(block, dict) and block.get("tool_use_id") == use_id:
+                return str(block["content"])
+    raise AssertionError(f"no result for {use_id}")
+
+
+def _held_contact_turn(session: Session, gateway: _Gateway) -> None:
+    """A turn that read a doc, then had adding the contact held."""
+    _run(
+        [ToolUseBlock("tu1", "call_tool", READ_DOC)],
+        [ToolUseBlock("tu2", "upsert_person", CONTACT)],
+        gateway=gateway, session=session, message="read the doc and add Mallory",
+    )
+
+
+def test_a_go_runs_the_held_step_before_a_new_read(upserts: list[dict[str, Any]]) -> None:
+    session, gateway = Session(), _Gateway()
+    _held_contact_turn(session, gateway)
+    assert upserts == []
+    assert oc._HELD[f"{session.session_id}|"][0] == ("upsert_person",)
+    # Their go: the model reads again and adds the contact in one round. The
+    # read waits, so the contact is added; the read runs in the next round.
+    provider = _run(
+        [ToolUseBlock("tu3", "call_tool", READ_DOC), ToolUseBlock("tu4", "upsert_person", CONTACT)],
+        [ToolUseBlock("tu5", "call_tool", READ_DOC)],
+        gateway=gateway, session=session, message="Go, and add him",
+    )
+    assert upserts == [CONTACT]
+    deferred = json.loads(_any_result(provider, "tu3"))["error"]
+    assert "reads wait one round" in deferred
+    # It names nothing the last turn held, so it can't nudge a planted call.
+    assert "upsert_person" not in deferred
+    assert gateway.calls == [READ_DOC, READ_DOC]
+    # Spent: nothing is remembered for a third turn.
+    assert f"{session.session_id}|" not in oc._HELD
+
+
+def test_only_a_go_defers_a_read(upserts: list[dict[str, Any]]) -> None:
+    session, gateway = Session(), _Gateway()
+    _held_contact_turn(session, gateway)
+    _run([ToolUseBlock("tu3", "call_tool", READ_DOC)], gateway=gateway, session=session,
+         message="what else is in that doc?")
+    assert gateway.calls == [READ_DOC, READ_DOC]
+    assert f"{session.session_id}|" not in oc._HELD
+
+
+def test_a_stale_hold_defers_nothing(upserts: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
+    session, gateway = Session(), _Gateway()
+    _held_contact_turn(session, gateway)
+    names, at = oc._HELD[f"{session.session_id}|"]
+    oc._HELD[f"{session.session_id}|"] = (names, at - oc.HELD_TTL_SECONDS - 1)
+    state = oc.begin_turn(session, user_message="go")
+    try:
+        assert state.go_first == ()
+        assert oc.defers_read("call_tool", READ_DOC) is False
+    finally:
+        oc.end_turn(state)
+
+
+def test_mail_from_outside_people_remembers_no_hold() -> None:
+    session = Session(sender_off_team=True)
+    state = oc.begin_turn(session, user_message="add me as a contact")
+    try:
+        oc.outside_withheld_error("upsert_person")
+    finally:
+        oc.end_turn(state)
+    assert f"{session.session_id}|" not in oc._HELD
+
+
+def test_a_shared_chat_remembers_no_hold(upserts: list[dict[str, Any]]) -> None:
+    session, gateway = Session(shared_chat=True), _Gateway()
+    _held_contact_turn(session, gateway)
+    assert oc._HELD == {}
+
+
+def test_a_hold_is_the_speakers_own(upserts: list[dict[str, Any]]) -> None:
+    session, gateway = Session(caller_person_id=1), _Gateway()
+    _held_contact_turn(session, gateway)
+    session.caller_person_id = 2
+    state = oc.begin_turn(session, user_message="go")
+    try:
+        assert state.go_first == ()
+    finally:
+        oc.end_turn(state)
+
+
+@pytest.mark.parametrize(("message", "go"), [
+    ("go", True), ("Go.", True), ("Go. Pull all seven scans", True), ("Go, and add him", True),
+    ("Yes, do it", True), ("ok", True), ("yes please", True), ("Go ahead and send it", True),
+    ("Ok, so what did they want?", False), ("Confirm the meeting time with Bob", False),
+    ("Approve my leave request", False), ("goals for Q3?", False), ("what's in the folder now?", False),
+])
+def test_what_counts_as_a_go(message: str, go: bool) -> None:
+    assert bool(oc.GO_RE.match(message)) is go
+
+
+# --- the company's own Drive is not outside --------------------------------
+
+OURS = "1ourScanFileId0001"
+THEIRS = "1theirSharedFile002"
+FOLDER = "1ourScansFolder0003"
+READ_OURS = {"name": "google_workspace__get_drive_file_content", "arguments": {"file_id": OURS}}
+READ_THEIRS = {"name": "google_workspace__get_drive_file_content", "arguments": {"file_id": THEIRS}}
+LIST_OURS = {"name": "google_workspace__list_drive_items", "arguments": {"folder_id": FOLDER}}
+RENAME = {"name": "google_workspace__update_drive_file", "arguments": {"file_id": OURS, "name": "Bill.pdf"}}
+
+
+class _CompanyGateway(_Gateway):
+    def __init__(self, ours: set[str]) -> None:
+        super().__init__()
+        self.ours = ours
+        self.looked_up: list[str] = []
+
+    async def company_drive_items(self, ids: list[str]) -> set[str]:
+        self.looked_up.extend(ids)
+        return {i for i in ids if i in self.ours}
+
+
+@pytest.mark.parametrize(("call", "item"), [
+    (READ_OURS, OURS),
+    (LIST_OURS, FOLDER),
+    ({"name": "google_workspace__read_sheet_values", "arguments": {"spreadsheetId": OURS, "range_name": "A1"}}, OURS),
+    ({"name": "google_workspace__get_drive_file_content", "arguments": json.dumps({"file_id": OURS})}, OURS),
+    # A search, a form, mail, or a read pointed elsewhere is never one item.
+    ({"name": "google_workspace__search_drive_files", "arguments": {"query": "scans"}}, None),
+    ({"name": "google_workspace__get_form", "arguments": {"form_id": OURS}}, None),
+    ({"name": "google_workspace__get_gmail_message_content", "arguments": {"message_id": OURS}}, None),
+    ({"name": "google_workspace__list_drive_items", "arguments": {"folder_id": "root", "drive_id": OURS}}, None),
+    ({"name": "google_workspace__get_drive_file_content", "arguments": {"file_id": [OURS]}}, None),
+    ({"name": "google_workspace__get_drive_file_content", "arguments": {"file_id": "x/../y"}}, None),
+])
+def test_what_reads_one_company_item(call: dict[str, Any], item: str | None) -> None:
+    assert oc.company_read_item(call) == item
+
+
+def test_reading_a_company_file_leaves_the_turn_free_to_rename_it(audit: list[dict[str, Any]]) -> None:
+    gateway = _CompanyGateway({OURS, FOLDER})
+    _run(
+        [ToolUseBlock("tu1", "call_tool", LIST_OURS), ToolUseBlock("tu2", "call_tool", READ_OURS)],
+        [ToolUseBlock("tu3", "call_tool", RENAME)],
+        [ToolUseBlock("tu4", "call_tool", READ_OURS)],
+        gateway=gateway,
+    )
+    assert gateway.calls == [LIST_OURS, READ_OURS, RENAME, READ_OURS]
+    # Each id is looked up once a turn.
+    assert sorted(gateway.looked_up) == sorted([FOLDER, OURS])
+    assert not [r for r in audit if r["details"].get("refused") == "outside_content"]
+
+
+def test_a_file_shared_in_from_outside_still_holds_the_turn() -> None:
+    gateway = _CompanyGateway({OURS})
+    provider = _run(
+        [ToolUseBlock("tu1", "call_tool", READ_THEIRS)],
+        [ToolUseBlock("tu2", "call_tool", RENAME)],
+        gateway=gateway,
+    )
+    assert gateway.calls == [READ_THEIRS]
+    assert "drive_files" in json.loads(_result(provider, "tu2"))["error"]
+
+
+def test_a_script_renames_the_company_files_it_read() -> None:
+    gateway = _CompanyGateway({OURS})
+    script = (
+        f'google_workspace__get_drive_file_content(file_id="{OURS}")\n'
+        f'google_workspace__update_drive_file(file_id="{OURS}", name="Bill.pdf")'
+    )
+    _run([ToolUseBlock("tu1", "run_script", {"script": script})], gateway=gateway)
+    assert [c["name"] for c in gateway.calls] == [READ_OURS["name"], RENAME["name"]]
+
+
+EDIT_OURS = {"name": "google_workspace__modify_doc_text", "arguments": {"document_id": OURS, "text": "Paid"}}
+RENAME_WITH_CONTENT = {
+    "name": "google_workspace__update_drive_file", "arguments": {"file_id": OURS, "name": "Bill.pdf", "content": "x"},
+}
+
+
+@pytest.mark.parametrize("write", [EDIT_OURS, RENAME_WITH_CONTENT])
+def test_after_a_company_read_only_a_rename_or_move_goes_through(write: dict[str, Any]) -> None:
+    # The company's files hold words from anyone who can edit them, so
+    # anything but a rename or move still waits for a go.
+    gateway = _CompanyGateway({OURS})
+    provider = _run(
+        [ToolUseBlock("tu1", "call_tool", READ_OURS)],
+        [ToolUseBlock("tu2", "call_tool", write)],
+        gateway=gateway,
+    )
+    assert gateway.calls == [READ_OURS]
+    assert "error" in json.loads(_result(provider, "tu2"))
+
+
+def test_a_script_that_reads_a_company_file_cannot_edit_it() -> None:
+    gateway = _CompanyGateway({OURS})
+    script = (
+        f'google_workspace__get_drive_file_content(file_id="{OURS}")\n'
+        f'google_workspace__modify_doc_text(document_id="{OURS}", text="Paid")'
+    )
+    _run([ToolUseBlock("tu1", "run_script", {"script": script})], gateway=gateway)
+    assert [c["name"] for c in gateway.calls] == [READ_OURS["name"]]

@@ -1,11 +1,12 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
-import { type FormEvent, type ReactNode, useCallback, useEffect, useId, useState } from "react";
+import { type FormEvent, Fragment, type ReactNode, useCallback, useEffect, useId, useState } from "react";
 
 import Icon from "@/components/Icon";
 import { ChatAppPickers } from "@/components/people/ChatAppPickers";
-import { TeamModeOffer } from "@/components/people/TeamModeOffer";
+import { PersonContactChanges, PersonContactNote } from "@/components/people/ContactChanges";
+import { TeamModeSwitch } from "@/components/people/TeamModeSwitch";
 import { usePageCrumb } from "@/components/shell/PageCrumb";
 import Button from "@/components/ui/Button";
 import { useChatDirectory, useSlackEmailMatch } from "@/components/ui/ChatPicker";
@@ -17,6 +18,8 @@ import {
   assignOpenLoop,
   closeOpenLoop,
   getDirectoryState,
+  getContactChanges,
+  getContactNote,
   getPeopleViewer,
   getPerson,
   getPersonOpenLoops,
@@ -28,6 +31,8 @@ import {
   setPersonSuspended,
   updatePerson,
   type AvailabilityWindow,
+  type ContactChange,
+  type ContactNote,
   type OpenLoop,
   type OutreachStat,
   type Person,
@@ -35,7 +40,8 @@ import {
   type WorkingStyle,
 } from "@/lib/api";
 import { assignNoticeLine } from "@/lib/assignNotice";
-import { isContact, shouldOfferTeamMode } from "@/lib/peopleKinds";
+import { DETAIL_LABELS, detailHref, detailsToText, detailText, textToDetails } from "@/lib/contactChanges";
+import { isContact, shouldSwitchToTeam } from "@/lib/peopleKinds";
 import { onLeaveLine, reachLine } from "@/lib/personReach";
 
 // ---------------------------------------------------------------------------
@@ -518,7 +524,7 @@ export default function PersonDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { mode } = useWorkspace();
-  const [offerFor, setOfferFor] = useState<string | null>(null);
+  const [switchedFor, setSwitchedFor] = useState<string | null>(null);
   // Only the principal may move someone between team and contacts (contacts
   // are theirs alone); for anyone else the API 404s a contact's page anyway.
   const [viewerIsPrincipal, setViewerIsPrincipal] = useState(false);
@@ -570,6 +576,8 @@ export default function PersonDetailPage() {
     email: "",
     // Other addresses, one per line or comma-separated.
     email_aliases: "",
+    // Phone, website and more, one "Label: value" per line.
+    details: "",
     slack_user_id: "",
     telegram_chat_id: "",
     discord_user_id: "",
@@ -590,6 +598,23 @@ export default function PersonDetailPage() {
       .catch((e) => setError(e instanceof Error ? e.message : "Failed to load"))
       .finally(() => setLoading(false));
   }, [personId]);
+
+  // What the Executive changed about this contact (the principal's alone).
+  const [contactChanges, setContactChanges] = useState<ContactChange[]>([]);
+  useEffect(() => {
+    if (isNaN(personId) || !viewerIsPrincipal) return;
+    getContactChanges(personId).then((d) => setContactChanges(d.changes), () => setContactChanges([]));
+  }, [personId, viewerIsPrincipal]);
+  // What the Executive remembers about this contact (the principal's alone).
+  const [contactNote, setContactNote] = useState<ContactNote | null>(null);
+  useEffect(() => {
+    if (isNaN(personId) || !viewerIsPrincipal) return;
+    getContactNote(personId).then(setContactNote, () => setContactNote(null));
+  }, [personId, viewerIsPrincipal]);
+  function reloadAfterUndo() {
+    getContactChanges(personId).then((d) => setContactChanges(d.changes), () => setContactChanges([]));
+    getPerson(personId).then((p) => { setPerson(p); resetForm(p); }, () => {});
+  }
 
   // The breadcrumb names the person rather than the id in the URL.
   usePageCrumb(person?.full_name);
@@ -616,6 +641,7 @@ export default function PersonDetailPage() {
       kind: p.kind ?? "team",
       email: p.email ?? "",
       email_aliases: (p.email_aliases ?? []).join("\n"),
+      details: detailsToText(p.details ?? []),
       slack_user_id: p.slack_user_id ?? "",
       telegram_chat_id: p.telegram_chat_id ?? "",
       discord_user_id: p.discord_user_id ?? "",
@@ -682,6 +708,7 @@ export default function PersonDetailPage() {
         ...(person?.is_principal || !viewerIsPrincipal ? {} : { kind: form.kind }),
         ...(nameIsManaged ? {} : { email: form.email.trim() || null }),
         email_aliases: form.email_aliases.split(/[\s,;]+/).map((a) => a.trim()).filter(Boolean),
+        details: textToDetails(form.details),
         slack_user_id: form.slack_user_id.trim() || null,
         telegram_chat_id: form.telegram_chat_id.trim() || null,
         discord_user_id: form.discord_user_id.trim() || null,
@@ -698,8 +725,8 @@ export default function PersonDetailPage() {
       setPerson(updated);
       setEditing(false);
       setSaved(true);
-      if (wasContact && !isContact(updated) && shouldOfferTeamMode(mode, updated.kind, updated.is_principal)) {
-        setOfferFor(updated.full_name);
+      if (wasContact && !isContact(updated) && shouldSwitchToTeam(mode, updated.kind, updated.is_principal)) {
+        setSwitchedFor(updated.full_name);
       }
       setTimeout(() => setSaved(false), 2500);
     } catch (e) {
@@ -816,7 +843,7 @@ export default function PersonDetailPage() {
 
   return (
     <div className="flex flex-col h-full bg-surface">
-      {offerFor && <TeamModeOffer name={offerFor} onDone={() => setOfferFor(null)} />}
+      {switchedFor && <TeamModeSwitch name={switchedFor} onDone={() => setSwitchedFor(null)} />}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 py-8">
           {loading && <p className="text-fg-muted text-[15px]">Loading…</p>}
@@ -926,6 +953,10 @@ export default function PersonDetailPage() {
               <div {...(tabs.length > 1 ? sectionPanelProps(tabsId, activeTab) : {})}>
               {activeTab === "overview" && (
                 <>
+              {viewerIsPrincipal && !editing && !person.is_principal && contactChanges.length > 0 && (
+                <PersonContactChanges changes={contactChanges} onChanged={reloadAfterUndo} />
+              )}
+              {viewerIsPrincipal && !editing && !person.is_principal && <PersonContactNote note={contactNote} />}
               {/* Core fields */}
               <section className="rounded-2xl border border-line bg-surface-elevated px-5">
                 {editing ? (
@@ -992,6 +1023,20 @@ export default function PersonDetailPage() {
                       <span className={HINT_CLS}>
                         One per line. Mail from these reaches them, and they can be emailed
                         here. Only the address above signs in.
+                      </span>
+                    </label>
+
+                    <label className={LABEL_CLS}>
+                      Phone, website and more
+                      <textarea
+                        value={form.details}
+                        onChange={(e) => setForm((f) => ({ ...f, details: e.target.value }))}
+                        rows={3}
+                        placeholder={"Mobile: +1 555 010 0100\nWebsite: example.com\nAddress: 100 Main St, Springfield"}
+                        className={`${INPUT_CLS} h-auto py-2.5`}
+                      />
+                      <span className={HINT_CLS}>
+                        One per line: Phone, Mobile, Website, LinkedIn, Profile or Address.
                       </span>
                     </label>
 
@@ -1092,6 +1137,34 @@ export default function PersonDetailPage() {
                         </div>
                       </li>
                     ))}
+                    {(person.details ?? []).length > 0 && (
+                      <li className="flex items-start gap-3 py-3.5">
+                        <Icon name="user" size="w-4 h-4" className="mt-1 text-fg-subtle flex-shrink-0" />
+                        <dl className="min-w-0 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                          {(person.details ?? []).map((d) => {
+                            const href = detailHref(d);
+                            return (
+                              <Fragment key={`${d.kind}:${d.value}`}>
+                                <dt className="text-sm text-fg-subtle">{DETAIL_LABELS[d.kind]}</dt>
+                                <dd className="text-[15px] text-fg break-words min-w-0">
+                                  {href ? (
+                                    <a
+                                      href={href}
+                                      className="text-accent hover:underline"
+                                      {...(href.startsWith("https:") ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+                                    >
+                                      {detailText(d)}
+                                    </a>
+                                  ) : (
+                                    detailText(d)
+                                  )}
+                                </dd>
+                              </Fragment>
+                            );
+                          })}
+                        </dl>
+                      </li>
+                    )}
                   </ul>
                 )}
               </section>

@@ -25,11 +25,13 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field
 
+from openexecutive.people import contact_info
 from openexecutive.people import registry as people_registry
 from openexecutive.people import store as people_store
 from openexecutive.people.models import (
     AuthorityScope,
     AvailabilityWindow,
+    ContactDetail,
     Person,
     PersonKind,
 )
@@ -59,6 +61,8 @@ class PersonCreate(BaseModel):
     slack_user_id: str | None = None
     telegram_chat_id: str | None = None
     discord_user_id: str | None = None
+    # Phone, website, profiles, postal address (``Person.details``).
+    details: list[ContactDetail] = Field(default_factory=list, max_length=20)
     preferred_channel: str = "any"
     response_sla_hours: int = Field(default=24, ge=1, le=8760)
     on_leave_until: date | None = None
@@ -77,6 +81,8 @@ class PersonPatch(BaseModel):
     slack_user_id: str | None = None
     telegram_chat_id: str | None = None
     discord_user_id: str | None = None
+    # The full list; replaces the current one. Omit to leave it unchanged.
+    details: list[ContactDetail] | None = Field(default=None, max_length=20)
     preferred_channel: str | None = None
     response_sla_hours: int | None = Field(default=None, ge=1, le=8760)
     on_leave_until: date | None = None
@@ -90,6 +96,28 @@ class PersonPatch(BaseModel):
 # --------------------------------------------------------------------------- #
 # Who is asking (contacts are the principal's alone)
 # --------------------------------------------------------------------------- #
+
+_DETAIL_NAMES = {
+    "phone": "a phone number", "mobile": "a mobile number", "website": "a website",
+    "linkedin": "a LinkedIn profile", "social": "a profile link", "address": "an address",
+}
+
+
+def _checked_details(details: list[ContactDetail]) -> list[ContactDetail]:
+    """Each detail as stored, blanks dropped; 422 naming the first that
+    isn't plainly its kind."""
+    out: list[ContactDetail] = []
+    for detail in details:
+        if not detail.value.strip():
+            continue
+        value = contact_info.clean_detail(detail.kind, detail.value)
+        if not value:
+            raise HTTPException(
+                status_code=422, detail=f"\"{detail.value[:60]}\" doesn't look like {_DETAIL_NAMES[detail.kind]}.",
+            )
+        out.append(ContactDetail(kind=detail.kind, value=value))
+    return out
+
 
 def caller_is_principal(request: Request) -> bool:
     """Whether the caller resolves to the principal: their signed-in email is
@@ -136,8 +164,26 @@ def _visible_person(person_id: int, request: Request) -> Person:
         shown = shown_to_demo_viewer([person], viewer)
         if not shown:
             raise HTTPException(status_code=404, detail="Person not found")
-        return shown[0]
-    return person
+        person = shown[0]
+    return _shown([person], request)[0]
+
+
+def _shown(people: list[Person], request: Request) -> list[Person]:
+    """``people`` as the caller may see them: a person's phone, website and
+    other details (some read from their email signature) go only to the
+    principal and to that person. Fails closed."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+
+    try:
+        caller = _resolve_caller_person_id(request)
+        principal = people_store.is_principal_or_self(caller, None)
+    except Exception:
+        logger.exception("people: caller check failed — details stay hidden")
+        caller, principal = None, False
+    if principal:
+        return people
+    return [p if not p.details or (caller is not None and p.id == caller) else p.model_copy(update={"details": []})
+            for p in people]
 
 
 class PeopleViewer(BaseModel):
@@ -171,8 +217,8 @@ def list_people(
     if demo:
         from openexecutive.people.demo import shown_to_demo_viewer
 
-        return shown_to_demo_viewer(people, viewer)
-    return people
+        people = shown_to_demo_viewer(people, viewer)
+    return _shown(people, request)
 
 
 @router.get("/people/me", response_model=PeopleViewer)
@@ -202,8 +248,8 @@ def people_by_scope(token: str, request: Request) -> list[Person]:
     if demo:
         from openexecutive.people.demo import shown_to_demo_viewer
 
-        return shown_to_demo_viewer(approvers, viewer)
-    return approvers
+        approvers = shown_to_demo_viewer(approvers, viewer)
+    return _shown(approvers, request)
 
 
 # --------------------------------------------------------------------------- #
@@ -460,6 +506,8 @@ def _require_roster_owner(request: Request) -> None:
 @router.post("/people", response_model=Person, status_code=status.HTTP_201_CREATED)
 def create_person(body: PersonCreate, request: Request) -> Person:
     _require_roster_owner(request)
+    # Checked before anything is written, so a bad one changes nothing.
+    details = _checked_details(body.details)
     if body.is_principal and body.kind != "team":
         raise HTTPException(status_code=422, detail=_PRINCIPAL_CONTACT_DETAIL)
     if body.kind != "team" and not caller_is_principal(request):
@@ -479,6 +527,8 @@ def create_person(body: PersonCreate, request: Request) -> Person:
         pid = _create(body)
     except people_store.PrincipalExistsError:
         raise HTTPException(status_code=409, detail=_PRINCIPAL_EXISTS) from None
+    if details:
+        people_store.set_person_details(pid, details)
     scopes = list(body.authority_scope)
     if body.is_principal and AuthorityScope.WILDCARD not in scopes:
         # The principal approves anything, as onboarding and `openexecutive
@@ -578,6 +628,8 @@ def _after_roster_write() -> None:
 @router.patch("/people/{person_id}", response_model=Person)
 def patch_person(person_id: int, body: PersonPatch, request: Request) -> Person:
     _require_roster_owner(request)
+    # Checked before anything is written, so a bad one changes nothing.
+    details = _checked_details(body.details) if body.details is not None else None
     existing = _visible_person(person_id, request)
     if body.kind is not None and body.kind != "team" and existing.is_principal:
         raise HTTPException(status_code=422, detail=_PRINCIPAL_CONTACT_DETAIL)
@@ -622,6 +674,8 @@ def patch_person(person_id: int, body: PersonPatch, request: Request) -> Person:
             department_slugs=body.department_slugs,
             kind=body.kind,
         )
+    if details is not None:
+        people_store.set_person_details(person_id, details)
     if "authority_scope" in raw:
         people_store.set_authority_scope(
             person_id, body.authority_scope or []

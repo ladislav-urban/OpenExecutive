@@ -66,7 +66,6 @@ const SEGMENT_LABELS: Record<string, string> = {
   executive: "Your Executive",
   "act-as-me": "Act as me",
   delegate: "Delegate",
-  "what-it-may-do": "What it may do",
   "handle-it": "Handle it for me",
   "take-the-lead": "Take the lead",
   memory: "About you",
@@ -120,7 +119,7 @@ function useFirstRunGate(pathname: string): boolean {
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname() ?? "/";
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const { mode, role } = useWorkspace();
+  const { mode, role, hasDepartments } = useWorkspace();
   const redirecting = useFirstRunGate(pathname);
   const { embedded } = useEmbed();
   const cardReturn = useCardReturn(pathname);
@@ -160,7 +159,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   const segments = pathname.split("/").filter(Boolean);
-  const hub = hubForPath(pathname, { mode, roleKind: role.role_kind });
+  const hub = hubForPath(pathname, { mode, roleKind: role.role_kind, hasDepartments });
 
   return (
     <AskOEProvider>

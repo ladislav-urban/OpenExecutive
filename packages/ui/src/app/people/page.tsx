@@ -5,7 +5,8 @@ import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 
 
 import { useAskOEFormContext } from "@/components/askoe/AskOEContext";
 import { ChatAppPickers } from "@/components/people/ChatAppPickers";
-import { TeamModeOffer } from "@/components/people/TeamModeOffer";
+import { ContactChangesCard, ContactKeeperSwitch } from "@/components/people/ContactChanges";
+import { TeamModeSwitch } from "@/components/people/TeamModeSwitch";
 import Button from "@/components/ui/Button";
 import { useChatDirectory, useSlackEmailMatch } from "@/components/ui/ChatPicker";
 import SectionTabs, { sectionPanelProps } from "@/components/ui/SectionTabs";
@@ -14,12 +15,15 @@ import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import {
   createPerson,
   getDirectoryState,
+  getContactChanges,
   getPeopleViewer,
   listPeople,
+  type ContactChanges,
   type PageFormField,
   type Person,
   type PersonKind,
 } from "@/lib/api";
+import { newlyAdded } from "@/lib/contactChanges";
 import {
   defaultKindForTab,
   defaultPeopleTab,
@@ -28,7 +32,7 @@ import {
   isContact,
   peopleForTab,
   personCardStatus,
-  shouldOfferTeamMode,
+  shouldSwitchToTeam,
   tabsFor,
   type PeopleTab,
 } from "@/lib/peopleKinds";
@@ -82,7 +86,17 @@ function DirectoryBadge({ person, candidate }: { person: Person; candidate: bool
   );
 }
 
-function PersonCard({ person, today, candidate = false }: { person: Person; today: string; candidate?: boolean }) {
+function PersonCard({
+  person,
+  today,
+  candidate = false,
+  isNew = false,
+}: {
+  person: Person;
+  today: string;
+  candidate?: boolean;
+  isNew?: boolean;
+}) {
   const contact = isContact(person);
   const status = personCardStatus(person, today);
   return (
@@ -104,6 +118,11 @@ function PersonCard({ person, today, candidate = false }: { person: Person; toda
             </span>
           )}
           <DirectoryBadge person={person} candidate={candidate} />
+          {isNew && (
+            <span className="inline-block px-2 py-0.5 rounded-full text-xs font-medium border border-emerald-500/40 text-emerald-500">
+              New
+            </span>
+          )}
         </div>
         <div className="text-[15px] text-fg-muted mt-0.5 truncate">{person.role || "—"}</div>
         <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-fg-muted">
@@ -583,7 +602,7 @@ export default function PeoplePage() {
   const [error, setError] = useState<string | null>(null);
   const [showAdd, setShowAdd] = useState(false);
   const [tab, setTab] = useState<PeopleTab | null>(null);
-  const [offerFor, setOfferFor] = useState<string | null>(null);
+  const [switchedFor, setSwitchedFor] = useState<string | null>(null);
   // Contacts are private to the principal. Until the viewer is known (or if
   // the check fails) nobody is offered them; the API enforces it regardless.
   const [viewerIsPrincipal, setViewerIsPrincipal] = useState(false);
@@ -605,8 +624,26 @@ export default function PeoplePage() {
       .finally(() => setLoading(false));
   }
 
+  // What the Executive changed in the contacts: the principal's alone.
+  const [contactChanges, setContactChanges] = useState<ContactChanges | null>(null);
+  const loadContactChanges = useCallback((next?: ContactChanges) => {
+    if (next) {
+      setContactChanges(next);
+      return;
+    }
+    getContactChanges().then(setContactChanges, () => setContactChanges(null));
+    listPeople({ includeContacts: true }).then(setPeople, () => {});
+  }, []);
+
+  useEffect(() => {
+    if (viewerIsPrincipal) getContactChanges().then(setContactChanges, () => setContactChanges(null));
+  }, [viewerIsPrincipal]);
+
   useEffect(() => {
     refresh();
+    // Done for you's contacts line opens the Contacts tab (?tab=contacts).
+    const linked = new URLSearchParams(window.location.search).get("tab");
+    if (linked === "team" || linked === "contacts") setTab(linked);
     getPeopleViewer()
       .then((v) => {
         setViewerIsPrincipal(v.is_principal);
@@ -620,6 +657,7 @@ export default function PeoplePage() {
   }, []);
 
   const shown = peopleForTab(people, activeTab, mode);
+  const fresh = activeTab === "contacts" && contactChanges ? newlyAdded(contactChanges.changes) : new Set<number>();
   const hidden = activeTab === "team" ? hiddenTeamCount(people, mode) : 0;
   const copy = TAB_COPY[activeTab];
   const tabsId = useId();
@@ -637,12 +675,12 @@ export default function PeoplePage() {
             setShowAdd(false);
             // Show the new row where it lives.
             setTab(isContact(p) ? "contacts" : "team");
-            if (shouldOfferTeamMode(mode, p.kind ?? "team", p.is_principal)) setOfferFor(p.full_name);
+            if (shouldSwitchToTeam(mode, p.kind ?? "team", p.is_principal)) setSwitchedFor(p.full_name);
           }}
           onClose={() => setShowAdd(false)}
         />
       )}
-      {offerFor && <TeamModeOffer name={offerFor} onDone={() => setOfferFor(null)} />}
+      {switchedFor && <TeamModeSwitch name={switchedFor} onDone={() => setSwitchedFor(null)} />}
       <main className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto px-4 sm:px-6 py-8">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between mb-6">
@@ -679,6 +717,12 @@ export default function PeoplePage() {
               {error}
             </div>
           )}
+          {activeTab === "contacts" && contactChanges && (
+            <>
+              <ContactChangesCard data={contactChanges} onChanged={loadContactChanges} />
+              <ContactKeeperSwitch data={contactChanges} onChanged={loadContactChanges} />
+            </>
+          )}
           {!loading && !error && shown.length === 0 && (
             <div className="rounded-2xl border border-line bg-surface-elevated p-10 text-center">
               <p className="text-fg-muted text-[15px] mb-5">{copy.empty}</p>
@@ -690,7 +734,13 @@ export default function PeoplePage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {shown.map((person) => (
-              <PersonCard key={person.id} person={person} today={today} candidate={candidates.has(person.id)} />
+              <PersonCard
+                key={person.id}
+                person={person}
+                today={today}
+                candidate={candidates.has(person.id)}
+                isNew={fresh.has(person.id)}
+              />
             ))}
           </div>
 

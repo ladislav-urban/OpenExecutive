@@ -17,6 +17,7 @@ from openexecutive.knowledge.review_store import (
     ReviewStore,
 )
 from openexecutive.knowledge.store import ChromaDBStore
+from openexecutive.observability import traced
 
 logger = logging.getLogger(__name__)
 
@@ -270,6 +271,7 @@ def _standing_block(rules: list[tuple[str, str]]) -> str:
     return "\n".join(lines)
 
 
+@traced("knowledge retrieve")
 def retrieve(
     query: str,
     domain_filter: list[str] | None = None,

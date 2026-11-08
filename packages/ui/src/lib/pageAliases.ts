@@ -8,8 +8,10 @@
 // Links still hand some of these out (orchestrator/app_control_catalog.py,
 // action chips), so they stay.
 export const PAGE_ALIASES: ReadonlyArray<{ source: string; destination: string }> = [
-  // Delegate opens on its first tab: what it may do without asking.
-  { source: "/delegate", destination: "/delegate/what-it-may-do" },
+  // Delegate opens on its first tab, Act as me.
+  { source: "/delegate", destination: "/delegate/act-as-me" },
+  // What it may do is now What it does for you, beside each Delegate tab.
+  { source: "/delegate/what-it-may-do", destination: "/delegate/act-as-me" },
   // The review queue lives inside the Knowledge base now.
   { source: "/review", destination: "/knowledge?view=review" },
   // Act as me moved to its own tab under Delegate.

@@ -16,6 +16,33 @@ system:
   stack:
     backend: Python 3.11+ · FastAPI · Anthropic Claude SDK · ChromaDB · SQLite
     frontend: Next.js 15 · React 19 · TailwindCSS · Mermaid.js
+  observability: |
+    Opt-in request tracing via Pydantic Logfire (openexecutive.observability).
+    Off unless LOGFIRE_TOKEN is set; then create_app() calls
+    configure_tracing(app), which instruments FastAPI and get_provider()
+    wraps every backend (anthropic / openrouter / local) in a tracing
+    decorator. Spans: one per HTTP request, "specialist {name}" around
+    router.route_to_specialist, "knowledge retrieve" around
+    knowledge.retriever.retrieve, and "messages.create|stream {model}" per
+    LLM call carrying gen_ai.usage.{input,output}_tokens and
+    gen_ai.usage.cache_{read,creation}.input_tokens, so latency and
+    prompt-cache hit rate are visible per turn. Invariant: no user content
+    leaves the process — Logfire's own Anthropic / httpx instrumentation is
+    deliberately NOT used (the former records message bodies on scrubber-safe
+    keys; the latter records full URLs, and the Telegram bot token sits in the
+    request path), the FastAPI argument mapper is replaced so endpoint bodies
+    are dropped, a server_request_hook rewrites the request URL to its route
+    template (path params such as /documents/{filename} never leave; query
+    string, host, client IP and user agent are blanked), exceptions are
+    recorded by type only via an exception_callback (SDK 4xx bodies echo the
+    request), and incoming traceparent / baggage are ignored
+    (distributed_tracing=False, add_baggage_to_attributes=False) so
+    unauthenticated callers cannot write into the project. LLM spans are
+    started without attaching context, because /chat pumps the streaming
+    generator from fresh tasks and an attached context could not be detached
+    across them. Tests are
+    isolated by an autouse conftest fixture so a developer's .env token never
+    turns tracing on in the suite.
   models:
     default: claude-sonnet-5-5
     deep_reasoning: claude-sonnet-5-5
@@ -95,7 +122,8 @@ system:
     - The Executive never offers to loop in, DM, or notify the human it is currently talking to. Each chat turn carries a <current_speaker> hint in the user turn (resolved from the caller's person_id, principal-flagged) and the persona "Choosing Who to Tell" rule forbids routing to anyone already in the room — so the principal reading a brief is never told the Executive will "loop Jordan in."
     - Specialists run in parallel via route_parallel() for cross-domain questions.
     - The untrusted-content policy (orchestrator.content_trust) is the one rule for text the principal did not write — inbound email, chat, attached files, watched pages. WHO SPEAKS - the principal only when the surface proved it (principal_speaking - web chat as the principal, CLI, their own Slack/Discord or secret-verified Telegram, their own address with Gmail dmarc=pass); an empty origin_channel is never read as trust. MEMORY - episodic extraction only then, and only on words outside <untrusted_content> blocks; peer memory and open loops are recorded under the speaker's own name, never as the principal's. TOOLS - writes on the principal's authority refuse others in their handlers; PRINCIPAL_ONLY_TOOLS (load_mcp_server - it connects the install to any URL; list_saved_tools and run_python_job - the principal's own automations and library files; run_script - it runs code the model just wrote, spending the turn's whole call budget) are not offered unless the principal is speaking on an interactive surface (email excluded, even authenticated), and a call emitted anyway is refused with a not_principal audit row. LABEL - outside text sits in the user turn inside <untrusted_content source author author_verified> with a fixed no-authority notice; NFKC folds compatibility forms, control characters are dropped and the tag's name is renamed wherever the text carries it (any case, spacing, entity-escaped), so the text cannot close its block. The principal's authenticated mail is theirs, but what it quotes or forwards still goes in a block (source email_quoted). A new inbound surface is an entry in this module, not a gate invented at its call site.
-    - Outside content (orchestrator.outside_content). Once a turn has read text from outside the team - any gateway read (a call_tool other than a Google or Microsoft 365 tool whose name starts with a write verb), an attachment on the message, a web search result, a synced Drive / OneDrive / Confluence / Notion excerpt (the retrieved context's synced headings, or retriever.retrieve returning one), read_document, run_executive_research, or an extension tool registered reads_outside (a vendor app) - for the rest of that turn the chat loop refuses what the Act as me lockdown refuses (mail_touched_withholds), every upsert_person, and every call_tool but the reads in MCP_CLIENT_MCP_TOOLS, a OneDrive file read and ERPNext's pinned reads (PINNED_ERPNEXT_TOOLS), so no mail, Docs, Sheets, Drive or calendar write. An ERPNext read marks the turn as source ERPNEXT; while that is all the turn read, propose_erpnext_draft (a draft is looked up in ERPNext first, and only leaves a card the person approves as it stands; its own erpnext__draft_check, marked by erpnext_caller.draft_check_run, passes the gateway's re-check) and run_script (an answer worked out from several ERPNext reads; each call inside it is still checked) stay open too (outside_content._AFTER_ERPNEXT_READ); mail read that turn still shuts both through the Act as me lockdown. A round that calls a read also holds that round's other such calls (they run together); the read itself runs and marks the turn once the round is done; a web search marks it as soon as the response arrives. Inside run_script each call is checked, and a read marks the turn for the calls after it. Handlers that reach outside re-check (lockdown.outside_reach_refusal), including the gateway's call_tool. The offered list never changes (the cached prefix stays the same) and the state lives in a context variable and on the session (session.turn_outside, found through current_session, because the web chat route resumes the generator in a fresh task per step), set by begin_turn and closed by end_turn, so nothing after the turn (the poller sending the reply) is held. Like the Act as me lockdown it lasts for the turn only; the next turn's history carries the reply, not what the tools returned. Mail to the Executive from someone not in People (a contact or a stranger) is outside text from its first word, so the email poller sets Session.sender_off_team, begin_turn marks the turn SENDER, and the whole turn is held; it may still raise an alert (create_alert), which is how that mail reaches the principal (private to them, routed to no one else, with the mail's real sender as its from), it may not send direct messages or remove watchlist entries (SENDER_WITHHELD_TOOLS), and a refusal on it tells the model to put the request in an alert rather than ask again. The poller's own audit rows still feed the brief. Separately, someone added to People this turn by upsert_person (or given a new address or chat account) is held until the next turn. _roster_allow_set leaves them out of the gateway's mail, calendar and Drive allow-list (the refusal says why, _block), and _guard_outbound, message_person and calendar attendees refuse them.
+    - Outside content (orchestrator.outside_content). Once a turn has read text from outside the team - any gateway read (a call_tool other than a Google or Microsoft 365 tool whose name starts with a write verb), an attachment on the message, a web search result, a synced Drive / OneDrive / Confluence / Notion excerpt (the retrieved context's synced headings, or retriever.retrieve returning one), read_document, run_executive_research, or an extension tool registered reads_outside (a vendor app) - for the rest of that turn the chat loop refuses what the Act as me lockdown refuses (mail_touched_withholds), every upsert_person but a contact the speaker named this message at an address they typed or one that sent the mail read (lockdown.speaker_named_contact, never on a SENDER turn; the refusal points to an add_contact card), and every call_tool but the reads in MCP_CLIENT_MCP_TOOLS, a OneDrive file read and ERPNext's pinned reads (PINNED_ERPNEXT_TOOLS), so no mail, Docs, Sheets, Drive or calendar write. The company's own Drive is not outside text — before a round (and before each run_script call) vet_reads looks up the one item a Google read names by id (company_read_item and _COMPANY_READS - Drive file content and downloads, folder listings, Docs, Sheets, Slides and their comments; never searches, forms, mail or calendar, and never with a drive_id, query or URL argument), once per id a turn, through MCPGateway.company_drive_items; a read of an item that is the company's own (mcp_gateway._company_item) marks the turn COMPANY instead of GATEWAY. COMPANY holds the same calls (anyone who can edit a company file wrote its words), except that while every read so far is COMPANY a rename or move passes (_company_rename - update_drive_file with only file_id, name, add_parents, remove_parents; _company_only checks the round's pending reads too). The Executive's own files go through the same check, so one it shared outside is not the company's. A refusal tells the model a rename or move the person asked for can go on a drive_files approval card. An ERPNext read marks the turn as source ERPNEXT; while that is all the turn read, propose_erpnext_draft (a draft is looked up in ERPNext first, and only leaves a card the person approves as it stands; its own erpnext__draft_check, marked by erpnext_caller.draft_check_run, passes the gateway's re-check) and run_script (an answer worked out from several ERPNext reads; each call inside it is still checked) stay open too (outside_content._AFTER_ERPNEXT_READ); mail read that turn still shuts both through the Act as me lockdown. A round that calls a read also holds that round's other such calls (they run together); the read itself runs and marks the turn once the round is done; a web search marks it as soon as the response arrives. Inside run_script each call is checked, and a read marks the turn for the calls after it. Handlers that reach outside re-check (lockdown.outside_reach_refusal), including the gateway's call_tool. The offered list never changes (the cached prefix stays the same) and the state lives in a context variable and on the session (session.turn_outside, found through current_session, because the web chat route resumes the generator in a fresh task per step), set by begin_turn and closed by end_turn, so nothing after the turn (the poller sending the reply) is held. Like the Act as me lockdown it lasts for the turn only; the next turn's history carries the reply, not what the tools returned. Mail to the Executive from someone not in People (a contact or a stranger) is outside text from its first word, so the email poller sets Session.sender_off_team, begin_turn marks the turn SENDER, and the whole turn is held; it may still raise an alert (create_alert), which is how that mail reaches the principal (private to them, routed to no one else, with the mail's real sender as its from), it may not send direct messages or remove watchlist entries (SENDER_WITHHELD_TOOLS), and a refusal on it tells the model to put the request in an alert rather than ask again. The poller's own audit rows still feed the brief. Separately, someone added to People this turn by upsert_person (or given a new address or chat account) is held until the next turn. _roster_allow_set leaves them out of the gateway's mail, calendar and Drive allow-list (the refusal says why, _block), and _guard_outbound, message_person and calendar attendees refuse them. What a turn held (outside_withheld_error and mail_touched_withheld_error call note_held) is kept in process, per conversation and speaker (never in a shared chat or a SENDER turn), for the next turn for HELD_TTL_SECONDS (an hour). When that message is a go (GO_RE - a short yes, or one opening with go, go ahead, do it or proceed as its own clause), begin_turn sets go_first, and the first round with a read has its reads (source_of, or a mailbox read tool) refused once with go_first_error, which names no tool and asks for nothing new (defers_read), so the approved writes run before a re-read holds them again; reads run from the next round. Nothing is replayed; the model makes the calls under every usual check. In the web chat the go is a tap - pending_held gives the held steps in plain words (step_words - only names it knows, else the app's generic label, as a tool name the model chose can carry planted words) to the chat stream's held_steps event and to the last reply in GET /sessions/{id}/messages, the UI shows Approve and Not now under the reply, and Approve sends Go ahead as the person's own message; a web turn's refusal (approve_hint, TurnOutside.web from Session.from_web_chat) points at Approve instead of asking for a typed go. Why - the owner asked for a tap instead of say go. A SENDER turn remembers nothing.
+    - When I read outside content (orchestrator.outside_mode). The owner's setting, one row in outside_content_mode, changed only by the principal (GET/PUT /executive/outside-content, Settings -> Your Executive), fixed per turn by begin_turn as TurnOutside.mode. ask (Ask every time) is the hold above. outsiders (Only for outsiders, the default) does not mark a Gmail search showing only ids, a Gmail message read whose every sender is a teammate (not a contact) that Gmail authenticated (fact_confirmation.sender_authenticated on a raw read of each id, at most 10) with no other address in it, or a calendar read naming only the team where the Executive itself organized every event (a teammate's invite is outside, since an invite's organizer is what the mail that brought it says; a calendar-id organizer or a Graph result trimmed of organizer is no one's; Google get_events only when detailed or for one event, since the plain listing hides who made each event; Microsoft 365 calendar reads). Outlook mail always marks, as there is no authentication check for it here. Attachments and synced folders mark too, as a file carries whoever wrote it, not whoever sent it. An at-sign the address pattern can't read counts as a stranger (mark_read / from_the_team). trust (Don't ask) applies only on the principal's own turn on an interactive surface that is not email or a shared chat (content_trust.principal_only_withheld empty), where no read marks the turn and reading their own mail locks nothing (the chat loop's mail lockdown and app_control check trusted_turn); anyone else gets outsiders. Shared chats, another AI app's turn and mail from someone not in People are always ask; sends still go only to People; someone added this turn waits for the next. An unreadable setting is ask. Why - the hold stopped almost every read-then-act request (check the calendar then move a meeting) and the owner asked for the choice. The test suite pins get_mode to ask (tests/conftest.py).
     - The workspace mode (memory.workspace_settings, `workspace_settings` table) is per install and defaults to team. Solo (one person using Open Executive just for themselves) runs no department check-ins anywhere — bootstrap_cadences and enqueue_next are no-ops and the runner cancels a stray dept_cadence row without running or chaining it — but department rows are kept, so switching back is instant. A Session may carry an explicit `workspace_mode` override (read via effective_workspace_mode) so a caller running several conversations on one Executive, such as evals, can pick the mode per session; otherwise the install-wide mode is read fresh at the start of each turn and pinned on the session for that turn only (Session.turn_workspace_mode, via pin_turn_workspace_mode), so every tool handler in the turn uses the mode its persona and tools were built in. The same row holds the principal's role (role_kind owner | in_house | independent | other, role_title, reports_to, remit, measured_on; all nullable) — solo is about who uses Open Executive, not the principal's level. Only solo mode reads it (the solo org block's role lines and the specialists' <principal_role> tag), and team output is byte-identical whether a role is stored or not. A Session may carry a `principal_role` override (effective_principal_role) for the same reason as the mode override.
     - A global operator pause (scheduler.pause, `executive_control` table) gates every autonomous loop — the scheduler, the Gmail poller and the workflow resumer. Inbound conversations (web chat, Slack, Discord, Telegram, Google Chat) are never gated. Pausing holds work, never cancels it.
     - Each specialist gets its own RAG fetch filtered by its declared domain alias.
@@ -347,7 +375,12 @@ caching:
     synthesis never get them; the chat loop adds them per turn like the Act
     as me tools, never on an unattended run, a turn private to the
     principal or to a speaker not on the People list, and only where the
-    tool's offered(session) says. That
+    tool's offered(session) says. known_caller=False lifts the People-list
+    rule for that tool alone (an extension surface that names its user
+    without proving who is speaking, so the turn has no caller_person_id);
+    register_tool then requires an offered(), which decides alone. Never on
+    an unattended, private, AI-app (mcp_client) or replay turn either way.
+    That
     predicate must depend only on the kind of turn, so each kind keeps one
     cached tool list. Act as me's lockdown refuses them after a mail read
     (unclassified, fails closed), except one registered with
@@ -365,7 +398,10 @@ caching:
     carry decision_id (the card the chat shows under its message), and an
     extension tool's waiting_for_approval result is its own chip's to
     describe (the department gate never holds an extension tool, so it is
-    never core's held action). A
+    never core's held action). activity_label names the
+    chat's activity line while it runs (activity_labels._extension_label,
+    after the built-in labels), and private_row makes its dispatch audit row
+    private (executive._private_tool_row). A
     collection is a drafted artifact tagged collection:<name>: the record
     carries it, GET /artifacts returns collection / collection_label, the
     Documents page shows one filter per collection, and archive, restore and
@@ -734,9 +770,8 @@ providers:
   executive_voices: |
     The Executive's voice persona (personas/builtin/*.md, shadowed by
     voice_personas rows) is substituted into block 0 at {VOICE_PERSONA}.
-    Three general voices are offered by the shared VoicePicker in setup
-    (/onboard, after the workspace choice and solo role step) and Settings ->
-    Executive, saving voice_persona_slug through PATCH /agents/executive:
+    Three general voices are offered by the VoicePicker in Settings ->
+    Executive (setup no longer asks; it ends on Home), saving voice_persona_slug through PATCH /agents/executive:
     Direct (slug ``default``, stored as no override), Supportive and
     Analytical. Frontmatter ``description`` / ``sample`` feed the picker;
     ``legacy: true`` marks the named-executive voices, hidden from the picker
@@ -1285,6 +1320,35 @@ routing:
     and `contacts_reachable_now()`, decides whether a turn may reach a
     contact at all (egress, calendar attendees, `message_person` and the
     raw DM tools) — see `integrations.channel_access`.
+  standalone_goals: |
+    A goal has an owner and, optionally, a department
+    (departments.models.Goal: `department_slug` and `owner_person_id` are
+    both nullable). Why: departments are heavyweight (a lead, authority,
+    a channel, a check-in) and most small teams and solo users never want
+    them, but every goal still needs someone it is on and a weekly check.
+    The owner is resolved at read time (`departments.goals.
+    effective_owner_id`): own owner, else the department's head, else the
+    principal; storing NULL keeps a goal following its department when the
+    head changes. Coverage: a department with a specialist grades its own
+    goals in its check-in; every other goal (no department, or a department
+    with no specialist) is graded weekly by the `goal_review` scheduled kind
+    (`departments.goal_review`, `GOAL_REVIEW_TIME`, default
+    weekly@mon@09:00, both modes) with `cso` (`goals.FALLBACK_REVIEWER`),
+    reusing the check-in's verdict contract and `persist_goal_verdicts`.
+    It skips goals graded within six days and unedited since, so a quiet
+    week costs no model call. Deleting a department detaches its goals
+    (an unowned goal takes the head as owner first) instead of deleting
+    them. Migration `_migrate_goals_stand_alone` rebuilds the table once to
+    drop NOT NULL, then adds `owner_person_id` (no backfill). Routes:
+    `GET /goals` (with owner name and department title), `POST /goals`
+    (blank area = no department), `PATCH`/`DELETE /goals/{id}`. The org
+    block renders goals with no department with their goal_id (team:
+    `## Goals With No Department`; solo: `### No area`); the brief adds an
+    "Other goals" row (slug "") shaped like a department so every reader of
+    `departments` counts them, and attention goals carry the owner. The UI
+    shows the Departments tab only when `GET /workspace` reports
+    `has_departments`, and adding a teammate while solo switches the
+    workspace to team mode without asking.
   department_tools: |
     `list_department_goals` and `update_department_goal`
     (openexecutive.orchestrator.department_tools) let the Executive
@@ -1292,8 +1356,11 @@ routing:
     a chat turn — used when the user reports progress ("we shipped
     the migration") or a setback ("we lost the deal"). Phase B —
     closes the loop opened by `department_check_in` workflow in Phase
-    A (see `departments.goal_review_persistence`). Both tools require
-    `department_slug`; `update_department_goal` requires `goal_id` +
+    A (see `departments.goal_review_persistence`). Neither needs a
+    department: `list_department_goals` without `department_slug` lists
+    every goal with its owner and department, and `update_department_goal`
+    names a goal by `goal_id` alone (a `department_slug` it is given must
+    match the goal's department). `update_department_goal` requires `goal_id` +
     `rationale` and at least one of `status`/`current`. `rationale` is
     stored in the audit log (never on the goal row) so future readers
     see the provenance of every chat-driven change. The handler enforces
@@ -1371,7 +1438,12 @@ routing:
     stable tool prefix. The solo persona teaches it (`_SOLO_CREATE_GOAL`);
     team mode learns it from the tool description, so the team persona
     stays byte-identical.
-    Evals: `department_goal_update_005`.
+    Goals stand on their own: `create_goal` leaves `area` out unless the
+    principal names one (a goal with no area creates no department) and
+    takes an optional `owner_person_id` (a non-archived team member, else
+    refused). The duplicate check and the 8-goal cap apply to the goals
+    with no department as one group.
+    Evals: `department_goal_update_005`, `department_goal_update_006`.
     `record_decision_outcome` (orchestrator/decision_tools.py, both modes)
     records how a past decision turned out. The weekly review lists up to
     three decisions older than 30 days with an empty outcome as
@@ -2357,7 +2429,7 @@ knowledge:
     loader.read_document_text / extract_text_from_file_async are the async
     entry points; ingest_file (uploads, reconcile_company_docs), the
     /documents/{filename} preview, intake uploads, integrations.attachments,
-    the email poller, oe__read_file and read_document all use them. The sync
+    the email poller and read_document (a workflow step's oe__read_document) use them. The sync
     extract_text_from_file serves its other callers (see parse_isolation).
 
     Where files reach the Executive:
@@ -2570,6 +2642,18 @@ memory:
     and decisions in them, and show an open ask as what the Executive is
     doing. Why: the header opened with "you've been messaging me heavily
     tonight" and made the reader's own complaint its headline.
+    RIGHT NOW — the whole-company header is written from
+    `briefing.header_context`: MOVED TODAY lines tagged [M1]…, COMING UP
+    TODAY (calendar), STILL OPEN and BACKGROUND (chat titles, own messages)
+    as context only. Each bullet must end with a tag; `keep_cited_points`
+    drops the rest and keeps three at most. No MOVED TODAY line means no
+    model call (the quiet line, or "Nothing new today — what's open is
+    below."). The history rail is read only for work finished today. Why:
+    chat titles and a 20-row history rail were most of its input, the prompt
+    banned the Needs you items and demanded 2–4 bullets, so it padded with
+    "I'm combining the PDFs now" and yesterday's DMs (2026-10-20). Every
+    brief uses `narrative.brief_model()`, the Executive's model, not
+    ROUTING_MODEL.
     WRITE PATH — chat tools in `orchestrator/fact_tools.py`:
       - `remember_fact(subject, statement, previous_value?, replaces_fact_id?,
         source_quote)` and `forget_fact(fact_id, rationale, source_quote)` —
@@ -2737,14 +2821,34 @@ memory:
         fake `dmarc=pass`), then exactly one dmarc= verdict must remain,
         reading exactly `dmarc=pass header.from=<domain>` (Gmail may follow
         it with its own `dara=` resinfo for Gmail / Workspace senders, so
-        its position is not checked). Fails closed (absent header,
-        dmarc=none, temperror, unbalanced quotes or comments, two verdicts,
-        extra text in the verdict, read failure). Residual: when Gmail
-        writes NO verdict (a From domain without DMARC) and echoes an
-        unsanitised `;dmarc=pass header.from=...` elsewhere (a HELO on
-        null-sender mail), the echo would read as the verdict — unverified
-        whether Gmail echoes it; bounded by the ack caps. Anyone else: no second read, never
-        authenticated.
+        its position is not checked). A From domain with no DMARC record
+        (no verdict, or dmarc=none for that domain) passes only on a DKIM
+        signature Gmail verified for exactly that domain (`_dkim_aligned`,
+        strict alignment), or Google Workspace's default key for it
+        (`<domain-with-hyphens>.<date>.gappssmtp.com`, read back only for a
+        two-label domain without hyphens, since `a-b-com` is ambiguous).
+        SPF alone never counts (a domain listing Google's servers passes
+        anyone sending through Google). On every branch, mail a list or
+        group resent (List-Id, X-Google-Group-Id, Mailing-List, or a Groups
+        `+bnc` envelope) is never proven: an open group in the domain's own
+        Workspace resends an outsider's forged From under the Workspace's
+        signature. A stamp echoing `smtp.helo=` (sender text) proves nothing
+        either. Fails closed (absent header, temperror,
+        dmarc=fail, no aligned DKIM, unbalanced quotes or comments, two
+        verdicts, extra text in the verdict, read failure). On an Outlook
+        mailbox the same check reads Exchange's stamp instead: Graph's
+        internetMessageHeaders for the message (get-mail-message), then
+        delegation.outlook.exchange_authenticated (topmost header with EOP's
+        compauth=, dmarc=pass for the From domain, or for dmarc=none /
+        bestguesspass a DKIM pass with header.d = that domain; Microsoft
+        365's default onmicrosoft.com key never counts, as it names the
+        tenant, not the domain; list-resent mail never passes; a smtp.helo=
+        echo or a second dkim= verdict never passes). It assumes Exchange
+        Online stamps every message into the mailbox: a tenant whose mail
+        arrives through an on-premises server or another gateway without
+        EOP's stamp gets no real proof (compauth= only checks the shape). Outlook
+        still sends no roster acknowledgement (the grant is Gmail's).
+        Anyone else: no second read, never authenticated.
         `fact_tools._gate` admits one only from the principal's PRIMARY
         address (exact; no alias / domain rule), authenticated, and not
         private_to_principal (forwarded mail and contacts stay refused).
@@ -4530,6 +4634,82 @@ people:
     fresh TTL. Restore calls `_after_roster_write`, so anything they sent
     to roster intake while suspended is matched and answered. Audited
     `person_suspended` / `person_restored` (private, `details.by`).
+  contact_keeper: |
+    people.contact_keeper keeps the principal's contacts current from their
+    own mailbox (delegation.gmail_for, Gmail or Outlook, never the MCP
+    gateway). Background only: scheduler.runner._maybe_keep_contacts calls
+    maybe_run every tick, which starts one pass per RUN_EVERY (6h), throttled
+    in process and by contact_keeper_state.last_run_at. A pass runs only
+    when the mode is not off, the principal has Act as me on (can_delegate +
+    is_enabled) and gmail_status is connected, inside rows_for_person so its
+    audit rows are the principal's; it ends with one private contacts_kept
+    log_event of counts, no names.
+    Why headers only: names and addresses come from To/Cc and guest lists,
+    never a mail's text, so a mail cannot write the roster. Adds need two
+    sent mails in 60 days (no lists, bulk, auto mail, ghostwritten Handle it
+    sends, over 10 recipients) or
+    a meeting they organised or accepted (at most 10 guests); own, exec,
+    known (archived too), role, no-reply and company-domain addresses are
+    skipped. Updates: an alias under a contact's exact two-word name as the
+    To line wrote it, twice, always a suggestion whatever the mode (an alias
+    is an egress address, so one reply to a lookalike must not attach it;
+    blocked or archived addresses never are), a
+    fuller name for a one-word one, and a role read from the contact's
+    newest authenticated mail (latest_from) by one forced-tool call, kept
+    only when every word is in the mail and it holds no link, address or
+    instruction (capped 5 per run, 20 a day, 14 days per address). Typed
+    fields are never overwritten (a name or role is written only when empty
+    or last set by the keeper).
+    people.contact_changes records each change (contact_changes) with reason
+    and evidence. Mode ask stores a suggestion applied on accept. Undo
+    archives an add or restores the old value if unchanged since; undo and
+    dismiss block (email, field, value) in contact_keeper_blocks so it is
+    never proposed again. A chat add (people_tools.handle_upsert_person) is
+    recorded with reason asked so it has an Undo. Routes /contacts/* answer
+    caller_is_principal only (404 otherwise). /today/activity gives the
+    principal one contacts_kept row per day with changes.
+    people.contact_notes keeps what the Executive remembers about each
+    contact (contact_notes, one row per person): last emailed, last heard
+    from (newest authenticated mail),
+    last met, next meeting and its title, counts, and a note of at most 400
+    characters with up to 6 topics. Why the principal's own words only: the
+    note is written by one forced-tool call (ROUTING_MODEL) from their own
+    sent mail to the contact (sender_new_text, no quoted mail, no
+    ghostwritten sends) and the titles of meetings they organised, so a
+    contact's mail cannot write it, and it can be read in chat like the
+    principal's own sent mail. Rewritten only when the set of those
+    messages and meetings changes (activity_key), capped 5 per pass and 20
+    model calls a day (contact_note_tries counts every call, failed or
+    rejected too); a note with a link, address or tag is rejected and the
+    old note kept.
+    A pass whose calendar read fails keeps the stored next meeting and
+    meeting count (put_activity meetings_known=False).
+    last_heard_at is read for up to HEARD_READS_PER_RUN (20) people a pass,
+    independent of the note budget. Read on the principal's own turn by list_people and
+    ask_about_person (contacts_reachable_now), and by GET
+    /contacts/{person_id}/note (principal only). archive_person deletes it.
+    Team members get the same note and signature read (role when empty and
+    contact details, never name or addresses: TEAM_FIELDS); a teammate's
+    note is still the principal's alone, from the principal's own mailbox,
+    never teammate_mail or their peer memory.
+    Contact details (person_details; Person.details: phone, mobile,
+    website, linkedin, social, address) come from the same signature call.
+    Why checked in code: each is kept only when the mail writes it (phone
+    digits as one number, every word of an address, a link's host+path), a
+    website only on the sender's own non-freemail domain or its subdomains
+    (never a parent such as co.uk), a profile only on
+    SOCIAL_HOSTS / linkedin.com (people.contact_info.detail_from_text). One
+    per kind is the keeper's (last_applied); a newer value replaces it,
+    a kind someone typed a value for is left alone. Each is a contact_changes row (field = kind) with Undo
+    that removes it and restores the one it replaced. Details are for the
+    reader only: never an egress channel.
+    Who sees them: the people routes (GET /people, /people/{id},
+    /people/by-scope) return details only to the principal and to that
+    person (api.routes.people._shown); anyone else gets details empty, so a
+    number read from a teammate's signature isn't handed to the whole team.
+    A refused mailbox read (GmailAuthError / GmailRateLimited) stops that
+    run's signature and last-heard reads but not its notes; the run is then
+    still recorded as a mailbox failure (raised after the notes).
   aliases: |
     A Person has one PRIMARY address (`Person.email`, the one they sign in
     with) and up to 10 ALIASES (`Person.email_aliases`, table
@@ -5368,7 +5548,9 @@ chat:
     Before the fixes, the same review grades every unreviewed turn with one
     forced grade_turns call (actor chat_review_grade): fine, miss (kind
     company = a fact or preference it lacked, product = something it could
-    not do) or unclear, with what the person wanted instead and a 4+ word
+    not do, plus a finer cause: term, fact, preference, specialist or do_it
+    for company, tool or cant for product, stored empty when missing or
+    from the other kind) or unclear, with what the person wanted instead and a 4+ word
     quote that must appear in that or a later turn, or a signal other than a
     thumbs up on the turn, else the grade is unclear.
     The grader reads the signals the product recorded about each turn:
@@ -5377,7 +5559,7 @@ chat:
     in a chat app, which has no buttons), stopped replies, a rewind
     (session_rewound audit row after the turn), a claim-check nudge
     (claim_check audit row by turn_id) and failed tool calls. Grades land on
-    chat_review_turns (verdict, kind, wanted, signals, graded_at, message_id)
+    chat_review_turns (verdict, kind, cause, wanted, signals, graded_at, message_id)
     and per-person weekly counts in chat_review_weeks; misses are kept 90
     days, other rows 7. A failed grade never stops the fixes. GET/DELETE
     /memories/reflection (api/routes/reflection.py) serves them to the Pulse
@@ -5826,10 +6008,10 @@ audit:
     - delegation_reply_closed — the reconciler (or a Send that found it settled) closed a card Gmail settled. details carry person_id, decision_id and the reason (expired, sent_in_gmail, draft_deleted, draft_gone, you_replied, thread_gone). Always private.
     - delegation_handle_it_changed — a person changed Handle it for me via PUT /delegation/handle-it (or it went off with the inbox watcher). actor "user"; details carry person_id, enabled and mode. Always private.
     - delegation_reply_handled — Handle it for me sent an inbox reply on its own. details carry person_id, decision_id, thread_id, sent_message_id and recipient_count, or confirmed_later from the reconciler. Always private.
-    - delegation_reply_allowed — Send + allow in training: the person allowed replies to a sender (or follow-ups to those people) after sending one. details carry person_id, decision_id, allowed_id and setting. Always private.
+    - delegation_reply_allowed — Send with the on-its-own-next-time tick, in training: the person allowed replies to a sender (or follow-ups to those people) after sending one. details carry person_id, decision_id, allowed_id and setting. Always private.
     - delegation_example_kept — Drafts in training: a reply the person changed in their mailbox and sent was kept as how they write to that person. details carry person_id, decision_id and allowed_id. Always private.
-    - delegation_actions_allowed / delegation_actions_handled / delegation_actions_held — Suggested actions in training: Approve + allow allowed those actions; a card of allowed actions was carried out on its own (details.outcomes); or it waited after all (details.reason). Always private.
-    - delegation_training_changed — a person put Act as me settings in or out of training (PUT /delegation/training). details carry person_id and each setting changed. Always private.
+    - delegation_actions_allowed / delegation_actions_handled / delegation_actions_held — Suggested actions in training: Approve with the tick allowed those actions; a card of allowed actions (or any card it may carry out with Suggested actions On) was carried out on its own (details.outcomes); or it waited after all (details.reason). Always private.
+    - delegation_training_changed — a person put Act as me settings in or out of training, or Suggested actions On or off (PUT /delegation/training). details carry person_id and each setting changed. Always private.
     - delegation_learned_removed — a person removed something Act as me had learned (DELETE /delegation/learned/{id}). details carry person_id and allowed_id. Always private.
     - take_the_lead_changed — a Take the lead switch, Ask first switch or company rule changed (PUT /take-the-lead, its rules, PUT /delegation/take-the-lead). actor "user"; details carry the scope and what changed.
     - delegation_reply_sent — the person tapped Send and their draft went, exactly as it was in Gmail. details carry person_id, decision_id, thread_id, sent_message_id, recipient_count and edited, or confirmed_later when the reconciler found an unconfirmed send had gone. Always private.
@@ -7317,10 +7499,55 @@ workflows:
     list_saved_tools is allowed under the Act as me lockdown (local read)
     and withheld on a turn private to the principal, like run_script.
 
+    Email as the creator (delegation/workflow_email.py): two built-ins,
+    oe__draft_email_as_me (draft in the creator's mailbox, recorded as a
+    chat draft) and oe__send_email_as_me (sent through
+    reply_send.send_for_workflow, the third door). Written only as the
+    workflow's owner; refused when someone else started the run by hand, the
+    speaker is unrostered, an unattended Executive pass started the
+    outermost run (chat_tools.started_by_a_pass), or another person's
+    workflow is in the chain (chat_tools.running). Needs Act as me allowed + on + own mailbox
+    connected, else the step is told to use the Executive's email. to/cc are
+    write targets (first email to a new address is held). Caps:
+    DELEGATION_MAX_DRAFTS_PER_DAY for every email, plus
+    DELEGATION_WORKFLOW_MAX_SENDS_PER_DAY (default 20) for sends, counted
+    from delegation_drafts rows with source workflow_sent written before
+    the send. A workflow with the send tool is created/changed/activated only
+    by its creator per verified.caller_refusal (403 from POST/PUT
+    /workflows/custom, save-edit, activate; save_refusal); chat's
+    save_workflow refuses to replace one at all. At send:
+    is_enabled, handle_it.signing_ok, no client slot, draft unchanged
+    (recipients exactly as written, from an own address, <=10, never the
+    Executive's). Results and the run report carry to/subject, never the
+    body; audit rows are private to the creator. The designer gets an
+    "Email as the user" line (build_context_block(as_me=...)).
+
+    Chat's tools in action steps (workflows/chat_tools.py): one list,
+    `ACCESS`, labels every tool chat offers — use (a step may call it as
+    oe__<name>), as_me (Act as me; chat-only for now), covered (the step
+    already has its own path: gateway tools, run_script, specialist steps) or
+    chat_only (it changes what the Executive knows or who is on the team, or
+    acts on the person's screen). A unit test fails when a new chat tool has
+    no label, so a new chat tool can't skip the decision. A "use" tool runs
+    through the SAME chat handler, as an unattended chat turn would: an
+    unattended Session bound as current_session, the workspace-mode filter
+    (solo withholds department/broadcast tools), and, when a team member
+    created the workflow, their department gate. Channels the instance has no
+    token for are not offered. A saved workflow is the person's permission, so
+    Take the lead's approval gates and the solo principal-only rules are not
+    applied (no change for workflows that worked before). run_workflow refuses
+    a workflow already in its own chain and nests at most 3 deep;
+    run_workflow / run_executive_research get a 15-minute call timeout.
+    oe__web_search is the model's own server search (appended after the sorted
+    tools; paused turns are sent back as-is). Workflows have no tool
+    handlers of their own: oe__message_person / oe__create_alert are the chat
+    tools under the same names, and oe__read_file (LEGACY_NAMES) still
+    resolves to read_document for saved workflows but isn't offered.
+
     Action steps (workflows that act): `ActionStepSpec` {goal, tools,
     max_tool_calls 1-50, default 20} in dynamic_models. `tools` is an allowlist
-    of exact names — MCP gateway tools (`server__tool`) and built-ins
-    `oe__read_file`, `oe__message_person`, `oe__create_alert` — and the user's
+    of exact names — MCP gateway tools (`server__tool`) and built-ins (the
+    chat's own tools as oe__<name>, below) — and the user's
     click on Create IS the approval (the review card lists every tool, flags
     ones that may change things, and names them in a "can use these without
     asking again" notice). Gateway meta-tools (search_tools / call_tool /
@@ -7336,8 +7563,8 @@ workflows:
     budget enforced, then a tools-off (`tool_choice: none`) final turn; tool
     errors return as is_error; each call emits a `progress` WorkflowEvent and a
     `workflow_tool_call` audit row (tool + outcome, never arguments). Output =
-    the agent's report + an "Actions taken" list. `oe__read_file` reads only
-    under WORKFLOW_FILE_DIRS (default workspace-mcp's attachment dir), resolving
+    the agent's report + an "Actions taken" list. `oe__read_document` reads only
+    under WORKFLOW_FILE_DIRS (or the company docs folder) (default workspace-mcp's attachment dir), resolving
     symlinks/`..` first. Action steps are allowed in cadence workflows. The
     designer gained a third constant tool, `search_available_tools`, answered
     inside the same `advance` call (≤4 per turn; tool_use/tool_result pairs are
@@ -7600,7 +7827,7 @@ workflows:
     - inbound_resolver — matches human replies back to paused workflow runs.
     - crisis_comms — drafts incident response messaging.
     - churn_deep_dive — structured customer-loss analysis.
-    - "morning_brief — Shift 3 recurring workflow. Fires once per day from the scheduler (default 08:00 in the user's zone; an explicit PRINCIPAL_BRIEF_MORNING_TIME env var is read as UTC). Targets the principal: utility_fast model renders a ≤200-word Markdown briefing. CHANGE-AWARE: the window is 'since the last DELIVERED morning brief' (`briefing.brief_state.since_for`, 24 h on a cold store, clamped to 7 d); activity comes from `_build_activity(20, since=…)`; proposals (action category only) split into NEW SINCE LAST BRIEF (enumerated, with why_now / next move) vs a one-line CARRIED OVER count (with the likely-stale count); a REWRITTEN block lists carried items the review rewrote in the window (`brief_state.rewritten_since`: verdict `changed`, still open — reported under 'what changed', never as done); a HANDLED OVERNIGHT block lists the alert review's completed moves (`brief_state.handled_since`, `changed` excluded). Section order: top call → what changed → handled overnight → needs you (new only) → waiting on → at risk. A fingerprint of the inputs (`build_brief_fingerprint`, date-free) is compared to the last delivered one: unchanged ⇒ the artifact is the one-liner 'Nothing new since yesterday's brief — N items still waiting on you.' and no model call (`PRINCIPAL_BRIEF_SUPPRESS_UNCHANGED`, bypass with `force_full=true` on a manual run). The workflow yields a `result` event `{brief_fingerprint, suppressed, since}`; only `_run_principal_brief` records the fingerprint, after a successful delivery (`brief_state.record_delivered`, stored in `briefing_narrative` under scope `brief:<kind>`). Delivery (`scheduler.runner._deliver_to_principal`, also used for the client-rotation digest): the principal's `preferred_channel` (slack / discord / telegram / email / any) maps to slack_dm / discord_dm / telegram / email and is tried first, then the other chat channels they have an id for in the order slack_dm → discord_dm → telegram. Email goes through the active MCP gateway when it runs the Google Workspace server (`runner.email_ready()`: another MCP server alone does not make email ready) (`google_workspace__send_gmail_message`, `user_google_email` = the Executive's own address, `to` = the principal's email, subject `<workflow title> — <local date>` in the user's zone, e.g. 'Morning Brief — Fri 25 Sep' (`_email_subject`; a UTC date put tomorrow's date on an evening digest west of UTC); body_format html, the Markdown rendered by `utils.markdown_email` (markdown-it-py: raw HTML off, so quoted outside text shows as text; images off, so opening the email loads nothing remote; javascript:/vbscript:/file:/data: links dropped); an in-band error counts as failed, `workflows.action_step.looks_like_error`). Email is tried first when the preference is `email`, and otherwise last, as the backup after every chat channel: delivery stops at the first channel that sends, so an owner linked by email at setup (`any`) with a working Slack still gets no email — only when every chat channel is missing or fails. Email is not a DM, so the per-Person outbound guard does not apply; the gateway's roster egress gate does. `_deliver_to_principal` returns a `PrincipalDelivery(ok, detail, reason, channel)`; reason is delivered | no_owner | no_channel | gateway_down | send_failed. `gateway_down` is email set up (the mail server in the MCP config, the principal has an address) but no active gateway: the Executive's fault, recorded with the supervisor's start failure (`mcp_gateway.gateway_problem`) instead of `no_channel`, which told the owner to connect what they had. A `send_failed` detail quotes each channel's own error (`email: invalid_grant …; slack_dm: channel_not_found`), stored with the outcome (`record_delivery_outcome(detail=…)`, JSON in the row's text, older bare-channel rows still read) and repeated by the notice and the Daily brief light (`brief_state.describe_problem`, whose fix says to reconnect when the detail shows a dead grant). Before planning, `_deliver_to_principal` / `deliver_to_person` run the lazy re-check `runner.ensure_email_ready` → `mcp_gateway.ensure_active_gateway`: with the gateway down and no attempt running, the supervisor (`orchestrator.gateway_boot.GatewaySupervisor`) tries a start now rather than waiting for its next backoff retry, so a gateway that failed at boot can still carry this brief; `_execute_action` resolves the gateway the same way instead of keeping the None boot handed the scheduler. The order comes from `runner.delivery_order` via `runner.principal_delivery_plan()` — public, because the Briefing notice and the Setup status light use them too. When no channel can deliver (e.g. a web-only principal, or email-only with no gateway) the brief is still generated and stored as a run with its artifact, exactly as before; it is not delivered (audited `delivery_failed`), so the window and fingerprint do not advance, and the next occurrence is chained. Every run's outcome is recorded (`brief_state.record_delivery_outcome`, scope `brief_delivery:<kind>`: the reason, and the channel that sent it — a channel name, never an address), including `not_written` when the workflow raised, emitted an error or produced no artifact (then nothing is sent), and `send_failed` when delivery itself raised. `last_delivery_outcome()` returns the latest of the two briefs and the (solo) weekly review (`brief_state.DELIVERY_KINDS`; `BRIEF_KINDS` stays the two daily briefs, whose send times the Setup page lists). `current_problem(outcome, has_owner, can_deliver)` says what still keeps it from the owner: send_failed and not_written stay reported until the next brief records a new outcome; having nowhere to send it is judged from now, so a fix clears it and a partial fix reports what is left (an owner added but still no channel reads no_channel). `GET /today/brief-delivery` (the Briefing's notice, owner only, null while the scheduler is off) and the Setup status 'Daily brief' light read it; brief names come from `scheduler.action_phrasing.KIND_LABEL` (`brief_state.brief_name`). SOLO: with effective_workspace_mode solo it uses STANDALONE_BRIEF_SOLO_SYSTEM (top call → what changed → handled overnight → needs you → due this week → goals at risk, named by area; no waiting-on or department sections) over the solo context render, which adds today_data['due_soon'] (open_loops.principal_due_soon: the principal's open loops overdue or due within 7 days) as a DUE THIS WEEK block, and the fingerprint carries the mode, drops the people-awaiting set and, when there are due items, carries them as (loop_id, state) pairs. TOP THREE TODAY (solo only, the DM brief only): `briefing.top_three.build_top_three` picks up to three in code — overdue then due-today commitments, off-track then at-risk goals (by area), commitments due later this week, then active initiatives stalest first — and renders them as a TOP THREE TODAY block the solo prompt turns into a 'Top three today' section right after the top call. When `runner.google_workspace_ready()` (gateway up and the Google Workspace server configured) and the principal has an email, ONE `google_workspace__get_events` call (asyncio.wait_for, 4 s) lists today's events (local midnight to midnight, sent as UTC) on the principal's calendar — `calendar_id` = their address, read as the Executive's account (`user_google_email` = EXEC_EMAIL_ADDRESS), or `primary` when that IS the principal's address; `parse_events` reads workspace-mcp's text listing or JSON and treats an error, a timeout or an unknown shape as NO calendar (never as a free day). With a calendar each item gets its own free block (an hour, never under 30 min) inside CALENDAR_BUSINESS_HOURS_START/_END, not before now, all-day events not blocking, plus a TODAY'S CALENDAR block (titles quoted as data); without one there are no slots and no calendar block. The calendar is read only when something was picked, and nothing here can fail the brief. The fingerprint adds the items' keys (`loop:N:state`, `goal:N:status`, `project:N` — no dates, no slot times) and only a coarse `calendar_hash` (busy blocks rounded to 15 min + the all-day count, no titles, no dates), each only when present, so an unchanged day still suppresses and a solo install with nothing picked keeps its old fingerprint. A day whose calendar read times out after one that did not (or the reverse) changes the fingerprint once — accepted. No slots on a non-business day (`calendar_tools.is_business_day`, shared with the booking caps), though the day's events are still listed. Only a date-only event is all day; a zero-length timed event is listed but blocks nothing; an event whose times cannot be read is dropped from the listing, the busy time and the all-day count, and a reply that lists events but none readable counts as no calendar (never a free day). Logs carry only the reply's length or the exception type — never reply text."
+    - "morning_brief — Shift 3 recurring workflow. Fires once per day from the scheduler (default 08:00 in the user's zone; an explicit PRINCIPAL_BRIEF_MORNING_TIME env var is read as UTC). Targets the principal: utility_fast model renders a ≤200-word Markdown briefing. CHANGE-AWARE: the window is 'since the last DELIVERED morning brief' (`briefing.brief_state.since_for`, 24 h on a cold store, clamped to 7 d); activity comes from `_build_activity(20, since=…)`; proposals (action category only) split into NEW SINCE LAST BRIEF (enumerated, with why_now / next move) vs a one-line CARRIED OVER count (with the likely-stale count); a REWRITTEN block lists carried items the review rewrote in the window (`brief_state.rewritten_since`: verdict `changed`, still open — reported under 'what changed', never as done); a HANDLED OVERNIGHT block lists the alert review's completed moves (`brief_state.handled_since`, `changed` excluded). Section order: top call → what changed → handled overnight → needs you (new only) → waiting on → at risk. A fingerprint of the inputs (`build_brief_fingerprint`, date-free) is compared to the last delivered one: unchanged ⇒ the artifact is the one-liner 'Nothing new since yesterday's brief — N items still waiting on you.' and no model call (`PRINCIPAL_BRIEF_SUPPRESS_UNCHANGED`, bypass with `force_full=true` on a manual run). The workflow yields a `result` event `{brief_fingerprint, suppressed, since}`; only `_run_principal_brief` records the fingerprint, after a successful delivery (`brief_state.record_delivered`, stored in `briefing_narrative` under scope `brief:<kind>`). Delivery (`scheduler.runner._deliver_to_principal`, also used for the client-rotation digest): the principal's `preferred_channel` (slack / discord / telegram / email / any) maps to slack_dm / discord_dm / telegram / email and is tried first, then the other chat channels they have an id for in the order slack_dm → discord_dm → telegram. Email goes through the active MCP gateway when it runs the Google Workspace server (`runner.email_ready()`: another MCP server alone does not make email ready) (`google_workspace__send_gmail_message`, `user_google_email` = the Executive's own address, `to` = the principal's email, subject `<workflow title> — <local date>` in the user's zone, e.g. 'Morning Brief — Fri 25 Sep' (`_email_subject`; a UTC date put tomorrow's date on an evening digest west of UTC); body_format html, the Markdown rendered by `utils.markdown_email` (markdown-it-py: raw HTML off, so quoted outside text shows as text; images off, so opening the email loads nothing remote; javascript:/vbscript:/file:/data: links dropped); an in-band error counts as failed, `workflows.action_step.looks_like_error`). Email is tried first when the preference is `email`, and otherwise last, as the backup after every chat channel: delivery stops at the first channel that sends, so an owner linked by email at setup (`any`) with a working Slack still gets no email — only when every chat channel is missing or fails. Email is not a DM, so the per-Person outbound guard does not apply; the gateway's roster egress gate does. `_deliver_to_principal` returns a `PrincipalDelivery(ok, detail, reason, channel)`; reason is delivered | no_owner | no_channel | gateway_down | send_failed. `gateway_down` is email set up (the mail server in the MCP config, the principal has an address) but no active gateway: the Executive's fault, recorded with the supervisor's start failure (`mcp_gateway.gateway_problem`) instead of `no_channel`, which told the owner to connect what they had. A `send_failed` detail quotes each channel's own error (`email: invalid_grant …; slack_dm: channel_not_found`), stored with the outcome (`record_delivery_outcome(detail=…)`, JSON in the row's text, older bare-channel rows still read) and repeated by the notice and the Daily brief light (`brief_state.describe_problem`, whose fix says to reconnect when the detail shows a dead grant). Before planning, `_deliver_to_principal` / `deliver_to_person` run the lazy re-check `runner.ensure_email_ready` → `mcp_gateway.ensure_active_gateway`: with the gateway down and no attempt running, the supervisor (`orchestrator.gateway_boot.GatewaySupervisor`) tries a start now rather than waiting for its next backoff retry, so a gateway that failed at boot can still carry this brief; `_execute_action` resolves the gateway the same way instead of keeping the None boot handed the scheduler. The order comes from `runner.delivery_order` via `runner.principal_delivery_plan()` — public, because the Briefing notice and the Setup status light use them too. When no channel can deliver (e.g. a web-only principal, or email-only with no gateway) the brief is still generated and stored as a run with its artifact, exactly as before; it is not delivered (audited `delivery_failed`), so the window and fingerprint do not advance, and the next occurrence is chained. Every run's outcome is recorded (`brief_state.record_delivery_outcome`, scope `brief_delivery:<kind>`: the reason, and the channel that sent it — a channel name, never an address), including `not_written` when the workflow raised, emitted an error or produced no artifact (then nothing is sent), and `send_failed` when delivery itself raised. `last_delivery_outcome()` returns the latest of the two briefs and the (solo) weekly review (`brief_state.DELIVERY_KINDS`; `BRIEF_KINDS` stays the two daily briefs, whose send times the Setup page lists). `current_problem(outcome, has_owner, can_deliver)` says what still keeps it from the owner: send_failed and not_written stay reported until the next brief records a new outcome; having nowhere to send it is judged from now, so a fix clears it and a partial fix reports what is left (an owner added but still no channel reads no_channel). `GET /today/brief-delivery` (the Briefing's notice, owner only, null while the scheduler is off) and the Setup status 'Daily brief' light read it; brief names come from `scheduler.action_phrasing.KIND_LABEL` (`brief_state.brief_name`). SOLO: with effective_workspace_mode solo it uses STANDALONE_BRIEF_SOLO_SYSTEM (top call → what changed → handled overnight → needs you → due this week → goals at risk, named by area; no waiting-on or department sections) over the solo context render, which adds today_data['due_soon'] (open_loops.principal_due_soon: the principal's open loops overdue or due within 7 days) as a DUE THIS WEEK block, and the fingerprint carries the mode, drops the people-awaiting set and, when there are due items, carries them as (loop_id, state) pairs. TOP THREE TODAY (solo only, the DM brief only): `briefing.top_three.build_top_three` picks up to three in code — overdue then due-today commitments, off-track then at-risk goals (by area), commitments due later this week, then active initiatives stalest first — and renders them as a TOP THREE TODAY block the solo prompt turns into a 'Top three today' section right after the top call. When `runner.google_workspace_ready()` (gateway up and the Google Workspace server configured) and the principal has an email, ONE `google_workspace__get_events` call (asyncio.wait_for, 4 s) lists today's events (local midnight to midnight, sent as UTC) on the principal's calendar — `calendar_id` = their address, read as the Executive's account (`user_google_email` = EXEC_EMAIL_ADDRESS), or `primary` when that IS the principal's address; `parse_events` reads workspace-mcp's text listing or JSON and treats an error, a timeout or an unknown shape as NO calendar (never as a free day). With a calendar each item gets its own free block (an hour, never under 30 min) inside CALENDAR_BUSINESS_HOURS_START/_END, not before now, all-day events not blocking, plus a TODAY'S CALENDAR block (titles quoted as data); without one there are no slots and no calendar block. The calendar is read only when something was picked, and nothing here can fail the brief. The fingerprint adds the items' keys (`loop:N:state`, `goal:N:status`, `project:N` — no dates, no slot times) and only a coarse `calendar_hash` (busy blocks rounded to 15 min + the all-day count, no titles, no dates), each only when present, so an unchanged day still suppresses and a solo install with nothing picked keeps its old fingerprint. A day whose calendar read times out after one that did not (or the reverse) changes the fingerprint once — accepted. No slots on a non-business day (`calendar_tools.is_business_day`, shared with the booking caps), though the day's events are still listed. Only a date-only event is all day; a zero-length timed event is listed but blocks nothing; an event whose times cannot be read is dropped from the listing, the busy time and the all-day count, and a reply that lists events but none readable counts as no calendar (never a free day). Logs carry only the reply's length or the exception type — never reply text. OWN CALENDAR: with Act as me and Read my calendar on for the principal (and their mailbox opening as theirs), `read_todays_calendar` also reads their own calendar through their own sign-in (delegation.calendar.events_for, Gmail or Outlook, declined events dropped), concurrently with the Executive's read, and merges them (same title and times listed once; either read alone is enough). `build_top_three(include_own=private_ok)` adds it only on a run for the principal; `live_signals.refresh_calendar` (principal-private cache) always includes it."
     - "morning_brief (live world, since the principal-brief rework) — besides the board it reads `live_signals.gather_live_signals(since)`: inbound, stuck, the principal's chats, and today's calendar read fresh in BOTH modes (`refresh_calendar(max_age=0)`) unless the solo top three already rendered TODAY'S CALENDAR. It carries the latest executive_reflection run's 'Flagged for the brief' bullets finished inside the window (`brief_state.reflection_flags_since`, via `persistence.get_run` since list_runs omits the artifact) and drops rhythm runs from its activity (`_build_activity(exclude_workflows=RHYTHM_WORKFLOWS)`): their dated titles moved the fingerprint daily so suppression never fired. Team section order: top call → today → what changed (inbound first) → handled overnight → needs you → waiting on → at risk (the slipping goal or the department left out). Period is the local date. PRIVACY: private rows (the principal's contacts' alerts via `_build_today(include_private=True)`, private audit rows, drafts, chats, the calendar) are read only when `morning_brief.PRINCIPAL_DELIVERY` is set (the scheduler sets it around `_run_principal_brief`) or on the principal's own verified chat turn in a conversation only they can read (`is_principal_on_verified_surface` AND `delegation.settings.private_conversation`: web chat, Slack/Discord DM, private Telegram — never a shared channel, where the reply is posted for everyone). A run that used one reports `private_to_principal` on its result event; the scheduler, `run_workflow` and `POST /workflows/{name}/runs` then store `persistence.PRIVATE_RUN_ARTIFACT` via `stored_artifact` (private_used compares every key and count of the live read with the shared one), because /workflows/runs is readable by every signed-in user. The fingerprint adds `live_keys` (time-free: sender|subject|count, stuck lines, drafts count, conversation titles, calendar shape) and the reflection flags only when non-empty, so a caller passing neither keeps its old fingerprint. INFO log 'morning_brief: context since=… inbound=… stuck=… private_used=… suppressed=…'."
     - "end_of_day_digest — Shift 3 recurring workflow. Fires once per day from the scheduler (default 18:00 in the user's zone; an explicit PRINCIPAL_BRIEF_EOD_TIME is read as UTC). Same shape as morning_brief but framed as a recap since the last DELIVERED digest (`brief_state.since_for`, 24 h on a cold store): what OE did today (activity since), alerts it handled today (completed moves only; rewritten-but-open items render as a REWRITTEN block under still pending), what's still pending (NEW SINCE LAST BRIEF, action category only, carried-over as one line), what's at risk for tomorrow, one optional 'sleep on this' question. Same fingerprint / one-liner suppression and `force_full` as morning_brief, under scope `brief:principal_brief_eod`. SOLO: _EOD_DIGEST_SOLO_SYSTEM (what I did today → open decisions → goals at risk tomorrow by area → sleep on this) over a context with GOALS AT RISK BY AREA and no people-waiting block."
     - "weekly_review — the principal's weekly look back and ahead (background; inputs all defaulted; playbook `weekly-review`). Steps: goals (every area with goals graded concurrently by its own specialist with the check-in's verdict contract `_parse_verdicts` and write-back `department_check_in.persist_goal_verdicts` → `record_goal_review`, one `goal_status_review` audit row per area with actor `weekly_review`; no goals → skipped, no specialist → listed ungraded, specialist failure → shown as last recorded) → commitments (`open_loops.principal_due_soon`, overdue or due within 7 days) → projects (active initiatives with no update for 7+ days) → decisions (`episodic.decisions_since`, the last 7 days) → revisit (`episodic.decisions_awaiting_outcome`: at most 3 decisions older than 30 days with an empty or whitespace outcome, newest first, shown as [decision N]) → assemble. Every section always renders, with a one-line note when empty. Next week's top 3 comes from one fast-model call (constant `WEEKLY_TOP_THREE_SYSTEM`; the playbook and the review ride in the user turn) trimmed to at most three list items, or — on failure or an empty reply — the ranked pick `briefing.top_three` uses. Yields a `result` event (areas graded/ungraded, due count, quiet project ids, the week's and the revisit decision ids). Role-neutral wording; says area in solo and department in team. Scheduled weekly in solo only (`principal_weekly_review`, see the scheduler key). The artifact starts with `TITLE_PREFIX` + the period and ends with the `TOP_THREE_HEADING` section; `summarize_review(artifact)` reads those back as plain text ({period, top_three, excerpt}) for the solo Briefing's 'This week's review' card (GET /today/weekly-review, see the today key). Evals: `workflow_weekly_review_001`."
@@ -9373,10 +9600,24 @@ integrations:
     (document_id, spreadsheet_id, presentation_id, form_id, file_id) or a
     destination folder (folder_id, parent_folder_id, add_parents) runs only
     when get_drive_file_permissions names the Executive's own address as the
-    owner; "root" needs no lookup, a copy's or PDF export's source is only
-    read, the sharing tools keep their own gate, and an unreadable owner, a
-    shared-drive item (no owner) or two Owners lines (a file name can hold a
-    line break) is refused.
+    owner, or the item is the company's own (_company_item, read from the
+    lookup's last "ID: <id>" line on, since the name before it is anyone's):
+    owned by someone on a company domain (people.identity.company_domains
+    plus the Executive's own domain unless free mail) with its permission
+    list visible, or on a shared drive whose every organizer is the
+    company's; and every user and domain it is shared with is the
+    company's, never a group (it can hold anyone) or "anyone with the link".
+    The lookup must keep Drive's own shape after the id line (Type, Parents,
+    Owners, Size in that order, one Owners line, one permission list right
+    after its count with exactly that many entries, or the private line),
+    else the item is not the company's. "root" needs no lookup, a
+    copy's or PDF export's source is only read, the sharing tools keep their
+    own gate, and an unreadable owner, a shared-drive item organized from
+    outside, or two Owners lines (a file name can hold a line break) is
+    refused. A rename or move the person tapped on a drive_files card
+    (tapped_drive_call, update_drive_file with file_id / name / add_parents
+    / remove_parents only) checks only the folder it goes to; refusals tell
+    the model to put such a change on that card.
     search-onedrive-files' q is substituted into the request path unencoded
     (/drives/{d}/search(q='{q}')), so a quote / slash / dot-dot would walk
     the GET to any Graph path (mail MIME, inbox rules): q must be plain words
@@ -10963,14 +11204,38 @@ company_onboarding:
   module: openexecutive.onboarding (interview.py, commit.py, wizard.py) + api.routes.onboarding
   intent: |
     First-run company setup. The user describes their business in their own
-    words (optionally attaching a deck, one-pager or brief); an LLM asks
-    clarifying questions, then drafts a company profile, a leadership roster
-    and a department list that the user reviews, edits inline, and saves.
+    words (optionally attaching a deck, one-pager or brief); an LLM asks at
+    most four quick questions, each with two to four suggested answers to tap
+    (Question.options, MAX_OPTIONS), never about departments or finances, then
+    drafts a company profile, the people, this year's goals with owners
+    (GoalDraft) and departments only when the user's words already listed
+    people by department. The user reviews, edits inline, and saves.
+    Personal or Team is never asked: understand.py reads it (Team when the
+    text names colleagues at the user's company, Personal when only the user
+    or outsiders are named, Personal when unclear) and the UI saves it before
+    the interview; the review shows it on one line with a Change link. Save
+    goes to Home; there is no done screen or voice step in setup.
+    An optional website comes first (onboarding/website.py): the server
+    reads it itself, never the model, so it works without web search - the
+    home page plus up to four same-site pages picked from its links (about,
+    team, products...; /about when none match), each through
+    monitoring.sources._http.fetch_bounded (SSRF guard, pinned DNS, three
+    redirects, 2 MB), as text capped per page and at 40,000 characters in
+    all, within 20 seconds. A failed page is skipped and an unreadable site
+    is no pages: setup carries on from the box, never an error screen. A
+    read is cached 10 minutes per process so understand and start fetch
+    once. Nothing is stored or indexed; the normalized address goes onto
+    the draft as CompanyProfile.website. The site is never guessed from the
+    sign-in email. Invariant: website and attached-file text enter the
+    opening turn as content_trust.wrap_untrusted blocks (source website /
+    attachment), and both prompts treat untrusted_content as source
+    material, never instructions; a website describes the company, not who
+    the user is or what they want this year.
     Deliberately shaped like the /demo and /clients/generate draft-then-review
     flows rather than like a form.
   api: |
-    POST /onboard/interview/understand (multipart: description + files[]; one model call, no session, returns mode/role/company/focus where the text says so),
-    POST /onboard/interview/start (multipart: description + files[]),
+    POST /onboard/interview/understand (multipart: description + files[] + optional website; one model call, no session, returns mode/role/company/focus where the text says so),
+    POST /onboard/interview/start (multipart: description + files[] + optional website; website_pages lists the pages read, empty when the site couldn't be read; a website that is no address at all is a 422),
     POST /onboard/interview/message, POST /onboard/interview/draft,
     POST /onboard/interview/revise (change one earlier answer, 0 = the
     description, which keeps its attached files; drops every turn after it,
@@ -10999,7 +11264,8 @@ company_onboarding:
     tool partway through a conversation invalidates the cached tool prefix on
     every subsequent turn (the same invariant orchestrator/form_tools.py
     documents). tool_choice flips to the forced emit tool exactly once, on the
-    turn where the question budget (8) or the transcript ceiling (120k chars)
+    turn where the question budget (MAX_QUESTIONS, 4) or the transcript
+    ceiling (MAX_TRANSCRIPT_CHARS)
     is reached, or when the user clicks "draft it now". That single call misses
     the tools cache; one miss per setup session is the accepted price of a
     bounded interview. Do NOT "fix" it by making the tools conditional.
@@ -11013,7 +11279,10 @@ company_onboarding:
     Two stages, mirroring fixtures.generator: Pydantic model_validate, then
     interview.validate_draft for referential integrity — exactly one
     is_principal, unique person names, every department head_person_name
-    matching a person (or empty), distinct department titles. A failure of
+    matching a person (or empty), distinct department titles, and every goal
+    named, within MAX_GOALS / MAX_GOAL_CHARS, its owner_name a drafted person
+    (or empty) and its department_title a drafted department (or empty).
+    The commit re-runs the same check on the body. A failure of
     either feeds the errors back as a follow-up user turn and retries ONCE
     with the emit tool forced.
   error_contract: |
@@ -11058,8 +11327,14 @@ company_onboarding:
     (commit.check_owner_email), (2) reject an empty name,
     (3) profile.save_to_yaml (write-then-rename, O_EXCL, fsync), (4) mark the
     session saved, (5) seed people, then link the owner email to the
-    principal (best-effort), (6) reconcile departments, (7) fire the
-    post-onboarding research workflow. A failure at 1-3 leaves the session
+    principal (best-effort), (6) reconcile departments, then save the goals
+    (commit.save_onboarding_goals: period "year", no department unless one
+    drafted is named, owner the named person else explicitly the principal,
+    skipping any worded like a goal already set for this year or
+    ongoing, so a re-run adds none; their
+    titles also become strategic_priorities.current_year in step 3's
+    profile via derive_org_structure), (7) fire the post-onboarding research
+    workflow. A failure at 1-3 leaves the session
     untouched, so the user edits the draft and retries. This replaces the
     deepcopy-snapshot rollback the wizard needs (process_answer mutates state
     before the build can fail). A second commit returns 409, preserving the
@@ -11829,16 +12104,20 @@ delegation:
     Eval: delegation_014.
   calendar: |
     Read my calendar (delegation.calendar, table delegation_calendar, one
-    row per person, absent/unreadable = off). Read-only, on the Act as me
-    sign-in: Google calendar.readonly, Microsoft Calendars.Read, added by
-    connect-own-gmail.py / connect-own-outlook.py --calendar. Optional
+    row per person, absent/unreadable = off). On the Act as me sign-in:
+    Google calendar.events, Microsoft Calendars.ReadWrite, added by
+    connect-own-gmail.py / connect-own-outlook.py --calendar; the only
+    write is answering a meeting invite (see invites). A sign-in minted
+    earlier with calendar.readonly / Calendars.Read keeps reading
+    (CALENDAR_READ_SCOPES, CALENDAR_SCOPES) and its invite cards say to
+    connect again (calendar_write_granted False). Optional
     scopes: the token refresh still requires only the mail ones; the
     clients keep the scope string the refresh returns (_GRANTED) and
     list_events raises CalendarNotGranted (a GmailError, not an auth error)
     before calling when it is missing, or on a 403. An Outlook refresh asks
-    for Calendars.Read too only when the credential file's scopes list it
-    (_refresh_scope); a mail-only one never asks, so its refresh can't fail
-    on it. PUT /delegation/calendar
+    for Calendars.ReadWrite (or Calendars.Read for an older file) only when
+    the credential file's scopes list it (_refresh_scope); a mail-only one
+    never asks, so its refresh can't fail on it. PUT /delegation/calendar
     {enabled}: on needs Act as me on, gmail_status connected and a one-hour
     list_events that works (409 act_as_me_off / calendar_not_granted, 503
     calendar_error); off always works; Act as me off turns it off;
@@ -11852,6 +12131,57 @@ delegation:
     calendarView, cancelled and working-location left out, one-line fields,
     data-not-instructions note. Nothing kept. The Act as me addendum names
     it and says reading the calendar counts as reading their mail.
+  invites: |
+    Meeting invites (delegation.invites), only with Read my calendar on
+    (watching = calendar.enabled); off, an invite is skipped "automatic" as
+    before. In inbox._consider, a message with calendar_invite goes to
+    invites.skip_reason (the watcher's rules less the reply-writing ones:
+    a calendar service's Sender header is not "automatic", no recipient
+    cap, no you_replied/draft_exists) then invites.consider. No model call.
+    Sender: inbox.relation_of + handling_relation; a stranger or an
+    unverified known sender is skipped invite_stranger / invite_unverified.
+    Event: mailbox find_invite (Gmail: the invite's iCalendar UID from its
+    text/calendar part, gmail.ics_invite, or its attached .ics, then
+    events.list?iCalUID= on the primary calendar; Outlook: GET
+    /messages/{id}?$expand=microsoft.graph.eventMessage/event, only
+    meetingMessageType meetingRequest). Skipped with reasons
+    invite_not_found, invite_not_organizer (organizer != From),
+    invite_answered, invite_past, invite_calendar_not_granted. A calendar
+    GmailError (not auth / rate limit) is retried later without backing off
+    the mail scan. Clashes (invites.clashes): calendar.events_for over the
+    meeting's window, other events' start/end only (never titles), the
+    meeting itself and declined / all-day events left out; None when
+    unreadable (clash_checked False). Card: delegation_invite decision,
+    approver_only, never an alert, payload private + event_id, title, start,
+    end, clashes, can_answer (calendar_write_granted is not False),
+    connect_command when it can't; idempotency key
+    delegation_invite:<person>:<message_id> via invites.create_once, which
+    also fixes reply cards: an open card under the key is that card, a
+    settled one gets a new card under key:<uuid>. Ledger outcome
+    invite_card, then accepted / declined / dismissed / expired. GET
+    /delegation/invites lists them (no calendar call). Approve =
+    invites.answer: caller_refusal (403 not_yours / 409
+    caller_signing_required), Act as me + Read my calendar on, live (start
+    ahead, under CARD_TTL 7 days), gmail_status connected,
+    claim_for_execution, mailbox.answer_invite(event_id, accept) — Gmail GET
+    event, set the self attendee's responseStatus, PATCH attendees with
+    sendUpdates=all; Outlook POST /events/{id}/accept|decline
+    {sendResponse: true}. CalendarWriteNotGranted -> release, can_answer
+    False on the card, 409 calendar_write_needed; GmailNotFound -> failed,
+    409 gone; other GmailError -> release, 502 calendar_error (answering is
+    idempotent). Reject answers nothing. On its own (invites.refusal, plain
+    code): Handle it for me on; relation in KNOWN_RELATIONS; Replies in
+    training -> training.allowed_inviter (key
+    act_as_me|person:<id>|invite_from|<address>, setting replies), else
+    Take the lead as you or the dial's level; signing_ok; clash None ->
+    calendar_unread, any clash -> clash; can_answer; not sensitive(title);
+    lead rules; handle_it.count_refusal (daily limit, once a day per
+    thread). Then gate auto_execute, claim, answer_invite(accept=True),
+    finish executed, record_handled; any failure releases and hands the
+    card back. Never declines on its own. handle_it.handled includes them
+    (source invite, summary "Accepted <first>'s <title>, <when>"), so GET
+    /delegation/handled and Today's sent_as_you show them. Audit, private:
+    delegation_invite_carded / _answered / _handled / _dismissed.
   forward_and_remind: |
     ghostwrite_email takes forward (a thread id) with to: a draft forwarding
     the thread's latest non-draft message, intent the note above it (the
@@ -11865,6 +12195,22 @@ delegation:
     attachments_left_off). Outlook: POST /messages/{id}/createForward with
     the note as comment and only recipients and the ghostwritten property
     in message; the body is never patched.
+    drive_files (a new email or a reply, never a forward; the principal
+    only): up to 15 Google Drive file ids (drive_attach.MAX_FILES). orchestrator.drive_attach sizes
+    each with a code-built google_workspace__get_drive_file_permissions and
+    downloads it with a code-built google_workspace__get_drive_file_download_url
+    (both in mcp_gateway._CODE_BUILT_TOOLS) as the Executive's account. The
+    saved copy comes only from one anchored "Saved to" line whose file name
+    ends in workspace-mcp's uuid (the Drive name echoed above it is chosen by
+    whoever shared the file), is read only inside the tool download folders,
+    deleted, and its bytes go in DraftSpec.attachments under the forward
+    caps, named from the saved name. Nothing of the file reaches the model,
+    so it is no outside read; after an outside read the result asks the
+    model to name each file. Someone else's saved_files entry or a save
+    folder is refused before and after the downloads (fail closed); a failed
+    fetch makes no draft. Outlook uploads each file to the new draft (fileAttachment, at
+    most OUTLOOK_ATTACHMENT_MAX_BYTES 3 MB, larger left off and counted)
+    and deletes the draft if an upload fails.
     remind_me(text, when) (orchestrator.reminder_tools) is in
     DELEGATION_TOOLS but not MAILBOX_TOOL_NAMES: it opens no mailbox and
     never sets touched_mail/read_mail. delegation.reminders.clean_text makes
@@ -11895,7 +12241,9 @@ delegation:
     MAIL_TOUCHED_ALLOWED_TOOLS; not a MAILBOX_TOOL_NAMES tool) leaves the
     speaker a card of up to 5 actions: invite (create_calendar_event input,
     roster attendees), message (message_person: person_id + text as sent),
-    add_contact (principal's cards only). delegation.action_cards.check
+    add_contact (principal's cards only), drive_files (rename and/or move up
+    to 25 Google Drive files, principal's cards only, always waits for the
+    tap, runs through MCPGateway.tapped_drive_change). delegation.action_cards.check
     validates each (roster, not archived, contacts only on the principal's
     card, not themselves, times ahead) at propose and again at approve. A card
     is a delegation_actions decision, approver = speaker, approver_only (404 to
@@ -11994,7 +12342,10 @@ delegation:
     registered with the MCP gateway. Methods profile_email, search_threads
     (metadata only), list_message_ids, get_thread, get_message, list_sent,
     send_as_signature, send_as_addresses, create_draft, get_draft (None on
-    a 404) and delete_draft (False on a 404), and ONE send method, send_draft:
+    a 404) and delete_draft (False on a 404); on the calendar list_events,
+    calendar_granted, calendar_write_granted, find_invite (reads) and
+    answer_invite (the person's own attendee answer on one event,
+    sendUpdates=all; delegation.invites only); and ONE send method, send_draft:
     an existing draft by its id — POST drafts/send with the body {"id": ...}
     and nothing else, never messages.send — called only by
     delegation.reply_send (unit tests pin the method set, the one endpoint,
@@ -12284,7 +12635,14 @@ delegation:
     lines — From, the sender's relation (and "address not verified"), the
     recipient count, the subject — and the sender's own new words
     (sender_new_text, at most 3000 characters), every line scrubbed, inside
-    one <email> block marked as data. No other tools, context or memory.
+    one <email> block marked as data, after the person's own last email in
+    the thread (their_last_words: only mail their own mailbox sent, SENT
+    label, at most 1500 characters) in a <their_last_email> block, so a reply
+    to their own ask reads as one. Real miss it fixes: they asked a contact
+    for a call, the contact wrote back "my week is open, I'll circle back
+    with times", and with only the new words it was filed fyi. Now a reply
+    that says when someone is free without settling a time is scheduling.
+    No other tools, context or memory.
     Code decides: a draft only when needs_reply, kind is question, request,
     scheduling, introduction or follow_up, and confidence clears 0.6 (team
     or contact), 0.7 (someone the person has written to, found by a Gmail
@@ -12331,7 +12689,12 @@ delegation:
     reply_all on, minus the person's own addresses and the Executive; a
     stranger's holding reply has reply_all off; Reply-To ignored; draft_to
     lists everyone and Send checks it); the card is
-    flagged others_on_thread when anyone else was addressed,
+    flagged others_on_thread when anyone else was addressed, and then
+    offers Reply to: the sender only, or everyone (reply_others, the list
+    fixed when the card was written; PUT /delegation/replies/{id}/recipients
+    {everyone}, card_drafts.set_recipients, rewrites draft_to, draft_spec and
+    the mailbox draft's To/Cc, never an address from the request; a stranger's
+    card starts on the sender only),
     executive_on_thread when the Executive was, and sender_unverified when
     Gmail's SPF/DKIM/DMARC results don't vouch for the From address
     (fact_confirmation.headers_authenticated). A sincere "are you an AI?"
@@ -12431,7 +12794,8 @@ delegation:
     in_a_row (last own message in the thread was an auto-send),
     daily_limit (DELEGATION_HANDLE_IT_MAX_SENDS_PER_DAY, default 20).
     The watcher then calls reply_send.send_on_its_own — the second door
-    into _send, pinned by an AST test to delegation/inbox.py — which runs
+    into _send, pinned by an AST test to delegation/inbox.py (the third,
+    send_for_workflow, is pinned to delegation/workflow_email.py) — which runs
     every send-time check with no caller and adds: gate_mode auto_execute,
     the switch on and the mode still allowing that sender (follows_up for
     a follow-up card), signing_ok, and the draft
@@ -12474,8 +12838,9 @@ delegation:
     example); training.setting_of(key) labels the one learned list. Theirs
     alone, capped per person (ALLOWED_MAX), never in learned_note.
     Replies in training: every reply waits (handle_it_reason training)
-    unless its sender was allowed with Send + allow (POST
-    /decisions/{id}/approve edits.allow); an allowed sender's reply goes on
+    unless its sender was allowed with Send and the "on its own next time"
+    tick (POST /decisions/{id}/approve edits.allow; the tick replaced the
+    separate Send + allow / Approve + allow buttons, 2026-10); an allowed sender's reply goes on
     its own only while Handle it is enabled, under the dial's Rules with
     the stranger check skipped, every other refusal check, and again at
     send time (removed since: handle_it_off). Follow-ups in training: the
@@ -12483,7 +12848,7 @@ delegation:
     relation check for exactly the allowed recipients. Take the lead as
     you lifts nothing while either is in training (turned off when they go
     in; PUT /delegation/take-the-lead answers 409 in_training). Suggested
-    actions in training: Approve + allow (edits.allow) on a
+    actions in training: Approve with the tick (edits.allow) on a
     delegation_actions card allows each message/invite that ran (never
     add_contact); propose_actions then carries out a card whose every
     action is allowed at once (action_cards.on_its_own_refusal: training
@@ -12500,7 +12865,17 @@ delegation:
     and what kind, never the words; the sensitive/link/amount/length
     checks and the daily cap are what bound it, and only allowed roster
     people can receive it.
-    Drafts in training: on Send (plain or + allow) with edits.example and a
+    Suggested actions On (training.ACTIONS_ON, row actions_on in
+    delegation_training, PUT /delegation/training {actions_on}; In training
+    wins when both are set and the route clears one when the other is set
+    true): a card is carried out with no allow under the same checks plus
+    _known_people_refusal (no add_contact, every recipient settled on the
+    roster for SETTLED_AFTER 7 days, as for cards from another AI app).
+    Nothing is learned under On. Handle it for me's web picker is Off / In
+    training / On: In training sets replies and follow_ups together, and the
+    dial's steps show under On only, because handle_it.refusal skips the
+    level check while Replies is in training (only enabled matters).
+    Drafts in training: on Send (ticked or not) with edits.example and a
     draft edited in the mailbox, the sent text is kept as style|<address>;
     training.example_for (style key first, then an older reply-key example)
     feeds the ghostwriter's <writer_example> (style only, untrusted block)
@@ -12540,7 +12915,10 @@ delegation:
     and, when it is in their Drafts, there too, only while that draft is still
     the version the card last saw (409 draft_changed / draft_not_plain /
     caller_signing_required, 422 empty / too_long); it sends nothing, and a
-    change by hand sets questions_settled. POST
+    change by hand sets questions_settled. PUT
+    /delegation/replies/{id}/recipients {everyone} sends it to the sender
+    only or to everyone the email went to (409 no_choice when nobody else
+    was on it), with the same checks. POST
     /delegation/replies/{id}/answer {answers: [{question_index,
     answer_text}]} (delegation.answers) answers what the reply left open:
     one composer-model call (REWRITE_PROMPT + the person's voice block, no
@@ -12565,10 +12943,16 @@ delegation:
     source), see handle_it; DelegationOut.handle_it is {enabled, mode,
     available, sent_today}; reply cards carry source ("follow_up" or "").
   may_do: |
-    Delegate -> What it may do (delegation.may_do, GET /what-it-may-do) is
-    read-only: one row per thing that can go out without asking, its
+    What it does for you (delegation.may_do, GET /what-it-may-do) is
+    read-only: with the viewer's settings right now, one row per thing that
+    can go out without asking, written as one sentence of what it does, its
     outcome (goes, waits, always_waits, drafts, off) and the setting that
-    decides it. It reads the same settings the gates read, so it cannot say
+    decides it. It sits beside every Delegate tab (DelegatePage ->
+    WhatItDoesPanel: a right-hand column on a wide screen, a bottom sheet on
+    a narrow one), grouped by outcome, and reloads on DELEGATION_CHANGED,
+    which every delegation setter in lib/api.ts fires after a save, marking
+    changed rows for ten seconds. /delegate and /delegate/what-it-may-do
+    open Act as me. It reads the same settings the gates read, so it cannot say
     something they don't do: As you from settings.is_enabled,
     inbox.get_watch, handle_it.get / RULES / leading, training.get /
     learned and the person's rules; As the Executive (principal only) from
@@ -12601,7 +12985,7 @@ delegation:
     sending steps, with In training and Your rules at everything) on
     Delegate -> Handle it for me, which opens only at inbox and says so
     otherwise. Moving Act as me below inbox says Handle it for me stops
-    too. What it may do links act_as_me rows to the first and handle_it
+    too. What it does for you links act_as_me rows to the first and handle_it
     rows to the second.
   surfaces: |
     Settings → Act as me (ActAsMeCard): the Gmail status with the connect
