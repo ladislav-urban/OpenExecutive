@@ -231,8 +231,8 @@ def channel_of(session: Any) -> str | None:
 def _someone_else(session: Any) -> bool:
     """Whether the turn's words may be someone other than the owner's: mail
     from someone not in People, a shared chat someone else wrote in since the
-    owner did, another AI app or a host page, a teammate, or a chat app or email turn
-    whose surface didn't prove the owner wrote it. Hands-off is the
+    owner did, another AI app or a host page, a teammate, an unattended run, or a chat app
+    or email turn whose surface didn't prove the owner wrote it. Hands-off is the
     owner's trust in their own Executive, so it never covers these."""
     if getattr(session, "sender_off_team", False) is True:
         return True
@@ -240,13 +240,18 @@ def _someone_else(session: Any) -> bool:
         return True
     if getattr(session, "from_mcp_client", False) is True or getattr(session, "from_host", False) is True:
         return True
+    # Nobody is there to see an unattended run (a schedule, a workflow, a
+    # watch): what it sends or writes waits on a card at every level (the
+    # owner, Nov 8, 2026). A step the owner approved still runs
+    # (``levels.approved``), and a message only to them never waits.
+    if getattr(session, "unattended", False) is True:
+        return True
     # A chat app or email turn is the owner's only when its surface proved
     # it (``content_trust.principal_speaking``): email that Gmail's DMARC
     # check tied to the owner's own address, a chat that verifies its
     # sender. Google Chat's sender (``gate_sender_person_id``) and any other
-    # channel turn without that proof run at Balanced. An unattended run is
-    # the owner's own setting, not checked here.
-    if getattr(session, "origin_channel", "") and getattr(session, "unattended", False) is not True:
+    # channel turn without that proof run at Balanced.
+    if getattr(session, "origin_channel", ""):
         from openexecutive.orchestrator.content_trust import principal_speaking
 
         if not principal_speaking(session):

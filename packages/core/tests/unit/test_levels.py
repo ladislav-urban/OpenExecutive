@@ -33,7 +33,7 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     people_registry.invalidate()
 
 
-@pytest.mark.parametrize("reason", sorted(levels.REASONS - {levels.STRANGER, levels.NOT_OWNER, levels.SHARED, levels.AI_APP}))
+@pytest.mark.parametrize("reason", sorted(levels.REASONS - {levels.STRANGER, levels.NOT_OWNER, levels.SHARED, levels.AI_APP, levels.UNATTENDED}))
 def test_hands_off_runs_every_noticed_step(reason: str) -> None:
     assert levels.decide(reason, mode=outside_mode.TRUST) == levels.RUN
 

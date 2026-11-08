@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from openexecutive.api.routes import executive as executive_route
 from openexecutive.memory import episodic
-from openexecutive.orchestrator import content_scan, outside_mode
+from openexecutive.orchestrator import content_scan, levels, outside_mode
 from openexecutive.orchestrator import outside_content as oc
 from openexecutive.orchestrator.session import Session
 
@@ -102,9 +102,13 @@ def test_hands_off_is_hands_off_on_every_channel_the_owner_proved(monkeypatch: p
     assert outside_mode.for_turn(Session(origin_channel=channel)) == outside_mode.OUTSIDERS
 
 
-def test_an_unattended_run_keeps_the_owners_level(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_an_unattended_run_is_never_hands_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Nobody sees an unattended run: what it sends or writes waits on a card
+    at every level (the owner, Nov 8, 2026)."""
     _use(monkeypatch, outside_mode.TRUST)
-    assert outside_mode.for_turn(Session(origin_channel="slack", unattended=True)) == outside_mode.TRUST
+    for session in (Session(unattended=True), Session(origin_channel="slack", unattended=True)):
+        assert outside_mode.for_turn(session) == outside_mode.OUTSIDERS
+    assert levels.decide(levels.UNATTENDED, mode=outside_mode.TRUST) == levels.CARD
 
 
 def test_mail_from_a_stranger_is_never_hands_off(monkeypatch: pytest.MonkeyPatch) -> None:
