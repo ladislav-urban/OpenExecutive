@@ -16,18 +16,28 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 
+# Audit event for a conversation that took in what another one read from
+# ERPNext (a past-chat hit): from then on it counts as having read it too.
+CARRIED_EVENT = "erpnext_carried"
+
+
 def session_read_erpnext(session_id: str | None) -> bool:
-    """Whether the conversation ``session_id`` read ERPNext in any turn, by
-    the audit log. False for no id. Fails closed."""
+    """Whether the conversation ``session_id`` read ERPNext in any turn, or
+    took in what one read (``CARRIED_EVENT``), by the audit log. False for
+    no id. Fails closed."""
     if not session_id:
         return False
     try:
         from openexecutive.audit.logger import get_audit_logger
 
+        audit = get_audit_logger()
+        # Every owner's rows: a teammate's turn writes its rows as theirs
+        # (private_to_person), and those count as much as the principal's.
         return bool(
-            get_audit_logger().query(
-                event_type="tool_invocation", session_id=session_id, q="mcp:erpnext__", limit=1
+            audit.query(
+                event_type="tool_invocation", session_id=session_id, q="mcp:erpnext__", limit=1, all_owners=True
             )
+            or audit.query(event_type=CARRIED_EVENT, session_id=session_id, limit=1, all_owners=True)
         )
     except Exception:
         logger.warning("couldn't check whether a conversation read ERPNext — keeping it private", exc_info=True)
@@ -46,3 +56,26 @@ def conversation_read_erpnext(session: Any) -> bool:
         with contextlib.suppress(Exception):
             session.read_erpnext = True
     return found
+
+
+def mark_carried(session_id: str | None, from_session_ids: set[str]) -> bool:
+    """Record, lastingly, that ``session_id`` took in what the conversations
+    ``from_session_ids`` read from ERPNext, so every later turn of it counts
+    as having read ERPNext (a channel adapter builds a new Session per
+    message, and a restart rebuilds them all). False when it couldn't be
+    recorded: the caller then withholds what it would have carried."""
+    if not session_id:
+        return False
+    try:
+        from openexecutive.audit.logger import get_audit_logger
+
+        row = get_audit_logger().log(
+            CARRIED_EVENT,
+            "Took in an earlier chat that read ERPNext",
+            session_id=session_id,
+            details={"from_sessions": sorted(from_session_ids)[:20]},
+        )
+        return row is not None
+    except Exception:
+        logger.warning("couldn't record that a conversation took in ERPNext figures", exc_info=True)
+        return False

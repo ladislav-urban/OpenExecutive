@@ -60,6 +60,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "chat_turn",
     "answer_check",  # a reply's figures held to ERPNext's results that turn (counts only; orchestrator/answer_check.py)
     "answer_check_changes",  # the sentences that check changed, before and after, with each figure and why; private, text kept 30 days
+    "erpnext_carried",  # a conversation took in an earlier chat that read ERPNext (a past-chat hit); it then counts as having read it (audit/erpnext_reads.py)
     "specialist_consult",
     "tool_invocation",
     "scheduled_action",

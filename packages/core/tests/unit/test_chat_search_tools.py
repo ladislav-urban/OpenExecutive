@@ -194,38 +194,40 @@ def test_a_hit_from_a_mail_private_chat_keeps_the_turn_theirs(roster: SimpleName
     assert session.turn_delegation.touched_mail is True and session.turn_delegation.read_mail is True
 
 
-def _erp_audit(monkeypatch: pytest.MonkeyPatch, read: set[str]) -> None:
-    """An audit log that has ERPNext reads for the conversations in ``read``."""
-    class _Audit:
-        def query(self, **kw: Any) -> list[Any]:
-            assert kw["q"] == "mcp:erpnext__"
-            return [object()] if kw["session_id"] in read else []
+def test_a_hit_from_a_chat_that_read_erpnext_makes_this_one_count_as_reading_it(roster: SimpleNamespace) -> None:
+    from openexecutive.audit.erpnext_reads import conversation_read_erpnext
 
-    monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", lambda: _Audit())
-
-
-def test_a_hit_from_a_chat_that_read_erpnext_makes_this_one_count_as_reading_it(
-    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
-) -> None:
     _chat("erp", roster.teammate, ("assistant", "Acme owes $12,340 on Maple Court."))
-    _erp_audit(monkeypatch, {"erp"})
+    audit_logger.get_audit_logger().log("tool_invocation", "mcp:erpnext__get_report Accounts Receivable", session_id="erp")
     session = _web(roster.teammate)
     assert _search(session, "maple")["hits"] == 1
-    # Its replies now stay out of what other people's turns read.
+    # Its replies now stay out of what other people's turns read, and so do
+    # the next message's on a new Session (a channel chat, or after a restart).
     assert session.read_erpnext is True
+    assert conversation_read_erpnext(SimpleNamespace(session_id="now", read_erpnext=False)) is True
 
 
-def test_a_hit_from_a_chat_that_read_no_erpnext_leaves_it_unmarked(
-    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_a_hit_from_a_chat_that_read_no_erpnext_leaves_it_unmarked(roster: SimpleNamespace) -> None:
+    from openexecutive.audit.erpnext_reads import conversation_read_erpnext
+
     _chat("old", roster.teammate, ("assistant", "Maple Court is 52 units."))
-    _erp_audit(monkeypatch, set())
     session = _web(roster.teammate)
     assert _search(session, "maple")["hits"] == 1
     assert session.read_erpnext is False
+    assert conversation_read_erpnext(SimpleNamespace(session_id="now", read_erpnext=False)) is False
 
 
-def test_an_unreadable_audit_log_counts_as_having_read_erpnext(
+def test_a_mark_that_cannot_be_recorded_withholds_the_hits(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _chat("erp", roster.teammate, ("assistant", "Acme owes $12,340 on Maple Court."))
+    audit_logger.get_audit_logger().log("tool_invocation", "mcp:erpnext__get_report Accounts Receivable", session_id="erp")
+    monkeypatch.setattr(audit_logger.get_audit_logger(), "log", lambda *a, **kw: None)
+    out = _search(_web(roster.teammate), "maple")
+    assert "private" in out["error"] and "hits" not in out
+
+
+def test_an_unreadable_audit_log_withholds_the_hits(
     roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _chat("old", roster.teammate, ("assistant", "Maple Court is 52 units."))
@@ -234,9 +236,10 @@ def test_an_unreadable_audit_log_counts_as_having_read_erpnext(
         raise RuntimeError("db locked")
 
     monkeypatch.setattr("openexecutive.audit.logger.get_audit_logger", broken)
-    session = _web(roster.teammate)
-    assert _search(session, "maple")["hits"] == 1
-    assert session.read_erpnext is True
+    # Counted as an ERPNext chat, and since that can't be recorded either,
+    # nothing is carried in.
+    out = _search(_web(roster.teammate), "maple")
+    assert "private" in out["error"] and "hits" not in out
 
 
 # --------------------------------------------------------------------------- #

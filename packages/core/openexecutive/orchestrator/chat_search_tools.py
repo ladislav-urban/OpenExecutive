@@ -131,7 +131,14 @@ async def handle_search_past_chats(tool_input: dict[str, Any]) -> str:
     # A hit from a chat that read ERPNext can carry its figures into this one:
     # this conversation then counts as having read ERPNext, so its replies
     # stay out of what other people's turns read (audit.erpnext_reads).
-    if session is not None and _any_read_erpnext({str(hit.get("session_id") or "") for hit in hits}):
+    # Recorded in the audit log, so the next message of a channel chat (a new
+    # Session) and any turn after a restart still count it.
+    hit_sessions = {str(hit.get("session_id") or "") for hit in hits}
+    if _any_read_erpnext(hit_sessions):
+        from openexecutive.audit.erpnext_reads import mark_carried
+
+        if not mark_carried(getattr(session, "session_id", None), hit_sessions):
+            return _error("I couldn't keep this conversation private, so I didn't search your chats. Try again.")
         try:
             session.read_erpnext = True
         except Exception:
