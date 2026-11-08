@@ -309,12 +309,27 @@ second session speeds up only the oe_connector and eval steps.
   - its plan and document names: `agentic-erp-integration-plan`,
     `pilot-runbook`, `demo-scenarios-plan`, `finance-scenarios-plan`, the
     `marketing/` docs and the other files under its `docs/`;
-  - Control Room decision numbers ("Control Room 132" and the like);
-  - pilot host names (`*.dynocortex.com`, the pilot's `agents.erp…` and
-    `id.erp…`) and other internal URLs;
+  - Control Room decision numbers ("Control Room 132" and the like) and the
+    names of the working sessions (consoles);
+  - the pilot's host names (`erp.`, `agents.erp.` and `id.erp.dynocortex.com`),
+    its public IP address, and other internal URLs and paths on the owner's
+    machines;
+  - the owner's personal email addresses, in files, commit messages and
+    trailers (`Co-authored-by:`);
   - oe_connector's code. It moves to AGPLv3 while this fork stays
     Apache-2.0 (Control Room 135), so no oe_connector source may be copied
     in here.
+
+  Run gitleaks over the whole history with oe-connector-63's config, which
+  extends the default rules with the hosts, the IP, the addresses and the
+  internal paths. Ask oe-connector-63 for it; it is not kept in this repo,
+  since it holds those values. For copied passages, compare runs of 12 or
+  more words against oe_connector's `docs/`.
+
+  The owner's rule (decisions 130–135): every document in oe_connector's
+  `docs/` is private until the owner releases it, one by one. A plain pointer
+  ("see oe_connector's `docs/erpnext-integration.md`") is fine; copied
+  content is not.
 
   List everything found for the owner, with the commit, path and a short
   excerpt, and remove nothing before they have decided what to do with each.
