@@ -44,6 +44,16 @@ Routes:
                                     switch is off or a check is running)
   GET    /delegation/replies      — the reply cards waiting for the caller
                                     (from the database; no Gmail call)
+  POST   /delegation/drafts/{id}/send — {thread_moved_on?}: send a draft
+                                    chat wrote as the caller, on their tap,
+                                    exactly as written (their own only; 404
+                                    otherwise). Needs a caller the API knows
+                                    is that person, like a card's Send (409
+                                    ``caller_signing_required``); 409
+                                    ``confirm`` asks a second yes when the
+                                    conversation moved on, and
+                                    ``draft_changed`` when it was edited in
+                                    the mailbox
   PUT    /delegation/replies/{id}/text — {text}: change a reply's words
   PUT    /delegation/replies/{id}/recipients — {everyone}: the sender only,
          or everyone the email went to
@@ -58,6 +68,11 @@ Routes:
                                     route (same checks); returns the card
                                     with changed_sentences. 429 past the
                                     hourly limit (delegation.answers)
+  POST   /delegation/replies/{id}/change — {text}: what to change, in the
+                                    caller's words; rewritten and saved like
+                                    an answer (same checks and limit); the
+                                    request and the Executive's line on what
+                                    it changed join the card's conversation
   PUT    /delegation/handle-it    — {enabled?, mode?}: Handle it for me,
                                     the inbox watcher sending some replies on
                                     its own, mode careful | balanced | bold
@@ -419,6 +434,18 @@ class ReplyQuestionOut(BaseModel):
     answer: str = ""
 
 
+class ReplyTurnOut(BaseModel):
+    """One turn of a reply card's conversation since its draft was written."""
+
+    # "news": newer email in the conversation; "asked": what the caller asked
+    # to change; "note": the Executive's line on what it changed.
+    kind: str
+    text: str
+    from_name: str = ""
+    from_email: str = ""
+    at: str = ""
+
+
 class ReplyCardOut(BaseModel):
     decision_id: int
     status: str
@@ -462,6 +489,12 @@ class ReplyCardOut(BaseModel):
     # What the email asks and what the draft says, in a line or two, for the
     # card's closed view ("" on a card drafted before it).
     gist: str = ""
+    # Newer email in the conversation, what the caller asked to change and
+    # what the Executive changed, in order.
+    conversation: list[ReplyTurnOut] = Field(default_factory=list)
+    # When it was last brought up to date with newer mail; Send passes it
+    # back as edits.seen_caught_up_at.
+    caught_up_at: str = ""
 
 
 class RepliesOut(BaseModel):
@@ -472,6 +505,17 @@ class ReplyTextUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     text: str = Field(max_length=20_000)
+
+
+class ChatDraftSendIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    # The second yes for a reply whose conversation moved on since.
+    thread_moved_on: bool = False
+
+
+class ChatDraftSentOut(BaseModel):
+    sent: bool = True
 
 
 class ReplyRecipientsUpdate(BaseModel):
@@ -486,6 +530,12 @@ class ReplyAnswerIn(BaseModel):
 
     question_index: int = Field(ge=0, le=20)
     answer_text: str = Field(min_length=1, max_length=500)
+
+
+class ReplyChangeIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    text: str = Field(min_length=1, max_length=500)
 
 
 class ReplyAnswersIn(BaseModel):
@@ -1039,6 +1089,27 @@ async def update_delegation_reply_text(request: Request, decision_id: int, body:
     return ReplyCardOut(**{k: v for k, v in asdict(card).items() if k in ReplyCardOut.model_fields})
 
 
+@router.post("/delegation/drafts/{row_id}/send", response_model=ChatDraftSentOut)
+async def send_chat_draft(request: Request, row_id: int, body: ChatDraftSendIn) -> ChatDraftSentOut:
+    """Send a draft chat wrote as the caller, on their tap, exactly as it was
+    written (``delegation.reply_send.send_chat_draft``, which checks
+    everything again first). Their own drafts only."""
+    from openexecutive.delegation.reply_send import SendRefused
+    from openexecutive.delegation.reply_send import send_chat_draft as send
+
+    person = _caller(request)
+    try:
+        await send(
+            person, row_id, caller=api_caller.caller(request),
+            confirm={"thread_moved_on": True} if body.thread_moved_on else None,
+        )
+    except SendRefused as refused:
+        raise HTTPException(
+            status_code=refused.status, detail={"code": refused.code, "message": refused.message, **refused.extra},
+        ) from None
+    return ChatDraftSentOut()
+
+
 @router.put("/delegation/replies/{decision_id}/recipients", response_model=ReplyCardOut)
 async def update_delegation_reply_recipients(
     request: Request, decision_id: int, body: ReplyRecipientsUpdate,
@@ -1098,6 +1169,39 @@ async def answer_delegation_reply(request: Request, decision_id: int, body: Repl
             caller=api_caller.caller(request),
             resolver=person_id,
             answers=[answers.Answer(question_index=a.question_index, text=a.answer_text) for a in body.answers],
+        )
+    except SendRefused as refused:
+        raise HTTPException(
+            status_code=refused.status, detail={"code": refused.code, "message": refused.message, **refused.extra},
+        ) from None
+    card = next((c for c in cards(person) if c.decision_id == decision_id), None)
+    if card is None:
+        raise _refuse(404, "not_found", "That reply isn't waiting for you any more.")
+    out = ReplyCardOut(**{k: v for k, v in asdict(card).items() if k in ReplyCardOut.model_fields})
+    return out.model_copy(update={"changed_sentences": changed})
+
+
+@router.post("/delegation/replies/{decision_id}/change", response_model=ReplyCardOut)
+async def change_delegation_reply(request: Request, decision_id: int, body: ReplyChangeIn) -> ReplyCardOut:
+    """Change one of the caller's reply cards the way they said, in their
+    own words: the draft is rewritten in their voice and saved like an
+    answer (``delegation.answers.change`` through ``card_drafts.edit``: the
+    same checks, the same update in their Drafts, the same hourly limit).
+    Their own cards only; sends nothing."""
+    from openexecutive.delegation import answers
+    from openexecutive.delegation.inbox import DECISION_CLASS
+    from openexecutive.delegation.replies import cards
+    from openexecutive.delegation.reply_send import SendRefused
+    from openexecutive.memory.decision_ledger import get_decision_instance
+
+    person = _caller(request)
+    person_id = _person_id(person)
+    instance = get_decision_instance(decision_id)
+    if instance is None or instance.decision_class != DECISION_CLASS or instance.approver_person_id != person_id:
+        raise _refuse(404, "not_found", "That reply isn't waiting for you any more.")
+    try:
+        _, changed = await answers.change(
+            instance, caller=api_caller.caller(request), resolver=person_id, text=body.text,
         )
     except SendRefused as refused:
         raise HTTPException(

@@ -371,7 +371,9 @@ def get_session_messages(session_id: str, request: Request) -> list[dict]:
     message also says who wrote it (``sender_person_id``, ``sender_name``);
     a line a host origin's page wrote says so (``from_host``). The last
     reply carries ``held_steps`` while what its turn held for an outside
-    read still waits on the caller's go (``outside_content.pending_held``)."""
+    read still waits on the caller's go (``outside_content.pending_held``),
+    and ``flags`` while what the content check flagged in it is fresh
+    (``outside_content.pending_flags``)."""
     caller, member = _require_chat_access(request, session_id)
     meta = get_session_metadata(session_id)
     if meta is None:
@@ -399,7 +401,7 @@ def get_session_messages(session_id: str, request: Request) -> list[dict]:
     if messages and messages[-1].get("role") == "assistant" and not member:
         from types import SimpleNamespace
 
-        from openexecutive.orchestrator.outside_content import pending_held
+        from openexecutive.orchestrator.outside_content import pending_flags, pending_held
 
         # A chat shared since its turn held nothing that a go would still
         # release (``outside_content._held_key``), so it shows no buttons.
@@ -408,6 +410,9 @@ def get_session_messages(session_id: str, request: Request) -> list[dict]:
         )
         if held:
             messages[-1]["held_steps"] = list(held)
+        flags = pending_flags(SimpleNamespace(session_id=session_id, caller_person_id=caller))
+        if flags:
+            messages[-1]["flags"] = list(flags)
     return messages
 
 

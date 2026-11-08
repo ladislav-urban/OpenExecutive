@@ -663,6 +663,17 @@ class TodayResponse(BaseModel):
     narrative_points: list[NarrativePoint] = Field(default_factory=list)
     narrative_move: str | None = None
     narrative_seen_at: str | None = None
+    # When the served header was last found current (ISO-8601 UTC): now,
+    # when nothing it reads has moved since it was written, so a quiet
+    # header says "Checked 2:20 PM" rather than the hour it was written.
+    # None while a fresher one is being written. Additive.
+    narrative_checked_at: str | None = None
+    # The principal's own: mail to their own inbox today from people they
+    # don't deal with (strangers, bulk mail), as short "Name: subject"
+    # labels (a few) and how many there were. Right now's "Also in" line,
+    # never a point. Additive; empty / 0 for anyone else.
+    inbox_also: list[str] = Field(default_factory=list)
+    inbox_also_total: int = 0
     # The principal's own: today's delivered morning brief and the meetings
     # still ahead today. Additive; None / empty for anyone else.
     morning_brief: MorningBriefItem | None = None
@@ -1862,6 +1873,13 @@ def _with_due_soon(
 _LIVE_MIN_LOOKBACK = timedelta(hours=12)
 
 
+def _live_start(now: datetime, tz: tzinfo) -> datetime:
+    """Where Right now's live window starts: local midnight, or
+    ``_LIVE_MIN_LOOKBACK`` before the current hour when that is earlier."""
+    hour = now.astimezone(tz).replace(minute=0, second=0, microsecond=0)
+    return min(hour.replace(hour=0), hour - _LIVE_MIN_LOOKBACK)
+
+
 def _header_live(include_private: bool, now: datetime | None = None) -> tuple[Any, str, str]:
     """``(signals, window words, NOW label)`` for a whole-company header.
 
@@ -1879,9 +1897,8 @@ def _header_live(include_private: bool, now: datetime | None = None) -> tuple[An
     now = now or datetime.now(UTC)
     tz = get_user_timezone()
     hour = now.astimezone(tz).replace(minute=0, second=0, microsecond=0)
-    midnight = hour.replace(hour=0)
-    start = min(midnight, hour - _LIVE_MIN_LOOKBACK)
-    window = "today so far" if start == midnight else f"since {start:%a %H:%M}"
+    start = _live_start(now, tz)
+    window = "today so far" if start == hour.replace(hour=0) else f"since {start:%a %H:%M}"
     now_label = f"{hour:%A %d %B}, between {hour:%H}:00 and {(hour + timedelta(hours=1)):%H}:00 local time"
     signals = gather_live_signals(
         start.astimezone(UTC), now=now, include_private=include_private,
@@ -2067,6 +2084,39 @@ def _regen_lock(scope: str) -> asyncio.Lock:
     return lock
 
 
+# A stale header older than this is not served: the rewrite runs at least
+# hourly (the NOW line moves the key), so one this old means it has been
+# failing, and its "next meeting" or "due in an hour" no longer holds.
+_STALE_HEADER_MAX_AGE = timedelta(hours=2)
+
+
+def _header_outdated(written: datetime, now: datetime, *, quotes_calendar: bool) -> bool:
+    """Whether a header written at ``written`` can no longer be shown as now:
+    it is over ``_STALE_HEADER_MAX_AGE`` old, or (``quotes_calendar``: the
+    principal's own header) a meeting on today's cached calendar started or
+    ended since it was written, so it may call that meeting next or say there
+    is time to prepare. Only asked of a stale header, whose rewrite is
+    already scheduled. Never raises."""
+    if now - written > _STALE_HEADER_MAX_AGE:
+        return True
+    if not quotes_calendar:
+        return False
+    from openexecutive.briefing.live_signals import cached_calendar
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    try:
+        events = cached_calendar(now, get_user_timezone()) or []
+        return any(
+            edge is not None and written < edge <= now
+            for e in events
+            if not e.all_day
+            for edge in (e.start, e.end)
+        )
+    except Exception:
+        logger.exception("today: checking the header against the calendar failed")
+        return False
+
+
 def _attach_narrative(
     response: TodayResponse,
     *,
@@ -2081,7 +2131,9 @@ def _attach_narrative(
     say how old the text is and re-poll until the regeneration lands. A row
     written on an earlier local day is never served as today's: the page
     shows nothing until today's is written (a few seconds) rather than
-    yesterday's read as if it were current."""
+    yesterday's read as if it were current, and the same goes for a stale
+    one a meeting has started or ended since, or that is hours old
+    (``_header_outdated``): it may still call a finished call next."""
     from openexecutive.briefing import narrative_cache
     from openexecutive.memory.workspace_settings import get_workspace
 
@@ -2095,9 +2147,18 @@ def _attach_narrative(
         age_s: int | None = None
         if cached is not None:
             written = _parse_aware(cached.generated_at)
-            if written is not None and narrative_cache.local_today(written) == narrative_cache.local_today():
+            if (
+                written is not None
+                and narrative_cache.local_today(written) == narrative_cache.local_today()
+                and not (is_stale and _header_outdated(
+                    written, datetime.now(UTC),
+                    quotes_calendar=scope == narrative_cache.DEFAULT_SCOPE,
+                ))
+            ):
                 response.narrative = cached.narrative_text
                 response.narrative_generated_at = cached.generated_at
+                if not is_stale:
+                    response.narrative_checked_at = narrative_cache.utc_now_iso()
                 age_s = int((datetime.now(UTC) - written).total_seconds())
                 _attach_right_now(response, scope, cached.narrative_text, cached.generated_at)
         scheduled = is_stale and background_tasks is not None and not _in_failure_backoff(scope)
@@ -2130,6 +2191,25 @@ def _attach_right_now(response: TodayResponse, scope: str, text: str, written_at
     # Only a rostered reader's own scope has a last look (see /today/seen).
     if scope != narrative_cache.COMPANY_SCOPE:
         response.narrative_seen_at = right_now.seen_at(scope)
+    if scope == narrative_cache.DEFAULT_SCOPE:
+        _attach_inbox_also(response)
+
+
+def _attach_inbox_also(response: TodayResponse, now: datetime | None = None) -> None:
+    """The principal's "Also in" line: today's mail to their own inbox from
+    people they don't deal with. Never raises."""
+    from openexecutive.briefing.live_signals import own_inbox
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    now = now or datetime.now(UTC)
+    try:
+        tz = get_user_timezone()
+        mail = own_inbox(_live_start(now, tz).astimezone(UTC), tz, now)
+    except Exception:
+        logger.exception("today: reading the own inbox for Right now failed")
+        return
+    response.inbox_also = list(mail.others)
+    response.inbox_also_total = mail.others_total
 
 
 async def _regen_briefing_narrative(
@@ -2197,6 +2277,8 @@ async def _regen_briefing_narrative_locked(
     from openexecutive.memory.workspace_settings import get_workspace
 
     started = time.monotonic()
+    # The new points that need the principal, by key (right_now_ping).
+    important: set[str] = set()
 
     def prepare() -> tuple[Any, ...] | None:
         # The SQLite reads behind the context: seconds on a slow disk, so run
@@ -2220,13 +2302,13 @@ async def _regen_briefing_narrative_locked(
         cached = narrative_cache.get(scope)
         if cached is not None and cached.input_hash == input_hash:
             return None  # another trigger already wrote this exact state
-        return mode, scope, today_data, viewer_desc, reader, context, activity, input_hash
+        return mode, scope, today_data, viewer_desc, reader, context, activity, input_hash, cached
 
     try:
         prepared = await asyncio.to_thread(prepare)
         if prepared is None:
             return True
-        mode, scope, today_data, viewer_desc, reader, context, activity, input_hash = prepared
+        mode, scope, today_data, viewer_desc, reader, context, activity, input_hash, cached = prepared
         if context == narrative_cache.QUIET_CONTEXT:
             # Nothing awaits a decision — skip the model call entirely and
             # write the fixed quiet line. Still cached (below) so the hot path
@@ -2250,6 +2332,15 @@ async def _regen_briefing_narrative_locked(
                 timeout=25.0 + REWRITE_TIMEOUT_S,
             )
             if viewer_desc is None and text:
+                if scope == narrative_cache.DEFAULT_SCOPE:
+                    from openexecutive.briefing.header_context import (
+                        needs_you_tags,
+                        point_citations,
+                    )
+                    from openexecutive.briefing.right_now import point_key
+
+                    needs_you = needs_you_tags(context)
+                    important = {point_key(p) for p, cited in point_citations(text) if cited & needs_you}
                 # Right now: a point must cite a line of what moved today.
                 # A draft with nothing left is still cached (as the fixed
                 # line), or every view would pay for the same draft again.
@@ -2270,7 +2361,12 @@ async def _regen_briefing_narrative_locked(
     ))
     from openexecutive.briefing import right_now
 
-    right_now.record_points(scope, text, written_at)
+    recorded = right_now.record_points(scope, text, written_at)
+    if scope == narrative_cache.DEFAULT_SCOPE and recorded.new:
+        from openexecutive.briefing.right_now_ping import maybe_ping
+
+        ping = await maybe_ping(recorded.new, important, earlier_today=_written_earlier_today(cached))
+        logger.info("today: right now ping %s", ping.status)
     logger.info(
         "today: narrative regenerated scope=%s ms=%d quiet=%s context_chars=%d",
         scope, int((time.monotonic() - started) * 1000),
@@ -2279,15 +2375,25 @@ async def _regen_briefing_narrative_locked(
     return True
 
 
+def _written_earlier_today(cached: Any) -> bool:
+    """Whether the header being replaced was written today, the quiet line
+    included: the first header of the day is the morning's, which the brief
+    covers, so it pings nobody."""
+    from openexecutive.briefing import narrative_cache
+
+    written = _parse_aware(cached.generated_at) if cached is not None else None
+    return written is not None and narrative_cache.local_today(written) == narrative_cache.local_today()
+
+
 async def refresh_principal_narrative() -> bool:
     """Bring the principal's header up to date without anyone opening the page.
 
     Called from the scheduler's tick: refreshes the calendar read the header
-    quotes and settles the chat drafts it counts, then regenerates the principal's narrative only when its key
+    quotes and the principal's unanswered sent mail (``briefing.waiting_on``), and settles the chat drafts it counts, then regenerates the principal's narrative only when its key
     moved (new mail, something stuck, a proposal, the hour). True when a
     regeneration ran. Never raises.
     """
-    from openexecutive.briefing import narrative_cache
+    from openexecutive.briefing import narrative_cache, waiting_on
     from openexecutive.briefing.live_signals import refresh_calendar, settle_principal_drafts
     from openexecutive.memory.workspace_settings import get_workspace
     from openexecutive.people.store import find_principal_person
@@ -2296,8 +2402,8 @@ async def refresh_principal_narrative() -> bool:
         principal = find_principal_person()
         if principal is None or principal.id is None:
             return False
-        await refresh_calendar()
-        await settle_principal_drafts()
+        # Independent reads, so a slow mailbox delays none of the others.
+        await asyncio.gather(refresh_calendar(), waiting_on.refresh(), settle_principal_drafts())
         mode = get_workspace().mode
         snapshot = _build_today(include_private=True)
         scope, today_data, desc, viewer = _narrative_inputs(snapshot, principal.id)

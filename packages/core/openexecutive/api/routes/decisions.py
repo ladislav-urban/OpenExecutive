@@ -23,6 +23,7 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
@@ -67,7 +68,9 @@ class ApproveBody(BaseModel):
     For a reply card (``delegation_reply``) nothing is edited here: the draft
     is sent as it is in Gmail. ``edits`` carries the person's second yes when
     something changed since the card was made: ``recipients`` (the list they
-    were shown) and ``thread_moved_on: true``; and Send + allow in training:
+    were shown) and ``thread_moved_on: true``, and ``seen_caught_up_at``
+    (the card's ``caught_up_at`` as shown, so a draft brought up to date
+    since asks again); and Send + allow in training:
     ``allow: true``, with ``example: true`` to keep an edited draft as an
     example (``delegation.training``).
 
@@ -996,7 +999,31 @@ async def _reject(
 # The cards a chat app shows with Approve and Skip buttons
 # (integrations.channel_cards): the two a chat reply leaves for the person
 # chatting, as the web chat shows them under its reply.
-CHAT_CARD_CLASSES = frozenset({_CALENDAR_CLASS, "delegation_actions"})
+CHAT_CARD_CLASSES = frozenset({_CALENDAR_CLASS, "delegation_actions", "app_action"})
+# Of the app_action cards (orchestrator.app_control), the ones a chat app's
+# tap may carry out: those whose action checks the tapper itself, not a
+# signed request (a workflow change, workflow_change.run).
+CHAT_APP_ACTIONS = frozenset({"change_workflow"})
+
+
+def shown_in_chat(instance: DecisionInstance) -> bool:
+    """Whether a chat app shows this card with Approve and Skip buttons."""
+    if instance.decision_class not in CHAT_CARD_CLASSES:
+        return False
+    if instance.decision_class != _APP_ACTION.name:
+        return True
+    return _parse_payload(instance).get("action") in CHAT_APP_ACTIONS
+
+
+class _ChatTapRequest:
+    """What an app_action card's action reads on a chat app's tap: the
+    proven tap, and no signed caller (``workflow_change._tapper``)."""
+
+    def __init__(self, tap: Any) -> None:
+        self.state = SimpleNamespace(chat_tap=tap)
+        self.headers: dict[str, str] = {}
+        self.query_params: dict[str, str] = {}
+        self.client = None
 
 
 async def resolve_in_chat(instance_id: int, person: Any, *, approve: bool) -> DecisionInstance:
@@ -1012,7 +1039,7 @@ async def resolve_in_chat(instance_id: int, person: Any, *, approve: bool) -> De
     from openexecutive.people.store import find_principal_person
 
     instance = get_decision_instance(instance_id)
-    if instance is None or instance.decision_class not in CHAT_CARD_CLASSES or person.id is None:
+    if instance is None or not shown_in_chat(instance) or person.id is None:
         raise HTTPException(status_code=404, detail="This card is no longer there.")
     spec = _spec_for(instance)
     principal = find_principal_person()
@@ -1030,6 +1057,9 @@ async def resolve_in_chat(instance_id: int, person: Any, *, approve: bool) -> De
         raise HTTPException(status_code=409, detail="This card was already handled.")
     if instance.decision_class == _CALENDAR_CLASS:
         return await _book(instance, ApproveBody(), by_principal=is_principal, resolver=person.id)
+    if instance.decision_class == _APP_ACTION.name:
+        tap = ChatTap(normalize_email(person.email or ""))
+        return await _carry_out_app_action(instance, ApproveBody(), _ChatTapRequest(tap), person.id)  # type: ignore[arg-type]
     try:
         await approve_actions(
             instance, caller=ChatTap(normalize_email(person.email or "")), resolver=person.id,

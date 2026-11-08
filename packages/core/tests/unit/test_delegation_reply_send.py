@@ -212,6 +212,30 @@ def test_a_newer_message_needs_a_second_yes(owner: Any, models: dict[str, Any]) 
     assert mailbox.sent == ["d1"]
 
 
+def test_a_draft_brought_up_to_date_asks_again_unless_that_version_was_shown(
+    owner: Any, models: dict[str, Any],
+) -> None:
+    from openexecutive.delegation import card_drafts
+    from openexecutive.delegation.answers import CAUGHT_UP_KEY
+
+    mailbox, card = _card(owner)
+    models["rewritten"] = {"body": "Hi Dana,\n\nMonday works.", "note": "Dana offered Monday."}
+    mailbox.add(_msg("m2", "t1", minutes_ago=-5, text="Actually, Monday works too."))
+    asyncio.run(inbox.reconcile(owner, mailbox, now=NOW + timedelta(minutes=30), own={OWNER, *mailbox.aliases}))
+    card = ledger.get_decision_instance(card.id)
+    caught_up = inbox.card_payload(card)[CAUGHT_UP_KEY]
+    # Rewritten on its own after the card was shown: a second yes.
+    first = _refused(card, mailbox, owner, confirm={"seen_caught_up_at": "an older version"})
+    assert first.code == "confirm" and first.extra["reasons"] == ["thread_moved_on"]
+    # The card that was tapped showed this version: it goes.
+    _send(card, mailbox, owner, confirm={"seen_caught_up_at": caught_up})
+    assert mailbox.sent == ["d1"]
+    # The Executive's own rewrite isn't the person's change.
+    assert card_drafts.EDITED_ON_CARD not in inbox.card_payload(card)
+    assert "edited_in_gmail" not in inbox.ledger_flags(owner.id, ["m1"])["m1"]
+    assert _status(card) == "approved_unchanged"
+
+
 def test_a_draft_gone_or_answered_closes_the_card(owner: Any, models: dict[str, Any]) -> None:
     mailbox, card = _card(owner)
     del mailbox.drafts["d1"]
@@ -412,14 +436,17 @@ def _importers(module: str) -> set[str]:
     return set(_index()[1].get(module, set()))
 
 
-def test_only_the_send_path_sends_and_only_its_three_doors_reach_it() -> None:
-    """Three doors and no more: the person's tap (the approve route), Handle
-    it for me (the inbox watcher, under the person's own switch), and a
-    workflow its creator saved to send as them (``oe__send_email_as_me``)."""
+def test_only_the_send_path_sends_and_only_its_four_doors_reach_it() -> None:
+    """Four doors and no more: the person's tap on a card (the approve
+    route), Handle it for me (the inbox watcher, under the person's own
+    switch), a workflow its creator saved to send as them
+    (``oe__send_email_as_me``), and the person's tap under a chat draft (the
+    chat draft send route)."""
     assert _uses("send_draft") == {"delegation/reply_send.py"}
     assert _uses("send_approved_reply") == {"api/routes/decisions.py"}
     assert _uses("send_on_its_own") == {"delegation/inbox.py"}
     assert _uses("send_for_workflow") == {"delegation/workflow_email.py"}
+    assert _uses("send_chat_draft") == {"api/routes/delegation.py"}
     assert _uses("handle_send_email_as_me") == {"workflows/tool_catalog.py"}
     # card_drafts, answers and the edit routes use its refusals and caller check only.
     assert _importers("openexecutive.delegation.reply_send") == {
@@ -427,7 +454,7 @@ def test_only_the_send_path_sends_and_only_its_three_doors_reach_it() -> None:
         "delegation/answers.py", "delegation/workflow_email.py",
     }
     assert _importers("openexecutive.delegation.reply_send.SendRefused") >= {"delegation/answers.py"}
-    assert not ({"send_draft", "send_approved_reply", "send_on_its_own", "send_for_workflow"} & {
+    assert not ({"send_draft", "send_approved_reply", "send_on_its_own", "send_for_workflow", "send_chat_draft"} & {
         n for n, files in _index()[0].items() if "delegation/answers.py" in files
     })
 

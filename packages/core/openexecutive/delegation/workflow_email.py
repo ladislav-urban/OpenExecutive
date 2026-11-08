@@ -25,9 +25,12 @@ Both write in the creator's voice (``ghostwriter.compose``, as chat's
   reply card uses), and nobody else may change it. At send time the API must
   still be able to tie a save to a person (``handle_it.signing_ok``), and the
   draft goes through ``reply_send.send_for_workflow``, the one send path.
-- **First email to a new address asks once.** ``to`` and ``cc`` are write
-  targets, so a step's first email to an address waits for the creator's
-  approval (``action_step.TargetPolicy``), then is remembered.
+- **Recipients they chose go without asking.** ``to`` and ``cc`` are write
+  targets (``action_step.TargetPolicy``). Their own addresses and the
+  addresses in the goal of a step that emails as them (``chosen_recipients``: only its
+  verified creator saves such a workflow) go straight out; the first email
+  to any other address waits for the creator's approval, then is
+  remembered. So mail a step read can't add a recipient that goes unasked.
 - **Capped.** Every draft counts against ``DELEGATION_MAX_DRAFTS_PER_DAY``
   (shared with chat and the inbox, ``caps``), and sends against
   ``DELEGATION_WORKFLOW_MAX_SENDS_PER_DAY`` as well.
@@ -52,7 +55,9 @@ logger = logging.getLogger(__name__)
 TIMEOUT_S = 300.0
 DRAFT_TOOL = "oe__draft_email_as_me"
 SEND_TOOL = "oe__send_email_as_me"
-TOOLS = frozenset({DRAFT_TOOL, SEND_TOOL})
+# Answers an email in their inbox as Handle it for me would (delegation.workflow_reply).
+REPLY_TOOL = "oe__answer_email_as_me"
+TOOLS = frozenset({DRAFT_TOOL, SEND_TOOL, REPLY_TOOL})
 MAX_INTENT_CHARS = 4000
 _EMAIL_RE = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 
@@ -111,21 +116,77 @@ def available_for(person_id: int | None) -> bool:
 
 
 def sends(defn: Any) -> bool:
-    """Whether a workflow definition has a step that sends as its creator."""
-    return any(SEND_TOOL in (getattr(step, "tools", None) or []) for step in getattr(defn, "steps", []))
+    """Whether a workflow definition has a step that sends as its creator,
+    or answers their email (which may go on its own)."""
+    return any(
+        {SEND_TOOL, REPLY_TOOL} & set(getattr(step, "tools", None) or []) for step in getattr(defn, "steps", [])
+    )
 
 
-def save_refusal(defn: Any, caller: Any, owner_id: int | None) -> str | None:
+def as_creator(defn: Any) -> bool:
+    """Whether a workflow definition sends as its creator or reads their mail
+    (``workflow_reads``): only its creator, verified, may save or switch it on."""
+    from openexecutive.delegation.workflow_reads import reads
+
+    return sends(defn) or reads(defn)
+
+
+def _saved_part(defn: Any) -> dict[str, Any]:
+    dumped: dict[str, Any] = defn.model_dump(exclude={"is_active", "created_at", "updated_at"})
+    return dumped
+
+
+def chosen_recipients(defn: Any) -> set[str]:
+    """The addresses a workflow that writes or reads as its creator may email
+    without asking: the creator's own, and those written in the goal of a
+    step that emails as them, as saved. Only the creator, verified, saves such a workflow
+    (``save_refusal``), so these are their choice, never something a run
+    read. Empty for any other workflow, or one not saved as it runs. Never
+    raises."""
+    from openexecutive.people.store import get_person
+    from openexecutive.workflows.dynamic_store import get_definition, get_owner
+
+    try:
+        stored = get_definition(defn.name)
+        if stored is None or not as_creator(stored) or _saved_part(stored) != _saved_part(defn):
+            return set()
+        owner_id = get_owner(defn.name)
+        owner = get_person(owner_id) if owner_id is not None else None
+        if owner is None:
+            return set()
+        written = [
+            str(getattr(step, "goal", "") or "") for step in stored.steps
+            if TOOLS & set(getattr(step, "tools", None) or [])
+        ]
+    except Exception:
+        logger.warning("workflow email: couldn't read the chosen recipients", exc_info=True)
+        return set()
+    own = {a.strip().lower() for a in [owner.email, *owner.email_aliases] if a}
+    return own | {a.lower() for text in written for a in _EMAIL_RE.findall(text)}
+
+
+def save_refusal(defn: Any, caller: Any, owner_id: int | None, *, check_tools: bool = True) -> str | None:
     """Why ``caller`` may not save or switch on ``defn`` with its creator
-    ``owner_id``, or None. Only a workflow that sends as its creator is
-    checked: then the caller must be that creator, and the API must know it
-    (``verified.caller_refusal``). Never raises; a lookup that fails refuses."""
+    ``owner_id``, or None. Only a workflow that sends as its creator or reads
+    their mail is checked: then the caller must be that creator, and the API
+    must know it (``verified.caller_refusal``), and one that reads must keep
+    to what a run may do after reading mail (``workflow_reads.definition_refusal``,
+    skipped with ``check_tools`` False for the stored copy an edit replaces).
+    Never raises; a lookup that fails refuses."""
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.delegation.verified import NOT_YOURS, caller_refusal
+    from openexecutive.delegation.workflow_reads import definition_refusal
     from openexecutive.people.store import get_person
 
-    if not sends(defn):
+    if not as_creator(defn):
         return None
+    try:
+        unsafe = definition_refusal(defn, owner_id) if check_tools else None
+    except Exception:
+        logger.warning("workflow email: couldn't check what the workflow reads", exc_info=True)
+        unsafe = "Couldn't check this workflow's tools just now. Try again."
+    if unsafe is not None:
+        return unsafe
     try:
         owner = get_person(owner_id) if owner_id is not None else None
         refused = caller_refusal(caller, normalize_email(owner.email)) if owner is not None else NOT_YOURS
@@ -137,7 +198,12 @@ def save_refusal(defn: Any, caller: Any, owner_id: int | None) -> str | None:
     if refused == NOT_YOURS:
         return (
             "Only the person who created this workflow can save or switch on a workflow "
-            "that sends email as them."
+            "that reads their email or sends email as them."
+        )
+    if not sends(defn):
+        return (
+            "A workflow that reads your email needs signed sign-ins on this server, so "
+            "nobody else can save one in your name."
         )
     return (
         "A workflow that sends email as you needs signed sign-ins on this server, so "
@@ -216,8 +282,10 @@ class _Ask:
     intent: str
 
 
-async def _ask(tool_input: dict[str, Any], *, mailbox: Any) -> _Ask | str:
-    """Who writes, to whom, and what: or the error result."""
+async def creator_mailbox(*, mailbox: Any) -> tuple[Any, str, Any] | str:
+    """The workflow's creator, their address and their mailbox's client, when
+    this run may write as them: or the error result. ``mailbox`` replaces
+    their own client (tests)."""
     from openexecutive.delegation.gmail import (
         STATUS_MESSAGES,
         gmail_for,
@@ -225,7 +293,6 @@ async def _ask(tool_input: dict[str, Any], *, mailbox: Any) -> _Ask | str:
         normalize_email,
     )
     from openexecutive.delegation.settings import can_delegate, is_enabled
-    from openexecutive.delegation.threads import MAX_RECIPIENTS
     from openexecutive.people.store import get_person
     from openexecutive.workflows.chat_tools import running
 
@@ -246,6 +313,21 @@ async def _ask(tool_input: dict[str, Any], *, mailbox: Any) -> _Ask | str:
         return _error("Its creator hasn't turned on Act as me (writing email as them)." + _FALL_BACK)
     if person is None or person.id is None:  # can_delegate checked both; for the type checker
         return _error("I can't tell whose mailbox this is.")
+    email = normalize_email(person.email)
+    try:
+        client = mailbox if mailbox is not None else gmail_for(email)
+    except Exception:
+        logger.warning("workflow email: couldn't open the mailbox", exc_info=True)
+        return _error("Couldn't open their mailbox just now." + _FALL_BACK)
+    status = await gmail_status(email, gmail=client)
+    if status != "connected":
+        return _error(STATUS_MESSAGES[status] + _FALL_BACK, status=status)
+    return person, email, client
+
+
+async def _ask(tool_input: dict[str, Any], *, mailbox: Any) -> _Ask | str:
+    """Who writes, to whom, and what: or the error result."""
+    from openexecutive.delegation.threads import MAX_RECIPIENTS
 
     intent = str(tool_input.get("intent") or "").strip()
     if not intent:
@@ -263,16 +345,10 @@ async def _ask(tool_input: dict[str, Any], *, mailbox: Any) -> _Ask | str:
         return _error("Pass `to`: who the email is for.")
     if len(to) + len(cc) > MAX_RECIPIENTS:
         return _error(f"At most {MAX_RECIPIENTS} recipients.")
-
-    email = normalize_email(person.email)
-    try:
-        client = mailbox if mailbox is not None else gmail_for(email)
-    except Exception:
-        logger.warning("workflow email: couldn't open the mailbox", exc_info=True)
-        return _error("Couldn't open their mailbox just now." + _FALL_BACK)
-    status = await gmail_status(email, gmail=client)
-    if status != "connected":
-        return _error(STATUS_MESSAGES[status] + _FALL_BACK, status=status)
+    writer = await creator_mailbox(mailbox=mailbox)
+    if isinstance(writer, str):
+        return writer
+    person, email, client = writer
     return _Ask(person=person, email=email, client=client, to=to, cc=cc, intent=intent)
 
 

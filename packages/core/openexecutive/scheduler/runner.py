@@ -2389,11 +2389,19 @@ async def _deliver_to_principal(text: str, *, label: str = "Update") -> Principa
         return await _send_on_plan(principal, plan, text, label=label)
 
 
-async def deliver_to_person(person: Person, text: str, *, label: str = "Update") -> PrincipalDelivery:
+async def deliver_to_person(
+    person: Person, text: str, *, label: str = "Update", chat_only: bool = False,
+) -> PrincipalDelivery:
     """Send ``text`` to ``person`` alone, the way the briefs reach the
     principal: their own Slack or Discord DM, their Telegram chat, or email
-    to their own address (``delivery_order``, which skips a Telegram group)."""
-    plan = delivery_order(person, email_ready=await ensure_email_ready())
+    to their own address (``delivery_order``, which skips a Telegram group).
+    ``chat_only`` leaves email out: nothing goes when no chat app reaches them."""
+    if chat_only:
+        plan = [c for c in delivery_order(person, email_ready=False) if c != "email"]
+        if not plan:
+            return PrincipalDelivery(False, "no chat app reaches them", "no_channel")
+    else:
+        plan = delivery_order(person, email_ready=await ensure_email_ready())
     return await _send_on_plan(person, plan, text, label=label)
 
 
@@ -2422,6 +2430,7 @@ async def _send_on_plan(
                     "user_id": principal.slack_user_id, "text": text,
                 })
                 if _delivered_ok(result):
+                    await _remember_in_chat(result, f"slack:dm:{principal.slack_user_id}", principal, text, label)
                     return _sent(channel, principal.slack_user_id)
                 failures.append(f"{channel}: {_error_line(result)}")
             elif channel == "discord_dm" and principal.discord_user_id:
@@ -2430,6 +2439,7 @@ async def _send_on_plan(
                     "discord_user_id": principal.discord_user_id, "text": text,
                 })
                 if _delivered_ok(result):
+                    await _remember_in_chat(result, f"discord:dm:{principal.discord_user_id}", principal, text, label)
                     return _sent(channel, principal.discord_user_id)
                 failures.append(f"{channel}: {_error_line(result)}")
             elif channel == "telegram" and principal.telegram_chat_id:
@@ -2440,6 +2450,7 @@ async def _send_on_plan(
                     "chat_id": int(principal.telegram_chat_id), "text": text,
                 })
                 if _delivered_ok(result):
+                    await _remember_in_chat(result, f"telegram:{principal.telegram_chat_id}", principal, text, label)
                     return _sent(channel, principal.telegram_chat_id)
                 failures.append(f"{channel}: {_error_line(result)}")
             elif channel == "email":
@@ -2456,6 +2467,28 @@ async def _send_on_plan(
     return PrincipalDelivery(
         False, "delivery failed on every channel: " + "; ".join(failures), "send_failed"
     )
+
+
+async def _remember_in_chat(
+    result_json: str, base_id: str, person: Person, text: str, label: str
+) -> None:
+    """Save a message just sent into a chat app into that chat's conversation
+    (``integrations.conversations.record_delivery``), so the person's reply
+    to it has it in view. Only once it was sent: a held one is saved when
+    ``people.held_messages`` releases it, which sends through
+    ``deliver_to_person`` and so through here. Never raises."""
+    import json as _json
+
+    try:
+        if _json.loads(result_json).get("status") != "sent":
+            return
+        from openexecutive.integrations.conversations import record_delivery
+
+        await asyncio.to_thread(
+            record_delivery, base_id, text, owner_person_id=person.id, title=label,
+        )
+    except Exception:
+        logger.exception("scheduler: couldn't save the delivery into %s", base_id)
 
 
 def _sent(channel: str, to: str | None) -> PrincipalDelivery:
@@ -2495,77 +2528,96 @@ async def _run_dynamic_workflow(action: ScheduledAction, now: datetime) -> None:
         mark_action_done(action.id)
         return
 
-    run_id = str(uuid.uuid4())
-    try:
-        workflow = get_workflow(name)
-        wf_inputs = workflow.input_model()()  # cadence runs supply no inputs
-        create_run(
-            run_id, name, f"{workflow.title} {now.strftime('%Y-%m-%d')}", wf_inputs.model_dump()
-        )
-        store = ChromaDBStore(persist_directory=get_settings().vector_store_path)
-        artifact = ""
-        paused = False
-        async for event in workflow.run(inputs=wf_inputs, store=store):
-            # The one pause a scheduled run CAN take: an action step held
-            # writes to new targets. Nothing waits in-process — the run is
-            # checkpointed, its owner is asked, and the resumer finishes it
-            # (and DMs the artifact to this cadence's recipient) later.
-            if (
-                isinstance(event, WaitForHumanEvent)
-                and event.resume_state is not None
-                and event.resume_state.kind == "held_writes"
-            ):
-                event.resume_state.deliver_to_person_id = action.assigned_to_person_id
-                await checkpoint_gate(run_id=run_id, event=event, workflow_title=workflow.title)
-                paused = True
-                break
-            # The only scheduler branch that can receive a DYNAMIC workflow, so
-            # the only one that can be handed an approval gate. A cadence fire
-            # has no human in the loop, and `validate_definition` forbids gates
-            # in cadence-enabled workflows for exactly that reason — but a
-            # definition saved before that rule, or edited while a scheduled
-            # row was pending, still lands here. This used to ignore the gate
-            # and store `complete_run(run_id, "(no artifact)")`: a phantom
-            # successful run, every period, with nothing in it. Raising instead
-            # lets the handler below record a real failure.
-            event = ensure_workflow_event(event, site="scheduler.dynamic_workflow")
-            if event.type == "artifact" and event.content:
-                artifact = event.content
-            elif event.type == "error" and event.message:
-                raise RuntimeError(event.message)
-        if paused:
-            artifact = ""  # the resumer delivers it once the owner answers
-        else:
-            complete_run(run_id, artifact or "(no artifact)")
-    except Exception as exc:
-        logger.exception("scheduler: dynamic_workflow %r (action %d) failed", name, action.id)
-        with contextlib.suppress(Exception):
-            fail_run(run_id, str(exc))
-        file_failed_run_card(
-            run_id=run_id,
-            workflow_name=name,
-            title=defn.title or name,
-            scope=name,
-            routed_to_person_id=action.assigned_to_person_id,
-        )
-    else:
-        # Deliver AFTER the run is marked done, in its own guard — a delivery
-        # failure (e.g. revoked token) must not regress a successfully
-        # produced-and-stored artifact's status back to 'error'.
-        if artifact and action.assigned_to_person_id is not None:
-            try:
-                from openexecutive.orchestrator.schedule_tools import (
-                    handle_message_person,
-                )
+    from openexecutive.delegation.workflow_reads import owns_runs, private_run
+    from openexecutive.orchestrator.artifact_records import pinned_viewer, viewer_for_person
 
-                await handle_message_person(
-                    {"person_id": action.assigned_to_person_id, "text": artifact}
-                )
-            except Exception:
-                logger.exception(
-                    "scheduler: dynamic_workflow %r artifact delivery failed "
-                    "(run still complete)", name,
-                )
+    # One that reads its creator's mail runs as theirs: its history, its report
+    # and a failure go to them alone (delegation.workflow_reads).
+    owner = owns_runs(name)
+    deliver_to = owner if owner is not None else action.assigned_to_person_id
+    run_id = str(uuid.uuid4())
+    # Every audit row it writes, its report's included, is theirs too.
+    with private_run(name):
+        try:
+            workflow = get_workflow(name)
+            wf_inputs = workflow.input_model()()  # cadence runs supply no inputs
+            create_run(
+                run_id, name, f"{workflow.title} {now.strftime('%Y-%m-%d')}", wf_inputs.model_dump(),
+                owner_person_id=owner,
+            )
+            store = ChromaDBStore(persist_directory=get_settings().vector_store_path)
+            artifact = ""
+            paused = False
+            as_owner = pinned_viewer(viewer_for_person(owner)) if owner is not None else contextlib.nullcontext()
+            with as_owner:
+                async for event in workflow.run(inputs=wf_inputs, store=store):
+                    # The one pause a scheduled run CAN take: an action step held
+                    # writes to new targets. Nothing waits in-process — the run is
+                    # checkpointed, its owner is asked, and the resumer finishes it
+                    # (and DMs the artifact to this cadence's recipient) later.
+                    if (
+                        isinstance(event, WaitForHumanEvent)
+                        and event.resume_state is not None
+                        and event.resume_state.kind == "held_writes"
+                    ):
+                        event.resume_state.deliver_to_person_id = deliver_to
+                        await checkpoint_gate(run_id=run_id, event=event, workflow_title=workflow.title)
+                        paused = True
+                        break
+                    # The only scheduler branch that can receive a DYNAMIC workflow, so
+                    # the only one that can be handed an approval gate. A cadence fire
+                    # has no human in the loop, and `validate_definition` forbids gates
+                    # in cadence-enabled workflows for exactly that reason — but a
+                    # definition saved before that rule, or edited while a scheduled
+                    # row was pending, still lands here. This used to ignore the gate
+                    # and store `complete_run(run_id, "(no artifact)")`: a phantom
+                    # successful run, every period, with nothing in it. Raising instead
+                    # lets the handler below record a real failure.
+                    event = ensure_workflow_event(event, site="scheduler.dynamic_workflow")
+                    if event.type == "artifact" and event.content:
+                        artifact = event.content
+                    elif event.type == "error" and event.message:
+                        raise RuntimeError(event.message)
+            if paused:
+                artifact = ""  # the resumer delivers it once the owner answers
+            else:
+                complete_run(run_id, artifact or "(no artifact)")
+        except Exception as exc:
+            logger.exception("scheduler: dynamic_workflow %r (action %d) failed", name, action.id)
+            with contextlib.suppress(Exception):
+                fail_run(run_id, str(exc))
+            file_failed_run_card(
+                run_id=run_id,
+                workflow_name=name,
+                title=defn.title or name,
+                scope=name,
+                routed_to_person_id=deliver_to,
+            )
+        else:
+            # Deliver AFTER the run is marked done, in its own guard — a delivery
+            # failure (e.g. revoked token) must not regress a successfully
+            # produced-and-stored artifact's status back to 'error'.
+            if artifact and deliver_to is not None:
+                try:
+                    from openexecutive.orchestrator.schedule_tools import (
+                        handle_message_person,
+                    )
+                    from openexecutive.workflows.run_message import message_for_run
+
+                    # A few plain lines for the reader, or none when the run
+                    # had nothing for them; the full report stays on its page.
+                    message = await message_for_run(
+                        title=getattr(defn, "title", "") or name,
+                        description=getattr(defn, "description", "") or "",
+                        artifact=artifact, person_id=deliver_to,
+                    )
+                    if message:
+                        await handle_message_person({"person_id": deliver_to, "text": message})
+                except Exception:
+                    logger.exception(
+                        "scheduler: dynamic_workflow %r artifact delivery failed "
+                        "(run still complete)", name,
+                    )
 
     mark_action_done(action.id)
     # A Run again is a one-off: the cadence already has its next occurrence.

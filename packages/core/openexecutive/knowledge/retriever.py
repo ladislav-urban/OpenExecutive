@@ -531,13 +531,6 @@ def retrieve(
     ):
         return _standing_block(rules)
 
-    if notion_results or drive_results or onedrive_results or confluence_results:
-        # A synced folder is multi-writer: a turn that reads one counts as
-        # having read outside content (orchestrator.outside_content).
-        from openexecutive.orchestrator import outside_content
-
-        outside_content.mark(outside_content.SYNCED)
-
     if record_source is not None:
         _record_sources(
             record_source,
@@ -646,7 +639,17 @@ def retrieve(
         for ann in active_annotations:
             parts.append(f"[SME annotation] {ann.correction}")
 
-    return "\n\n".join(parts)
+    context = "\n\n".join(parts)
+    if notion_results or drive_results or onedrive_results or confluence_results:
+        # A synced folder is multi-writer: what a turn reads from one is
+        # checked like any outside read, and marks the turn by the owner's
+        # safety level (orchestrator.outside_content). Queued as the same
+        # sections ``begin_turn`` takes from this context, so the same read
+        # is checked once.
+        from openexecutive.orchestrator import outside_content
+
+        outside_content.mark_pending(outside_content.SYNCED, outside_content.synced_sections(context))
+    return context
 
 
 def _fit_to_budget(

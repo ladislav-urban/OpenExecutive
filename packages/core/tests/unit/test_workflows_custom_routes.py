@@ -318,7 +318,7 @@ def creator_check(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
     state: dict[str, Any] = {"ok": False, "owners": []}
 
-    def refusal(defn: Any, caller: Any, owner_id: int | None) -> str | None:
+    def refusal(defn: Any, caller: Any, owner_id: int | None, *, check_tools: bool = True) -> str | None:
         if not workflow_email.sends(defn):
             return None
         state["owners"].append(owner_id)
@@ -357,3 +357,30 @@ def test_only_its_verified_creator_saves_a_workflow_that_sends_as_them(
     creator_check["ok"] = True
     r = client.post("/workflows/custom/file_bills/activate", json={"is_active": True, "definition": stored})
     assert r.status_code == 200, r.text
+
+
+def test_only_its_creator_runs_a_workflow_that_reads_their_mail(
+    client: TestClient, creator_check: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert client.post("/workflows/custom", json=_action_definition(["oe__search_my_email"])).status_code == 201
+    monkeypatch.setattr(dynamic_store, "get_owner", lambda name: 1)
+    monkeypatch.setattr("openexecutive.api.routes.workflows._caller_person_id", lambda request: 2)
+
+    r = client.post("/workflows/file_bills/runs", json={})
+
+    assert r.status_code == 403 and "creator" in r.json()["detail"]
+    # Its creator, only once the API knows it is them (as a save needs).
+    from types import SimpleNamespace
+
+    from openexecutive.delegation import verified
+
+    monkeypatch.setattr("openexecutive.api.routes.workflows._caller_person_id", lambda request: 1)
+    monkeypatch.setattr(
+        "openexecutive.people.store.get_person", lambda pid: SimpleNamespace(email="olivia@co.example", is_principal=False, archived=False),
+    )
+    monkeypatch.setattr(verified, "caller_refusal", lambda caller, email: verified.SIGNING_REQUIRED)
+    r = client.post("/workflows/file_bills/runs", json={})
+    assert r.status_code == 403 and "signed sign-ins" in r.json()["detail"]
+    monkeypatch.setattr(verified, "caller_refusal", lambda caller, email: None)
+    r = client.post("/workflows/file_bills/runs", json={})
+    assert r.status_code != 403, r.text

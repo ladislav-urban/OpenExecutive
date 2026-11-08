@@ -26,6 +26,18 @@ export interface ActionTaken {
   // An approval card's id (propose_actions, propose_erpnext_draft): the chat
   // shows the card itself under the message.
   decision_id?: number;
+  // A draft written as you (ghostwrite_email): the chat shows it under the
+  // message with a Send button.
+  draft?: ChatDraft;
+}
+
+export interface ChatDraft {
+  row: number;
+  to: string[];
+  cc: string[];
+  subject: string;
+  // The start of the draft's text, as saved.
+  preview: string;
 }
 
 // Names the round of tool calls currently in flight, so the progress line can
@@ -162,6 +174,14 @@ export interface HeldStepsEvent {
   steps: string[];
 }
 
+// What the content check flagged this turn, in plain words: shown under the
+// reply (orchestrator/outside_content.py `pending_flags`).
+export interface FlagsEvent {
+  type: "flags";
+  session_id?: string;
+  flags: string[];
+}
+
 export type StreamItem =
   | ChatChunk
   | DebugEvent
@@ -170,7 +190,8 @@ export type StreamItem =
   | Activity
   | SourcesEvent
   | MessageAdded
-  | HeldStepsEvent;
+  | HeldStepsEvent
+  | FlagsEvent;
 
 export interface StreamChatOptions {
   committeeReview?: boolean;
@@ -1492,6 +1513,9 @@ export interface ChatMessage {
   // `held_steps` event, or re-attached when the chat is reloaded. Shown as
   // Approve / Not now buttons; Approve sends the go as their next message.
   held_steps?: string[];
+  // The last reply only: what the content check flagged in what its turn
+  // read, from the stream's `flags` event or re-attached on reload.
+  flags?: string[];
 }
 
 export interface Decision {
@@ -1850,12 +1874,17 @@ export async function getSetupStatus(signal?: AbortSignal): Promise<SetupStatus>
   return res.json();
 }
 
-// Settings → Your Executive → When I read outside content: how far text
-// someone else wrote holds what it does next (orchestrator/outside_mode.py).
+// Settings → Your Executive → When should I check with you?: the safety
+// level, "ask" (Careful), "outsiders" (Balanced) or "trust" (Hands-off), and
+// the channels set apart from it (orchestrator/outside_mode.py).
 export type OutsideContentMode = "ask" | "outsiders" | "trust";
 
 export interface OutsideContentSetting {
   mode: OutsideContentMode;
+  // Channel id → its own level; a channel not listed follows `mode`.
+  channels: Record<string, OutsideContentMode>;
+  // The channels a level can be set on, in order.
+  channel_ids: string[];
   can_change: boolean;
 }
 
@@ -1865,11 +1894,16 @@ export async function getOutsideContent(signal?: AbortSignal): Promise<OutsideCo
   return res.json();
 }
 
-export async function setOutsideContent(mode: OutsideContentMode): Promise<OutsideContentSetting> {
+// `channels`: a level sets that channel apart, null makes it follow `mode`
+// again; channels left out keep what they have.
+export async function setOutsideContent(
+  mode: OutsideContentMode,
+  channels?: Record<string, OutsideContentMode | null>,
+): Promise<OutsideContentSetting> {
   const res = await fetch(`${API_BASE}/executive/outside-content`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mode }),
+    body: JSON.stringify(channels ? { mode, channels } : { mode }),
   });
   if (res.status === 403) throw new Error("Only the account owner can change this.");
   if (!res.ok) throw new Error("Couldn't save that. Try again.");
@@ -2147,6 +2181,14 @@ export interface HandledReply {
 // alone. Send approves it (POST /decisions/{id}/approve); Dismiss rejects it
 // (POST /decisions/{id}/reject). `status` is "executing" while a send Gmail
 // didn't confirm is being checked.
+export interface ReplyTurn {
+  kind: "news" | "asked" | "note" | string;
+  text: string;
+  from_name?: string;
+  from_email?: string;
+  at?: string;
+}
+
 export interface ReplyCard {
   decision_id: number;
   status: string;
@@ -2196,6 +2238,13 @@ export interface ReplyCard {
   // What the email asks and what the draft says, in a line or two, for the
   // card's closed view; empty or absent on a card drafted before it.
   gist?: string;
+  // Since the draft was written: newer email in the conversation ("news"),
+  // what you asked to change ("asked") and what the Executive changed
+  // ("note"), in order. Absent on an older backend.
+  conversation?: ReplyTurn[];
+  // When the reply was last brought up to date with newer mail; Send passes
+  // it back, so a version you never saw asks again.
+  caught_up_at?: string;
 }
 
 // One thing a reply leaves you to decide (GET /delegation/replies).
@@ -2546,6 +2595,18 @@ export async function answerReplyQuestions(
   return (await res.json()) as ReplyCard;
 }
 
+// Change the reply the way you say, in your own words: the Executive
+// rewrites it and says what it changed (POST .../change). Sends nothing.
+export async function changeReply(id: number, text: string): Promise<ReplyCard> {
+  const res = await fetch(`${API_BASE}/delegation/replies/${id}/change`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw await delegationError(res, "Couldn't change your reply.");
+  return (await res.json()) as ReplyCard;
+}
+
 // Forget one thing it learned in training: it asks again from now on.
 export async function removeTrainingLearned(id: number): Promise<DelegationSettings> {
   const res = await fetch(`${API_BASE}/delegation/learned/${id}`, { method: "DELETE" });
@@ -2659,7 +2720,14 @@ function strings(value: unknown): string[] {
 // version when you changed the draft (Drafts in training).
 export async function sendReplyCard(
   id: number,
-  confirm?: { recipients: string[]; thread_moved_on?: boolean; allow?: boolean; example?: boolean },
+  confirm?: {
+    recipients: string[];
+    thread_moved_on?: boolean;
+    allow?: boolean;
+    example?: boolean;
+    // The card's caught_up_at as shown: brought up to date since asks again.
+    seen_caught_up_at?: string;
+  },
 ): Promise<SendReplyResult> {
   const res = await fetch(`${API_BASE}/decisions/${id}/approve`, {
     method: "POST",
@@ -2671,6 +2739,26 @@ export async function sendReplyCard(
   const detail = (body.detail && typeof body.detail === "object" ? body.detail : {}) as Record<string, unknown>;
   const message = typeof detail.message === "string" ? detail.message : "Couldn't send that reply.";
   const code = typeof detail.code === "string" ? detail.code : res.status === 404 ? "draft_gone" : "error";
+  if (res.status === 409 && code === "confirm") {
+    return { status: "confirm", message, reasons: strings(detail.reasons), recipients: strings(detail.recipients) };
+  }
+  throw new ReplySendError(message, code);
+}
+
+// Send a draft the chat wrote as you, exactly as it was written (POST
+// /delegation/drafts/{row}/send). `threadMovedOn` is your second yes when a
+// newer message arrived in that conversation.
+export async function sendChatDraft(row: number, threadMovedOn = false): Promise<SendReplyResult> {
+  const res = await fetch(`${API_BASE}/delegation/drafts/${row}/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_moved_on: threadMovedOn }),
+  });
+  if (res.ok) return { status: "sent" };
+  const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  const detail = (body.detail && typeof body.detail === "object" ? body.detail : {}) as Record<string, unknown>;
+  const message = typeof detail.message === "string" ? detail.message : "Couldn't send that email.";
+  const code = typeof detail.code === "string" ? detail.code : "error";
   if (res.status === 409 && code === "confirm") {
     return { status: "confirm", message, reasons: strings(detail.reasons), recipients: strings(detail.recipients) };
   }
@@ -5607,6 +5695,12 @@ export interface Today {
   narrative_points?: NarrativePoint[];
   narrative_move?: string | null;
   narrative_seen_at?: string | null;
+  // When the served header was last found current (null while a fresher one
+  // is being written), and the owner's "Also in" line: today's mail to their
+  // own inbox from people they don't deal with. Optional for older API builds.
+  narrative_checked_at?: string | null;
+  inbox_also?: string[];
+  inbox_also_total?: number;
   // The owner's own: today's delivered morning brief and the meetings still
   // ahead today.
   morning_brief?: MorningBriefItem | null;

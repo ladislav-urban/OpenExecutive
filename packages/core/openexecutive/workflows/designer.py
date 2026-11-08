@@ -211,28 +211,63 @@ def _one_line(text: str, limit: int) -> str:
 
 def _email_as_line(as_me: bool) -> str:
     """How this user's workflow emails can go."""
-    from openexecutive.delegation.workflow_email import DRAFT_TOOL, SEND_TOOL
+    from openexecutive.delegation.workflow_email import DRAFT_TOOL, REPLY_TOOL, SEND_TOOL
+    from openexecutive.delegation.workflow_reads import TOOLS as READ_TOOLS
 
+    reads = ", ".join(sorted(READ_TOOLS))
     if as_me:
         return (
             "Email as the user: their own mailbox is connected (Act as me). When an "
             f"email should come from them, in their voice, use {DRAFT_TOOL} (saves a "
             f"draft in their mailbox for them to send) or {SEND_TOOL} (sends it as "
             "them). When it should come from the Executive, use the gateway's email "
-            "tools. If it isn't clear which of the three they want, ask."
+            "tools. If it isn't clear which of the three they want, ask. When they say "
+            "who an email as them goes to, write those addresses into the step's goal: "
+            "emails to them, or to the user, go without asking, and the first email to "
+            "any other address waits for the user's approval. To read their own mail or "
+            f"calendar, use {reads}. To answer an email in their inbox the way their "
+            f"Handle it for me does (sent on its own when its rules allow, otherwise a card "
+            f"for them), use {REPLY_TOOL} with the thread from those reads. A workflow that reads them runs only for them and "
+            "reports only to them, and none of its steps may use web search, gateway "
+            "tools, scripts or other workflows: if they want those too, suggest a "
+            "separate workflow."
         )
     return (
         "Email as the user: not available, since they haven't connected their own "
-        f"mailbox under Act as me. Do not use {DRAFT_TOOL} or {SEND_TOOL}; emails "
-        "come from the Executive's own address through the gateway's email tools."
+        f"mailbox under Act as me. Do not use {DRAFT_TOOL}, {SEND_TOOL}, {REPLY_TOOL} or {reads}; "
+        "emails come from the Executive's own address through the gateway's email tools."
     )
 
 
-def build_context_block(*, as_me: bool = False) -> str:
+def _accounts_line(as_me: bool, exec_email: str, user_email: str) -> str:
+    """Whose mailbox and calendar each kind of tool reads."""
+    from openexecutive.delegation.workflow_reads import TOOLS as READ_TOOLS
+
+    yours = f" ({user_email})" if user_email else ""
+    line = (
+        "Whose account the gateway's mail and calendar tools use: the Executive's own"
+        + (f" ({exec_email})" if exec_email else "")
+        + ", never the user's. A calendar step that names no calendar reads the "
+        "Executive's calendar, so it finds none of the user's meetings."
+    )
+    if as_me:
+        mine = next((t for t in sorted(READ_TOOLS) if t.endswith("calendar")), "")
+        return line + (
+            f" To read the user's own calendar{yours}, use {mine}. With a gateway "
+            "calendar tool, write their address into the step's goal as the calendar to read."
+        )
+    return line + (
+        f" To read the user's calendar{yours}, write their address into the step's goal "
+        "as the calendar to read (it must be shared with the Executive's account)."
+    )
+
+
+def build_context_block(*, as_me: bool = False, user_email: str = "") -> str:
     """Render the live facts the designer needs, for the FIRST user turn.
 
     ``as_me``: the person designing it may have its emails written as them
-    (``workflow_email.available_for``).
+    (``workflow_email.available_for``). ``user_email``: their address, so a
+    calendar step reads their calendar and not the Executive's.
 
     Read once per session by the route and stored, so the replayed first turn
     stays identical across the conversation. Every source degrades to an
@@ -301,8 +336,18 @@ def build_context_block(*, as_me: bool = False) -> str:
         "the Executive uses in chat, so anything it did in chat a step can "
         "do too):\n" + "\n".join(builtins) + "\n\n"
         + _email_as_line(as_me) + "\n\n"
+        + _accounts_line(as_me, _exec_email(), _one_line(user_email, 254)) + "\n\n"
         "Workflow names already taken (do not reuse): " + ", ".join(taken)
     )
+
+
+def _exec_email() -> str:
+    from openexecutive.config import get_settings
+
+    try:
+        return str(get_settings().exec_email_address or "").strip()
+    except Exception:
+        return ""
 
 
 def _first_sentence(text: str) -> str:

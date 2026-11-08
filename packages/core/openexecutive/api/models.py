@@ -245,7 +245,7 @@ class HealthResponse(BaseModel):
     # gateway failed to start used to look healthy here while no email went
     # out or came in.
     gateway: GatewayHealth | None = None
-    version: str = "0.6.3"  # x-release-please-version
+    version: str = "0.6.6"  # x-release-please-version
 
 
 class VersionResponse(BaseModel):
@@ -424,6 +424,9 @@ class ChatMessage(BaseModel):
     # The last reply only: the steps its turn held after an outside read,
     # still waiting on the caller's go (outside_content.pending_held).
     held_steps: list[str] | None = None
+    # The last reply only: what the content check flagged in its turn, in
+    # plain words, while fresh (outside_content.pending_flags).
+    flags: list[str] | None = None
 
 
 class TargetCustomerData(BaseModel):

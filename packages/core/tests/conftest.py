@@ -98,6 +98,26 @@ def _outside_content_asks(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture(autouse=True)
+def _content_scan_unchecked(monkeypatch: pytest.MonkeyPatch):
+    """Keep the content check (orchestrator.content_scan) from calling a
+    model: every read comes back unchecked, which holds under Careful (the
+    suite's level, ``_outside_content_asks``) and, below it, holds nothing
+    and puts ``UNCHECKED_NOTICE`` before the result. test_content_scan.py
+    and the level tests give it verdicts of their own."""
+    from openexecutive.orchestrator import content_scan
+
+    async def unchecked(content: object, *, model: str | None = None) -> content_scan.Verdict:
+        return content_scan.UNCHECKED
+
+    async def list_unchecked(entries: list[object], *, model: str | None = None) -> content_scan.Verdict:
+        return content_scan.UNCHECKED
+
+    monkeypatch.setattr(content_scan, "scan", unchecked)
+    monkeypatch.setattr(content_scan, "scan_list", list_unchecked)
+    content_scan.reset()
+
+
+@pytest.fixture(autouse=True)
 def _no_claim_check(monkeypatch: pytest.MonkeyPatch):
     """Keep the end-of-turn claim check (orchestrator.claim_check) from making
     a provider call in tests that script a turn; test_claim_check.py turns it

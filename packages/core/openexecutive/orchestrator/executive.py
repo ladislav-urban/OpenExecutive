@@ -25,7 +25,7 @@ from openexecutive.audit.usage import log_model_usage
 from openexecutive.config import get_settings
 from openexecutive.delegation.lockdown import (
     mail_touched_withheld_error,
-    mail_touched_withholds,
+    mail_turn_withholds,
 )
 from openexecutive.delegation.settings import (
     block0_delegation_on,
@@ -711,6 +711,18 @@ def _apply_loop_cache_marker(
     if markable:
         markable[-1]["cache_control"] = {"type": "ephemeral"}
     return bool(markable)
+
+
+def _with_notice(result: Any, notice: str) -> Any:
+    """``result`` with the content check's notice before it
+    (``outside_content.FLAG_NOTICE``): text gets it as a prefix, content
+    blocks get it as a first text block."""
+    if isinstance(result, list):
+        return [{"type": "text", "text": notice}, *result]
+    if isinstance(result, str):
+        return notice + result
+    # Anything else as the JSON the model would read without the notice.
+    return notice + json.dumps(result, default=str)
 
 
 def _tool_error_result(tool_name: str, exc: BaseException) -> str:
@@ -2777,6 +2789,10 @@ class Executive:
                     )
 
             if final_msg.stop_reason != "tool_use":
+                # A reply with no tool call still gets the queued files and
+                # synced excerpts checked, so what they tried is flagged to
+                # the person (outside_content.settle).
+                await outside_content.settle()
                 # Do what it says: a reply that claims a change no call this
                 # turn made gets one more round to make it or say it can't.
                 if claim_checked or iteration >= max_iterations:
@@ -2951,16 +2967,23 @@ class Executive:
             # but is not locked: it is the person asking again. The offered
             # list stays as it is, so the cached prefix never changes
             # mid-turn.
+            # How much of it holds is the safety level's, like any read: every
+            # mail read is checked once its round is done (check_mail_read
+            # below), and Balanced then holds it all only if one was flagged
+            # or too big to check; a round that reads mail holds it all for
+            # that round, since its reads aren't checked yet. Posts to
+            # everyone and roster changes stay shut at every level
+            # (delegation.lockdown.mail_turn_withholds).
             mail_touched_uses: list[dict[str, Any]] = []
-            # Under "Don't ask", on the principal's own turn, reading their
-            # mail holds nothing (orchestrator.outside_mode).
-            if pinned_delegation is not None and not outside_content.trusted_turn() and (
-                pinned_delegation.read_mail
-                or any(tu["name"] in MAILBOX_TOOL_NAMES or tu["name"] in HISTORY_TOOL_NAMES for tu in dispatch_uses)
-            ):
+            reads_mail_now = any(
+                tu["name"] in MAILBOX_TOOL_NAMES or tu["name"] in HISTORY_TOOL_NAMES for tu in dispatch_uses
+            )
+            if pinned_delegation is not None and (pinned_delegation.read_mail or reads_mail_now):
                 mail_touched_uses = [
                     tu for tu in [*skill_tool_uses, *mcp_tool_uses, *script_tool_uses]
-                    if mail_touched_withholds(tu["name"], tu["input"])
+                    if mail_turn_withholds(
+                        tu["name"], tu["input"], reading_now=reads_mail_now, pinned=pinned_delegation
+                    )
                 ]
             if mail_touched_uses:
                 skill_tool_uses = [tu for tu in skill_tool_uses if tu not in mail_touched_uses]
@@ -2974,8 +2997,13 @@ class Executive:
             # round's other such calls too, since a round's tools run
             # together; the reads themselves run, and mark the turn once the
             # round is done. The offered list stays as it is, as above.
+            # Reads queued for their check (an attachment, a synced excerpt)
+            # are checked first, so the owner's safety level can decide
+            # whether they hold this round (outside_content.settle). Under
+            # Hands-off a read in this round holds nothing either.
+            await outside_content.settle()
             read_before_round = outside_content.read_outside()
-            round_sources = [
+            round_sources = [] if outside_content.trusted_turn() else [
                 (tu, source) for tu in dispatch_uses
                 if (source := outside_content.source_of(tu["name"], tu["input"])) is not None
             ]
@@ -3603,12 +3631,17 @@ class Executive:
                 # (call_tool input, result text, the exception if the call
                 # raised); an own tool's input is {"name", "arguments", "own": True}.
                 made: list[tuple[dict[str, Any], str, BaseException | None]] = []
+                # The safety check's notices on the script's reads: shown to
+                # the model above the script's result, never put into the
+                # text the script parses.
+                notices: list[str] = []
 
                 async def _script_call(
                     tool: str,
                     arguments: dict[str, Any],
                     _call: Any = script_call,
                     _made: list[tuple[dict[str, Any], str, BaseException | None]] = made,
+                    _notices: list[str] = notices,
                     _own: frozenset[str] = script_own,
                     _handlers: dict[str, Any] = turn_handlers,
                     _counts: dict[str, int] = script_counts,
@@ -3642,10 +3675,18 @@ class Executive:
                     probe_name, probe_input = (
                         (tool, arguments) if own else ("call_tool", {"name": tool, "arguments": arguments})
                     )
+                    await outside_content.settle()
                     if outside_content.read_outside() and outside_content.outside_withholds(
                         probe_name, probe_input
                     ):
                         return outside_content.outside_withheld_error(tool[:200]), True
+                    # The owner's mail this turn read holds what a direct call
+                    # would hold (delegation.lockdown.mail_turn_withholds):
+                    # an alert or a roster change at any level.
+                    if pinned_delegation is not None and mail_turn_withholds(
+                        probe_name, probe_input, pinned=pinned_delegation
+                    ):
+                        return mail_touched_withheld_error(tool[:200]), True
                     if not own:
                         await outside_content.vet_reads(
                             [{"name": probe_name, "input": probe_input}], self._mcp_gateway
@@ -3682,10 +3723,16 @@ class Executive:
                         text = _tool_error_result(tool, exc)
                         _made.append((call_input, text, exc))
                         if source is not None:
-                            outside_content.mark(source)
+                            # The error can carry what the tool read: checked
+                            # like any read.
+                            notice = await outside_content.mark_read(source, probe_input, text, self._mcp_gateway)
+                            if notice:
+                                _notices.append(notice)
                         return text, True
                     if source is not None:
-                        await outside_content.mark_read(source, probe_input, text, self._mcp_gateway)
+                        notice = await outside_content.mark_read(source, probe_input, text, self._mcp_gateway)
+                        if notice:
+                            _notices.append(notice)
                     _made.append((call_input, text, None))
                     return text, looks_like_error(text)
 
@@ -3710,6 +3757,7 @@ class Executive:
                     # Whether the script read ERPNext: its result then carries
                     # that text back, and is labelled like a direct call's.
                     script_read_erpnext = False
+                    notices.clear()
                     # aclosing: a stopped turn closes the script, and with it
                     # the Monty worker, instead of leaving it to the GC.
                     async with contextlib.aclosing(
@@ -3833,7 +3881,7 @@ class Executive:
                             elif kind == "done":
                                 script_result, script_failed = payload
                     logger.info("← run_script  result=%s", _trunc(script_result))
-                    results_by_id[tu["id"]] = (
+                    results_by_id[tu["id"]] = "".join(dict.fromkeys(notices)) + (
                         wrap_untrusted(script_result, source="erpnext", author="run_script")
                         if script_read_erpnext
                         else script_result
@@ -3895,11 +3943,41 @@ class Executive:
 
             # What this round read from outside reaches the model with its
             # results: from the next round on the turn is held.
-            for tu, source in round_sources:
+            # The check sees each read's result first (orchestrator.content_scan):
+            # a flagged one reaches the model behind a notice not to follow it.
+            for tu, source in [
+                (tu, source) for tu in dispatch_uses
+                if (source := outside_content.source_of(tu["name"], tu["input"])) is not None
+            ]:
                 if tu not in outside_uses and tu not in mail_touched_uses and tu not in withheld_uses:
-                    await outside_content.mark_read(
+                    notice = await outside_content.mark_read(
                         source, tu["input"], results_by_id.get(tu["id"], ""), self._mcp_gateway
                     )
+                    if notice:
+                        results_by_id[tu["id"]] = _with_notice(results_by_id.get(tu["id"], ""), notice)
+            # The owner's own mail this round read is checked the same way,
+            # and decides how much of the Act as me lockdown holds from the
+            # next round on (delegation.lockdown.mail_lock_holds).
+            if pinned_delegation is not None and reads_mail_now:
+                for tu in dispatch_uses:
+                    if tu["name"] not in MAILBOX_TOOL_NAMES and tu["name"] not in HISTORY_TOOL_NAMES:
+                        continue
+                    if tu["id"] not in results_by_id:
+                        continue  # never ran (not offered): no mail was read
+                    checked, notice = await outside_content.check_mail_read(
+                        pinned_delegation, results_by_id.get(tu["id"], "")
+                    )
+                    results_by_id[tu["id"]] = checked
+                    if notice:
+                        results_by_id[tu["id"]] = _with_notice(results_by_id.get(tu["id"], ""), notice)
+                # A script that ran beside the read may have read mail the
+                # loop never checks: the turn stays unvetted.
+                ran_script = any(
+                    tu["name"] in (step_script.RUN_SCRIPT_TOOL, "run_python_job")
+                    for tu in [*skill_tool_uses, *mcp_tool_uses, *script_tool_uses]
+                )
+                if not ran_script:
+                    outside_content.check_mail_reads_done(pinned_delegation)
 
             current_messages.append({"role": "assistant", "content": response_content})
             # Cap here, at the single point every result reaches the model,

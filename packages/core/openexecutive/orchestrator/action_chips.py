@@ -72,6 +72,8 @@ SIDE_EFFECTING_TOOLS: frozenset[str] = frozenset({
     "ack_alert",
     # Universal workflow launcher (any built-in / custom workflow from chat)
     "run_workflow",
+    # Saves a workflow, or leaves a card for a change to one (workflow_change)
+    "save_workflow",
     # Research artifacts flagged for review
     "draft_artifact",
     # MCP — generic, classified by underlying tool name at runtime
@@ -147,6 +149,29 @@ def _humanize_iso(iso_ts: str) -> str:
     return f"in {int(delta_s // 86_400)}d"
 
 
+def _draft_fields(parsed: dict[str, Any]) -> dict[str, Any]:
+    """What the chat shows under a draft written as the speaker, with its
+    Send button: the draft's row (what the tap names, never the model), who
+    it goes to, its subject and the start of its text, all from the draft
+    as saved. Nothing when the row wasn't kept: then it is sent from the
+    mailbox only."""
+    row = parsed.get("draft_row")
+    if not isinstance(row, int) or isinstance(row, bool) or row <= 0:
+        return {}
+
+    def addresses(key: str) -> list[str]:
+        value = parsed.get(key)
+        return [str(a) for a in value if isinstance(a, str)] if isinstance(value, list) else []
+
+    return {"draft": {
+        "row": row,
+        "to": addresses("to"),
+        "cc": addresses("cc"),
+        "subject": str(parsed.get("subject") or ""),
+        "preview": str(parsed.get("preview") or ""),
+    }}
+
+
 def summarize_action(
     *,
     tool_name: str,
@@ -218,7 +243,7 @@ def summarize_action(
     if (
         parsed is not None
         and parsed.get("status") == "waiting_for_approval"
-        and tool_name not in ("propose_actions", "do_in_app")
+        and tool_name not in ("propose_actions", "do_in_app", "save_workflow")
         and not extension
     ):
         # Held for someone's approval (a team member's send or change, the
@@ -264,6 +289,7 @@ def summarize_action(
         # Built server-side from a fixed prefix (delegation.gmail.mailbox_link).
         if isinstance(link, str) and link.startswith(MAILBOX_LINK_PREFIXES):
             payload["link"] = link
+        payload.update(_draft_fields(parsed or {}))
     elif tool_name == "save_my_email_attachment":
         # Only a saved copy earns a chip. No link or name: the link opens
         # outside the app, and the name is whatever the sender called it.
@@ -562,6 +588,24 @@ def summarize_action(
             return None
         payload["summary"] = f"Open {(parsed or {}).get('screen') or 'it'}"
         payload["link"] = link
+    elif tool_name == "save_workflow":
+        status = (parsed or {}).get("status")
+        name = str((parsed or {}).get("name") or "").replace("_", " ")
+        if status == "waiting_for_approval":
+            payload["summary"] = "Waiting for your OK: a change to a workflow"
+            # The chat shows the card itself under its message, by this id.
+            decision_id = (parsed or {}).get("decision_id")
+            if isinstance(decision_id, int) and not isinstance(decision_id, bool):
+                payload["decision_id"] = decision_id
+        elif status == "saved":
+            payload["summary"] = f"Saved the workflow {name}" if name else "Saved the workflow"
+        elif status == "saved_pending_review":
+            payload["summary"] = f"Saved the workflow {name}, switched off" if name else "Saved the workflow, switched off"
+        else:
+            return None
+        link = (parsed or {}).get("name")
+        if isinstance(link, str) and link and status != "waiting_for_approval":
+            payload["link"] = f"/jobs/{link}"
     elif tool_name == "run_workflow":
         wf = str(tool_input.get("workflow", "")).replace("_", " ")
         run_id = (parsed or {}).get("run_id")

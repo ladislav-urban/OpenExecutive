@@ -210,10 +210,11 @@ def _stop_owner_key(request: Request, caller_person_id: int | None) -> str:
     return f"{key}|host" if api_caller.from_host(request) else key
 
 
-# Conversations a host origin's page has written in, as this process saw it
-# happen: the stored mark (session_store.host_wrote) can fail to write, and a
-# turn running alongside must be held all the same. The API runs as one
-# process.
+# Conversations a host origin's page has written in whose stored mark
+# (session_store.host_wrote) hasn't been written yet, or failed to write: a
+# turn running alongside must be held all the same. An id leaves once its mark
+# is stored, so a host page starting many chats doesn't grow it. The API runs
+# as one process.
 _host_sessions: set[str] = set()
 
 
@@ -1486,7 +1487,10 @@ async def _chat_turn(
         try:
             from openexecutive.memory.session_store import mark_host_wrote
 
-            mark_host_wrote(session.session_id)
+            if mark_host_wrote(session.session_id):
+                # Stored: the mark holds the chat now, so the id leaves
+                # this process's own list and it doesn't grow.
+                _host_sessions.discard(session.session_id)
         except Exception:
             logger.exception("chat.host_mark_failed session_id=%s", session.session_id)
     if session.host_page and is_first_turn:
@@ -2181,6 +2185,12 @@ async def _chat_turn(
             if held_steps:
                 held_evt = {"type": "held_steps", "session_id": session.session_id, "steps": list(held_steps)}
                 yield f"data: {json.dumps(held_evt)}\n\n"
+            # What the content check flagged this turn, in plain words
+            # (orchestrator.content_scan): shown under the reply.
+            flags = outside_content.pending_flags(session) if not (stopped or timed_out) else ()
+            if flags:
+                flags_evt = {"type": "flags", "session_id": session.session_id, "flags": list(flags)}
+                yield f"data: {json.dumps(flags_evt)}\n\n"
 
             if stopped:
                 # Not an `error` event — a stop is a user decision, not a

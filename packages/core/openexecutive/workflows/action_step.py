@@ -121,11 +121,14 @@ def _user_turn(
 ) -> str:
     from openexecutive.memory.workspace_settings import get_user_timezone
 
+    tz = get_user_timezone()
     parts = [
         f"Workflow: {workflow_title}",
         f"Step: {step.title}",
         f"Today: {datetime.now(UTC).date().isoformat()} (UTC). "
-        f"The user's timezone: {get_user_timezone().key}.",
+        f"The user's timezone: {tz.key}. Now there: "
+        f"{datetime.now(tz).strftime('%a %Y-%m-%d %H:%M')}. In your report, "
+        "give times in their timezone, never UTC.",
         "",
         "Goal:",
         goal.strip(),
@@ -320,6 +323,10 @@ class TargetPolicy:
     - values approved for this workflow before (``approved_targets``) — by the
       owner answering a held write, never by anything the model or a page can
       write;
+    - in a workflow that writes or reads as its creator, their own addresses
+      and the addresses in the goal of a step that emails as them
+      (``workflow_email.chosen_recipients``):
+      only that creator, verified, can save one;
     - ids a write in this run created: the top-level id / link fields
       (``id``, ``spreadsheetId``, ``webViewLink`` …) of the STRUCTURED (JSON
       object) result of a tool whose name says it creates (create / insert /
@@ -329,8 +336,8 @@ class TargetPolicy:
       otherwise plant an id — and a URL-taking tool's result is whatever the
       URL served. These survive a pause through the resume payload
       (``created``).
-    Everything else, including values written in the workflow's own text
-    (which anyone who can edit the workflow could change without a review),
+    Everything else, including values written in any other workflow's own
+    text (which anyone who can edit the workflow could change without a review),
     is asked once and then remembered.
     """
 
@@ -342,7 +349,9 @@ class TargetPolicy:
     def for_workflow(
         cls, defn: DynamicWorkflowDef, created: Iterable[str] = ()
     ) -> TargetPolicy:
-        return cls(approved=approved_values(defn.name), created=created)
+        from openexecutive.delegation.workflow_email import chosen_recipients
+
+        return cls(approved=approved_values(defn.name) | chosen_recipients(defn), created=created)
 
     def _trusted(self, value: str) -> bool:
         norm = normalize_value(value)
@@ -622,11 +631,20 @@ async def run_action_step(
         )
         return
 
+    from openexecutive.delegation import workflow_reads
+
+    # A workflow that reads its creator's mail is locked down for all of its
+    # steps (delegation.workflow_reads): checked again here, and no scripts.
+    reads_mail, refused = workflow_reads.run_rules(workflow_name)
+    if refused is not None:
+        yield ("error", f"step {step.id!r} cannot run: {refused}")
+        return
+
     settings = get_settings()
     agent = WorkflowActorAgent()
     resolved_model = model if model is not None else agent.effective_model()
     provider = get_provider(resolved_model)
-    scripts = settings.workflow_step_scripts and step_script.available()
+    scripts = settings.workflow_step_scripts and step_script.available() and not reads_mail
     tool_defs = [resolved[name].as_anthropic_tool() for name in step.tools if resolved[name].source != "server"]
     if scripts:
         tool_defs.append(
@@ -913,7 +931,7 @@ async def run_held_calls(
         _audit(
             workflow_name, step.id, call.tool, f"held → {outcome}", _target_digest(call.arguments)
         )
-        lines.append(f"- `{call.tool}` → {where} — {outcome}")
+        lines.append(f"- {plain_tool_name(call.tool)} → {where} — {outcome}")
     return "\n".join(lines)
 
 
@@ -934,13 +952,41 @@ def held_question(workflow_title: str, held: list[HeldCall]) -> str:
     ]
     for call in held:
         where = ", ".join(describe_target(k, v) for k, v in call.targets) or "a new target"
-        lines.append(f"- {where} (via {call.tool})")
+        lines.append(f"- {where} (via {plain_tool_name(call.tool)})")
     lines.append(
         "Reply yes to allow all of the above — they run now, and future runs "
         "can write to these with any of this workflow's tools without asking — "
         "or no to skip them."
     )
     return "\n".join(lines)
+
+
+# The words a server prefix reads as: "google_workspace" is "Google
+# Workspace", not "Google workspace".
+_ACRONYMS = frozenset({"api", "crm", "csv", "hr", "mcp", "pdf", "url"})
+
+
+def _words(name: str) -> str:
+    return " ".join(name.replace("-", "_").split("_")).strip()
+
+
+def plain_tool_name(name: str) -> str:
+    """A tool's name in plain words for the person reading a run: an app's
+    tool reads "Google Workspace: get events", a built-in one "Send telegram
+    message", never ``google_workspace__get_events``."""
+    from openexecutive.workflows.tool_catalog import BUILTIN_PREFIX
+
+    if name.startswith(BUILTIN_PREFIX):
+        return _words(name[len(BUILTIN_PREFIX):]).capitalize()
+    if name == step_script.RUN_SCRIPT_TOOL:
+        return "Script"
+    server, sep, tool = name.partition("__")
+    if not sep:
+        return _words(name).capitalize()
+    app = " ".join(
+        w.upper() if w.lower() in _ACRONYMS else w.capitalize() for w in _words(server).split()
+    )
+    return f"{app}: {_words(tool)}"
 
 
 def _format_output(report: str, actions: list[tuple[str, str]]) -> str:
@@ -952,7 +998,7 @@ def _format_output(report: str, actions: list[tuple[str, str]]) -> str:
         for action in actions:
             counts[action] = counts.get(action, 0) + 1
         lines += [
-            f"- `{name}` — {outcome}" + (f" (×{n})" if n > 1 else "")
+            f"- {plain_tool_name(name)} — {outcome}" + (f" (×{n})" if n > 1 else "")
             for (name, outcome), n in counts.items()
         ]
     else:
