@@ -8,10 +8,10 @@ product_name: Dynocortex
 advice_policy: explain
 forbid_repeated_text: true
 page:
-  report_name: Profit and Loss Statement
+  report: Profit and Loss Statement
 prior_turns:
 - page:
-    report_name: Profit and Loss Statement
+    report: Profit and Loss Statement
   user: How did Denver do last month, compared with Pittsburgh?
   assistant: 'Denver made a loss last month while Pittsburgh made a profit. Denver''s sales were small against its rent, power and depreciation.'
 description: 'Denver branch step 2 (oe_connector''s help/try-denver-branch.md) in ERPNext''s panel as a demo person: asked what opening the branch cost, the reply names each purchase of the branch opening project (the racking, the counter display, the laptop) with its supplier and amount, read from the project''s Purchase Invoice Items and their invoices'' suppliers, never from GL entries alone. Found in the pilot''s Nov 6, 2026 retake (OE 75921b2), where the reply read only GL entries, named suppliers from their text, and its cost table was left with the total row alone.'
