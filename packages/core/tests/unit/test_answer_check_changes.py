@@ -101,3 +101,30 @@ def test_a_whole_reply_replaced_records_the_sentences_it_held() -> None:
     )
     assert change["after"] == answer_correct.WHOLE_REPLY
     assert change["figures"] == [{"as_written": "$9,999", "why": reasons[0][1]}]
+
+
+def test_a_teammates_turn_writes_the_record_for_the_principal_alone(
+    audit: AuditLogger, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # On a teammate's own verified turn every other row is theirs too
+    # (people_tools.audit_row_owner); this one never is.
+    monkeypatch.setattr("openexecutive.audit.logger._row_owner", lambda _given: 7)
+    _check("Receivables are $48,200. Northwind Supplies owes $12,900 of it.", monkeypatch)
+    (row,) = _rows(audit, "answer_check_changes")
+    assert row["private_to_principal"] == 1 and row["private_to_person"] is None
+    (counts,) = _rows(audit, "answer_check")
+    assert counts["private_to_person"] == 7  # the counts row keeps the usual rule
+
+
+def test_the_scheduler_clears_old_text_once_a_day(audit: AuditLogger, monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.scheduler import runner
+
+    monkeypatch.setattr(answer_check, "_cleared_on", None)
+    old = audit.log("answer_check_changes", "old", full={"changes": [{"before": "x"}]}, principal_only=True)
+    with sqlite3.connect(audit._db_path) as conn:
+        stamp = (datetime.now(UTC) - timedelta(days=31)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        conn.execute("UPDATE audit_log SET ts = ? WHERE id = ?", (stamp, old))
+    now = datetime.now(UTC)
+    assert runner._maybe_clear_answer_check_text(now) == 1
+    assert _rows(audit, "answer_check_changes")[0]["full_json"] is None
+    assert runner._maybe_clear_answer_check_text(now) == 0  # once a day

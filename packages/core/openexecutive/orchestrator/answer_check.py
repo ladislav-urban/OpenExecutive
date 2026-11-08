@@ -615,11 +615,10 @@ def changed_sentences(before: str, after: str, reasons: list[tuple[str, str]]) -
 
 def _audit_changes(before: str, after: str, counts: _Counts) -> None:
     """The principal's record of what the check changed in this reply: the
-    changed sentences only, private to the principal, their text kept
-    CHANGES_KEPT_DAYS days (older rows' text is cleared as each new one is
-    written)."""
+    changed sentences only, the principal's alone whoever's turn it was
+    (never a team member's own row), their text kept CHANGES_KEPT_DAYS days
+    (clear_old_changes)."""
     from openexecutive.audit import log_event as audit_log
-    from openexecutive.audit.logger import get_audit_logger
 
     changes = changed_sentences(before, after, counts.reasons)
     if not changes:
@@ -630,11 +629,30 @@ def _audit_changes(before: str, after: str, counts: _Counts) -> None:
         actor="answer_check",
         details={"sentences": len(changes), "kept_days": CHANGES_KEPT_DAYS},
         full={"changes": changes},
-        private=True,
+        principal_only=True,
     )
-    get_audit_logger().drop_full(
-        "answer_check_changes", datetime.now(UTC) - timedelta(days=CHANGES_KEPT_DAYS)
-    )
+    clear_old_changes(datetime.now(UTC), force=True)
+
+
+# The day the old records' text was last cleared, in this process.
+_cleared_on: date | None = None
+
+
+def clear_old_changes(now: datetime, *, force: bool = False) -> int:
+    """Clear the text of the change records older than CHANGES_KEPT_DAYS:
+    once a day from the scheduler, and on every new record. Never raises."""
+    global _cleared_on
+    from openexecutive.audit.logger import get_audit_logger
+
+    today = now.astimezone(UTC).date()
+    if not force and _cleared_on == today:
+        return 0
+    _cleared_on = today
+    try:
+        return get_audit_logger().drop_full("answer_check_changes", now - timedelta(days=CHANGES_KEPT_DAYS))
+    except Exception:
+        logger.warning("answer_check: clearing old change records failed", exc_info=True)
+        return 0
 
 
 def _audit(counts: _Counts, *, changed: bool) -> None:

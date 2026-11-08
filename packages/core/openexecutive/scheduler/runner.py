@@ -195,6 +195,19 @@ def _maybe_release_held(now: datetime) -> bool:
         return False
 
 
+def _maybe_clear_answer_check_text(now: datetime) -> int:
+    """Once a day, clear the text of the answer check's change records past
+    their 30 days (orchestrator/answer_check.py), so a quiet install keeps
+    none longer. Never raises."""
+    try:
+        from openexecutive.orchestrator.answer_check import clear_old_changes
+
+        return clear_old_changes(now)
+    except Exception:
+        logger.exception("scheduler: clearing old answer-check text failed")
+        return 0
+
+
 def _maybe_sweep_alerts(now: datetime) -> int:
     """Run the expiry sweep if the interval has elapsed. Returns rows expired.
 
@@ -359,6 +372,7 @@ async def run_scheduler(
             _maybe_send_reminders(now)
             _maybe_release_held(now)
             _maybe_send_monthly_value(now)
+            _maybe_clear_answer_check_text(now)
             due = claim_due_actions(now)
             if due:
                 logger.info("scheduler: %d due action(s)", len(due))

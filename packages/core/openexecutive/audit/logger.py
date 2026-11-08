@@ -505,6 +505,7 @@ class AuditLogger:
         department: str | None = None,
         private: bool = False,
         private_to_person: int | None = None,
+        principal_only: bool = False,
     ) -> int | None:
         """Insert one audit row. Returns row id, or None on failure.
 
@@ -532,8 +533,11 @@ class AuditLogger:
             via = rows_via()
             if via and not (details and "via" in details):
                 details = {**(details or {}), "via": via}
-            owner = _row_owner(private_to_person)
-            is_private = (
+            # ``principal_only``: the principal's alone, whoever's turn wrote
+            # it, never a team member's own row (the answer check's record of
+            # what it changed: the owner, Nov 8, 2026).
+            owner = None if principal_only else _row_owner(private_to_person)
+            is_private = principal_only or (
                 bool(private) or owner is not None or _private_to_principal(summary, details, full)
             )
             safe_summary = _truncate(str(summary), _SUMMARY_MAX_LEN)
@@ -1020,6 +1024,7 @@ def log_event(
     department: str | None = None,
     private: bool = False,
     private_to_person: int | None = None,
+    principal_only: bool = False,
 ) -> None:
     """Fire-and-forget convenience wrapper around the default logger.
 
@@ -1049,6 +1054,7 @@ def log_event(
             department=department,
             private=private,
             private_to_person=private_to_person,
+            principal_only=principal_only,
         )
     except Exception:
         logger.warning("audit.log_event_failed event_type=%s", event_type, exc_info=True)
