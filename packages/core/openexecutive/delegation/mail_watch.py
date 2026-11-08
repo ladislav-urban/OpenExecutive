@@ -221,7 +221,7 @@ async def _check_one(watch: MailWatch, now: datetime, db_path: Path | None) -> s
     from openexecutive.scheduler.runner import deliver_to_person
 
     person = get_person(watch.person_id)
-    if person is None or person.archived:
+    if person is None or not person.active:
         _claim(watch.id, "person_gone", now, db_path)
         return "expired"
     since = _parse(watch.created_at) or now

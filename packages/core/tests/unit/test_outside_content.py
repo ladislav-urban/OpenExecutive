@@ -881,3 +881,49 @@ def test_a_search_of_the_company_drive_is_not_outside() -> None:
     )
     assert gateway.calls == [search, SEND]
     assert oc.source_of("call_tool", {"name": "microsoft_365__search-onedrive-files", "arguments": {}}) is None
+
+
+def test_a_listing_of_one_folder_counts_only_once_vetted_as_the_companys() -> None:
+    """A folder an outsider shared with the company lists names they chose:
+    a listing that names one item is the company's own only when
+    ``vet_reads`` found that item to be (the security review of the Nov 2026
+    sync). Searches and the drive root still are."""
+    folder = {"name": "google_workspace__list_drive_items", "arguments": {"folder_id": "1SharedByOutsiderAbc"}}
+    perms = {"name": "google_workspace__get_drive_file_permissions", "arguments": {"file_id": "1SharedByOutsiderAbc"}}
+
+    async def go() -> None:
+        state = oc.begin_turn(Session())
+        try:
+            assert oc.source_of("call_tool", folder) == oc.GATEWAY
+            assert oc.source_of("call_tool", perms) == oc.GATEWAY
+            for listing in (
+                {"name": "google_workspace__search_drive_files", "arguments": {"query": "budget"}},
+                {"name": "google_workspace__list_drive_items", "arguments": {"folder_id": "root"}},
+                {"name": "google_workspace__list_drive_items", "arguments": {}},
+            ):
+                assert oc.source_of("call_tool", listing) is None, listing
+            state.inside_items.add("1SharedByOutsiderAbc")
+            assert oc.source_of("call_tool", folder) is None
+            assert oc.source_of("call_tool", perms) is None
+        finally:
+            oc.end_turn(state)
+
+    asyncio.run(go())
+
+
+def test_a_draft_waits_while_a_read_is_still_being_checked() -> None:
+    """``_only_erpnext_read`` counts this round's sources and a read still
+    waiting for its check: neither may let a draft or script through."""
+    async def go() -> None:
+        state = oc.begin_turn(Session())
+        try:
+            assert not oc._only_erpnext_read()  # nothing read yet
+            oc.mark(oc.ERPNEXT)
+            assert oc._only_erpnext_read()
+            assert not oc._only_erpnext_read((oc.GATEWAY,))
+            state.pending.append((oc.GATEWAY, "unchecked"))
+            assert not oc._only_erpnext_read()
+        finally:
+            oc.end_turn(state)
+
+    asyncio.run(go())

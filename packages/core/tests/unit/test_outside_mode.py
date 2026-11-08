@@ -92,9 +92,19 @@ def test_every_kind_of_turn_runs_at_the_companys_level(
 
 
 @pytest.mark.parametrize("channel", ["email", "slack", "telegram", "google_chat", "discord", "teams"])
-def test_hands_off_is_hands_off_on_every_channel(monkeypatch: pytest.MonkeyPatch, channel: str) -> None:
+def test_hands_off_is_hands_off_on_every_channel_the_owner_proved(monkeypatch: pytest.MonkeyPatch, channel: str) -> None:
+    from openexecutive.orchestrator import content_trust
+
     _use(monkeypatch, outside_mode.TRUST, principal=False)
+    monkeypatch.setattr(content_trust, "principal_speaking", lambda _s: True)
     assert outside_mode.for_turn(Session(origin_channel=channel)) == outside_mode.TRUST
+    monkeypatch.setattr(content_trust, "principal_speaking", lambda _s: False)
+    assert outside_mode.for_turn(Session(origin_channel=channel)) == outside_mode.OUTSIDERS
+
+
+def test_an_unattended_run_keeps_the_owners_level(monkeypatch: pytest.MonkeyPatch) -> None:
+    _use(monkeypatch, outside_mode.TRUST)
+    assert outside_mode.for_turn(Session(origin_channel="slack", unattended=True)) == outside_mode.TRUST
 
 
 def test_mail_from_a_stranger_is_never_hands_off(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1288,6 +1288,7 @@ _COMPANY_READS: dict[str, str] = {
     "google_workspace__get_drive_file_download_url": "fileid",
     "google_workspace__list_drive_items": "folderid",
     "google_workspace__list_docs_in_folder": "folderid",
+    "google_workspace__get_drive_file_permissions": "fileid",
     "google_workspace__get_doc_content": "documentid",
     "google_workspace__get_doc_as_markdown": "documentid",
     "google_workspace__inspect_doc_structure": "documentid",
@@ -1406,10 +1407,19 @@ def _company_listing(tool_input: Any) -> bool:
         return True
     if not isinstance(arguments, dict):
         return False
-    return not any(
+    if any(
         isinstance(k, str) and _norm(k) in {"url", "fileurl", "sharedlink"} and v not in (None, "")
         for k, v in arguments.items()
-    )
+    ):
+        return False
+    # A listing of one named folder, file or drive is the company's only when
+    # ``vet_reads`` found that item to be its own: a folder an outsider
+    # shared with the company lists names they chose.
+    pointed = [
+        v for k, v in arguments.items()
+        if not isinstance(k, str) or (_norm(k).endswith(("id", "ids")) and v not in (None, "", "root"))
+    ]
+    return not pointed or (len(pointed) == 1 and _reads_company_item(tool_input))
 
 
 def source_of(tool_name: str, tool_input: Any) -> str | None:
@@ -1512,11 +1522,15 @@ def outside_allows_mcp_call(call_input: Any) -> bool:
 _AFTER_ERPNEXT_READ: frozenset[str] = frozenset({"propose_erpnext_draft", "run_script"})
 
 
-def _only_erpnext_read() -> bool:
-    """Whether everything the turn in progress read from outside was ERPNext.
-    No turn bound: no (fails closed)."""
+def _only_erpnext_read(pending: Any = ()) -> bool:
+    """Whether the turn in progress read ERPNext and nothing else from outside
+    (``pending``: this round's sources, not yet marked), with no read still
+    waiting for its check. No turn bound: no (fails closed)."""
     state = current()
-    return state is not None and state.sources <= {ERPNEXT}
+    if state is None or state.pending:
+        return False
+    sources = set(state.sources) | set(pending or ())
+    return ERPNEXT in sources and sources <= {ERPNEXT}
 
 
 def answers_off_team_mail() -> bool:
@@ -1584,7 +1598,7 @@ def outside_withholds(tool_name: str, tool_input: Any, *, pending: Any = ()) -> 
         return not speaker_named_contact(tool_input)
     if tool_name == "call_tool":
         return not outside_allows_mcp_call(tool_input)
-    if tool_name in _AFTER_ERPNEXT_READ and _only_erpnext_read():
+    if tool_name in _AFTER_ERPNEXT_READ and _only_erpnext_read(pending):
         return False
     from openexecutive.delegation.lockdown import mail_touched_withholds
 

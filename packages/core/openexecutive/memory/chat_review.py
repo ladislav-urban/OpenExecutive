@@ -293,6 +293,12 @@ def record_turn(
         words = own_words(speaker_text or "")
         if not words or not words.strip():
             return None
+        from openexecutive.people.demo import demo_turn
+
+        # A demo person's chat is a stranger trying the product: nothing in
+        # it is reviewed, learned from or kept as a fact.
+        if demo_turn(session):
+            return None
         person = _verified_person(session, person_id)
         if person is None or person.id is None:
             return None

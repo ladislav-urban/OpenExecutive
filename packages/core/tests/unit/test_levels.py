@@ -82,18 +82,32 @@ def test_an_error_deciding_is_a_card(monkeypatch: pytest.MonkeyPatch) -> None:
     assert levels.decide(levels.OUTSIDE) == levels.CARD
 
 
+@pytest.mark.parametrize("channel", ["slack", "telegram"])
+def test_hands_off_is_hands_off_where_the_surface_proves_the_owner(
+    monkeypatch: pytest.MonkeyPatch, channel: str
+) -> None:
+    from openexecutive.orchestrator import content_trust
+
+    monkeypatch.setattr(outside_mode, "get_mode", lambda **_: outside_mode.TRUST)
+    monkeypatch.setattr(content_trust, "principal_speaking", lambda _s: True)
+    for session in (Session(from_web_chat=True), Session(shared_chat=True), Session(origin_channel=channel)):
+        assert outside_mode.for_turn(session) == outside_mode.TRUST
+
+
 @pytest.mark.parametrize("session", [
-    Session(from_web_chat=True),
-    Session(session_id="email:t1"),
+    Session(origin_channel="email", email_from="ceo@example.com"),
+    Session(origin_channel="google_chat", gate_sender_person_id=1),
     Session(origin_channel="slack"),
-    Session(origin_channel="telegram"),
-    Session(shared_chat=True),
+    Session(gate_sender_person_id=99),
 ])
-def test_hands_off_is_hands_off_on_every_channel(
+def test_a_channel_turn_the_surface_didnt_prove_runs_balanced(
     monkeypatch: pytest.MonkeyPatch, session: Session
 ) -> None:
+    """Mail Gmail's DMARC check didn't tie to the owner, Google Chat (whose
+    sender is unverified) and any channel turn without a verified principal
+    are never Hands-off (the security review of the Nov 2026 sync)."""
     monkeypatch.setattr(outside_mode, "get_mode", lambda **_: outside_mode.TRUST)
-    assert outside_mode.for_turn(session) == outside_mode.TRUST
+    assert outside_mode.for_turn(session) == outside_mode.OUTSIDERS
 
 
 def test_mail_from_someone_not_in_people_never_runs_hands_off(monkeypatch: pytest.MonkeyPatch) -> None:

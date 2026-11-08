@@ -4,10 +4,12 @@ import asyncio
 import base64
 import contextlib
 import contextvars
+import html
 import json
 import logging
 import os
 import re
+import unicodedata
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from email.utils import getaddresses
@@ -21,6 +23,7 @@ from openexecutive.memory import drive_reads
 from openexecutive.orchestrator import erpnext_caller
 from openexecutive.orchestrator.erpnext_caller import ErpnextCaller
 from openexecutive.people.identity import RosterAllow
+from openexecutive.utils.html_tags import strip_tags
 
 logger = logging.getLogger(__name__)
 
@@ -439,6 +442,14 @@ _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 # DEL, zero-width and bidi format characters, BOM) — removed before the scheme
 # test so "\x01https://…" or "\u200bhttps://…" is still a URL here.
 _INVISIBLE_RE = re.compile(r"[\x00-\x20\x7f\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]")
+# Sheets functions Google evaluates by fetching a URL from the cell VALUE, so
+# no key names it. Matched anywhere in any string — a `values` argument may
+# arrive JSON-encoded, a CSV cell sits mid-line, "+IMPORTDATA(" needs no "=" —
+# on every tool that can write cells: the Sheets tools (sheet / table /
+# conditional formatting) and the Drive create / update / import tools, which
+# convert CSV into a native Sheet. Other formulas (=SUM(...)) pass, as does
+# the word without a call ("IMPORTDATA is a function").
+_FORMULA_FETCH_RE = re.compile(r"\b(IMPORTDATA|IMPORTXML|IMPORTHTML|IMPORTFEED|IMAGE)\s*\(", re.IGNORECASE)
 _CELL_WRITER_RE = re.compile(r"sheet|table|conditional|drive_file")
 # A converter decodes markup before it sees a formula, so text bound for a
 # Sheet is also scanned with CDATA markers, then tags and comments, removed
@@ -1028,6 +1039,93 @@ def _nested_fetch_key(value: Any, depth: int = 0) -> str | None:
             found = _nested_fetch_key(v, depth + 1)
             if found is not None:
                 return found
+    return None
+
+
+def _becomes_sheet(tool: str, arguments: dict[str, Any]) -> bool:
+    """True when an upload through ``tool`` is converted into a native Sheet:
+    the Sheets import, a Drive create whose target type is a native Sheet,
+    or any Drive update: the file being rewritten may be a native Sheet, and
+    Drive converts plain text and TSV into one too, so a stated type on an
+    update proves nothing.
+
+    A Drive create stores the bytes as they are (workspace-mcp's
+    create_drive_file never converts), so an .xlsx or .csv saved to Drive
+    stays an Excel or CSV file that Google does not evaluate: only an
+    explicit ``application/vnd.google-apps.spreadsheet`` target counts."""
+    bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
+    if bare in ("import_to_google_sheets", "update_drive_file"):
+        return True
+    if bare != "create_drive_file":
+        return False
+    return any(
+        isinstance(key, str) and _norm_key(key) in ("mimetype", "contentmimetype")
+        and isinstance(value, str) and _NATIVE_SHEET_MIME in value.lower()
+        for key, value in arguments.items()
+    )
+
+
+def _formula_fetches(text: str) -> bool:
+    """True when ``text`` holds a fetching formula call, as written, with
+    character references decoded, or with markup removed first."""
+    if _FORMULA_FETCH_RE.search(text):
+        return True
+    decoded = html.unescape(text)
+    if _FORMULA_FETCH_RE.search(decoded):
+        return True
+    # CDATA markers first: to the tag strip, "<![CDATA[DATA]]>" is one tag.
+    stripped = html.unescape(strip_tags(text.replace("<![CDATA[", "").replace("]]>", "")))
+    if _FORMULA_FETCH_RE.search(stripped):
+        return True
+    folded = _FOLDED_NOISE_RE.sub("", unicodedata.normalize("NFKC", stripped))
+    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
+    return _FORMULA_FETCH_RE.search(folded) is not None
+
+
+def _check_sheet_formulas(tool: str, arguments: dict[str, Any]) -> str | None:
+    """Return None unless a cell-writing call carries a formula Google
+    evaluates by fetching a URL (`_FORMULA_FETCH_RE`), or an upload whose
+    formulas cannot be read from here; else a JSON error."""
+    bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
+    if not _CELL_WRITER_RE.search(bare):
+        return None
+    # A Drive create that doesn't become a Sheet is stored as text or bytes,
+    # never evaluated: "Logo image (PNG)" in a note is not a formula.
+    if bare == "create_drive_file" and not _becomes_sheet(tool, arguments):
+        return None
+    if _becomes_sheet(tool, arguments):
+        for key, value in arguments.items():
+            if not isinstance(key, str) or value in (None, ""):
+                continue
+            if _norm_key(key) in ("base64content", "filepath"):
+                return _refuse(
+                    tool, key, "<uninspected-file>",
+                    reason=(
+                        f"{key!r} would become a Google Sheet, and a binary or "
+                        "server-side file's formulas cannot be checked here — "
+                        "refusing. Pass the rows as text `content` (CSV) instead."
+                    ),
+                )
+    for text in _iter_arg_strings(arguments):
+        if text is _TOO_DEEP:
+            return _refuse(
+                tool, "values", "<unreadable>",
+                reason="an argument nested this deep cannot be checked — refusing. Flatten it.",
+            )
+        if len(text) > _JSON_STRING_MAX and text.lstrip()[:1] in ("[", "{"):
+            return _refuse(
+                tool, "values", "<unreadable>",
+                reason="a JSON-encoded argument this large cannot be checked — refusing. Send fewer rows per call.",
+            )
+        if _formula_fetches(text):
+            return _refuse(
+                tool, "values", "<url-fetch>",
+                reason=(
+                    "a formula that fetches a URL (IMPORTDATA / IMPORTXML / "
+                    "IMPORTHTML / IMPORTFEED / IMAGE) would make Google carry data "
+                    "out — refusing. Write the value itself instead."
+                ),
+            )
     return None
 
 
@@ -4356,10 +4454,15 @@ class MCPGateway:
             blocked = _check_acting_account(tool_name, arguments)
             if blocked is not None:
                 return blocked
+            # Server-side fetches and fetching formulas carry data out at any
+            # level: no card makes them safe, so they run even when relaxed.
+            blocked = _check_url_fetch(tool_name, arguments)
+            if blocked is not None:
+                return blocked
+            blocked = _check_sheet_formulas(tool_name, arguments)
+            if blocked is not None:
+                return blocked
             if not relaxed:
-                blocked = _check_url_fetch(tool_name, arguments)
-                if blocked is not None:
-                    return blocked
                 blocked = _check_mailed_text(tool_name, arguments)
                 if blocked is not None:
                     return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
@@ -4373,9 +4476,9 @@ class MCPGateway:
                 blocked = _check_gmail_recipients(tool_name, arguments)
                 if blocked is not None:
                     return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
-                blocked = _check_attachment_urls(tool_name, arguments)
-                if blocked is not None:
-                    return blocked
+            blocked = _check_attachment_urls(tool_name, arguments)
+            if blocked is not None:
+                return blocked
             # Only after the recipients pass: render any artifact the model
             # asked to attach, so a blocked send never renders anything.
             expanded = await _expand_artifact_attachments(tool_name, arguments)

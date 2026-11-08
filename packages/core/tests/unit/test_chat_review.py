@@ -141,6 +141,11 @@ def test_an_unverified_turn_is_not_kept(roster: SimpleNamespace, extra: dict[str
     assert _record(roster.principal, session=session) is None
 
 
+def test_a_demo_persons_turn_is_not_kept(db: Path, roster: SimpleNamespace) -> None:
+    assert _record(roster.teammate, session=_web(roster.teammate.id, demo_caller=True)) is None
+    assert _pending_reviews(db) == []
+
+
 def test_an_adapters_own_verification_counts(roster: SimpleNamespace) -> None:
     session = Session(session_id="s-1", origin_channel="otherchat", caller_person_id=roster.teammate.id,
                       speaker_verified=True)
