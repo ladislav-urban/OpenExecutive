@@ -126,7 +126,10 @@ def audit_rows(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     # Every check here writes an answer_check row: kept here, never in a
     # default episodic_memory.db another module reads.
     rows: list[Any] = []
-    monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **kw: rows.append(kw.get("details")))
+    monkeypatch.setattr(
+        "openexecutive.audit.log_event",
+        lambda *a, **kw: rows.append(kw.get("details")) if a and a[0] == "answer_check" else None,
+    )
     return rows
 
 
