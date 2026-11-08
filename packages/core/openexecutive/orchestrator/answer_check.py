@@ -44,7 +44,7 @@ import re
 from collections.abc import Iterable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 from openexecutive.orchestrator import answer_correct, figure_check, figure_confirm, name_check
@@ -217,6 +217,9 @@ class _Counts:
     weekdays: int = 0
     # Record ids given their titles (record_titles).
     titles: int = 0
+    # Each failed figure or name as written, and why it failed: for the
+    # private record of what the check changed (_audit_changes).
+    reasons: list[tuple[str, str]] = field(default_factory=list)
 
 
 def _doctypes(turn: AnswerCheckTurn) -> list[str]:
@@ -455,6 +458,7 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     # first: a source name, which a customer may have written, never reaches
     # the correction call's prompt (answer_correct.write_names).
     near = [answer_correct.Correction(n, n.right) for n in wrong_names if n.status == "near"]
+    counts.reasons = [(c.figure.text, _why(c)) for c in [*near, *corrections]]
     checked_names = names.plus(str(c.right) for c in near)
     if near:
         text, corrections, figures = answer_correct.write_names(text, near, corrections, figures)
@@ -555,6 +559,107 @@ def _whole(
     return answer_correct.WHOLE_REPLY
 
 
+def _why(c: answer_correct.Correction) -> str:
+    """Why a figure or name failed, and what the check did with it, in a few
+    words for the principal's record."""
+    item = c.figure
+    if isinstance(item, Figure):
+        if item.status == "wrong_currency":
+            why = "written in another currency than its value"
+        elif item.arithmetic is not None:
+            why = "the reply's own arithmetic gives another result"
+        elif item.status == "from_truncated":
+            why = "found only in a result that was cut short"
+        else:
+            why = "no value in the turn's ERPNext results matches it"
+    else:
+        why = "close to one name the results hold" if item.status == "near" else "a name no result holds"
+    return f"{why}; {'written as ' + answer_correct.written(c) if c.right is not None else 'left out'}"
+
+
+# How long the record of what the check changed keeps its sentences (the
+# owner, Nov 8, 2026): the row and its counts stay, the text goes.
+CHANGES_KEPT_DAYS = 30
+# At most this many changed sentences per reply, each cut to this length.
+_CHANGES_MAX = 12
+_SENTENCE_MAX = 600
+
+
+def changed_sentences(before: str, after: str, reasons: list[tuple[str, str]]) -> list[dict[str, Any]]:
+    """The sentences (list items, table rows) ``after`` changed from
+    ``before``: each one as it was and as it went out, with the failed
+    figures or names it held and why. Never the rest of the reply."""
+    import difflib
+
+    def parts(text: str) -> list[str]:
+        if text == answer_correct.WHOLE_REPLY:
+            return [text]
+        return [text[u.start:u.end].strip() for u in answer_correct.units(text) if text[u.start:u.end].strip()]
+
+    old, new = parts(before), parts(after)
+    out: list[dict[str, Any]] = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if op == "equal":
+            continue
+        was = " ".join(old[i1:i2])
+        held = [{"as_written": text, "why": why} for text, why in reasons if text and text in was]
+        out.append({
+            "before": was[:_SENTENCE_MAX],
+            "after": " ".join(new[j1:j2])[:_SENTENCE_MAX],
+            "figures": held,
+        })
+        if len(out) >= _CHANGES_MAX:
+            break
+    return out
+
+
+def _audit_changes(before: str, after: str, counts: _Counts) -> None:
+    """The principal's record of what the check changed in this reply: the
+    changed sentences only, the principal's alone whoever's turn it was
+    (never a team member's own row), their text kept CHANGES_KEPT_DAYS days
+    (clear_old_changes)."""
+    from openexecutive.audit import log_event as audit_log
+    from openexecutive.audit.logger import _mailbox_scope
+
+    if _mailbox_scope():
+        # A turn that read someone's own mailbox is theirs alone, the
+        # principal included: its sentences could quote their mail.
+        return
+    changes = changed_sentences(before, after, counts.reasons)
+    if not changes:
+        return
+    audit_log(
+        "answer_check_changes",
+        f"Answer check changed {len(changes)} sentence(s)",
+        actor="answer_check",
+        details={"sentences": len(changes), "kept_days": CHANGES_KEPT_DAYS},
+        full={"changes": changes},
+        principal_only=True,
+    )
+    clear_old_changes(datetime.now(UTC), force=True)
+
+
+# The day the old records' text was last cleared, in this process.
+_cleared_on: date | None = None
+
+
+def clear_old_changes(now: datetime, *, force: bool = False) -> int:
+    """Clear the text of the change records older than CHANGES_KEPT_DAYS:
+    once a day from the scheduler, and on every new record. Never raises."""
+    global _cleared_on
+    from openexecutive.audit.logger import get_audit_logger
+
+    today = now.astimezone(UTC).date()
+    if not force and _cleared_on == today:
+        return 0
+    _cleared_on = today
+    try:
+        return get_audit_logger().drop_full("answer_check_changes", now - timedelta(days=CHANGES_KEPT_DAYS))
+    except Exception:
+        logger.warning("answer_check: clearing old change records failed", exc_info=True)
+        return 0
+
+
 def _audit(counts: _Counts, *, changed: bool) -> None:
     from openexecutive.audit import log_event as audit_log
 
@@ -646,4 +751,9 @@ async def check_reply(
         _audit(counts, changed=fixed != text)
     except Exception:
         logger.warning("answer_check: audit row failed", exc_info=True)
+    if fixed != text:
+        try:
+            _audit_changes(text, fixed, counts)
+        except Exception:
+            logger.warning("answer_check: the record of its changes failed", exc_info=True)
     return fixed

@@ -147,8 +147,26 @@ _LABEL_BEFORE = frozenset({
     "version", "chapter", "section", "rank", "ranked", "level", "tier", "round", "week", "day",
     "quarter", "q", "fy", "h", "item", "row", "table", "figure", "question", "point", "part",
 })
-# Three capitals before or after a number that are words, not currency codes.
-_NOT_CURRENCY = frozenset({"THE", "AND", "FOR", "NOT", "BUT", "ALL", "ANY", "ERP", "API", "PDF", "CSV", "YOY"})
+# Three capitals before or after a number are a currency only when they are
+# a currency's ISO 4217 code. Anything else is a word, a unit or an item's
+# code: "162 LED panels" was read as 162 in a currency "LED", not the
+# report's USD, and written back as "162 $ panels" (pilot, Nov 6, 2026).
+_ISO_4217 = frozenset("""
+    AED AFN ALL AMD ANG AOA ARS AUD AWG AZN BAM BBD BDT BGN BHD BIF BMD BND BOB BRL BSD BTN BWP BYN
+    BZD CAD CDF CHF CLP CNY COP CRC CUC CUP CVE CZK DJF DKK DOP DZD EGP ERN ETB EUR FJD FKP GBP GEL
+    GHS GIP GMD GNF GTQ GYD HKD HNL HTG HUF IDR ILS INR IQD IRR ISK JMD JOD JPY KES KGS KHR KMF KPW
+    KRW KWD KYD KZT LAK LBP LKR LRD LSL LYD MAD MDL MGA MKD MMK MNT MOP MRU MUR MVR MWK MXN MYR MZN
+    NAD NGN NIO NOK NPR NZD OMR PAB PEN PGK PHP PKR PLN PYG QAR RON RSD RUB RWF SAR SBD SCR SDG SEK
+    SGD SHP SLE SLL SOS SRD SSP STN SVC SYP SZL THB TJS TMT TND TOP TRY TTD TWD TZS UAH UGX USD UYU
+    UZS VED VES VND VUV WST XAF XCD XCG XOF XPF YER ZAR ZMW ZWG ZWL
+""".split())  # noqa: SIM905 - the codes read as ISO lists them
+# Codes that are also words written in capitals ("ALL", "TOP", "CUP"):
+# never a currency in a reply.
+_NOT_CURRENCY = frozenset({
+    "THE", "AND", "FOR", "NOT", "BUT", "ALL", "ANY", "ERP", "API", "PDF", "CSV", "YOY",
+    "TOP", "CUP", "PEN", "MAD", "TRY", "BOB", "GEL", "BAM", "MOP", "NIO", "SOS", "PAB",
+})
+_CURRENCY_CODES = _ISO_4217 - _NOT_CURRENCY
 
 _SCALE_RE = r"(?:thousand|millions?|billions?|bn|mn|[kKMmB])(?![A-Za-z])"
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
@@ -396,6 +414,42 @@ def _in_table_cell(text: str, start: int, end: int) -> bool:
     return not before.strip(" *_~") and not after.strip(" *_~")
 
 
+_TIME_UNITS = frozenset({
+    "second", "seconds", "minute", "minutes", "min", "mins", "hour", "hours", "hr", "hrs",
+    "day", "days", "week", "weeks", "month", "months", "year", "years", "yr", "yrs",
+})
+
+
+def _cells(line: str) -> list[str]:
+    inner = line.strip()
+    inner = inner[1:] if inner.startswith("|") else inner
+    inner = inner[:-1] if inner.endswith("|") else inner
+    return inner.split("|")
+
+
+def _column_counts_time(text: str, start: int) -> bool:
+    """Whether the table cell at ``start`` sits under a header naming a unit
+    of time ("Days late", "Hours", "Weeks overdue")."""
+    line_start = text.rfind("\n", 0, start) + 1
+    column = text[line_start:start].count("|") - (1 if text[line_start:start].lstrip().startswith("|") else 0)
+    # The table's first line is its header: walk up while lines are rows.
+    header_start = line_start
+    while header_start > 0:
+        prev_start = text.rfind("\n", 0, header_start - 1) + 1
+        if not text[prev_start:header_start - 1].lstrip().startswith("|"):
+            break
+        header_start = prev_start
+    header_end = text.find("\n", header_start)
+    header = text[header_start:len(text) if header_end == -1 else header_end]
+    if header_start == line_start or set(header.replace("|", "").strip()) <= set("-: "):
+        return False
+    cells = _cells(header)
+    if not 0 <= column < len(cells):
+        return False
+    words = {w.lower() for w in _WORD_RE.findall(cells[column].strip(" *_~"))}
+    return bool(words & _TIME_UNITS)
+
+
 def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = False) -> list[Figure]:
     """The figures ``text`` gives, in order. ``everything`` reads every number
     that isn't a date, an id or list numbering (a source's text, where a plain
@@ -412,9 +466,9 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
         after = text[num_end] if num_end < len(text) else ""
         pre, post = m.group("pre") or "", m.group("post") or ""
         scale_text, pct = m.group("scale") or "", bool(m.group("pct"))
-        if pre.strip().isalpha() and (pre.strip() in _NOT_CURRENCY or not pre.strip().isupper()):
+        if pre.strip().isalpha() and pre.strip() not in _CURRENCY_CODES:
             pre = ""
-        if post.strip().isalpha() and post.strip() in _NOT_CURRENCY:
+        if post.strip().isalpha() and post.strip() not in _CURRENCY_CODES:
             post = ""
         # Joined to letters or another number: an id, a code or a range
         # (SINV-00042, Q3, FY2026, 0-30), never a figure.
@@ -452,7 +506,13 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
                 if _word_before(text, m.start()) in _MONTHS or _word_after(text, num_end) in _MONTHS:
                     continue  # "Nov 4", "4 November"
                 multiple = _is_multiple(text, num_end)
-                if not (_in_table_cell(text, num_start, num_end) or value >= 10_000 or multiple):
+                in_cell = _in_table_cell(text, num_start, num_end)
+                if in_cell and _column_counts_time(text, num_start):
+                    # A "Days late" cell is "184 days", as in a sentence: a
+                    # count of time worked out from dates, never an ERPNext
+                    # figure (Cedar & Pine's was blanked, pilot, Nov 6, 2026).
+                    continue
+                if not (in_cell or value >= 10_000 or multiple):
                     # A plain whole number is a figure only as a count of
                     # something: "14 orders", never "30 days" or "top 5".
                     following = _word_after(text, num_end)

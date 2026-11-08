@@ -91,7 +91,7 @@ def test_a_count_no_value_is_known_for_becomes_several(
     assert _check("Seven customers are waiting on back orders. Birch Co is owed 52 breakers.") == (
         "Several customers are waiting on back orders. Birch Co is owed 52 breakers."
     )
-    assert audit_rows[-1][2]["whole_reply"] == 0
+    assert [r for r in audit_rows if r[0] == "answer_check"][-1][2]["whole_reply"] == 0
     assert _check("All seven customer orders are late. Birch Co is owed 52 breakers.") == (
         "All customer orders are late. Birch Co is owed 52 breakers."
     )

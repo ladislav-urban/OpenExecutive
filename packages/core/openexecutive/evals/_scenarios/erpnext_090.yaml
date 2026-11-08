@@ -1,0 +1,22 @@
+id: erpnext_090
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Work Order
+description: 'Production step 1 (oe_connector''s help/try-production.md) in ERPNext''s panel as a demo person: asked which work orders are behind and why, the reply names every late work order (planned end before today, submitted, not completed or stopped), and for the lighting control panel batch waiting on parts it names the parts and the suppliers they are on order from (Orion and Lumen), read from the open purchase orders raised from its Material Request. Found in the pilot''s Nov 6, 2026 retake (OE 75921b2), where the reply did not name the suppliers.'
+query: Which work orders are behind, and why?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  names_every_late_work_order: true
+  names_the_suppliers_the_missing_parts_are_on_order_from: true
+  says_why_each_is_behind: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

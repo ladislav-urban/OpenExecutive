@@ -59,6 +59,7 @@ _FULL_MAX_LEN = 64 * 1024
 EVENT_TYPES: tuple[str, ...] = (
     "chat_turn",
     "answer_check",  # a reply's figures held to ERPNext's results that turn (counts only; orchestrator/answer_check.py)
+    "answer_check_changes",  # the sentences that check changed, before and after, with each figure and why; private, text kept 30 days
     "specialist_consult",
     "tool_invocation",
     "scheduled_action",
@@ -250,6 +251,20 @@ def _owner_clause(
         return "private_to_person IS NULL"
     params.append(int(owned_by))
     return "(private_to_person IS NULL OR private_to_person = ?)"
+
+
+def _mailbox_scope() -> bool:
+    """Whether rows written now are someone's own mailbox work (a scope
+    ``rows_for_person`` opened, or a turn that read their mail). Fails
+    closed: a check that cannot run answers yes."""
+    try:
+        from openexecutive.audit.context import rows_owner
+        from openexecutive.delegation.settings import turn_touched_delegate_mail
+
+        return rows_owner() is not None or turn_touched_delegate_mail()
+    except Exception:
+        logger.warning("audit.mailbox_scope_check_failed — treated as mailbox work", exc_info=True)
+        return True
 
 
 def _row_owner(private_to_person: int | None) -> int | None:
@@ -508,6 +523,7 @@ class AuditLogger:
         department: str | None = None,
         private: bool = False,
         private_to_person: int | None = None,
+        principal_only: bool = False,
     ) -> int | None:
         """Insert one audit row. Returns row id, or None on failure.
 
@@ -535,8 +551,15 @@ class AuditLogger:
             via = rows_via()
             if via and not (details and "via" in details):
                 details = {**(details or {}), "via": via}
-            owner = _row_owner(private_to_person)
-            is_private = (
+            # ``principal_only``: the principal's alone, whoever's turn wrote
+            # it, never a team member's own row (the answer check's record of
+            # what it changed: the owner, Nov 8, 2026).
+            # Never over someone's own mailbox work, which is theirs alone,
+            # the principal included: the usual rule then (fails closed).
+            if principal_only and _mailbox_scope():
+                principal_only = False
+            owner = None if principal_only else _row_owner(private_to_person)
+            is_private = principal_only or (
                 bool(private) or owner is not None or _private_to_principal(summary, details, full)
             )
             safe_summary = _truncate(str(summary), _SUMMARY_MAX_LEN)
@@ -600,6 +623,23 @@ class AuditLogger:
         except Exception:
             logger.warning("audit.log_failed event_type=%s", event_type, exc_info=True)
             return None
+
+    def drop_full(self, event_type: str, older_than: datetime) -> int:
+        """Clear the ``full`` payload of ``event_type`` rows written before
+        ``older_than``: the row and its counts stay, its text goes (a row
+        whose text is kept for a limited time). Returns how many changed;
+        never raises."""
+        try:
+            with _get_conn(self._db_path) as conn:
+                cur = conn.execute(
+                    "UPDATE audit_log SET full_json = NULL"
+                    " WHERE event_type = ? AND ts < ? AND full_json IS NOT NULL",
+                    (event_type, older_than.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")),
+                )
+                return int(cur.rowcount or 0)
+        except Exception:
+            logger.warning("audit.drop_full_failed event_type=%s", event_type, exc_info=True)
+            return 0
 
     def get(self, event_id: int) -> AuditEvent | None:
         """Fetch a single row by id, including the un-truncated `full` payload."""
@@ -1006,6 +1046,7 @@ def log_event(
     department: str | None = None,
     private: bool = False,
     private_to_person: int | None = None,
+    principal_only: bool = False,
 ) -> None:
     """Fire-and-forget convenience wrapper around the default logger.
 
@@ -1035,6 +1076,7 @@ def log_event(
             department=department,
             private=private,
             private_to_person=private_to_person,
+            principal_only=principal_only,
         )
     except Exception:
         logger.warning("audit.log_event_failed event_type=%s", event_type, exc_info=True)

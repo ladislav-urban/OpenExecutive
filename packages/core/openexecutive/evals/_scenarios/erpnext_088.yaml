@@ -1,0 +1,27 @@
+id: erpnext_088
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Profit and Loss Statement
+prior_turns:
+- page:
+    report: Profit and Loss Statement
+  user: How did Denver do last month, compared with Pittsburgh?
+  assistant: 'Denver made a loss last month while Pittsburgh made a profit. Denver''s sales were small against its rent, power and depreciation.'
+description: 'Denver branch step 2 (oe_connector''s help/try-denver-branch.md) in ERPNext''s panel as a demo person: asked what opening the branch cost, the reply names each purchase of the branch opening project (the racking, the counter display, the laptop) with its supplier and amount, read from the project''s Purchase Invoice Items and their invoices'' suppliers, never from GL entries alone. Found in the pilot''s Nov 6, 2026 retake (OE 75921b2), where the reply read only GL entries, named suppliers from their text, and its cost table was left with the total row alone.'
+query: What did opening it cost us?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  names_each_opening_purchase_with_its_supplier_and_amount: true
+  reads_the_projects_purchase_invoices_for_items_and_suppliers: true
+  gives_the_total_opening_cost: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

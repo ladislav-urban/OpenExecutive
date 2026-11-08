@@ -91,7 +91,10 @@ def test_a_report_total_counts_only_when_whole() -> None:
 @pytest.fixture(autouse=True)
 def quiet(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
     rows: list[Any] = []
-    monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **kw: rows.append(kw.get("details")))
+    monkeypatch.setattr(
+        "openexecutive.audit.log_event",
+        lambda *a, **kw: rows.append(kw.get("details")) if a and a[0] == "answer_check" else None,
+    )
 
     async def no_review(**kw: Any) -> list[Review]:
         return [answer_review.CANNOT_TELL] * len(kw["flagged"])

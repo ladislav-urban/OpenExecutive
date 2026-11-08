@@ -1,0 +1,22 @@
+id: erpnext_089
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Project
+description: 'Projects step 3 (oe_connector''s help/try-projects.md) in ERPNext''s panel as a demo person, on the Keystone project: asked what is late, the reply reads the project''s submitted Project Updates newest first and names the task its latest Friday update says is past its date, and who it is on (Morgan). Found in the pilot''s Nov 6, 2026 retake (OE 75921b2), where the reply ("Three of the four Keystone tasks are late…") did not use the latest update.'
+query: What's late on the Keystone job right now?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  uses_the_latest_project_update_and_names_the_task_it_says_is_late: true
+  says_who_the_late_task_is_on: true
+  does_not_list_tasks_as_late_that_the_latest_update_does_not: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

@@ -5518,6 +5518,18 @@ chat:
     person caller; never the brief), max 3 a turn; a differing report total
     is the right value, written in by code; not_this_measure/error/truncated
     change nothing.
+    What it changed is recorded for the principal alone (decided Nov 8,
+    2026): an answer_check_changes audit row, written principal_only (the
+    principal's alone whoever's turn it was: audit_row_owner is never asked,
+    so a teammate's own turn doesn't make it theirs), holding in full_json
+    only the changed sentences (each unit before and after, at most 12, 600
+    characters each) with each failed figure or name as written and why
+    (answer_check._why). Its text is kept CHANGES_KEPT_DAYS (30): each new
+    row and a daily scheduler pass (answer_check.clear_old_changes,
+    AuditLogger.drop_full) clear older rows' full_json; a database backup
+    keeps it until the backup itself goes. Why: the
+    pilot's audit could say how many figures a correction touched, never
+    which, so a garbled reply ("162 $ panels") had to be reproduced by hand.
   chat_review: |
     Conversation review (memory/chat_review.py). The post-turn block keeps a
     verified speaker's turn (principal on a people_tools-verified surface, or

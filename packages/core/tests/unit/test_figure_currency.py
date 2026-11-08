@@ -87,3 +87,54 @@ def test_the_check_rewrites_the_mark_alone_without_a_model(monkeypatch: pytest.M
     out = asyncio.run(answer_check.check_reply("The order came to €3,848.89.", turn, question="q", model="m"))
     assert out == "The order came to $3,848.89."
     assert called == []
+
+
+# The pilot's Nov 6, 2026 retake (margin drop, step 4): "The 162 LED panels"
+# was read as 162 in a currency "LED", not the report's USD, and written back
+# as "The 162 $ panels". Only a currency's ISO 4217 code is a currency.
+BY_ITEM = ErpnextResult(
+    "erpnext__run_report",
+    {"report_name": "Gross Profit"},
+    {
+        "report_name": "Gross Profit", "currency": "USD",
+        "columns": [
+            {"fieldname": "item_code", "fieldtype": "Link"},
+            {"fieldname": "qty", "fieldtype": "Float"},
+            {"fieldname": "selling_amount", "fieldtype": "Currency"},
+        ],
+        "rows": [
+            {"item_code": "DEMO-LED-40", "qty": 162.0, "selling_amount": 3402.0},
+            {"item_code": "DEMO-PCB-12", "qty": 40.0, "selling_amount": 600.0},
+        ],
+        "truncated": False,
+    },
+)
+
+
+def test_capitals_after_a_number_are_a_currency_only_as_an_iso_code() -> None:
+    for text in ("The 162 LED panels sold for $3,402.", "Stock: 40 LED, 12 PCB and 7 USB boards."):
+        quantities = [f for f in find_figures(text) if "$" not in f.text]
+        assert quantities and all(f.currency_text == "" and f.text.isdigit() for f in quantities), text
+    for text, mark in (("It came to EUR 1,200.", "EUR"), ("It came to 1,200 USD.", "USD"), ("It was $1,200.", "$")):
+        (fig,) = find_figures(text)
+        assert fig.currency_text == mark, text
+    # A code that is also a word in capitals is never a currency in a reply.
+    for text in ("We kept the 40 TOP sellers in stock.", "Order 12 CUP holders."):
+        assert all(f.currency_text == "" for f in find_figures(text)), text
+
+
+def test_a_quantity_before_an_items_code_stays_as_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **k: None)
+
+    async def review(**kw: Any) -> list[Review]:
+        return [answer_review.CANNOT_TELL] * len(kw["flagged"])
+
+    monkeypatch.setattr(answer_review, "review", review)
+    turn = answer_check.AnswerCheckTurn()
+    turn.results.append(BY_ITEM)
+    turn._context = {"number_format": "#,###.##", "currencies": {"USD": {"symbol": "$"}}}
+    text = "Yes, it was worth it. The 162 LED panels sold at cost brought in $3,402 of cash with no loss."
+    assert asyncio.run(answer_check.check_reply(text, turn, question="q", model="m")) == text
+    # A real code on the wrong amount is still corrected.
+    wrong = "The panels brought in 3,402 EUR."
+    assert asyncio.run(answer_check.check_reply(wrong, turn, question="q", model="m")) == "The panels brought in 3,402 $."
