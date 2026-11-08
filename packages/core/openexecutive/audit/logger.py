@@ -59,6 +59,7 @@ _FULL_MAX_LEN = 64 * 1024
 EVENT_TYPES: tuple[str, ...] = (
     "chat_turn",
     "answer_check",  # a reply's figures held to ERPNext's results that turn (counts only; orchestrator/answer_check.py)
+    "answer_check_changes",  # the sentences that check changed, before and after, with each figure and why; private, text kept 30 days
     "specialist_consult",
     "tool_invocation",
     "scheduled_action",
@@ -596,6 +597,23 @@ class AuditLogger:
         except Exception:
             logger.warning("audit.log_failed event_type=%s", event_type, exc_info=True)
             return None
+
+    def drop_full(self, event_type: str, older_than: datetime) -> int:
+        """Clear the ``full`` payload of ``event_type`` rows written before
+        ``older_than``: the row and its counts stay, its text goes (a row
+        whose text is kept for a limited time). Returns how many changed;
+        never raises."""
+        try:
+            with _get_conn(self._db_path) as conn:
+                cur = conn.execute(
+                    "UPDATE audit_log SET full_json = NULL"
+                    " WHERE event_type = ? AND ts < ? AND full_json IS NOT NULL",
+                    (event_type, older_than.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%fZ")),
+                )
+                return int(cur.rowcount or 0)
+        except Exception:
+            logger.warning("audit.drop_full_failed event_type=%s", event_type, exc_info=True)
+            return 0
 
     def get(self, event_id: int) -> AuditEvent | None:
         """Fetch a single row by id, including the un-truncated `full` payload."""
