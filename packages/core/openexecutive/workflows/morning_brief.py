@@ -400,6 +400,9 @@ class MorningBriefWorkflow(Workflow):
                 "suppressed": suppressed,
                 "since": since.isoformat(),
                 "private_to_principal": private_used,
+                # The brief holds ERPNext figures: the chat it is saved
+                # into counts as having read ERPNext (audit.erpnext_reads).
+                "read_erpnext": bool(erp_numbers),
             },
         )
 

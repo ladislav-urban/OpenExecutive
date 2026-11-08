@@ -150,3 +150,46 @@ def test_a_held_message_is_saved_when_its_release_sends_it(monkeypatch: pytest.M
     delivery = asyncio.run(runner.deliver_to_person(_principal(), "While you were away: ...", label=HEADING))
     assert delivery.ok and delivery.channel == "telegram"
     assert saved == [(BASE, "While you were away: ...", HEADING)]
+
+
+@pytest.mark.parametrize("erp", [True, False])
+def test_erpnext_figures_sent_on_a_schedule_mark_the_chat(monkeypatch: pytest.MonkeyPatch, erp: bool) -> None:
+    # The brief's ERP numbers or a scheduled metric: nothing in the chat
+    # called ERPNext, so the delivery itself marks it (audit.erpnext_reads).
+    from openexecutive.audit import erpnext_reads
+
+    marked: list[tuple[str, set[str]]] = []
+    monkeypatch.setattr(erpnext_reads, "mark_carried", lambda sid, src: marked.append((sid, src)) or True)
+    token = erpnext_reads.DELIVERING_ERPNEXT.set(erp)
+    try:
+        saved = _run_send(monkeypatch, {"status": "sent", "chat_id": 4242})
+    finally:
+        erpnext_reads.DELIVERING_ERPNEXT.reset(token)
+    assert saved == [(BASE, DIGEST, OWNER, "Evening digest")]
+    assert marked == ([(BASE, {"scheduled"})] if erp else [])
+
+
+def test_a_scheduled_metric_runs_with_the_mark_on(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT
+    from openexecutive.briefing import erp_metrics
+    from openexecutive.memory import episodic
+
+    path = tmp_path / "metric.db"
+    initialize_db(path)
+    monkeypatch.setattr(episodic, "DB_PATH", path)
+    seen: list[bool] = []
+
+    async def fake_run(action: Any, now: Any, deliver: Any) -> None:
+        seen.append(DELIVERING_ERPNEXT.get())
+
+    monkeypatch.setattr(erp_metrics, "run", fake_run)
+    action_id = episodic.insert_scheduled_action(
+        run_at=datetime.now(UTC).isoformat(), channel="__internal__", channel_ref="metric",
+        intent_text="metric", kind="erpnext_metric",
+    )
+    action = episodic.get_scheduled_action(action_id)
+    assert action is not None
+    asyncio.run(runner._execute_action(action, None))
+    assert seen == [True] and DELIVERING_ERPNEXT.get() is False

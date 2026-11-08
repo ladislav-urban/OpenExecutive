@@ -1181,9 +1181,15 @@ async def _execute_action(
     # computed by code and sent to the principal as the brief is; it chains
     # its own next run. channel="__internal__" too, so it comes first.
     if action.kind == "erpnext_metric":
+        from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT
         from openexecutive.briefing import erp_metrics
 
-        await erp_metrics.run(action, now, _deliver_to_principal)
+        # A metric is ERPNext's figures: the chat it lands in is marked.
+        erp_token = DELIVERING_ERPNEXT.set(True)
+        try:
+            await erp_metrics.run(action, now, _deliver_to_principal)
+        finally:
+            DELIVERING_ERPNEXT.reset(erp_token)
         return
 
     # ------------------------------------------------------------------
@@ -2498,9 +2504,16 @@ async def _remember_in_chat(
             return
         from openexecutive.integrations.conversations import record_delivery
 
-        await asyncio.to_thread(
+        session_id = await asyncio.to_thread(
             record_delivery, base_id, text, owner_person_id=person.id, title=label,
         )
+        from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT, mark_carried
+
+        # ERPNext's figures, sent on a schedule: the conversation counts as
+        # having read ERPNext, so a reply that restates them, or a later
+        # past-chat hit, stays out of what other people's turns read.
+        if session_id and DELIVERING_ERPNEXT.get() and not mark_carried(session_id, {"scheduled"}):
+            logger.error("scheduler: couldn't mark %s as holding ERPNext figures", session_id)
     except Exception:
         logger.exception("scheduler: couldn't save the delivery into %s", base_id)
 
@@ -2704,6 +2717,7 @@ async def _run_principal_brief(action: ScheduledAction, now: datetime) -> None:
         fingerprint: str | None = None
         suppressed = False
         private_to_principal = False
+        read_erpnext = False
         # This run goes to the principal alone, so the brief may read what is
         # private to them (morning_brief.PRINCIPAL_DELIVERY).
         from openexecutive.workflows.morning_brief import PRINCIPAL_DELIVERY
@@ -2718,6 +2732,7 @@ async def _run_principal_brief(action: ScheduledAction, now: datetime) -> None:
                     fingerprint = str(event.data["brief_fingerprint"])
                     suppressed = bool(event.data.get("suppressed"))
                     private_to_principal = bool(event.data.get("private_to_principal"))
+                    read_erpnext = bool(event.data.get("read_erpnext"))
                 elif event.type == "error" and event.message:
                     raise RuntimeError(event.message)
         finally:
@@ -2736,11 +2751,16 @@ async def _run_principal_brief(action: ScheduledAction, now: datetime) -> None:
             # Messages the principal asked to get in their brief ride along
             # as one "While you were away" block (people.held_messages).
             delivered_text, held_ids = _with_held_messages(kind, artifact)
+            from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT
+
+            erp_token = DELIVERING_ERPNEXT.set(read_erpnext)
             try:
                 delivery = await _deliver_to_principal(delivered_text, label=workflow.title)
             except BaseException:
                 _unclaim_held(held_ids)
                 raise
+            finally:
+                DELIVERING_ERPNEXT.reset(erp_token)
             ok, detail = delivery.ok, delivery.detail
             if ok:
                 await _mark_held_sent(held_ids)

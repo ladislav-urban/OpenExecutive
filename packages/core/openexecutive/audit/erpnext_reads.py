@@ -11,10 +11,17 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from contextvars import ContextVar
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
+
+# Set while the scheduler delivers text that holds ERPNext figures (the
+# morning brief's ERP numbers, a scheduled ERP metric): the chat
+# conversation it is saved into is marked (``mark_carried``), since
+# nothing there called ERPNext.
+DELIVERING_ERPNEXT: ContextVar[bool] = ContextVar("delivering_erpnext", default=False)
 
 # Audit event for a conversation that took in what another one read from
 # ERPNext (a past-chat hit): from then on it counts as having read it too.
