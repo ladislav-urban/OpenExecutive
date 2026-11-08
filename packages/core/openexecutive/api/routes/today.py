@@ -35,7 +35,7 @@ import asyncio
 import json
 import logging
 from datetime import UTC, datetime, timedelta, tzinfo
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -617,11 +617,50 @@ class HeldBackItem(BaseModel):
     lines: list[str]
 
 
+class PointSource(BaseModel):
+    """What a Right now point is about, when Home can open it: an email in
+    the reader's own inbox (``kind`` "mail": its ids, and its reply card
+    when one is open), a card in Needs you (``kind`` "alert"), or a team
+    chat message (``kind`` "link": its link in that app, and the app's
+    name)."""
+
+    kind: Literal["mail", "alert", "link"]
+    message_id: str | None = None
+    thread_id: str | None = None
+    decision_id: int | None = None
+    alert_id: int | None = None
+    url: str | None = None
+    app: str | None = None
+
+
 class NarrativePoint(BaseModel):
-    """One point of Right now (the /today header): its Markdown, and when it
-    first appeared today (ISO-8601 UTC)."""
+    """One point of Right now (the /today header): its Markdown, when it
+    first appeared today (ISO-8601 UTC), and what it is about."""
 
     text: str
+    since: str | None = None
+    source: PointSource | None = None
+
+
+def _point_source(raw: dict[str, Any] | None) -> PointSource | None:
+    """A stored point source as the API shows it; None when unreadable."""
+    if not raw:
+        return None
+    try:
+        return PointSource.model_validate(raw)
+    except ValueError:
+        return None
+
+
+class NarrativeProgress(BaseModel):
+    """What a Right now being written is doing, for the page to show in its
+    place: ``reading`` what moved (mail, calendar, Needs you), ``writing``
+    the header, ``checking`` each point cites something that moved. Plus how
+    many emails from people they deal with came to the principal's own inbox
+    since the served header was written (``since``), when there is one."""
+
+    step: Literal["reading", "writing", "checking"]
+    new_mail: int = 0
     since: str | None = None
 
 
@@ -655,6 +694,9 @@ class TodayResponse(BaseModel):
     # narrative lands without a reload. Additive; None / False on a cold cache.
     narrative_generated_at: str | None = None
     narrative_stale: bool = False
+    # While ``narrative_stale``: what the rewrite is doing, so the page shows
+    # that instead of the header it replaces. Additive; None otherwise.
+    narrative_progress: NarrativeProgress | None = None
     # The same narrative split for Home's Right now card
     # (``briefing.right_now``): the bold opener, the points with when each
     # first appeared today, and the Move today line. Plus when this reader
@@ -1917,11 +1959,14 @@ def _narrative_context(
     mode: str = "team",
     scope: str | None = None,
     reader: Reader | None | object = _LOOKUP,
+    sources_out: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]] | None]:
     """``(context, activity)`` — the exact user turn the model would receive.
 
     ``reader`` is who the header is written for (``_narrative_reader``); the
     regeneration resolves it once and hands the same one to the post-check.
+    ``sources_out``, when given, is filled with Right now's tag → item map
+    (``HeaderContext.sources``), so a point can be opened from Home.
 
     The single source both the cache key and the model call come from, so the
     key can never be computed over something the model did not see.
@@ -1942,7 +1987,7 @@ def _narrative_context(
     today_data = _with_due_soon(today_data, mode, viewer_desc, scope)
     resolved = _narrative_reader(scope, viewer) if reader is _LOOKUP else reader
     if viewer_desc is None:
-        return _header_context(today_data, viewer, mode, scope, resolved)  # type: ignore[arg-type]
+        return _header_context(today_data, viewer, mode, scope, resolved, sources_out)  # type: ignore[arg-type]
     if _nothing_needs_attention(today_data, mode):
         return narrative_cache.QUIET_CONTEXT, None
     activity = _narrative_activity(viewer, viewer_desc)
@@ -1976,6 +2021,7 @@ def _header_context(
     mode: str,
     scope: str | None,
     reader: Reader | None,
+    sources_out: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]] | None]:
     """Right now's context for a whole-company scope
     (``briefing.header_context``). With nothing moved today it is one of the
@@ -2003,8 +2049,13 @@ def _header_context(
     raise_lines: list[str] = []
     raise_older: list[str] = []
     leave_out = ""
+    dismissed: list[Any] = []
     if own:
+        from openexecutive.briefing import right_now
+
         raise_lines, raise_older, leave_out = brief_requests.raise_split(tz)
+        # What they cleared from Right now today stays out of the next one.
+        dismissed = right_now.dismissed(narrative_cache.DEFAULT_SCOPE, narrative_cache.local_today())
     standing_facts = render_facts_for_prompt()
 
     def render(activity: list[dict[str, Any]]) -> HeaderContext:
@@ -2021,6 +2072,7 @@ def _header_context(
             raise_older=raise_older,
             leave_out_block=leave_out,
             reader=reader,
+            dismissed=dismissed,
         )
 
     # Rendered first without the rail: on a board with nothing open and
@@ -2039,6 +2091,8 @@ def _header_context(
     ctx = render(activity)
     if not ctx.moved:
         return narrative_cache.NOTHING_MOVED_CONTEXT, None
+    if sources_out is not None:
+        sources_out.update(ctx.sources)
     return ctx.text, activity
 
 
@@ -2070,6 +2124,8 @@ _regen_pending: set[str] = set()
 # the page is told nothing is coming, so it drops its "Catching up…" line.
 _REGEN_FAILURE_BACKOFF = timedelta(minutes=5)
 _regen_failed_at: dict[str, datetime] = {}
+# Scope → the step a running rewrite is on (``NarrativeProgress.step``).
+_regen_step: dict[str, str] = {}
 
 
 def _in_failure_backoff(scope: str, now: datetime | None = None) -> bool:
@@ -2166,12 +2222,39 @@ def _attach_narrative(
             assert background_tasks is not None
             background_tasks.add_task(_regen_briefing_narrative, caller_person_id, scope)
         response.narrative_stale = scheduled
+        if scheduled:
+            response.narrative_progress = _narrative_progress(scope, cached)
         logger.info(
             "today: narrative served scope=%s age_s=%s stale=%s regen_scheduled=%s",
             scope, age_s, is_stale, scheduled,
         )
     except Exception:
         logger.exception("today: briefing narrative attach failed (scope=%s)", scope)
+
+
+def _narrative_progress(scope: str, cached: Any, now: datetime | None = None) -> NarrativeProgress:
+    """Where the rewrite of ``scope``'s header is (``reading`` until it
+    starts), and for the principal how many emails came to their own inbox
+    since ``cached`` was written. Never raises."""
+    from openexecutive.briefing import narrative_cache
+
+    step = _regen_step.get(scope)
+    progress = NarrativeProgress(step="writing" if step == "writing" else "checking" if step == "checking" else "reading")
+    written = _parse_aware(cached.generated_at) if cached is not None else None
+    if written is None or narrative_cache.local_today(written) != narrative_cache.local_today():
+        return progress
+    progress.since = cached.generated_at
+    if scope != narrative_cache.DEFAULT_SCOPE:
+        return progress
+    try:
+        from openexecutive.briefing.live_signals import own_inbox
+        from openexecutive.memory.workspace_settings import get_user_timezone
+
+        mail = own_inbox(written, get_user_timezone(), now or datetime.now(UTC))
+        progress.new_mail = mail.total  # from people they deal with, not yet answered
+    except Exception:
+        logger.exception("today: counting new mail for Right now failed")
+    return progress
 
 
 def _attach_right_now(response: TodayResponse, scope: str, text: str, written_at: str) -> None:
@@ -2181,12 +2264,21 @@ def _attach_right_now(response: TodayResponse, scope: str, text: str, written_at
     from openexecutive.briefing import narrative_cache, right_now
 
     parts = right_now.split_narrative(text)
-    times = right_now.point_times(scope, narrative_cache.local_today())
+    day = narrative_cache.local_today()
+    times = right_now.point_times(scope, day)
+    sources = right_now.point_sources(scope, day)
+    # Dismissed today: gone until the day ends, however the header words it.
+    gone = right_now.dismissed(scope, day)
     response.narrative_lead = parts.lead
     response.narrative_move = parts.move
     response.narrative_points = [
-        NarrativePoint(text=p, since=times.get(right_now.point_key(p), written_at))
+        NarrativePoint(
+            text=p,
+            since=times.get(right_now.point_key(p), written_at),
+            source=_point_source(sources.get(right_now.point_key(p))),
+        )
         for p in parts.points
+        if not right_now.is_dismissed(p, sources.get(right_now.point_key(p)), gone)
     ]
     # Only a rostered reader's own scope has a last look (see /today/seen).
     if scope != narrative_cache.COMPANY_SCOPE:
@@ -2242,19 +2334,23 @@ async def _regen_briefing_narrative(
         )
         return
     async with lock:
-        # At most one extra pass: a trigger that arrived mid-run may carry
-        # news the running pass never saw. The pass is cheap when nothing
-        # moved (it returns before the model call when the key matches).
-        for _ in range(2):
-            _regen_pending.discard(expected_scope)
-            ok = await _regen_briefing_narrative_locked(caller_person_id, expected_scope)
-            if not ok:
-                _regen_failed_at[expected_scope] = datetime.now(UTC)
+        try:
+            # At most one extra pass: a trigger that arrived mid-run may carry
+            # news the running pass never saw. The pass is cheap when nothing
+            # moved (it returns before the model call when the key matches).
+            for _ in range(2):
                 _regen_pending.discard(expected_scope)
-                return
-            _regen_failed_at.pop(expected_scope, None)
-            if expected_scope not in _regen_pending:
-                return
+                _regen_step[expected_scope] = "reading"
+                ok = await _regen_briefing_narrative_locked(caller_person_id, expected_scope)
+                if not ok:
+                    _regen_failed_at[expected_scope] = datetime.now(UTC)
+                    _regen_pending.discard(expected_scope)
+                    return
+                _regen_failed_at.pop(expected_scope, None)
+                if expected_scope not in _regen_pending:
+                    return
+        finally:
+            _regen_step.pop(expected_scope, None)
 
 
 async def _regen_briefing_narrative_locked(
@@ -2279,6 +2375,9 @@ async def _regen_briefing_narrative_locked(
     started = time.monotonic()
     # The new points that need the principal, by key (right_now_ping).
     important: set[str] = set()
+    # Tag → item for the lines Home can open, and point key → item.
+    sources: dict[str, dict[str, Any]] = {}
+    pointed: dict[str, dict[str, Any]] = {}
 
     def prepare() -> tuple[Any, ...] | None:
         # The SQLite reads behind the context: seconds on a slow disk, so run
@@ -2296,7 +2395,7 @@ async def _regen_briefing_narrative_locked(
             return None
         reader = _narrative_reader(scope, viewer)
         context, activity = _narrative_context(
-            today_data, viewer, viewer_desc, mode, scope, reader=reader,
+            today_data, viewer, viewer_desc, mode, scope, reader=reader, sources_out=sources,
         )
         input_hash = narrative_cache.build_narrative_input_hash(context, scope=scope, mode=mode)
         cached = narrative_cache.get(scope)
@@ -2318,6 +2417,7 @@ async def _regen_briefing_narrative_locked(
             # Open items, none new today: Needs you below is the whole story.
             text = NOTHING_NEW
         else:
+            _regen_step[expected_scope] = "writing"
             text = await asyncio.wait_for(
                 synthesize_briefing_narrative(
                     today_data=today_data, activity=activity or [],
@@ -2331,7 +2431,12 @@ async def _regen_briefing_narrative_locked(
                 # 25 s for the draft, plus the rewrite's own budget.
                 timeout=25.0 + REWRITE_TIMEOUT_S,
             )
+            _regen_step[expected_scope] = "checking"
             if viewer_desc is None and text:
+                from openexecutive.briefing.header_context import point_sources
+                from openexecutive.briefing.right_now import point_key as key_of
+
+                pointed = {key_of(p): src for p, src in point_sources(text, sources)}
                 if scope == narrative_cache.DEFAULT_SCOPE:
                     from openexecutive.briefing.header_context import (
                         needs_you_tags,
@@ -2361,7 +2466,8 @@ async def _regen_briefing_narrative_locked(
     ))
     from openexecutive.briefing import right_now
 
-    recorded = right_now.record_points(scope, text, written_at)
+    recorded = right_now.record_points(scope, text, written_at, pointed)
+    right_now.record_sources(scope, written_at, pointed)
     if scope == narrative_cache.DEFAULT_SCOPE and recorded.new:
         from openexecutive.briefing.right_now_ping import maybe_ping
 
@@ -2808,6 +2914,47 @@ async def mark_today_seen(request: Request) -> dict[str, str | None]:
         return {"seen_at": None}
     scope = narrative_cache.DEFAULT_SCOPE if _is_principal(caller) else f"person:{caller}"
     return {"seen_at": right_now.mark_seen(scope)}
+
+
+class DismissPointRequest(BaseModel):
+    """A Right now point to clear, as ``GET /today`` served it."""
+
+    text: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/today/dismiss", tags=["today"])
+async def dismiss_today_point(
+    body: DismissPointRequest, request: Request, background_tasks: BackgroundTasks,
+) -> dict[str, bool]:
+    """The reader dismissed a point of their Right now: ``GET /today`` leaves
+    it out for the rest of the local day (by its subject, or a reworded point
+    about the same email or card), and the principal's next header is told
+    not to raise it again, so the header is rewritten after the response.
+    Stored per narrative scope, like ``/today/seen``; an unrostered caller's
+    shared scope keeps none."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.briefing import narrative_cache, right_now
+    from openexecutive.people.store import get_person
+
+    caller = _resolve_caller_person_id(request)
+    if caller is None or get_person(caller) is None:
+        return {"dismissed": False}
+    principal = _is_principal(caller)
+    scope = narrative_cache.DEFAULT_SCOPE if principal else f"person:{caller}"
+    # Only a point of the header this reader is served, in its words: they go
+    # into the next header's context. One reworded since the page loaded is
+    # matched by its subject.
+    served = narrative_cache.get(scope)
+    points = right_now.split_narrative(served.narrative_text).points if served is not None else []
+    key = right_now.point_key(body.text)
+    point = next((p for p in points if p == body.text), None) or next(
+        (p for p in points if key and right_now.point_key(p) == key), None,
+    )
+    if point is None or right_now.dismiss(scope, point) is None:
+        return {"dismissed": False}
+    if principal:
+        background_tasks.add_task(refresh_principal_narrative)
+    return {"dismissed": True}
 
 
 def _morning_brief_today() -> MorningBriefItem | None:

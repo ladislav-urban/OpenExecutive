@@ -9,6 +9,7 @@ import {
   approveAlert,
   approveDecision,
   bulkAckAlerts,
+  dismissTodayPoint,
   getDelegation,
   getToday,
   markTodaySeen,
@@ -33,7 +34,7 @@ import {
   narrativeUpdatedLabel,
   shouldRefreshOnFocus,
 } from "@/lib/narrativeFreshness";
-import { checkedLabel, seenBaseline } from "@/lib/rightNow";
+import { checkedLabel, seenBaseline, type TimedPoint } from "@/lib/rightNow";
 import { reviewRanLabel } from "@/lib/rhythmCards";
 import InfoTip from "./InfoTip";
 import HeldBack from "./briefing/HeldBack";
@@ -479,6 +480,19 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
     }, 120);
   };
 
+  // What Right now's points open: the email (and its reply card, shared
+  // with Needs you) or the card in Needs you.
+  // ✕ on a point clears it at once; the server keeps it out for the day.
+  const onDismissPoint = useCallback((point: TimedPoint) => {
+    setToday((t) => t && { ...t, narrative_points: (t.narrative_points ?? []).filter((p) => p.text !== point.text) });
+    dismissTodayPoint(point.text)
+      .then((kept) => {
+        if (!kept) return getToday().then(setToday);
+      })
+      .catch((e) => console.error("Dismissing a Right now point failed", e));
+  }, []);
+  const rightNowActions = { replies, onShowAlert: jumpToAlert, onContinue, onDismiss: onDismissPoint };
+
   const dateLabel = new Date().toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric" });
 
   const departments = today?.departments ?? [];
@@ -636,6 +650,18 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   // day isn't called quiet and the summary line points at it.
   const firstWeekCard = today?.first_week_card ?? null;
   const firstWeek = Boolean(today?.first_week);
+  // Right now already says when nothing needs the reader, so an empty Needs
+  // you would only say it again. It stays in the first week, where its empty
+  // line points at the mailbox step.
+  const hideEmptyNeedsYou =
+    hasBrief &&
+    !firstWeek &&
+    queue.length === 0 &&
+    approvalRows.length === 0 &&
+    !snoozed &&
+    !rerunNotice &&
+    !replies.notice &&
+    !showNeedsYouMenu;
   // The first week's empty queue points at the own-mailbox step only while
   // that mailbox isn't connected (null until known, so no flash).
   const [ownMailboxConnected, setOwnMailboxConnected] = useState<boolean | null>(null);
@@ -649,7 +675,7 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
   }, [firstWeek]);
   const briefFreshness = today
     ? today.narrative_stale
-      ? "Refreshing…"
+      ? "Updating…"
       : checkedLabel(today.narrative_checked_at) ?? narrativeUpdatedLabel(today.narrative_generated_at, new Date())
     : null;
 
@@ -694,7 +720,14 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
             </span>
           ),
           width: "lg",
-          body: <RightNowBody today={today} baseline={rightNowBaseline?.at ?? null} onContinue={onContinue} />,
+          body: (
+            <RightNowBody
+              today={today}
+              baseline={rightNowBaseline?.at ?? null}
+              onContinue={onContinue}
+              actions={rightNowActions}
+            />
+          ),
         },
         departments: {
           title: "Departments",
@@ -906,12 +939,14 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                   baseline={rightNowBaseline?.at ?? null}
                   updatedLabel={briefFreshness}
                   onOpen={() => setOpenPanel("brief")}
+                  actions={rightNowActions}
                 />
               )}
 
               {/* Needs you — decisions routed to the caller, and replies
                   waiting to be sent. */}
-              <section id={NEEDS_YOU_ID} className="mb-8 scroll-mt-4">
+              {!hideEmptyNeedsYou && (
+                <section id={NEEDS_YOU_ID} className="mb-8 scroll-mt-4">
                 <div className="mb-3 flex items-center gap-2">
                   <h2 className="text-lg font-semibold text-fg">
                     Your decision
@@ -997,7 +1032,8 @@ export default function Briefing({ onContinue, showHeader = false, firstName, ba
                     Nothing waits for your decision right now. Decisions and replies to send land here.
                   </p>
                 ) : null}
-              </section>
+                </section>
+              )}
 
               {(today.held_back?.length ?? 0) > 0 && <HeldBack items={today.held_back ?? []} />}
 

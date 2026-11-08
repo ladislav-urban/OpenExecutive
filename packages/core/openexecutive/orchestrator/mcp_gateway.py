@@ -478,9 +478,9 @@ _TOO_DEEP = "<too-deep>"
 # upload (XLSX, ODS, XLS) hides its formulas behind zip members, XML encodings
 # and character references — nothing a scan here can read reliably. So such an
 # upload may only be text `content`, which is scanned; base64_content and a
-# server-side file_path are refused for it. Every other upload (a PNG to
-# Drive, a DOCX to Docs) is left alone.
-_SHEET_MIME_RE = re.compile(r"spreadsheet|ms-?excel|openxmlformats.*sheet|opendocument\.spreadsheet|csv")
+# server-side file_path are refused for it. Every other upload (an .xlsx kept
+# as an Excel file in Drive, a PNG, a DOCX to Docs) is left alone.
+_NATIVE_SHEET_MIME = "google-apps.spreadsheet"
 # Free text Google mails to someone the roster never checked: an RSVP comment
 # goes to the event's organizer; an out-of-office / focus-time decline message
 # goes to whoever invites the Executive during the window. Refused on every
@@ -1044,20 +1044,25 @@ def _nested_fetch_key(value: Any, depth: int = 0) -> str | None:
 
 def _becomes_sheet(tool: str, arguments: dict[str, Any]) -> bool:
     """True when an upload through ``tool`` is converted into a native Sheet:
-    the Sheets import, or a Drive create whose target type is a spreadsheet.
-    A Drive update's target is unknown here, so it counts too."""
+    the Sheets import, a Drive create whose target type is a native Sheet,
+    or any Drive update: the file being rewritten may be a native Sheet, and
+    Drive converts plain text and TSV into one too, so a stated type on an
+    update proves nothing.
+
+    A Drive create stores the bytes as they are (workspace-mcp's
+    create_drive_file never converts), so an .xlsx or .csv saved to Drive
+    stays an Excel or CSV file that Google does not evaluate: only an
+    explicit ``application/vnd.google-apps.spreadsheet`` target counts."""
     bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
     if bare in ("import_to_google_sheets", "update_drive_file"):
         return True
     if bare != "create_drive_file":
         return False
-    for key, value in arguments.items():
-        if (
-            isinstance(key, str) and _norm_key(key) in ("mimetype", "contentmimetype")
-            and isinstance(value, str) and _SHEET_MIME_RE.search(value.lower())
-        ):
-            return True
-    return False
+    return any(
+        isinstance(key, str) and _norm_key(key) in ("mimetype", "contentmimetype")
+        and isinstance(value, str) and _NATIVE_SHEET_MIME in value.lower()
+        for key, value in arguments.items()
+    )
 
 
 def _formula_fetches(text: str) -> bool:
@@ -1083,6 +1088,10 @@ def _check_sheet_formulas(tool: str, arguments: dict[str, Any]) -> str | None:
     formulas cannot be read from here; else a JSON error."""
     bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
     if not _CELL_WRITER_RE.search(bare):
+        return None
+    # A Drive create that doesn't become a Sheet is stored as text or bytes,
+    # never evaluated: "Logo image (PNG)" in a note is not a formula.
+    if bare == "create_drive_file" and not _becomes_sheet(tool, arguments):
         return None
     if _becomes_sheet(tool, arguments):
         for key, value in arguments.items():
@@ -3087,6 +3096,27 @@ def _company_item(item: _DriveItem, exec_address: str, domains: frozenset[str]) 
     return True
 
 
+def _company_owned(item: _DriveItem, exec_address: str, domains: frozenset[str]) -> bool:
+    """Whether a Drive item belongs to the company, for writing into it:
+    owned by the Executive or someone on a company domain, or on a shared
+    drive one of whose organizers is. Who else it is shared with doesn't
+    matter here: the company's own folders are often shared with partners,
+    and the person asked for the change (``_company_item`` is the stricter
+    test used to decide whether a read brought in outside words)."""
+    def ours(address: str) -> bool:
+        return address == exec_address or address.rpartition("@")[2] in domains
+
+    # Open to anyone with the link, or a whole other domain: a file there is
+    # public, so nothing is written into it on the model's word alone.
+    if any(kind == "anyone" or (kind == "domain" and who not in domains) for kind, who, _ in item.permissions):
+        return False
+    if item.owner is not None:
+        return ours(item.owner)
+    return item.shared_drive and any(
+        role == "organizer" and kind == "user" and ours(who) for kind, who, role in item.permissions
+    )
+
+
 async def _google_company_items(
     session: Any, ids: Iterable[str], discover: _Discover | None = None,
 ) -> set[str]:
@@ -3170,16 +3200,16 @@ async def _check_google_file_write(
         if item is not None:
             if domains is None:
                 domains = _company_domains_with(exec_address)
-            if _company_item(item, exec_address, domains):
+            if _company_owned(item, exec_address, domains):
                 continue
         return _refuse(
             tool, "file_id", target[:60],
             reason=(
                 f"{tool} may only write to files and folders the Executive's own "
                 "Google account owns, or the company's own: owned by someone at the "
-                "company or on its shared drive, and not shared with anyone outside "
-                "it. This one is not — refusing. Save it to a new file in the "
-                "Executive's Drive and share that with the People who need it."
+                "company or on its shared drive. This one belongs to someone outside "
+                "it — refusing. Save it to a new file in the Executive's Drive and "
+                "share that with the People who need it."
                 + _GOOGLE_WRITE_CARD_HINT
             ),
         )
@@ -3620,6 +3650,59 @@ _M365_SENT_REPLY_TOOLS = frozenset({
 })
 
 
+def _sent_to(tool_name: str, normalized: str, arguments: dict[str, Any]) -> set[str]:
+    """The lowercased to/cc addresses of a Gmail or Outlook send; empty for
+    any other tool (an Outlook reply names none in its arguments)."""
+    out: set[str] = set()
+    if tool_name == "google_workspace__send_gmail_message":
+        for field in _OUTBOUND_CONTEXT_RECIPIENT_FIELDS:
+            value = arguments.get(field)
+            items = value if isinstance(value, list) else [value]
+            for _name, addr in getaddresses([s for s in items if isinstance(s, str)]):
+                if addr.strip():
+                    out.add(addr.strip().lower())
+    elif normalized == _M365_RECORD_SEND_TOOL:
+        message = _ci_get(_ci_get(arguments, "body"), "message")
+        for key in ("toRecipients", "ccRecipients"):
+            for addr in _m365_recipient_addresses(_ci_get(message, key)):
+                if addr.strip():
+                    out.add(addr.strip().lower())
+    return out
+
+
+async def _clear_replaced_drafts(tool_name: str, normalized: str, arguments: dict[str, Any]) -> None:
+    """The Executive just sent an email itself: take this conversation's
+    unsent chat drafts of it (same people, same subject) out of the writer's Drafts
+    (``delegation.redrafts.clear_after_send``). Never raises."""
+    from openexecutive.delegation.settings import DelegationOverride
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    session = current_session.get()
+    if session is None:
+        return
+    try:
+        sent = _sent_to(tool_name, normalized, arguments)
+        if not sent:
+            return
+        from openexecutive.delegation.redrafts import clear_after_send
+
+        if tool_name == "google_workspace__send_gmail_message":
+            subject = arguments.get("subject")
+        else:
+            subject = _ci_get(_ci_get(_ci_get(arguments, "body"), "message"), "subject")
+        override = getattr(session, "delegation_override", None)
+        client: Any = None
+        client_person_id: int | None = None
+        if isinstance(override, DelegationOverride):
+            client, client_person_id = override.gmail, getattr(override.person, "id", None)
+        await clear_after_send(
+            str(session.session_id), sent, subject=subject if isinstance(subject, str) else "",
+            client=client, client_person_id=client_person_id,
+        )
+    except Exception:
+        logger.exception("clear_replaced_drafts: could not clear drafts (non-fatal)")
+
+
 def _note_mail_sent(tool_name: str, normalized: str, arguments: dict[str, Any]) -> None:
     """Mark on the conversation (``Session.mail_sent_to`` /
     ``mail_replied_ids``) who a send the mailbox accepted went to, so the
@@ -3632,19 +3715,8 @@ def _note_mail_sent(tool_name: str, normalized: str, arguments: dict[str, Any]) 
     if session is None:
         return
     try:
-        if tool_name == "google_workspace__send_gmail_message":
-            for field in _OUTBOUND_CONTEXT_RECIPIENT_FIELDS:
-                value = arguments.get(field)
-                items = value if isinstance(value, list) else [value]
-                for _name, addr in getaddresses([s for s in items if isinstance(s, str)]):
-                    if addr.strip():
-                        session.mail_sent_to.add(addr.strip().lower())
-        elif normalized == _M365_RECORD_SEND_TOOL:
-            message = _ci_get(_ci_get(arguments, "body"), "message")
-            for key in ("toRecipients", "ccRecipients"):
-                for addr in _m365_recipient_addresses(_ci_get(message, key)):
-                    if addr.strip():
-                        session.mail_sent_to.add(addr.strip().lower())
+        if tool_name == "google_workspace__send_gmail_message" or normalized == _M365_RECORD_SEND_TOOL:
+            session.mail_sent_to.update(_sent_to(tool_name, normalized, arguments))
         elif normalized in _M365_SENT_REPLY_TOOLS:
             message_id = _ci_get(arguments, "messageId")
             if isinstance(message_id, str) and message_id:
@@ -3876,6 +3948,50 @@ class PinnedToolsProbe:
     missing: tuple[str, ...] | None
 
 
+# A call that finds the connection to the child closed (it went away: an
+# out-of-memory kill, a crash, a restart of the machine's services) starts it
+# again once and is retried. Only these errors: they are raised when a
+# request is about to be sent, so the closed call never reached a server and
+# retrying it can't do anything twice.
+REVIVE_TIMEOUT_S = 120.0
+
+
+def _closed_connection(exc: BaseException) -> bool:
+    import anyio
+
+    return isinstance(exc, (anyio.ClosedResourceError, anyio.BrokenResourceError))
+
+
+async def _close_parts(session: Any, stdio_cm: Any) -> None:
+    """Tear down a dead session and its stdio pipes. Never raises."""
+    for part in (session, stdio_cm):
+        if part is None:
+            continue
+        # Not BaseException: a cancelled request must stop the revival too.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(part.__aexit__(None, None, None), timeout=10.0)
+
+
+class _RevivingSession:
+    """The gateway's session, for one caller: ``call_tool`` starts the child
+    again once and retries when the connection has closed
+    (``_closed_connection``)."""
+
+    def __init__(self, gateway: MCPGateway, session: Any) -> None:
+        self._gateway = gateway
+        self._session = session
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        if self._session is not None:
+            try:
+                return await self._session.call_tool(name, arguments)
+            except BaseException as exc:
+                if not _closed_connection(exc):
+                    raise
+        self._session = await self._gateway._revive(self._session)
+        return await self._session.call_tool(name, arguments)
+
+
 class MCPGateway:
     """Proxies search_tools / call_tool / load_mcp_server to an extensible-mcp subprocess.
 
@@ -3890,13 +4006,16 @@ class MCPGateway:
     def __init__(self) -> None:
         self._session: Any = None
         self._stdio_cm: Any = None
+        # Kept from start() so a child that went away can be started again
+        # in place (``_revive``), with every holder of this gateway intact;
+        # its directory also holds the `tokens` file whose names
+        # load_mcp_server must not take.
+        self._config_path: Path | None = None
+        self._revive_lock: asyncio.Lock | None = None
         # The servers the config named when this gateway started. The
         # Connected Systems prompt section reads it, so a gateway that never
         # started never reads as connected.
         self.server_names: tuple[str, ...] = ()
-        # The config the gateway started with; its directory holds the
-        # `tokens` file whose names load_mcp_server must not take.
-        self._config_path: Path | None = None
         # What startup priming found, for /health and the Setup status page.
         # None until priming finishes, so a probe that crashed can never read
         # as "every pinned tool is present" — only PinnedToolsProbe(missing=())
@@ -3963,13 +4082,13 @@ class MCPGateway:
             args=[*_EXTENSIBLE_MCP_LAUNCH_ARGS, "--config", str(config_path)],
             env=forwarded_env or None,
         )
+        self._config_path = config_path
         self._stdio_cm = stdio_client(params)
         read, write = await self._stdio_cm.__aenter__()
         self._session = ClientSession(read, write)
         await self._session.__aenter__()
         await self._session.initialize()
         self.server_names = tuple(configured_server_names(config_path))
-        self._config_path = config_path
         logger.info("MCPGateway started — config=%s", config_path)
 
     async def close(self) -> None:
@@ -3981,11 +4100,37 @@ class MCPGateway:
                 await self._stdio_cm.__aexit__(None, None, None)
         self._session = None
         self._stdio_cm = None
+        # Closed on purpose (shutdown): no call starts it again.
+        self._config_path = None
 
     def _require_session(self) -> Any:
-        if self._session is None:
+        if self._session is None and self._config_path is None:
             raise RuntimeError("MCPGateway.start() must be called before using the gateway")
-        return self._session
+        # None after a revival that failed: the next call tries it again.
+        return _RevivingSession(self, self._session)
+
+    async def _revive(self, dead: Any) -> Any:
+        """Start the child again in place after its connection closed under
+        ``dead``, once for every call that found it closed. Returns the live
+        session (another call's revival, when it got there first)."""
+        if self._revive_lock is None:
+            self._revive_lock = asyncio.Lock()
+        async with self._revive_lock:
+            if self._session is not None and self._session is not dead:
+                return self._session
+            if self._config_path is None:
+                raise RuntimeError("MCPGateway.start() must be called before using the gateway")
+            logger.warning("MCPGateway: the connection to the tools closed; starting it again")
+            await _close_parts(self._session, self._stdio_cm)
+            self._session = self._stdio_cm = None
+            try:
+                await asyncio.wait_for(self.start(self._config_path), timeout=REVIVE_TIMEOUT_S)
+            except BaseException:
+                # Left with nothing half open, so the next call tries again.
+                await _close_parts(self._session, self._stdio_cm)
+                self._session = self._stdio_cm = None
+                raise
+            return self._session
 
     async def search_tools(self, tool_input: dict[str, Any]) -> str:
         return _drop_blocked_tools(await self._search(tool_input))
@@ -4501,6 +4646,7 @@ class MCPGateway:
         # either: marking it would hide the unanswered-email card.
         if not _is_error_payload(result_text) and not result_text.lstrip().lower().startswith("error"):
             _note_mail_sent(tool_name, normalized, arguments)
+            await _clear_replaced_drafts(tool_name, normalized, arguments)
         if attached_artifacts and not _is_error_payload(result_text):
             from openexecutive.audit import log_event as audit_log
 

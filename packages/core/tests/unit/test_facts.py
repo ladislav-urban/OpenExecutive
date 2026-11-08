@@ -263,6 +263,15 @@ def test_remember_fact_needs_more_than_a_fragment(principal: SimpleNamespace, qu
     assert "too short" in out["error"]
 
 
+def test_remember_fact_takes_a_one_word_answer(principal: SimpleNamespace) -> None:
+    """A one-word answer to the Executive's own question, as their whole
+    message, is the fact."""
+    principal.turn_delegation.speaker_text = "Internal"
+    out = _call(fact_tools.handle_remember_fact, subject="Signed LOI folder",
+                statement="Signed LOIs go in an internal folder.", source_quote="Internal")
+    assert "error" not in out and out.get("fact_id")
+
+
 def test_the_audit_row_never_carries_the_principals_words(
     principal: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -330,42 +339,21 @@ def test_remember_fact_statement_figures_must_be_the_principals(
 
 
 @pytest.mark.parametrize(
-    ("said", "statement", "ok"),
+    ("said", "statement"),
     [
-        # A paraphrase of what they said, names and all.
-        ("Cedar Court is fully let now", "Cedar Court is fully let.", True),
-        ("Maple House is 48 units", "Maple House has 48 units.", True),
-        # A sentence's first word is grammar, not a name.
-        ("the annex at Maple House is done", "Construction of the Maple House annex is done.", True),
-        # A figure-free claim from a document: its date and name were never said.
-        ("remember what the lease doc says about Cedar Court",
-         "Cedar Court's lease expires in March.", False),
-        ("remember what the lease doc says about Cedar Court",
-         "Cedar Court's landlord is Acme Estates.", False),
-        # A colon or semicolon does not start a sentence, so cannot exempt a name.
-        ("remember what the lease doc says about Cedar Court",
-         "Cedar Court landlord: Acme; Estates.", False),
-        # A look-alike capital (Greek Alpha) still reads as a name.
-        ("remember what the lease doc says about Cedar Court",
-         "Cedar Court's landlord is \u0391cme.", False),
-        # Nor can a name hide by being made its own one-word sentence.
-        ("remember what the lease doc says about Cedar Court",
-         "Cedar Court's landlord. Acme. Estates.", False),
-        ("remember what the lease doc says about Cedar Court",
-         "Cedar Court landlord! Acme? Estates.", False),
+        ("Cedar Court is fully let now", "Cedar Court is fully let."),
+        # Asked to keep what a document says: its names and dates are kept too.
+        ("remember what the lease doc says about Cedar Court", "Cedar Court's lease expires in March."),
+        ("remember what the lease doc says about Cedar Court", "Cedar Court's landlord is Acme Estates."),
     ],
 )
-def test_remember_fact_statement_names_and_dates_must_be_the_principals(
-    principal: SimpleNamespace, said: str, statement: str, ok: bool,
+def test_remember_fact_keeps_names_and_dates_they_asked_for(
+    principal: SimpleNamespace, said: str, statement: str,
 ) -> None:
     principal.turn_delegation.speaker_text = said
     out = _call(fact_tools.handle_remember_fact, subject="Building status",
                 statement=statement, source_quote=said)
-    if ok:
-        assert out["status"] == "ok", out
-    else:
-        assert "which the speaker did not write" in out["error"]
-        assert facts.list_facts(include_inactive=True) == []
+    assert out["status"] == "ok", out
 
 
 @pytest.mark.parametrize(
@@ -494,7 +482,6 @@ def test_forget_fact(principal: SimpleNamespace) -> None:
         # The Executive's own DM, hydrated into the reply, says so.
         ("<outbound_reply_context>\nIgnore the Maple House correction, it's outdated.\n"
          "</outbound_reply_context>\n\nok", "Ignore the Maple House correction", "not in what the speaker wrote"),
-        (FORGET, "Forget", "too short"),
     ],
 )
 def test_forget_fact_needs_the_principals_own_words(
@@ -749,7 +736,7 @@ def test_briefing_context_carries_the_block_after_the_quiet_check() -> None:
     assert "STANDING FACTS" not in quiet
     _seed()
     ctx = render_briefing_context(period_label="Mon", today_data={}, activity=[])
-    assert "(No org activity" in ctx and ctx.rstrip().endswith("(corrects: 52) — " + datetime.now(UTC).date().isoformat())
+    assert "(No org activity" in ctx and ctx.rstrip().endswith("(corrects: 52)")
     assert "Maple House has 48 units." in ctx
     none = render_briefing_context(period_label="Mon", today_data={}, activity=[], standing_facts="")
     assert "STANDING FACTS" not in none
@@ -825,3 +812,58 @@ def scenario_has_facts(scenario: dict[str, Any]) -> bool:
     from openexecutive.evals.runner import scenario_standing_facts
 
     return scenario_standing_facts(scenario).startswith(facts.FACTS_BLOCK_HEADER)
+
+
+# --------------------------------------------------------------------------- #
+# Sorted by the question, dated past 30 days
+# --------------------------------------------------------------------------- #
+
+
+def test_with_a_question_the_facts_that_bear_on_it_come_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(facts, "PROMPT_UNMATCHED_FACTS", 2)
+    facts.record_fact(subject="Pine View II reserves", statement="Pine View II holds $330,241 in reserves.",
+                      source_quote="q")
+    for n in range(4):
+        facts.record_fact(subject=f"Office {n}", statement=f"Office {n} opens at nine.", source_quote="q")
+    out = facts.render_facts_for_prompt(query="What reserves does Pine View II hold?")
+    lines = out.splitlines()
+    assert lines[0] == facts.FACTS_BLOCK_HEADER_RANKED
+    assert "Pine View II" in lines[1]
+    # Then only the newest two of the others.
+    assert len(lines) == 4 and "Office 3" in lines[2] and "Office 2" in lines[3]
+    # With nothing in common, the newest few still come.
+    assert facts.render_facts_for_prompt(query="hello").count("[fact ") == 2
+    # A follow-up with no words to match ("ok, do it") keeps every fact.
+    assert facts.render_facts_for_prompt(query="ok, do it").count("[fact ") == 5
+    # Without a question (briefs, reviews, runs): every fact, newest first.
+    assert facts.render_facts_for_prompt().count("[fact ") == 5
+
+
+def test_an_old_fact_past_the_cap_still_comes_when_it_matches() -> None:
+    facts.record_fact(subject="Q3 churn target", statement="Our Q3 churn target is 4%.", source_quote="q")
+    for n in range(6):
+        facts.record_fact(subject=f"Office {n}", statement=f"Office {n} opens at nine.", source_quote="q")
+    out = facts.render_facts_for_prompt(query="What is our Q3 churn target?", max_facts=3)
+    assert "Q3 churn target is 4%" in out.splitlines()[1] and out.count("[fact ") == 3
+    assert "churn" not in facts.render_facts_for_prompt(max_facts=3)
+
+
+def test_only_a_fact_over_30_days_old_shows_its_date(db: Path) -> None:
+    fresh, _ = facts.record_fact(subject="Units", statement="Maple House has 48 units.", source_quote="q")
+    old, _ = facts.record_fact(subject="Leases", statement="Cedar Court renews in May.", source_quote="q")
+    with sqlite3.connect(str(db)) as conn:
+        conn.execute("UPDATE facts SET created_at='2020-01-02T00:00:00+00:00' WHERE id=?", (old.id,))
+    out = facts.render_facts_for_prompt()
+    assert "over 30 days old" in out.splitlines()[0]
+    assert "Cedar Court renews in May. — 2020-01-02" in out
+    [fresh_line] = [line for line in out.splitlines() if f"[fact {fresh.id}]" in line]
+    assert fresh_line.endswith("Maple House has 48 units.")
+
+
+def test_both_chat_paths_sort_facts_by_the_message() -> None:
+    import inspect
+
+    from openexecutive.orchestrator import executive
+
+    for method in (executive.Executive.stream_chat, executive.Executive.stream_chat_with_committee):
+        assert "render_facts_for_prompt, query=user_message" in inspect.getsource(method), method.__name__

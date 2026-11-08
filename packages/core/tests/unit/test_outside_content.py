@@ -191,7 +191,7 @@ def test_what_stays_shut_after_an_outside_read() -> None:
     assert oc.outside_withholds("call_tool", WRITE_DOC)
     assert oc.outside_withholds("call_tool", {"name": "fetch__fetch_url", "arguments": {"url": "https://x"}})
     assert oc.outside_withholds("call_tool", "not a dict")
-    for tool in ("read_document", "run_script", "run_workflow", "send_company_broadcast", "schedule_followup"):
+    for tool in ("run_executive_research", "run_script", "run_workflow", "send_company_broadcast", "schedule_followup"):
         assert oc.outside_withholds(tool, {}), tool
     assert not oc.outside_withholds("call_tool", READ_DOC)
     for tool in ("message_person", "consult_specialist", "remember_fact", "list_people"):
@@ -740,11 +740,91 @@ def test_only_a_go_defers_a_read(upserts: list[dict[str, Any]]) -> None:
     assert f"{session.session_id}|" not in oc._HELD
 
 
+def test_a_go_may_read_the_same_text_again(upserts: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
+    # The go turn reads the very doc the held turn read (to find what to
+    # change) before making the held step: the same text holds nothing new.
+    from openexecutive.orchestrator import content_scan
+
+    async def clean(content: object, *, model: str | None = None) -> content_scan.Verdict:
+        return content_scan.CLEAN
+
+    monkeypatch.setattr(content_scan, "scan", clean)
+    session, gateway = Session(), _Gateway()
+    _held_contact_turn(session, gateway)
+    assert upserts == []
+    _run(
+        [ToolUseBlock("tu3", "call_tool", READ_DOC)],
+        [ToolUseBlock("tu4", "call_tool", READ_DOC)],
+        [ToolUseBlock("tu5", "upsert_person", CONTACT)],
+        gateway=gateway, session=session, message="go",
+    )
+    assert upserts == [CONTACT]
+
+
+def _go_reads_new_text(
+    upserts: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch, verdict: Any,
+) -> None:
+    """A held turn, then a go turn that reads a doc it hadn't read before
+    (checked as ``verdict``) and then makes the held step."""
+    from openexecutive.orchestrator import content_scan
+
+    session, gateway = Session(), _Gateway()
+    _held_contact_turn(session, gateway)
+
+    async def scan(content: object, *, model: str | None = None) -> content_scan.Verdict:
+        return verdict
+
+    monkeypatch.setattr(content_scan, "scan", scan)
+    other = {"name": "google_workspace__get_doc_content", "arguments": {"document_id": "d2"}}
+    async def call_tool(tool_input: dict[str, Any]) -> str:
+        gateway.calls.append(tool_input)
+        return json.dumps({"text": "something else"})
+
+    monkeypatch.setattr(gateway, "call_tool", call_tool)
+    _run(
+        [ToolUseBlock("tu3", "call_tool", READ_DOC)],
+        [ToolUseBlock("tu4", "call_tool", other)],
+        [ToolUseBlock("tu5", "upsert_person", CONTACT)],
+        gateway=gateway, session=session, message="go",
+    )
+
+
+def test_a_go_is_not_undone_by_new_text_the_check_passes(
+    upserts: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import content_scan
+
+    _go_reads_new_text(upserts, monkeypatch, content_scan.CLEAN)
+    assert upserts == [CONTACT]
+
+
+def test_a_go_is_not_undone_by_text_too_big_to_check(
+    upserts: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A scanned PDF too big to check whole held every go on 10-19/20.
+    from openexecutive.orchestrator import content_scan
+
+    # TOO_BIG is the read that holds without a flag; at Careful (the tests'
+    # level) it doesn't undo the go. Only a flag does, below.
+    assert content_scan.TOO_BIG.holds and not content_scan.TOO_BIG.flagged
+    _go_reads_new_text(upserts, monkeypatch, content_scan.TOO_BIG)
+    assert upserts == [CONTACT]
+
+
+def test_a_go_still_holds_after_new_text_the_check_flags(
+    upserts: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import content_scan
+
+    _go_reads_new_text(upserts, monkeypatch, content_scan.Verdict(flagged=True, categories=("instructions",)))
+    assert upserts == []
+
+
 def test_a_stale_hold_defers_nothing(upserts: list[dict[str, Any]], monkeypatch: pytest.MonkeyPatch) -> None:
     session, gateway = Session(), _Gateway()
     _held_contact_turn(session, gateway)
-    names, at = oc._HELD[f"{session.session_id}|"]
-    oc._HELD[f"{session.session_id}|"] = (names, at - oc.HELD_TTL_SECONDS - 1)
+    names, at, seen = oc._HELD[f"{session.session_id}|"]
+    oc._HELD[f"{session.session_id}|"] = (names, at - oc.HELD_TTL_SECONDS - 1, seen)
     state = oc.begin_turn(session, user_message="go")
     try:
         assert state.go_first == ()

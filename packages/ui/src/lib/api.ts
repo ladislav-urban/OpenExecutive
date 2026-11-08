@@ -61,6 +61,9 @@ export interface Activity {
   // Canonical tool behind the label; for MCP this is the underlying tool name.
   tool: string;
   iteration?: number;
+  // What the round read that the turn hadn't yet, counted by kind
+  // ("email", "file", "person"…), for the long-turn card.
+  reads?: Record<string, number>;
 }
 
 export interface ChatChunk {
@@ -166,6 +169,12 @@ export interface MessageAdded {
   ids: string[];
 }
 
+// The person pressed I'll finish it (POST /chat/hand-over) and the turn took
+// it: no more tools, the reply is a write-up of what it has so far.
+export interface HandingOver {
+  type: "handing_over";
+}
+
 // The turn held steps after reading something from outside: they wait on the
 // person's go, offered as Approve / Not now under the reply.
 export interface HeldStepsEvent {
@@ -174,12 +183,24 @@ export interface HeldStepsEvent {
   steps: string[];
 }
 
-// What the content check flagged this turn, in plain words: shown under the
-// reply (orchestrator/outside_content.py `pending_flags`).
+// What the content check flagged this turn, in plain words: sent only with
+// held steps, as their reason (orchestrator/outside_content.py `pending_flags`).
 export interface FlagsEvent {
   type: "flags";
   session_id?: string;
   flags: string[];
+}
+
+// What a long turn shows while it works (orchestrator/turn_progress.py): the
+// task, what it is doing now, and everything it has used and found so far.
+// Sent again whenever it changes; a turn that sends none shows its activity
+// line and the reads counted from its rounds.
+export interface ProgressEvent {
+  type: "progress";
+  task: string;
+  now: string;
+  used: string[];
+  found: string[];
 }
 
 export type StreamItem =
@@ -190,8 +211,10 @@ export type StreamItem =
   | Activity
   | SourcesEvent
   | MessageAdded
+  | HandingOver
   | HeldStepsEvent
-  | FlagsEvent;
+  | FlagsEvent
+  | ProgressEvent;
 
 export interface StreamChatOptions {
   committeeReview?: boolean;
@@ -354,6 +377,22 @@ export async function transcribeRecording(recording: Blob, filename: string): Pr
 export async function stopChat(clientTurnId: string): Promise<boolean> {
   try {
     const res = await fetch(`${API_BASE}/chat/stop`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client_turn_id: clientTurnId }),
+    });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// I'll finish it: stop the running turn's work and have it write up what it
+// has for the person to finish. False when the turn won't take it (finished
+// or stopped); the reply that arrives is then the turn's own.
+export async function handOverChat(clientTurnId: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE}/chat/hand-over`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ client_turn_id: clientTurnId }),
@@ -1551,6 +1590,8 @@ export interface Advice {
 export interface PersonConclusion {
   content: string;
   created_at: string;
+  // "" when it can't be removed from here.
+  id?: string;
 }
 
 export interface PersonMemory {
@@ -1650,6 +1691,17 @@ export async function retireStandingFact(id: number, reason = ""): Promise<Stand
     body: JSON.stringify({ reason }),
   });
   if (!res.ok) throw new Error("Failed to retire standing fact");
+  return res.json();
+}
+
+// Change what a standing fact says. The old wording is kept as what it corrects.
+export async function editStandingFact(id: number, statement: string): Promise<StandingFact> {
+  const res = await fetch(`${API_BASE}/memories/facts/${id}/edit`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ statement }),
+  });
+  if (!res.ok) throw new Error(res.status === 403 ? "You can't change this fact" : "Couldn't save that change");
   return res.json();
 }
 
@@ -1790,6 +1842,17 @@ export async function listPersonConclusions(
   );
   if (!res.ok) throw new Error("Failed to list person conclusions");
   return res.json();
+}
+
+// Remove one line of what it learned about you (your own only).
+export async function forgetPersonConclusion(personId: number, conclusionId: string): Promise<void> {
+  const res = await fetch(
+    `${API_BASE}/memories/people/${personId}/conclusions/${encodeURIComponent(conclusionId)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) throw new Error("Couldn't remove that line");
+  // The overview is shared for a few seconds; the next read must be fresh.
+  peopleMemoryShared = null;
 }
 
 export interface ScheduledAction {
@@ -2691,6 +2754,43 @@ export async function getReplyCards(signal?: AbortSignal): Promise<ReplyCard[] |
   return body.cards;
 }
 
+// One email in your own mailbox, as Right now opens it (GET /delegation/mail).
+export interface MailView {
+  thread_id: string;
+  message_id: string;
+  subject: string;
+  from_name: string;
+  from_email: string;
+  to: string[];
+  cc: string[];
+  received_at: string;
+  text: string;
+  attachments: { name: string; mime_type: string; size: number }[];
+  has_attachments: boolean;
+  their_last_words: string;
+  link: string;
+  reply_card_id: number | null;
+}
+
+export async function getMail(threadId: string, messageId: string, signal?: AbortSignal): Promise<MailView> {
+  const q = new URLSearchParams({ thread_id: threadId, message_id: messageId });
+  const res = await fetch(`${API_BASE}/delegation/mail?${q}`, { signal });
+  if (!res.ok) throw await delegationError(res, "Couldn't open that email.");
+  return (await res.json()) as MailView;
+}
+
+// A reply to one email, on a card for you (the conversation's open card
+// when there is one). Sends nothing.
+export async function replyToMail(threadId: string, messageId: string): Promise<number> {
+  const res = await fetch(`${API_BASE}/delegation/mail/reply`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ thread_id: threadId, message_id: messageId }),
+  });
+  if (!res.ok) throw await delegationError(res, "Couldn't write that reply.");
+  return ((await res.json()) as { decision_id: number }).decision_id;
+}
+
 // Why a Send didn't go: the backend's code (draft_gone, you_replied,
 // already_handled, send_unconfirmed, caller_signing_required, …) and what to
 // tell you.
@@ -2771,7 +2871,7 @@ export async function sendChatDraft(row: number, threadMovedOn = false): Promise
 // Dismiss (POST /decisions/{id}/reject) drops it.
 export interface ActionCardAction {
   index: number;
-  // invite, message, add_contact or drive_files.
+  // invite, message, add_contact, drive_files or save_files.
   kind: string;
   summary: string;
   // A message's text as it will be sent, or a meeting's description.
@@ -4003,6 +4103,10 @@ export interface AgentDetail {
   research_focus: string | null;
   research_focus_default: string | null;
   instructions: string | null;
+  // The Executive only: the model for one answer after pushback ("off" or ""
+  // = same as normal answers), and PUSHBACK_MODEL's.
+  pushback_model?: string | null;
+  pushback_model_default?: string | null;
 }
 
 export interface AgentHistoryEntry {
@@ -4015,6 +4119,7 @@ export interface AgentHistoryEntry {
   voice_persona_slug: string | null;
   research_focus: string | null;
   instructions: string | null;
+  pushback_model?: string | null;
   created_at: string;
 }
 
@@ -4026,6 +4131,7 @@ export interface AgentPatch {
   voice_persona_slug?: string | null;
   research_focus?: string | null;
   instructions?: string | null;
+  pushback_model?: string | null;
 }
 
 // ---- Voice Personas --------------------------------------------------------
@@ -4999,7 +5105,7 @@ export interface ContactChange {
   full_name: string;
   old_value: string;
   new_value: string;
-  reason: "emailed" | "met" | "asked" | "from_line" | "signature";
+  reason: "emailed" | "met" | "wrote" | "asked" | "from_line" | "signature";
   evidence: number;
   status: "applied" | "suggested" | "undone" | "dismissed";
   seen: boolean;
@@ -5041,7 +5147,16 @@ export interface ContactNote {
   emailed_count: number;
   met_count: number;
   note_written_at: string | null;
+  // You wrote this note; it keeps your words.
+  edited_by_you?: boolean;
   updated_at: string;
+}
+
+// When the principal last emailed, heard from or met each person, for the
+// People list (principal only; people with nothing known are left out).
+export async function getLastContacts(): Promise<{ person_id: number; at: string; how: string }[]> {
+  const body = await contactsCall<{ people: { person_id: number; at: string; how: string }[] }>("/last-contact");
+  return body.people;
 }
 
 export async function getContactNote(personId: number): Promise<ContactNote | null> {
@@ -5049,6 +5164,23 @@ export async function getContactNote(personId: number): Promise<ContactNote | nu
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Request failed: ${res.statusText}`);
   return res.json();
+}
+
+// Your own wording for what it remembers about someone; it keeps your words.
+export async function editContactNote(personId: number, note: string): Promise<ContactNote> {
+  const res = await fetch(`${API_BASE}/contacts/${personId}/note`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ note }),
+  });
+  if (res.status === 422) throw new Error("Write it in plain words, without links or addresses");
+  if (!res.ok) throw new Error("Couldn't save the note");
+  return res.json();
+}
+
+export async function removeContactNote(personId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/contacts/${personId}/note`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Couldn't remove the note");
 }
 
 export function setContactKeeperMode(mode: ContactKeeperMode): Promise<ContactChanges> {
@@ -5662,6 +5794,26 @@ export interface NarrativePoint {
   text: string;
   // When the point first appeared today (ISO UTC).
   since?: string | null;
+  // What the point is about, when Home can open it: an email in your own
+  // inbox, or a card in Needs you.
+  source?: PointSource | null;
+}
+
+// What a Right now being rewritten is doing (shown in its place): reading
+// what moved, writing, checking each point. `new_mail`: emails from people
+// the owner deals with since the served header (`since`) was written.
+export interface NarrativeProgress {
+  step: "reading" | "writing" | "checking";
+  new_mail?: number;
+  since?: string | null;
+}
+
+export interface PointSource {
+  kind: "mail" | "alert";
+  message_id?: string | null;
+  thread_id?: string | null;
+  decision_id?: number | null;
+  alert_id?: number | null;
 }
 
 export interface MorningBriefItem {
@@ -5688,6 +5840,8 @@ export interface Today {
   // Optional for older API builds + test mocks.
   narrative_generated_at?: string | null;
   narrative_stale?: boolean;
+  // While narrative_stale: what the rewrite is doing.
+  narrative_progress?: NarrativeProgress | null;
   // The same narrative split for Home's Right now card: the bold opener, the
   // points with when each first appeared today, the Move today line, and when
   // this reader last looked. Optional for older API builds + test mocks.
@@ -5781,6 +5935,19 @@ export async function markTodaySeen(): Promise<string | null> {
   if (!res.ok) return null;
   const body = (await res.json()) as { seen_at?: string };
   return body.seen_at ?? null;
+}
+
+// The reader cleared a Right now point: gone for the rest of the day, and
+// the Executive doesn't raise it again. True when it was kept.
+export async function dismissTodayPoint(text: string): Promise<boolean> {
+  const res = await fetch(`${API_BASE}/today/dismiss`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) return false;
+  const body = (await res.json()) as { dismissed?: boolean };
+  return body.dismissed === true;
 }
 
 // The latest morning brief or end-of-day digest that didn't reach the owner,

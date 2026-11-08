@@ -372,7 +372,8 @@ def get_session_messages(session_id: str, request: Request) -> list[dict]:
     a line a host origin's page wrote says so (``from_host``). The last
     reply carries ``held_steps`` while what its turn held for an outside
     read still waits on the caller's go (``outside_content.pending_held``),
-    and ``flags`` while what the content check flagged in it is fresh
+    and with them ``flags``, what the content check flagged in it, as their
+    reason
     (``outside_content.pending_flags``)."""
     caller, member = _require_chat_access(request, session_id)
     meta = get_session_metadata(session_id)
@@ -410,9 +411,10 @@ def get_session_messages(session_id: str, request: Request) -> list[dict]:
         )
         if held:
             messages[-1]["held_steps"] = list(held)
-        flags = pending_flags(SimpleNamespace(session_id=session_id, caller_person_id=caller))
-        if flags:
-            messages[-1]["flags"] = list(flags)
+            # The flags are the held steps' reason, so only with them.
+            flags = pending_flags(SimpleNamespace(session_id=session_id, caller_person_id=caller))
+            if flags:
+                messages[-1]["flags"] = list(flags)
     return messages
 
 

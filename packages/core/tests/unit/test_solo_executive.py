@@ -59,7 +59,8 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # out (the website retake, Nov 3, 2026).
 # And: a revaluation changes a balance by its gain or loss (the website
 # retake, Nov 3, 2026, month-end step 6).
-TEAM_PERSONA_SHA256 = "ac5e280a69c967c128832917f0952a43376cf8e1d52c58c865e0301448c8defb"
+# And again: People is checked first when asked how to reach someone.
+TEAM_PERSONA_SHA256 = "e2970123dd2cc6b4eb3a5e7f9673b7ec8b2997da28b381caf26b782c5dc0e17b"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",
