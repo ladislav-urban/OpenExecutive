@@ -19,7 +19,9 @@ Three steps, cheapest first, each checked in code:
    or table row holding each failed figure goes, found in the reply's Markdown.
    When that would take the first sentence or a heading, a table's header or
    total row, leave a table or list empty, or leave fewer than half the reply's
-   figures, the whole reply becomes ``WHOLE_REPLY`` instead (question 9).
+   figures, the whole reply becomes ``WHOLE_REPLY`` instead (question 9). A
+   table that would keep its total row alone goes whole instead, header and
+   total too: a total with nothing to add up is no table.
 
 Nothing here says a figure was wrong, checked or corrected: the person reads
 only the final text.
@@ -385,6 +387,14 @@ def remove(
         top = [u for u in members if not any(o is not u and o.start <= u.start and u.end <= o.end for o in members)]
         if all(any(g.start <= u.start and u.end <= g.end for g in gone) for u in top):
             return WHOLE_REPLY
+        # A table left with its total row alone adds nothing up: it goes
+        # whole, header and total too, and the reply stands on its sentences
+        # (or doesn't, by the half rule below). Pilot, Nov 6, 2026: a cost
+        # table kept only "Total | | $22,691.60" once its rows' suppliers,
+        # read from GL entries' text, were left out.
+        kept = [u for u in top if not any(g.start <= u.start and u.end <= g.end for g in gone)]
+        if kept and all(u.lead and u.kind == "row" for u in kept):
+            gone.update(u for u in all_units if u.block == block)
     left = [f for f in every if not any(u.start <= f.start and f.end <= u.end for u in gone)]
     if every and len(left) * 2 < len(every):
         return WHOLE_REPLY
