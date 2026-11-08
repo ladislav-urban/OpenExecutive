@@ -4,12 +4,10 @@ import asyncio
 import base64
 import contextlib
 import contextvars
-import html
 import json
 import logging
 import os
 import re
-import unicodedata
 from collections.abc import Awaitable, Callable, Iterable, Iterator
 from dataclasses import dataclass
 from email.utils import getaddresses
@@ -23,7 +21,6 @@ from openexecutive.memory import drive_reads
 from openexecutive.orchestrator import erpnext_caller
 from openexecutive.orchestrator.erpnext_caller import ErpnextCaller
 from openexecutive.people.identity import RosterAllow
-from openexecutive.utils.html_tags import strip_tags
 
 logger = logging.getLogger(__name__)
 
@@ -442,14 +439,6 @@ _URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 # DEL, zero-width and bidi format characters, BOM) — removed before the scheme
 # test so "\x01https://…" or "\u200bhttps://…" is still a URL here.
 _INVISIBLE_RE = re.compile(r"[\x00-\x20\x7f\u200b-\u200f\u2028-\u202f\u2060-\u206f\ufeff]")
-# Sheets functions Google evaluates by fetching a URL from the cell VALUE, so
-# no key names it. Matched anywhere in any string — a `values` argument may
-# arrive JSON-encoded, a CSV cell sits mid-line, "+IMPORTDATA(" needs no "=" —
-# on every tool that can write cells: the Sheets tools (sheet / table /
-# conditional formatting) and the Drive create / update / import tools, which
-# convert CSV into a native Sheet. Other formulas (=SUM(...)) pass, as does
-# the word without a call ("IMPORTDATA is a function").
-_FORMULA_FETCH_RE = re.compile(r"\b(IMPORTDATA|IMPORTXML|IMPORTHTML|IMPORTFEED|IMAGE)\s*\(", re.IGNORECASE)
 _CELL_WRITER_RE = re.compile(r"sheet|table|conditional|drive_file")
 # A converter decodes markup before it sees a formula, so text bound for a
 # Sheet is also scanned with CDATA markers, then tags and comments, removed
@@ -1039,93 +1028,6 @@ def _nested_fetch_key(value: Any, depth: int = 0) -> str | None:
             found = _nested_fetch_key(v, depth + 1)
             if found is not None:
                 return found
-    return None
-
-
-def _becomes_sheet(tool: str, arguments: dict[str, Any]) -> bool:
-    """True when an upload through ``tool`` is converted into a native Sheet:
-    the Sheets import, a Drive create whose target type is a native Sheet,
-    or any Drive update: the file being rewritten may be a native Sheet, and
-    Drive converts plain text and TSV into one too, so a stated type on an
-    update proves nothing.
-
-    A Drive create stores the bytes as they are (workspace-mcp's
-    create_drive_file never converts), so an .xlsx or .csv saved to Drive
-    stays an Excel or CSV file that Google does not evaluate: only an
-    explicit ``application/vnd.google-apps.spreadsheet`` target counts."""
-    bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
-    if bare in ("import_to_google_sheets", "update_drive_file"):
-        return True
-    if bare != "create_drive_file":
-        return False
-    return any(
-        isinstance(key, str) and _norm_key(key) in ("mimetype", "contentmimetype")
-        and isinstance(value, str) and _NATIVE_SHEET_MIME in value.lower()
-        for key, value in arguments.items()
-    )
-
-
-def _formula_fetches(text: str) -> bool:
-    """True when ``text`` holds a fetching formula call, as written, with
-    character references decoded, or with markup removed first."""
-    if _FORMULA_FETCH_RE.search(text):
-        return True
-    decoded = html.unescape(text)
-    if _FORMULA_FETCH_RE.search(decoded):
-        return True
-    # CDATA markers first: to the tag strip, "<![CDATA[DATA]]>" is one tag.
-    stripped = html.unescape(strip_tags(text.replace("<![CDATA[", "").replace("]]>", "")))
-    if _FORMULA_FETCH_RE.search(stripped):
-        return True
-    folded = _FOLDED_NOISE_RE.sub("", unicodedata.normalize("NFKC", stripped))
-    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
-    return _FORMULA_FETCH_RE.search(folded) is not None
-
-
-def _check_sheet_formulas(tool: str, arguments: dict[str, Any]) -> str | None:
-    """Return None unless a cell-writing call carries a formula Google
-    evaluates by fetching a URL (`_FORMULA_FETCH_RE`), or an upload whose
-    formulas cannot be read from here; else a JSON error."""
-    bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
-    if not _CELL_WRITER_RE.search(bare):
-        return None
-    # A Drive create that doesn't become a Sheet is stored as text or bytes,
-    # never evaluated: "Logo image (PNG)" in a note is not a formula.
-    if bare == "create_drive_file" and not _becomes_sheet(tool, arguments):
-        return None
-    if _becomes_sheet(tool, arguments):
-        for key, value in arguments.items():
-            if not isinstance(key, str) or value in (None, ""):
-                continue
-            if _norm_key(key) in ("base64content", "filepath"):
-                return _refuse(
-                    tool, key, "<uninspected-file>",
-                    reason=(
-                        f"{key!r} would become a Google Sheet, and a binary or "
-                        "server-side file's formulas cannot be checked here — "
-                        "refusing. Pass the rows as text `content` (CSV) instead."
-                    ),
-                )
-    for text in _iter_arg_strings(arguments):
-        if text is _TOO_DEEP:
-            return _refuse(
-                tool, "values", "<unreadable>",
-                reason="an argument nested this deep cannot be checked — refusing. Flatten it.",
-            )
-        if len(text) > _JSON_STRING_MAX and text.lstrip()[:1] in ("[", "{"):
-            return _refuse(
-                tool, "values", "<unreadable>",
-                reason="a JSON-encoded argument this large cannot be checked — refusing. Send fewer rows per call.",
-            )
-        if _formula_fetches(text):
-            return _refuse(
-                tool, "values", "<url-fetch>",
-                reason=(
-                    "a formula that fetches a URL (IMPORTDATA / IMPORTXML / "
-                    "IMPORTHTML / IMPORTFEED / IMAGE) would make Google carry data "
-                    "out — refusing. Write the value itself instead."
-                ),
-            )
     return None
 
 
@@ -3096,27 +2998,6 @@ def _company_item(item: _DriveItem, exec_address: str, domains: frozenset[str]) 
     return True
 
 
-def _company_owned(item: _DriveItem, exec_address: str, domains: frozenset[str]) -> bool:
-    """Whether a Drive item belongs to the company, for writing into it:
-    owned by the Executive or someone on a company domain, or on a shared
-    drive one of whose organizers is. Who else it is shared with doesn't
-    matter here: the company's own folders are often shared with partners,
-    and the person asked for the change (``_company_item`` is the stricter
-    test used to decide whether a read brought in outside words)."""
-    def ours(address: str) -> bool:
-        return address == exec_address or address.rpartition("@")[2] in domains
-
-    # Open to anyone with the link, or a whole other domain: a file there is
-    # public, so nothing is written into it on the model's word alone.
-    if any(kind == "anyone" or (kind == "domain" and who not in domains) for kind, who, _ in item.permissions):
-        return False
-    if item.owner is not None:
-        return ours(item.owner)
-    return item.shared_drive and any(
-        role == "organizer" and kind == "user" and ours(who) for kind, who, role in item.permissions
-    )
-
-
 async def _google_company_items(
     session: Any, ids: Iterable[str], discover: _Discover | None = None,
 ) -> set[str]:
@@ -3200,16 +3081,19 @@ async def _check_google_file_write(
         if item is not None:
             if domains is None:
                 domains = _company_domains_with(exec_address)
-            if _company_owned(item, exec_address, domains):
+            # Owned by the company and shared with no one outside it: a file
+            # open to named outsiders is not written into (the owner, Nov 8,
+            # 2026, keeping the fork's rule over SenteLabsAI/OpenExecutive#686).
+            if _company_item(item, exec_address, domains):
                 continue
         return _refuse(
             tool, "file_id", target[:60],
             reason=(
                 f"{tool} may only write to files and folders the Executive's own "
                 "Google account owns, or the company's own: owned by someone at the "
-                "company or on its shared drive. This one belongs to someone outside "
-                "it — refusing. Save it to a new file in the Executive's Drive and "
-                "share that with the People who need it."
+                "company or on its shared drive, and not shared with anyone outside "
+                "it. This one is not — refusing. Save it to a new file in the "
+                "Executive's Drive and share that with the People who need it."
                 + _GOOGLE_WRITE_CARD_HINT
             ),
         )
@@ -4289,8 +4173,16 @@ class MCPGateway:
         # PRIVATE_TURN_MCP_TOOLS run: reads, and sends whose every recipient
         # the roster checks below (delegation.lockdown).
         from openexecutive.delegation.lockdown import outside_reach_refusal
+        from openexecutive.orchestrator import levels
 
-        refused = outside_reach_refusal(
+        # The owner's level (orchestrator.levels): under Hands-off, or for a
+        # step they approved on a card, the checks that only protect the
+        # owner from their own Executive (who it may email or invite, which
+        # folder a file goes in, what a call may fetch) don't run. Below
+        # Hands-off, a send or invite to someone they'd have to OK comes to
+        # them as an Approve card instead of a refusal.
+        relaxed = levels.relaxed()
+        refused = None if relaxed else outside_reach_refusal(
             str(tool_input.get("name") or "call_tool")[:200], tool_input, tool_name="call_tool"
         )
         code_built = _code_built_admits(tool_input)
@@ -4298,7 +4190,8 @@ class MCPGateway:
             return refused
         # A turn another AI app asked over Open Executive's MCP server runs
         # gateway reads only (schedule_tools.MCP_CLIENT_MCP_TOOLS), whether or
-        # not it may act: a mail send or draft goes on an approval card. The
+        # not it may act, plus mail only to the owner (levels.only_to_owner):
+        # anything else goes on an approval card. The
         # chat loop already refuses anything else; this holds for any other
         # path.
         from openexecutive.orchestrator.schedule_tools import (
@@ -4307,6 +4200,7 @@ class MCPGateway:
             mcp_client_withheld_error,
             mcp_client_withholds,
             mcp_rules_turn,
+            read_only_turn,
         )
         from openexecutive.prompts.connected_systems import ERPNEXT_CODE_ONLY_TOOLS
 
@@ -4328,7 +4222,25 @@ class MCPGateway:
                 called, {k: v for k, v in raw_args.items() if k != erpnext_caller.ASSERTION_ARG}
             ) is not None
         )
-        if mcp_rules_turn(turn_session) and not own_check and mcp_client_withholds("call_tool", tool_input):
+        # A demo person's turn reads and answers only: any other gateway call
+        # is refused outright, at every level and never as an Approve card
+        # (people.demo, the owner, Nov 8, 2026).
+        from openexecutive.orchestrator.outside_content import outside_allows_mcp_call
+        from openexecutive.people.demo import demo_refusal, demo_turn
+
+        if demo_turn(turn_session) and not own_check and not outside_allows_mcp_call(tool_input):
+            return demo_refusal(str(tool_input.get("name") or "call_tool"))
+        # A read-only turn (a host page's, an AI app's that may not act, a
+        # teammate's queued run) stays read-only even when the level is
+        # relaxed: Hands-off only lifts what protects the owner from their own
+        # Executive, and outside_mode already runs those turns below it.
+        if (
+            (not relaxed or read_only_turn(turn_session))
+            and mcp_rules_turn(turn_session)
+            and not own_check
+            and mcp_client_withholds("call_tool", tool_input)
+            and not levels.only_to_owner("call_tool", tool_input)
+        ):
             return mcp_client_withheld_error(
                 str(tool_input.get("name") or "call_tool")[:200],
                 acting=mcp_client_acting(turn_session),
@@ -4444,27 +4356,26 @@ class MCPGateway:
             blocked = _check_acting_account(tool_name, arguments)
             if blocked is not None:
                 return blocked
-            blocked = _check_url_fetch(tool_name, arguments)
-            if blocked is not None:
-                return blocked
-            blocked = _check_mailed_text(tool_name, arguments)
-            if blocked is not None:
-                return blocked
-            blocked = _check_sheet_formulas(tool_name, arguments)
-            if blocked is not None:
-                return blocked
-            blocked = await _check_google_file_write(
-                session, tool_name, arguments, self._discover, tapped=_tapped_drive_admits(tool_input),
-            )
-            if blocked is not None:
-                return blocked
+            if not relaxed:
+                blocked = _check_url_fetch(tool_name, arguments)
+                if blocked is not None:
+                    return blocked
+                blocked = _check_mailed_text(tool_name, arguments)
+                if blocked is not None:
+                    return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
+                blocked = await _check_google_file_write(
+                    session, tool_name, arguments, self._discover, tapped=_tapped_drive_admits(tool_input),
+                )
+                if blocked is not None:
+                    return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
         if tool_name in _GATED_GMAIL_TOOLS:
-            blocked = _check_gmail_recipients(tool_name, arguments)
-            if blocked is not None:
-                return blocked
-            blocked = _check_attachment_urls(tool_name, arguments)
-            if blocked is not None:
-                return blocked
+            if not relaxed:
+                blocked = _check_gmail_recipients(tool_name, arguments)
+                if blocked is not None:
+                    return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
+                blocked = _check_attachment_urls(tool_name, arguments)
+                if blocked is not None:
+                    return blocked
             # Only after the recipients pass: render any artifact the model
             # asked to attach, so a blocked send never renders anything.
             expanded = await _expand_artifact_attachments(tool_name, arguments)
@@ -4472,9 +4383,9 @@ class MCPGateway:
                 return expanded
             arguments, attached_artifacts = expanded
         if tool_name in _GATED_CALENDAR_TOOLS:
-            blocked = _check_calendar_attendees(tool_name, arguments)
+            blocked = None if relaxed else _check_calendar_attendees(tool_name, arguments)
             if blocked is not None:
-                return blocked
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
             arguments = _pin_calendar_notifications(arguments)
         if _is_drive_share_tool(tool_name):
             blocked = _check_drive_share(tool_name, arguments)
@@ -4490,10 +4401,10 @@ class MCPGateway:
             blocked = _check_m365_sender(tool_name, arguments)
             if blocked is not None:
                 return blocked
-        if normalized in _GATED_M365_MAIL_TOOLS or normalized in _GATED_M365_CALENDAR_TOOLS:
+        if not relaxed and (normalized in _GATED_M365_MAIL_TOOLS or normalized in _GATED_M365_CALENDAR_TOOLS):
             blocked = _check_m365_recipients(tool_name, arguments)
             if blocked is not None:
-                return blocked
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
         if normalized in _M365_REPLY_BY_ID_TOOLS:
             blocked = await _check_m365_referenced_message(
                 session, tool_name, normalized, arguments, self._discover
@@ -4526,16 +4437,16 @@ class MCPGateway:
             blocked = _check_m365_drive_share(tool_name, normalized, arguments)
             if blocked is not None:
                 return blocked
-        if normalized in _M365_DRIVE_WRITE_TOOLS:
+        if normalized in _M365_DRIVE_WRITE_TOOLS and not relaxed:
             blocked = await _check_m365_drive_write(
                 session, tool_name, normalized, arguments, self._discover
             )
             if blocked is not None:
-                return blocked
-        if normalized == _M365_MOVE_TOOL:
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
+        if normalized == _M365_MOVE_TOOL and not relaxed:
             blocked = _check_m365_move_destination(tool_name, arguments)
             if blocked is not None:
-                return blocked
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
         if normalized in _GATED_M365_MAIL_TOOLS:
             # Same order as Gmail: only after every recipient gate above passed.
             expanded = await _expand_m365_artifact_attachments(tool_name, normalized, arguments)

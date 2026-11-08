@@ -11,8 +11,11 @@ the model chooses the file, the folder and the name:
   Executive's Drive is the company's.
 - **Where:** a folder of the Executive's own storage. On Google Drive one
   the company owns (``folder_check``): a folder someone outside the company
-  owns is refused; one the company shares with partners is saved into, and
-  the answer names who else can open it (``also_open_to``). With ``root``,
+  owns, or one open to anyone with the link or a whole domain, is refused;
+  one shared with named people outside the team is saved into only on the
+  person's tap, on an approval card that names who else can open it
+  (``action_cards`` ``save_files``), so nothing lands where an outsider can
+  read it unseen (the owner, Nov 8, 2026). With ``root``,
   the top of the Executive's own Drive. On OneDrive any folder of its own
   drive, whose upload path can't reach another drive; a name already there
   gets " (2)". Or, with ``folder`` ``documents``, the company's Documents
@@ -108,6 +111,16 @@ def _team_emails() -> set[str]:
 SHARED_OUTSIDE = "That folder is shared with someone outside the team, so I don't save into it"
 
 
+class SharedOutside(Exception):
+    """A team folder that people outside the team can open: saved into only
+    on the person's tap (``action_cards`` ``save_files``). ``outside`` says
+    who, as Drive lists them."""
+
+    def __init__(self, outside: list[str]) -> None:
+        super().__init__(SHARED_OUTSIDE)
+        self.outside = outside
+
+
 # How the folder's permissions name anyone with the link, and a whole domain.
 ANYONE_WITH_LINK = "Anyone with the link"
 WHOLE_DOMAIN = "Everyone at "
@@ -187,11 +200,12 @@ def folder_refusal(info: str, folder: str, account: str, team: set[str]) -> str 
 async def _google(
     gateway: Any, item: Any, folder: str, name: str, *, tapped: bool = False, shown: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Save ``item`` into ``folder`` of the Executive's Google Drive. A
-    folder the company owns is saved into whoever else it is shared with
-    (the answer names them, ``also_open_to``); one someone outside the
-    company owns is refused. ``tapped`` and ``shown`` are kept for cards
-    left before saves stopped waiting on a tap; they change nothing."""
+    """Save ``item`` into ``folder`` of the Executive's Google Drive. One
+    someone outside the company owns, or one open to anyone with the link or
+    a whole domain, is refused. ``tapped``: the person approved this save on
+    a card that showed ``shown`` as who else can open the folder, so it is
+    saved into unless someone not on that list can open it now; untapped, a
+    folder people outside the team can open raises ``SharedOutside``."""
     from openexecutive.orchestrator.drive_attach import INFO_TOOL
     from openexecutive.orchestrator.mail_file_save import (
         _CREATED_RE,
@@ -218,6 +232,13 @@ async def _google(
             raise SaveFailed(
                 f"That folder is open to {public[0].lower() if public[0].startswith('Anyone') else public[0]}, "
                 "so I don't save into it. Pick a folder shared with named people, or change its sharing."
+            )
+        if outside and not tapped:
+            raise SharedOutside(outside)
+        added = [who for who in outside if who not in (shown or [])]
+        if tapped and added:
+            raise SaveFailed(
+                f"That folder is now also open to {', '.join(added[:5])}, which the card didn't show. Ask again."
             )
     made = await _call(gateway, "google_workspace__create_drive_file", {
         "user_google_email": account,
@@ -377,6 +398,8 @@ async def handle_save_file(tool_input: dict[str, Any]) -> str:
                     saved = await _microsoft(gateway, item, folder, name)
     except save.NoStorage:
         return json.dumps({"status": "no_storage", "detail": "Your OneDrive couldn't be reached."})
+    except SharedOutside as exc:
+        return _shared_outside(name, exc.outside)
     except save.SaveFailed as exc:
         return json.dumps({"status": "failed", "detail": f"Couldn't save {name}. {exc.detail}"})
     try:
@@ -395,6 +418,35 @@ async def handle_save_file(tool_input: dict[str, Any]) -> str:
         "link": saved["link"],
         "detail": "Saved. Give them the link." if saved["link"] else f"Saved to {saved['where']}.",
         **({"also_open_to": saved["also_open_to"]} if saved.get("also_open_to") else {}),
+    })
+
+
+def _card_offered() -> bool:
+    """Whether this turn can leave an approval card (``propose_actions``)."""
+    from openexecutive.orchestrator.action_card_tools import PROPOSE_ACTIONS
+    from openexecutive.orchestrator.delegation_tools import _writer
+
+    try:
+        return not isinstance(_writer(PROPOSE_ACTIONS), str)
+    except Exception:
+        return False
+
+
+def _shared_outside(name: str, outside: list[str]) -> str:
+    """A folder people outside the team can open: the save goes on a card
+    for the person to approve, or is refused when no card can be left."""
+    if not _card_offered():
+        return json.dumps({"status": "failed", "detail": f"Couldn't save {name}. {SHARED_OUTSIDE}."})
+    return json.dumps({
+        "status": "needs_card",
+        "shared_with": outside[:10],
+        "detail": (
+            "That folder is shared with people outside the team, so this save waits for their "
+            "tap. Put every file for this folder on one approval card: propose_actions with kind "
+            "save_files, the folder's id as folder, and files (each file's handle as file and "
+            "the name to save under as name). Nothing is saved until they approve; tell them the "
+            "card is waiting."
+        ),
     })
 
 

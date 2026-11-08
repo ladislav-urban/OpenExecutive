@@ -50,6 +50,8 @@ interface MessageProps {
   // A shared chat's messages from people: who wrote it. Someone else's sits
   // on the left under their name; the viewer's own stays on the right.
   author?: { name: string; mine: boolean };
+  // Under a finished reply, after its action chips: the "Memory updated" chip.
+  memory?: ReactNode;
 }
 
 // The small text buttons under a message (Copy, Try again, Edit).
@@ -286,6 +288,7 @@ export default function Message({
   onRetry,
   onEdit,
   author,
+  memory,
 }: MessageProps) {
   const executiveName = useExecutiveName();
   // Approval cards this reply left, shown under it (ActionCards), and the
@@ -391,6 +394,8 @@ export default function Message({
         {status && <div className="mt-3">{status}</div>}
 
         {actions && actions.length > 0 && (draftIds.length > 0 ? <DraftAwareChips actions={actions} /> : <ActionChips actions={actions} />)}
+
+        {memory}
 
         {cardIds.length > 0 && <ChatActionCards ids={cardIds} />}
 

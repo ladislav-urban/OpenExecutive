@@ -263,14 +263,23 @@ def shared_drive(drive: list, monkeypatch: pytest.MonkeyPatch) -> list:
     return drive
 
 
-def test_a_folder_shared_outside_is_saved_into_and_says_who_else_sees_it(
-    company: Session, shared_drive: list,
+def test_a_folder_shared_outside_waits_for_a_card(
+    company: Session, shared_drive: list, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The owner, Nov 8, 2026: nothing is saved unseen into a company folder
+    shared with named people outside it (the fork's rule over
+    SenteLabsAI/OpenExecutive#686): it waits for their tap on a card."""
     conversation_files.keep(company.session_id, {"bill.pdf": b"x"})
+    monkeypatch.setattr(file_tools, "_card_offered", lambda: True)
     out = _save({"file": "file:bill.pdf", "folder": FOLDER})
-    assert out["status"] == "saved" and out["also_open_to"] == ["dana@partner.example"]
-    created = [a for n, a in shared_drive[1:] if n.endswith("create_drive_file")]
-    assert created[0]["folder_id"] == FOLDER
+    assert out["status"] == "needs_card" and out["shared_with"] == ["dana@partner.example"]
+    assert "save_files" in out["detail"]
+    assert not any(n.endswith("create_drive_file") for n, _ in shared_drive[1:])
+    # No card on this turn: refused.
+    monkeypatch.setattr(file_tools, "_card_offered", lambda: False)
+    out = _save({"file": "file:bill.pdf", "folder": FOLDER})
+    assert out["status"] == "failed" and "outside the team" in out["detail"]
+    assert not any(n.endswith("create_drive_file") for n, _ in shared_drive[1:])
 
 
 def test_a_save_files_card_shows_who_else_sees_it_and_saves_on_the_tap(
@@ -383,15 +392,17 @@ def test_a_folder_open_to_anyone_with_the_link_gets_nothing(
     assert not any(n.endswith("create_drive_file") for n, _ in drive[1:])
 
 
-def test_a_card_left_before_saves_stopped_waiting_still_saves_on_the_tap(
-    company: Session, shared_drive: list,
-) -> None:
+def test_a_tap_saves_only_for_the_audience_the_card_showed(company: Session, shared_drive: list) -> None:
     from openexecutive.delegation import action_cards
 
     conversation_files.keep(company.session_id, {"a.pdf": b"x"})
     files = [{"file": "file:a.pdf", "name": "a.pdf", "kept": "a.pdf", "sha256": hashlib.sha256(b"x").hexdigest()}]
-    shown = {"folder": FOLDER, "session_id": company.session_id, "files": files, "outside": []}
+    shown = {"folder": FOLDER, "session_id": company.session_id, "files": files, "outside": ["dana@partner.example"]}
     assert asyncio.run(action_cards._do_save_files(shown, tapped=True))["status"] == "done"
+    # Shared with someone since the card was made: nothing saved.
+    stale = {**shown, "outside": []}
+    got = asyncio.run(action_cards._do_save_files(stale, tapped=True))
+    assert got["status"] == "failed" and "now also open to dana@partner.example" in got["detail"]
     assert sum(1 for n, _ in shared_drive[1:] if n.endswith("create_drive_file")) == 1
 
 

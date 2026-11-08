@@ -15,7 +15,7 @@ carrying the principal's authority. ``remember_fact`` is also open to a
 teammate on the People list talking from a surface that verified who they are
 (the web app signed in, their own Slack or Discord). Their fact is attributed
 — rendered "(per <name>)", so no prompt reads it as the principal's — and is
-held as a proposal until the principal approves it on the Pulse page, unless
+held as a proposal until the principal approves it on the Memory page, unless
 the principal marked that teammate trusted ("needs my approval" off;
 ``memory.facts``). Even a trusted teammate's fact that would replace one the
 principal set is held. A proposal never renders. Retiring a fact
@@ -32,7 +32,7 @@ A write also needs ``source_quote``: the speaker's exact words from this
 message (at least two words and eight characters), checked against what they
 typed this turn — never the backstory an adapter hydrates a reply with, and
 nothing at all when the message carries an attachment. It is the provenance
-the Pulse page shows the principal, and it keeps the model from storing its
+the Memory page shows the principal, and it keeps the model from storing its
 own inference, a document's figure or text quoted back at the principal as
 something they said. The quote alone only proves they asked; so a
 remember_fact statement's figures, names and date words, and an
@@ -359,14 +359,6 @@ class _Hold:
     summary: str
 
 
-# A quote this short could be found in almost any message ("48", "yes"), so
-# it would prove nothing about what the principal said, unless it is their
-# whole message: a one-word answer ("Internal") to the Executive's own
-# question is the fact.
-_QUOTE_MIN_CHARS = 8
-_QUOTE_MIN_WORDS = 2
-
-
 def _own_words(session: Any) -> str | None:
     """What the principal typed this turn: the pinned speaker text without
     any block an adapter added (the ``<outbound_reply_context>`` backstory a
@@ -388,12 +380,6 @@ def _quote_error(quote: str, session: Any) -> str | None:
         return "source_quote is required: the speaker's exact words from this message."
     nq = _normalize_for_quote_match(quote)
     spoken = _own_words(session)
-    whole = spoken is not None and nq.strip(" .!?") == _normalize_for_quote_match(spoken).strip(" .!?")
-    if not whole and (len(nq.replace(" ", "")) < _QUOTE_MIN_CHARS or len(nq.split()) < _QUOTE_MIN_WORDS):
-        return (
-            "source_quote is too short to show what the speaker said: quote the "
-            "whole phrase that states it."
-        )
     if spoken is None:
         return (
             "refused: this message carries an attachment, and its text can't be told "
@@ -701,7 +687,7 @@ def _apply_remember(args: dict[str, Any], provenance: dict[str, Any]) -> str:
         return _bad(tool, (
             f"{facts.MAX_PENDING_PROPOSALS_PER_PERSON} of this teammate's facts are already "
             "waiting for the principal's approval. Tell them it will be kept once the "
-            "principal has reviewed those on the Pulse page."
+            "principal has reviewed those on the Memory page."
         ))
     except Exception as exc:
         logger.exception("remember_fact: write failed")
@@ -747,7 +733,7 @@ def _apply_remember(args: dict[str, Any], provenance: dict[str, Any]) -> str:
             "statement": fact.statement,
             "message": (
                 f"Kept as a proposal, not in use yet: {why}. The principal approves "
-                "or declines it on the Pulse page. Tell the person you are talking "
+                "or declines it on the Memory page. Tell the person you are talking "
                 "to that, and do not describe it as in effect."
             ),
         })
@@ -1026,7 +1012,7 @@ def _apply_profile_edit(
         )
         fact_id = row.id
     except Exception:
-        # The profile write already landed; the Pulse page just misses a line.
+        # The profile write already landed; the Memory page just misses a line.
         logger.warning("update_company_profile: provenance row failed", exc_info=True)
 
     _audit(
