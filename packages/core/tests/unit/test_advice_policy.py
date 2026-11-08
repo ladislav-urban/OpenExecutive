@@ -41,8 +41,11 @@ def test_the_setting_turns_it_on(monkeypatch: pytest.MonkeyPatch, value: str) ->
     first = build_system_blocks()[0]["text"]
     assert HEADING in first
     for words in ("outlook from today's records", "Never make or recommend a tax, legal, credit or investment decision",
-                  "I don't give tax, legal, credit or investment advice; for those, ask a qualified adviser."):
+                  "Dynocortex explains your company's own figures and who decides. Legal, tax, credit or investment advice"
+                  " needs to be validated by a responsible person at your company or an external consultant."
+                  " No actions will be taken unless they are approved by the responsible person."):
         assert words in first
+    assert "ask a qualified adviser" not in first  # the wording the owner replaced on Nov 8, 2026
     # A constant: the block is the same on every build.
     assert build_system_blocks()[0]["text"] == first
 
@@ -101,7 +104,7 @@ def test_a_scenario_names_only_explain() -> None:
     with pytest.raises(ValueError, match="advice_policy"):
         validate_scenario_yaml(base + "advice_policy: advise\n")
     ours = [s for s in load_scenarios() if s["id"].startswith("finance_advice_")]
-    assert len(ours) == 17 and all(s["advice_policy"] == "explain" for s in ours)
+    assert len(ours) == 18 and all(s["advice_policy"] == "explain" for s in ours)
 
 
 def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -> None:
