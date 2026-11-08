@@ -95,6 +95,7 @@ def test_hands_off_is_hands_off_where_the_surface_proves_the_owner(
 
 
 @pytest.mark.parametrize("session", [
+    Session(from_web_chat=True, web_caller_signed_in=True),
     Session(origin_channel="email", email_from="ceo@example.com"),
     Session(origin_channel="google_chat", gate_sender_person_id=1),
     Session(origin_channel="slack"),

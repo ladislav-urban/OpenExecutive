@@ -264,6 +264,12 @@ def _someone_else(session: Any) -> bool:
 
         person = get_person(caller)
         return person is not None and not person.is_principal
+    # A web turn with no People entry: someone signed in whose address is on
+    # nobody's entry is not the owner (``principal_speaking`` answers no).
+    if getattr(session, "from_web_chat", False) is True:
+        from openexecutive.orchestrator.content_trust import principal_speaking
+
+        return not principal_speaking(session)
     return False
 
 
