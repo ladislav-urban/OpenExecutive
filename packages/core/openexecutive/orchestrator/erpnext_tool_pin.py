@@ -37,22 +37,27 @@ TOOL_DIGESTS: dict[str, str] = {
     "confirm_figure": "7e92126de1a33bced94e4b247220bac4fddaf8c26f0ec141fd612011cf34102b",
     "describe_doctype": "857eb11de056c01ca1a85be1552e22e04068b63bf37ccdf7de15edfc99cc13a3",
     "describe_report": "702e1c25ef62f819c2efe0421270b83779f882ae709067cc2189696e32ff4f7c",
-    "draft_check": "c97ed34120d93ce74bc8097e89416c98d19f59988ecd6fd812d36dc3e475e795",
-    "draft_material_request": "30e1ed9c99e8c1b8823bcb977dbc7198916092c9fbc36198859e213439ac4d9e",
-    "draft_purchase_order": "04132a8a2ffc64c3ad021756e2083a223fd74db977ba6bf379213fa68d0ee965",
-    "draft_quotation": "9fca468a1a9b942281037d47451a81693bdded098ee1d12b9bf16135df47f2ee",
-    "draft_todo": "4afb6078ba4a01690ffdad47fed610e0afd2112a8b6b00e19773a901e418b19b",
+    "draft_check": "d203c32661b2c09d54815cca812e9e447243a121e4e9ce0487d08d35eed9921d",
+    "draft_comment": "7990cbcbade4a1aee9d8e8afab2a91df82d9d700fcbf109389758053af5b43b5",
+    "draft_dunning": "e02463385959089f32f6d145348e87b69b1e67e4e72b1eaf4f30e689e005c45c",
+    "draft_material_request": "4397bbc6bef11249ee0943c62cb354f536cef005e4438597c5742a405538ca4d",
+    "draft_purchase_order": "e184ec2763b3c2de7bda7851ec656519943f9162bfa181769e1c440e9043b53e",
+    "draft_quotation": "9418aa69f719a5399d7c714fa338f579851b882364f321f344c7369793b08bbf",
+    "draft_todo": "1f1c2e65ba1a4bbba66cd74d40a9701d819bd580e7110f18db16f21ec268a1ed",
+    "draft_update": "e1508efc4843b8d36ea5f2fb45c5e8c2ddc337bb3dcd470fa93485f333ce2b9f",
     "get_record": "4d486bf8e9cc6afce155b722b3565f4908563b4580838722a3ee7d28841c3698",
     "list_records": "11b5293628e6c26937a4b8c568231f1bec8e41b977de0a05675fa492aa34f387",
+    "read_attachment": "e2890a5ed9875146b5af0ee563f24ba76c0b390cea1bee9481a40a762f14773d",
     "run_report": "43fc20d9c48e80bd64df2c16530ad84d6d30083fc6972d0f51cecd1bd218acb4",
     "search_catalog": "dbe9c1e72588824ebed3dcbfc01e0d90b39d4ad82ab0168d9cc6c0756b0f137c",
     "show_in_erpnext": "dff36d8d7403b07ceeef7e195ef117c5dee9f5adf8a42467418e5738a0d696d6",
+    "supplier_bank_changed": "5cbdd446fb7c1b3da9fed53cc0a23930e019a5a6cbc9ad175bba6e9c8355f505",
     "supplier_invoices": "f11300d594d4c9dd89e0f02e6fc23e1bda522fef3259ba3fb62321b5b83b0875",
     "supplier_order": "e4f891661b8fad016d322c8dead3f550affb761cfb8555ede7a77b316be61970",
     "supplier_orders": "abfa94e11de532f9cf1531c221dd4f8e8120816c215fb4b2780fd2edc338c1f8",
 }
 # oe_connector's protocol.TOOLS_DIGEST for the definitions pinned above.
-TOOLS_DIGEST = "602ef2e67dc44b23a5f0b7abb13a4b1d6f026a9263470c72ff652d487d287a2a"
+TOOLS_DIGEST = "b8a74e2725e857be258a7af178c65de4ec09009ffff9b65cebfdd107d7fbb756"
 
 # The supplier tools as oe_connector serves them (its mcp/protocol.py
 # SUPPLIER_TOOLS), offered to the A2A agent from this copy rather than from
