@@ -6,9 +6,10 @@
 // ToDo can't be submitted: it is simply an open task, so asking them to
 // submit it would send them looking for a button that isn't there.
 //
-// An install with a product name (OE_PRODUCT_NAME), or running in a host's
-// frame, is one product to the person: it calls ERPNext "the ERP", never by
-// the name of the part it is built from (the API's `in_product_reply`).
+// What the person reads calls ERPNext "the ERP", never by the name of the
+// part it is built from, with or without a product name (OE_PRODUCT_NAME)
+// or a host's frame. The `_named` arguments are kept for the callers that
+// pass them.
 //
 // No imports, so `npm test` can exercise this.
 
@@ -16,15 +17,15 @@
 // (ERPNEXT_DRAFT_DOCTYPES, integrations/erpnext_drafts.py).
 const NOT_SUBMITTED = new Set(["ToDo"]);
 
-/** What the person is told ERPNext is called: "the ERP" in a named product. */
-export function erpName(named: boolean): string {
-  return named ? "the ERP" : "ERPNext";
+/** What the person is told ERPNext is called. */
+export function erpName(_named: boolean): string {
+  return "the ERP";
 }
 
 /** The line an approved card shows: what is in the ERP now, and what is left to do there. */
-export function draftMadeLine(doctype: string, name: string | null, alreadyCreated: boolean, named = false): string {
+export function draftMadeLine(doctype: string, name: string | null, alreadyCreated: boolean, _named = false): string {
   const now = alreadyCreated ? "was already" : "is now";
-  const erp = erpName(named);
+  const erp = erpName(true);
   if (NOT_SUBMITTED.has(doctype)) {
     return name
       ? `${doctype} ${name} ${now} in ${erp}, open. It's closed there once it's done.`
@@ -36,34 +37,29 @@ export function draftMadeLine(doctype: string, name: string | null, alreadyCreat
 }
 
 /** The card's kind, over its headline. */
-export function draftKind(doctype: string, named: boolean): string {
-  return named ? `${doctype} draft` : `ERPNext ${doctype} draft`;
+export function draftKind(doctype: string, _named: boolean): string {
+  return `${doctype} draft`;
 }
 
 /** The warning on a card asked for outside this app's own chat. */
-export function askedInNote(askedIn: "erpnext_panel" | "erpnext_desk", named: boolean): string {
+export function askedInNote(askedIn: "erpnext_panel" | "erpnext_desk", _named: boolean): string {
   if (askedIn === "erpnext_desk") {
-    return named
-      ? "Asked for from a page in the ERP. Approve it only if you asked for it there."
-      : "Asked for from ERPNext's desk. Approve it only if you asked for it there.";
+    return "Asked for from a page in the ERP. Approve it only if you asked for it there.";
   }
-  return named
-    ? "Asked for in the ERP's Ask panel. Approve it only if you asked for it there."
-    : "Asked for in ERPNext's panel. Approve it only if you asked for it there.";
+  return "Asked for in the ERP's Ask panel. Approve it only if you asked for it there.";
 }
 
 /** The link to the draft once made. */
-export function openDraftLabel(doctype: string, named: boolean): string {
-  return named ? `Open the ${doctype}` : "Open in ERPNext";
+export function openDraftLabel(doctype: string, _named: boolean): string {
+  return `Open the ${doctype}`;
 }
 
 /** What the draft cards are, for the Needs you header's tip. */
-export function draftsTip(named: boolean): string {
-  const erp = erpName(named);
+export function draftsTip(_named: boolean): string {
   return (
-    `${named ? "Drafts" : "ERPNext drafts"} you asked the Executive to prepare. Each shows exactly what will be ` +
-    `written, and ${erp} has already checked it. Nothing is created until you tap Approve, and then only an ` +
-    `unsubmitted draft, as your own ${named ? "ERP" : "ERPNext"} user, for you to review and submit in ${erp}. ` +
+    "Drafts you asked the Executive to prepare. Each shows exactly what will be " +
+    "written, and the ERP has already checked it. Nothing is created until you tap Approve, and then only an " +
+    "unsubmitted draft, as your own ERP user, for you to review and submit in the ERP. " +
     "Only you see these."
   );
 }

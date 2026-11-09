@@ -5323,8 +5323,8 @@ chat:
     disconnected saved as streamed. Fails open on an internal error; code
     alone when out of time. answer_check audit row, counts only.
     ERPNEXT_ANSWER_CHECK=off|correct|correct_keep (default correct;
-    correct_keep never replaces a reply whole, owner's decision 90.a). Why: the pilot's
-    reshoots (oe_connector#413-#415) quoted figures ERPNext didn't hold.
+    correct_keep never replaces a reply whole, decided Nov 5, 2026). Why: a test deployment's
+    replies quoted figures ERPNext didn't hold.
     Names (PR (b), orchestrator/name_check.py): document names exact or not
     known; table cells under a name label and bold list openers with a figure
     must be a source name; near one source name (case/punctuation, or 0/1/2
@@ -9858,7 +9858,7 @@ integrations:
     DM channel. Failure to schedule never blocks the booking.
   erpnext: |
     ERPNext is an optional URL MCP server served by the oe_connector Frappe
-    app (github.com/ladislav-urban/oe_connector) inside the ERPNext site:
+    app inside the ERPNext site (not part of this repository):
     "erpnext": {"url": "https://<site>/api/method/oe_connector.mcp.endpoint.handle"}
     in company/mcp_servers.json. extensible-mcp (pinned rev) sends a URL
     server's credential only as `Authorization: Bearer <token>` from a

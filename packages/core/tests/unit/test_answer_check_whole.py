@@ -103,7 +103,7 @@ def test_the_projection_test_reads_the_question_not_the_reply() -> None:
 
 
 def test_correct_keep_never_replaces_a_reply_whole(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The owner's decision 90.a: figures put right in place, the reply kept.
+    # Decided Nov 5, 2026: figures put right in place, the reply kept.
     monkeypatch.setenv("ERPNEXT_ANSWER_CHECK", "correct_keep")
     _reviews(monkeypatch, *[CANNOT_TELL] * 10)
     _rewrites(monkeypatch, None)

@@ -2,3 +2,8 @@ Open Executive
 Copyright 2025 Open Executive Contributors
 
 This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This repository is Dynocortex Limited's fork of Open Executive
+(https://github.com/SenteLabsAI/OpenExecutive). Portions Copyright 2026
+Dynocortex Limited. The files Dynocortex Limited changed are listed in
+CHANGES-DYNOCORTEX.md.
