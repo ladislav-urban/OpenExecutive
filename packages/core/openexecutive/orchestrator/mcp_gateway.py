@@ -3501,9 +3501,11 @@ def _drop_blocked_tools(text: object) -> Any:
     which only that check's code calls; any ERPNext tool whose definition
     doesn't match its pin), so the model is never offered them.
     Output naming none of them comes back unchanged."""
+    from openexecutive.orchestrator.erpnext_caller import DRAFT_TOOL_PREFIX
     from openexecutive.prompts.connected_systems import (
         ERPNEXT_AUDIT_TOOL,
         ERPNEXT_CODE_ONLY_TOOLS,
+        ERPNEXT_DRAFT_TOOLS,
         ERPNEXT_SUPPLIER_TOOLS,
         ERPNEXT_WITHHELD_TOOLS,
     )
@@ -3520,6 +3522,9 @@ def _drop_blocked_tools(text: object) -> Any:
             or normalized in ERPNEXT_SUPPLIER_TOOLS
             or normalized in ERPNEXT_CODE_ONLY_TOOLS
             or normalized in ERPNEXT_WITHHELD_TOOLS
+            # A draft tool no card here uses yet (Dunning, update, comment):
+            # the call is refused anyway, so the model needn't read it.
+            or (normalized.startswith(DRAFT_TOOL_PREFIX) and normalized not in ERPNEXT_DRAFT_TOOLS)
             or name in changed
         )
 

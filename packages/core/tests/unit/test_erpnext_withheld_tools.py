@@ -25,7 +25,7 @@ def test_withheld_tools_are_pinned_and_on_no_list_that_uses_them() -> None:
     assert pinned >= cs.ERPNEXT_WITHHELD_TOOLS
     for used in (
         set(cs.PINNED_ERPNEXT_TOOLS), set(cs.ERPNEXT_CODE_ONLY_TOOLS), set(cs.ERPNEXT_SUPPLIER_TOOLS),
-        set(getattr(cs, "ERPNEXT_DRAFT_TOOLS", ())),
+        set(cs.ERPNEXT_DRAFT_TOOLS), set(cs.ERPNEXT_DISCOVERY_QUERIES),
     ):
         assert not cs.ERPNEXT_WITHHELD_TOOLS & used
 
