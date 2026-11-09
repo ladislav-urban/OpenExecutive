@@ -96,7 +96,7 @@ _ROW_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,139}")
 # A document's name: ERPNext's own rule (any text up to 140 characters), with
 # no control characters and no leading or trailing space ("Smith & Sons",
 # "Müller GmbH", "ACC/2026/001").
-_DOC_RE = re.compile(r"[^\x00-\x1f\x7f\s](?:[^\x00-\x1f\x7f]{0,138}[^\x00-\x1f\x7f\s])?")
+_DOC_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^\x00-\x1f\x7f-\x9f\s])?")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # oe_connector's _CONTROL: control characters, tab included, newline kept.
 _CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")

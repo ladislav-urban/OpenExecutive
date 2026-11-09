@@ -1347,7 +1347,7 @@ async def _check_and_leave(
         # Only what this conversation left, as each stands now.
         "earlier_cards": earlier,
         "note": (
-            ("" if new else "This is the card already waiting for the same draft. ")
+            ("" if new else f"This is the card already waiting for the same {_noun(operation)}. ")
             + _after_approval(operation)
             + "Outside the web app, say "
             "where to find it. Speak of this conversation's earlier cards only as "
