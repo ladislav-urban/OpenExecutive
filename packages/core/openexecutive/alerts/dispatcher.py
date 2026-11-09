@@ -167,6 +167,37 @@ def _violates_privacy_invariant(alert: Alert) -> bool:
     return any(tag.lower() in _PRIVACY_SENSITIVE_TAGS for tag in alert.topic_tags)
 
 
+async def push_to_named(alert: Alert, person_ids: list[int]) -> int:
+    """Send a private alert to each person it names (``models.named_people``)
+    in their own private chat only: their Slack or Discord DM or their own
+    Telegram chat (``deliver_to_person`` with ``chat_only``, which never
+    picks a group or email). Never a shared channel, a department or anyone
+    else's brief. An inactive person, or one in quiet hours, gets nothing
+    here; the card still waits on their Home. Returns how many were sent.
+    Never raises."""
+    from openexecutive.alerts.models import named_for
+    from openexecutive.people.channel import is_within_availability
+    from openexecutive.people.store import get_person
+    from openexecutive.scheduler.runner import deliver_to_person
+
+    sent = 0
+    urgent = str(alert.severity) == "urgent"
+    for person_id in person_ids:
+        try:
+            if not named_for(alert, person_id):
+                continue
+            person = get_person(person_id)
+            if person is None or not person.active:
+                continue
+            if not is_within_availability(person, now=datetime.now(UTC), quiet_hours=True, urgent=urgent):
+                continue
+            delivery = await deliver_to_person(person, _format_broadcast_body(alert), label="Alert", chat_only=True)
+            sent += int(delivery.ok)
+        except Exception:
+            logger.exception("push_to_named failed for alert=%s person=%s", alert.id, person_id)
+    return sent
+
+
 def _format_broadcast_body(alert: Alert) -> str:
     """Render an alert as a short broadcast-friendly plain-text body.
 

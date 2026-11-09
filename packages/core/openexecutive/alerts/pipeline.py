@@ -246,14 +246,25 @@ async def evaluate_and_dispatch(
     if event.raised_by:
         # One team member's alert never folds into another's card.
         dedup_key = f"raised_by:{(event.from_ or event.raised_by).lower()}:{dedup_key}"
-    topic_tags = _with_department_tag(
-        decision.topic_tags, event.department or event.channel,
-    )
+    from openexecutive.alerts.models import NAMED_TAG_PREFIX
+
+    # Only the event's own list names people (models.named_people): a tag
+    # the triage model wrote is never one.
+    topic_tags = [
+        t for t in _with_department_tag(decision.topic_tags, event.department or event.channel)
+        if not str(t).lower().startswith(NAMED_TAG_PREFIX)
+    ]
     routed_to = _person_id_from_event(event)
+    named = [i for i in dict.fromkeys(event.named_person_ids) if isinstance(i, int) and not isinstance(i, bool)]
     if event.private:
         topic_tags, routed_to, dedup_key, effective_channels = _make_private(
             topic_tags, dedup_key
         )
+        if named:
+            topic_tags = [*topic_tags, *(f"{NAMED_TAG_PREFIX}{i}" for i in named)]
+            # On the first named person's Home as theirs; the principal and
+            # the others named see it too.
+            routed_to = named[0]
 
     # A replay of the SAME upstream event (webhook retry, re-poll) is a
     # no-op, exactly as before: the (source, external_id) row already exists.
@@ -341,6 +352,8 @@ async def evaluate_and_dispatch(
         department_slug=decision.department_slug,
         broadcast_integration=decision.broadcast_integration,
     )
+    if event.private and named:
+        await dispatcher.push_to_named(alert, named)
     return decision, alert_id
 
 

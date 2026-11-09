@@ -431,9 +431,12 @@ def _board_alerts(now: datetime, *, include_private: bool, viewer: Any, fold_twi
         # a meeting with one) appear only on the principal's own /today —
         # never for a teammate, and never in the morning brief, the
         # end-of-day digest or the reflection, which all read this default.
-        from openexecutive.alerts.models import is_private_alert
+        from openexecutive.alerts.models import is_private_alert, named_for
 
-        raw_alerts = [a for a in raw_alerts if not is_private_alert(a)]
+        # A private alert that names the viewer (models.named_people, an
+        # ERPNext credit hold) is on their own Home too, never anyone else's.
+        person_id = getattr(viewer, "person_id", None)
+        raw_alerts = [a for a in raw_alerts if not is_private_alert(a) or named_for(a, person_id)]
     elif fold_twins:
         raw_alerts = _fold_private_twins(raw_alerts)
     return raw_alerts

@@ -20,6 +20,36 @@ def is_private_alert(alert: object) -> bool:
     return any(str(t).lower() == PRIVATE_ALERT_TAG for t in tags)
 
 
+# Topic tag naming one more person a private alert is also for: an ERPNext
+# alert whose event named who may read it (``credit_hold``'s ``for_users``,
+# integrations/erpnext_events.py), matched to People. The alert stays
+# private: it never reaches a broadcast, a live push, a department, anyone's
+# brief or the reflection. Only the named person's own Home, the alert's own
+# route and a push to their own private chat let them in. The pipeline
+# strips any such tag the triage model writes; only the event's own list sets one.
+NAMED_TAG_PREFIX = "named:"
+# The sources whose events may name people. Nothing else's tags count.
+NAMED_SOURCES = frozenset({"erpnext"})
+
+
+def named_people(alert: object) -> frozenset[int]:
+    """The People ids a private alert is also for (``NAMED_TAG_PREFIX``);
+    empty for any alert that isn't private or isn't from a named source."""
+    if not is_private_alert(alert) or getattr(alert, "source", None) not in NAMED_SOURCES:
+        return frozenset()
+    ids: set[int] = set()
+    for tag in getattr(alert, "topic_tags", None) or []:
+        text = str(tag)
+        if text.startswith(NAMED_TAG_PREFIX) and text[len(NAMED_TAG_PREFIX):].isdigit():
+            ids.add(int(text[len(NAMED_TAG_PREFIX):]))
+    return frozenset(ids)
+
+
+def named_for(alert: object, person_id: int | None) -> bool:
+    """Whether a private alert names ``person_id`` as one it is for."""
+    return isinstance(person_id, int) and person_id in named_people(alert)
+
+
 # Source of a document the Executive published (`draft_artifact`). Each one
 # is its owner's alone (``owner_person_id``; none = the principal's): it never
 # reaches a surface that serves anyone else (see ``artifact_visible_to``).
@@ -125,6 +155,9 @@ class AlertEvent(BaseModel):
     # routes it to the principal, keeps it out of every broadcast and live
     # push, and never coalesces it into a card someone else can see.
     private: bool = False
+    # With ``private``: People ids the alert is also for (``NAMED_TAG_PREFIX``),
+    # set only by the ERPNext event route from the event's own list.
+    named_person_ids: list[int] = Field(default_factory=list)
     # Set only by the create_alert tool on a team member's chat turn: who
     # raised it, for its "Raised by <name>" label. Such an alert keeps a
     # source and id the server picked (``TEAM_RAISED_SOURCE``), whatever the

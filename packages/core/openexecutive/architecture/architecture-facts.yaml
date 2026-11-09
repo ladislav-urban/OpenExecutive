@@ -10638,7 +10638,21 @@ integrations:
     Valuation entries that failed, or sat queued or in progress past
     repost_stalled_hours, which leave stock values and the stock ledger
     wrong without telling anyone; key company:<oldest repost name>).
-    erpnext_events.KINDS lists all six; oe_connector
+    credit_hold (a draft Sales Order over its customer's credit limit; key
+    company:<sales order>) may name who it is for: for_users, at most five
+    ERPNext users oe_connector checked can read everything the text says.
+    erpnext_events.named_person_ids matches each to an active team member on
+    People by email or alias (the principal and anyone not on People left
+    out). The alert stays private (PRIVATE_ALERT_TAG) and gains a named:<id>
+    tag per match (alerts.models.named_people, private erpnext alerts only),
+    routed to the first: it shows on those people's own Home
+    (today._board_alerts) and opens on its route (alerts._visible_alert) for
+    them, and dispatcher.push_to_named sends it to each one's own private chat
+    only (deliver_to_person chat_only). It never reaches a broadcast, a live
+    push, a department or anyone's brief, digest or reflection. The pipeline
+    strips any named: tag the triage model writes, so only the event's own
+    list names anyone. No match: private to the principal, as before.
+    erpnext_events.KINDS lists all seven; oe_connector
     holds a kind back until it is listed there, because a kind OpenExecutive
     does not know is skipped yet the request is still accepted, so the event
     would be marked sent and lost for the month.

@@ -11,7 +11,13 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from openexecutive.alerts import approvals, lifecycle, store
-from openexecutive.alerts.models import ARTIFACT_SOURCE, Alert, is_private_alert, visible_alert
+from openexecutive.alerts.models import (
+    ARTIFACT_SOURCE,
+    Alert,
+    is_private_alert,
+    named_for,
+    visible_alert,
+)
 
 # The standalone alerts UI (panel, live toast stream, mute/severity settings,
 # feedback) was removed — those items now surface only through the briefing
@@ -31,7 +37,12 @@ def _visible_alert(alert_id: int, request: Request) -> Alert:
     existing = store.get_alert(alert_id)
     if (
         existing is None
-        or (is_private_alert(existing) and not _caller_is_principal(request))
+        or (
+            is_private_alert(existing)
+            and not _caller_is_principal(request)
+            # A private alert that names the caller (an ERPNext credit hold).
+            and not named_for(existing, _caller_person_id(request))
+        )
         or not visible_alert(existing, _caller_viewer(request))
     ):
         raise HTTPException(status_code=404, detail="Alert not found")
