@@ -169,12 +169,15 @@ ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, 
 
 # Tools oe_connector serves and this install pins (erpnext_tool_pin), but
 # nothing here may call yet: reading an attachment (S4) waits for intake's
-# tool-less extraction, and a supplier's bank-change fact (S5) for the
-# payment-check job. The gateway refuses them on every path, with no marker
-# that lifts it, and tool search never shows them. When one's own path
+# tool-less extraction, a supplier's bank-change fact (S5) for the
+# payment-check job, and customers' payment records (phase 1) for the
+# collections job, which reads many customers' payment behaviour at once.
+# The gateway refuses them on every path, with no marker that lifts it, and
+# tool search never shows them. When one's own path
 # exists it moves to a list gated by that path's marker, never to the tools
 # the model is offered.
 ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({
+    "erpnext__customer_payment_record",
     "erpnext__read_attachment",
     "erpnext__supplier_bank_changed",
 })
@@ -337,7 +340,7 @@ _ERPNEXT_GUIDE = (
 # it searched; on the pilot it guessed shapes and names, Oct 29, 2026).
 # Written for the pin below: a test fails when the pin moves, so a changed
 # definition gets these lines checked too. Process-constant.
-ERPNEXT_ARGS_WRITTEN_FOR = "b8a74e2725e857be258a7af178c65de4ec09009ffff9b65cebfdd107d7fbb756"
+ERPNEXT_ARGS_WRITTEN_FOR = "6cb3653333f63e68558e067da36426a56c5385d12bad13a2647f8047f3fde38a"
 _ERPNEXT_ARGS = (
     "  Their arguments, exactly these names, with objects and lists passed as JSON "
     "values, never as quoted strings: "
