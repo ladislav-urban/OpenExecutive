@@ -983,7 +983,13 @@ async def _carry_out(
         # What the actions say came from their mail: every row the handlers
         # write (audit, the activity rail) is theirs alone, as on their own
         # turn. Only the principal reaches their contacts.
-        with rows_for_person(person.id), grant_contact_egress() if person.is_principal else nullcontext():
+        from openexecutive.audit import cost_caps
+
+        with (
+            rows_for_person(person.id),
+            cost_caps.bind_job("action-card"),
+            grant_contact_egress() if person.is_principal else nullcontext(),
+        ):
             for i, action in enumerate(actions):
                 if i not in chosen:
                     results.append({"index": i, "status": "skipped", "detail": "Left out."})

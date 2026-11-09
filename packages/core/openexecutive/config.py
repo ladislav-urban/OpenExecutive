@@ -650,6 +650,15 @@ class Settings(BaseSettings):
     roster_request_daily_cap: int = Field(30, ge=0, le=10_000, alias="ROSTER_REQUEST_DAILY_CAP")
     roster_request_ttl_days: int = Field(14, ge=1, le=365, alias="ROSTER_REQUEST_TTL_DAYS")
 
+    # Cost caps (audit.cost_caps), in USD, checked before every hosted model
+    # call; 0 is off, the default. A day runs in the company's time zone. The
+    # principal is never held to the person cap; the monthly cap holds for
+    # every call. A capped call is refused before it is sent, and the
+    # principal is told once per cap a day.
+    cost_cap_person_daily_usd: float = Field(0.0, ge=0, le=1_000_000, alias="COST_CAP_PERSON_DAILY_USD")
+    cost_cap_job_daily_usd: float = Field(0.0, ge=0, le=1_000_000, alias="COST_CAP_JOB_DAILY_USD")
+    cost_cap_monthly_usd: float = Field(0.0, ge=0, le=10_000_000, alias="COST_CAP_MONTHLY_USD")
+
     # Telegram + Discord channel access is roster-driven: a sender's
     # channel ID must be present on a non-archived Person row. The old
     # TELEGRAM_ALLOWED_CHAT_IDS / DISCORD_ALLOWED_USER_IDS / EMAIL_ALLOWED_SENDERS

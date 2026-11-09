@@ -217,6 +217,9 @@ def _announce_destination(model: str, provider: Any) -> None:
     see the data leave: which provider, and on OpenRouter which parser."""
     from openexecutive.providers.openrouter_provider import OpenRouterProvider
 
+    # The backend under the cost-cap and tracing wrappers.
+    while hasattr(provider, "_inner"):
+        provider = provider._inner
     where = type(provider).__name__
     if isinstance(provider, OpenRouterProvider):
         from openexecutive.providers.openrouter_provider import _pdf_engine

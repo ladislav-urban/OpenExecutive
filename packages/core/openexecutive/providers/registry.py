@@ -470,10 +470,12 @@ def get_provider(model: str) -> LLMProvider:
     # to a hosted vendor.
     if model in _local_models(settings):
         return wrap_provider(_local(), "local")
+    # Hosted backends are billed: every call checks the cost caps first
+    # (audit.cost_caps). A local model costs nothing and isn't capped.
     if _is_claude(model):
         if settings.openrouter_enabled:
-            return wrap_provider(_openrouter(), "openrouter")
-        return wrap_provider(_anthropic(), "anthropic")
+            return _capped(wrap_provider(_openrouter(), "openrouter"))
+        return _capped(wrap_provider(_anthropic(), "anthropic"))
     # Other non-Claude slugs require OpenRouter to be enabled.
     if not settings.openrouter_enabled:
         raise HTTPException(
@@ -485,7 +487,13 @@ def get_provider(model: str) -> LLMProvider:
                 f"from a local OpenAI-compatible backend."
             ),
         )
-    return wrap_provider(_openrouter(), "openrouter")
+    return _capped(wrap_provider(_openrouter(), "openrouter"))
+
+
+def _capped(provider: LLMProvider) -> LLMProvider:
+    from openexecutive.providers.capped import CappedProvider
+
+    return CappedProvider(provider)
 
 
 def pdf_input_supported(model: str) -> bool:

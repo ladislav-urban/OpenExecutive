@@ -1697,7 +1697,10 @@ async def carry_out(payload: dict[str, Any], *, by_principal: bool) -> str:
 
     token = current_session.set(Session(unattended=True))
     try:
+        from openexecutive.audit import cost_caps
+
         with (
+            cost_caps.bind_job("take-the-lead"),
             grant_contact_egress() if by_principal else nullcontext(),
             # The tap approves this one call: a skill that runs others
             # (a workflow, research) keeps every check for them.

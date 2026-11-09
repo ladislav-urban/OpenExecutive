@@ -166,6 +166,11 @@ def log_model_usage(
     run_id = get_research_run_id()
     if run_id:
         details["run_id"] = run_id
+    # Count it against the person and job it was spent for (the cost caps),
+    # and say which on the row. Never raises.
+    from openexecutive.audit import cost_caps
+
+    details.update(cost_caps.add(model, counts))
     try:
         log_event(
             EVENT_TYPE,
