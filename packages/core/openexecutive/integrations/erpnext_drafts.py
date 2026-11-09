@@ -141,6 +141,8 @@ _DUNNING_FIELDS = frozenset({"sales_invoice", "dunning_type", "posting_date"})
 _DUNNING_STALE = "posting_date must be after every overdue installment"
 # What the card shows of the letter's text: a preview, marked when cut.
 LETTER_SHOWN_MAX = 600
+# How much of a letter's text is read to make that preview.
+LETTER_READ_MAX = 20_000
 
 
 def enabled_doctypes() -> tuple[str, ...]:
@@ -386,6 +388,10 @@ def pin_from_check(doctype: str, fields: dict[str, Any], summary: Any) -> dict[s
         datetime.strptime(got, "%Y-%m-%d")
     except ValueError:
         return "ERPNext gave the letter an impossible date, so no card was left."
+    # The same bound approval re-checks (_dunning), so no card is left that
+    # approval would refuse.
+    if got > (datetime.now(UTC) + timedelta(days=1)).date().isoformat():
+        return "ERPNext dated the letter in the future, so no card was left."
     return {**fields, "posting_date": got}
 
 
@@ -673,8 +679,12 @@ def _letter(value: Any) -> str:
     marked when cut."""
     from openexecutive.utils.html_tags import strip_tags
 
+    # A preview needs only the start: a template of any size costs the same.
+    raw = str(value or "")[:LETTER_READ_MAX]
     # A paragraph or line break is a space, so its words don't run together.
-    spaced = re.sub(r"<\s*(?:/\s*(?:p|div|li|h\d)|br\s*/?)\s*>", " ", str(value or ""), flags=re.IGNORECASE)
+    # Unambiguous, so it stays linear on any input (a `<br` then a long run
+    # of spaces with no `>` can't backtrack).
+    spaced = re.sub(r"<\s*(?:/\s*(?:p|div|li|h\d)\s*|br\s*(?:/\s*)?)>", " ", raw, flags=re.IGNORECASE)
     text = " ".join(strip_tags(spaced).split())
     return text if len(text) <= LETTER_SHOWN_MAX else text[:LETTER_SHOWN_MAX].rstrip() + "…"
 

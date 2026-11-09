@@ -3803,7 +3803,7 @@ def _drop_blocked_tools(text: object) -> Any:
             or normalized in ERPNEXT_SUPPLIER_TOOLS
             or normalized in ERPNEXT_CODE_ONLY_TOOLS
             or normalized in ERPNEXT_WITHHELD_TOOLS
-            # A draft tool no card here uses yet (Dunning, update, comment):
+            # A draft tool no card here uses yet (update, comment):
             # the call is refused anyway, so the model needn't read it.
             or (normalized.startswith(DRAFT_TOOL_PREFIX) and normalized not in ERPNEXT_DRAFT_TOOLS)
             or name in changed

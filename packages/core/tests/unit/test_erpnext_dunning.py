@@ -153,3 +153,35 @@ def test_a_letter_whose_invoice_gained_an_installment_closes(
     with pytest.raises(drafts.ApproveRefused) as refused:
         _approve(card)
     assert refused.value.code == "changed_since_proposed"
+
+
+def test_a_hostile_letter_template_costs_no_time() -> None:
+    import time
+
+    started = time.monotonic()
+    drafts._letter("<br" + " " * 200_000 + "x" + "<p" + " " * 200_000)
+    assert time.monotonic() - started < 1.0
+
+
+def test_a_future_letter_date_from_erpnext_leaves_no_card() -> None:
+    future = (datetime.now(UTC) + timedelta(days=5)).date().isoformat()
+    out = drafts.pin_from_check("Dunning", {"sales_invoice": "S"}, {"posting_date": future})
+    assert isinstance(out, str) and "future" in out
+
+
+def test_the_gateway_refuses_a_dunning_without_its_card(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    import asyncio
+
+    from openexecutive.orchestrator import mcp_gateway
+    from openexecutive.orchestrator.schedule_tools import set_session
+
+    gateway = mcp_gateway.get_active_gateway()
+    assert gateway is not None
+
+    async def go() -> str:
+        with set_session(_owner_turn(roster, "remind Harbor")):
+            return await gateway.call_tool({"name": "erpnext__draft_dunning",
+                                            "arguments": {"sales_invoice": "ACC-SINV-2026-00042"}})
+
+    assert "error" in json.loads(asyncio.run(go()))
+    assert erp.calls == []
