@@ -2,7 +2,7 @@
 
 This repository is **Dynocortex Limited's fork of [OpenExecutive](https://github.com/SenteLabsAI/OpenExecutive)**, the open-source executive agent built by [SenteLabs](https://sentelabs.ai). It is licensed under the Apache License 2.0, like upstream (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). SenteLabs doesn't endorse this fork, and isn't responsible for it.
 
-Everything upstream does still works here. The fork adds an integration with [ERPNext](https://erpnext.com), an open-source ERP. The ERP side is a separate app that runs inside the ERP and serves MCP over HTTP; it isn't part of this repository.
+Everything upstream does still works here. The fork adds an integration with [ERPNext](https://erpnext.com), an open-source ERP. The ERP side is a separate app that runs inside the ERP and serves MCP over HTTP; it isn't part of this repository, and the ERP-side app isn't published.
 
 ## What this fork adds
 
