@@ -93,6 +93,10 @@ SENSITIVE_DOCTYPES: frozenset[str] = frozenset({
 _WHOSE = frozenset({"yours", "assigned to you"})
 # A row name as ERPNext gives one (a hash, or a name with dashes).
 _ROW_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,139}")
+# A document's name: ERPNext's own rule (any text up to 140 characters), with
+# no control characters and no leading or trailing space ("Smith & Sons",
+# "Müller GmbH", "ACC/2026/001").
+_DOC_RE = re.compile(r"[^\x00-\x1f\x7f\s](?:[^\x00-\x1f\x7f]{0,138}[^\x00-\x1f\x7f\s])?")
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 # oe_connector's _CONTROL: control characters, tab included, newline kept.
 _CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
@@ -162,7 +166,7 @@ def check_change(operation: str, doctype: Any, name: Any, fields: Any) -> tuple[
         what = "changed" if operation == "update" else "commented on"
         return (f"Nothing can be {what} here." if not allowed
                 else f"`doctype` must be one of {', '.join(allowed)} to be {what}.")
-    if not isinstance(name, str) or not _ROW_RE.fullmatch(name.strip()):
+    if not isinstance(name, str) or not _DOC_RE.fullmatch(name.strip()):
         return "`name` is the document's name, as ERPNext shows it."
     if not isinstance(fields, dict):
         return "`fields` must be an object."
@@ -270,6 +274,19 @@ def summary_refusal(operation: str, doctype: str, name: str, fields: dict[str, A
     changes, lines, removed = summary.get("changes"), summary.get("lines"), summary.get("removed")
     if not (isinstance(changes, list) and isinstance(lines, list) and isinstance(removed, list)):
         return "ERPNext's reading of the change was incomplete, so no card was left."
+    sent = set(fields.get("set") or {})
+    if any(not isinstance(c, dict) or c.get("field") not in sent for c in changes):
+        return "ERPNext's reading names a change that wasn't asked for, so no card was left."
+    sent_lines = {
+        (table, row): set(row_fields)
+        for table, rows in (fields.get("lines") or {}).items() for row, row_fields in rows.items()
+    }
+    for line in lines:
+        if not isinstance(line, dict):
+            return "ERPNext's reading of the change was incomplete, so no card was left."
+        asked = sent_lines.get((line.get("table"), line.get("row")), set())
+        if any(not isinstance(c, dict) or c.get("field") not in asked for c in line.get("changes") or []):
+            return "ERPNext's reading names a change that wasn't asked for, so no card was left."
     line_changes = sum(len(x.get("changes") or []) for x in lines if isinstance(x, dict))
     total = len(changes) + line_changes + len(removed)
     if total == 0 or total > MAX_CHANGES:

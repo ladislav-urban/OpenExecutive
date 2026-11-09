@@ -432,5 +432,5 @@ def test_the_route_returns_the_gate_with_the_range_before_and_keeps_the_csv(
         assert client.get("/erpnext/drafts/oversight", params=bad, headers=owner).status_code == 422, bad
     # The CSV stays one row per record with the same columns: no summary.
     as_csv = client.get("/erpnext/drafts/oversight?format=csv", headers=owner).text
-    assert next(csv.reader(io.StringIO(as_csv))) == list(oversight.CSV_COLUMNS) and len(oversight.CSV_COLUMNS) == 23
+    assert next(csv.reader(io.StringIO(as_csv))) == list(oversight.CSV_COLUMNS) and len(oversight.CSV_COLUMNS) == 25
     assert "approval_rate" not in as_csv

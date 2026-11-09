@@ -1204,6 +1204,25 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
             pinned.erpnext_drafts -= 1
 
 
+def _noun(operation: str) -> str:
+    return {"update": "change", "comment": "comment"}.get(operation, "draft")
+
+
+def _after_approval(operation: str) -> str:
+    """What the tool's result tells the model approval will do."""
+    where = (
+        "The card is on Today in the OpenExecutive web app, and under this reply in its chat, "
+        "for them to approve. "
+    )
+    if operation == "update":
+        return ("Nothing is changed in ERPNext yet. " + where + "Approving makes exactly the change "
+                "it shows, as them, and the document stays unsubmitted. ")
+    if operation == "comment":
+        return "Nothing is in ERPNext yet. " + where + "Approving adds exactly that comment, as them. "
+    return ("Nothing is in ERPNext yet. " + where + "It then becomes an unsubmitted draft they review "
+            "and submit in ERPNext. ")
+
+
 def _keyed(operation: str, name: str | None, fields: dict[str, Any]) -> dict[str, Any]:
     """What a card's dedupe digest covers: a new draft's fields as before;
     an update's or comment's operation and document with them."""
@@ -1263,10 +1282,10 @@ async def _check_and_leave(
         )
         if refusal is not None:
             return _error(refusal), False
-    if doctype == "Dunning" and fingerprint_of(checked) is None:
+    if operation == "create" and doctype == "Dunning" and fingerprint_of(checked) is None:
         # Its figures are the point: never a card that approves blind.
         return _error("ERPNext didn't fingerprint this letter, so no card was left. Try again in a moment."), False
-    pinned = pin_from_check(doctype, fields, checked.get("summary"))
+    pinned = pin_from_check(doctype, fields, checked.get("summary")) if operation == "create" else fields
     if isinstance(pinned, str):
         return _error(pinned), False
     fields = pinned
@@ -1309,8 +1328,9 @@ async def _check_and_leave(
     # Only a card actually left counts towards the turn's cards and the audit:
     # the same draft again is the card already waiting.
     if new:
-        audit("erpnext_draft_proposed", f"Left person {person.id} an ERPNext {doctype} draft card", {
+        audit("erpnext_draft_proposed", f"Left person {person.id} an ERPNext {doctype} {_noun(operation)} card", {
             "person_id": person.id, "decision_id": decision_id, "doctype": doctype,
+            **({"operation": operation, "name": name} if operation != "create" else {}),
             **({"asked_in": asked_in} if asked_in else {}),
         })
     try:
@@ -1322,14 +1342,14 @@ async def _check_and_leave(
         "status": "waiting_for_approval",
         "decision_id": decision_id,
         "doctype": doctype,
+        **({"operation": operation} if operation != "create" else {}),
         "card": wrap_untrusted(json.dumps(view, ensure_ascii=False), source="erpnext", author="draft_check"),
         # Only what this conversation left, as each stands now.
         "earlier_cards": earlier,
         "note": (
             ("" if new else "This is the card already waiting for the same draft. ")
-            + "Nothing is in ERPNext yet. The card is on Today in the OpenExecutive web app, "
-            "and under this reply in its chat, for them to approve; it then becomes an "
-            "unsubmitted draft they review and submit in ERPNext. Outside the web app, say "
+            + _after_approval(operation)
+            + "Outside the web app, say "
             "where to find it. Speak of this conversation's earlier cards only as "
             "`earlier_cards` gives them (approved, dismissed, closed with nothing made, "
             "expired, or waiting), or not at all; never call one waiting that isn't, "
@@ -1358,7 +1378,11 @@ def chip(tool_input: dict[str, Any], parsed: dict[str, Any] | None) -> dict[str,
     doctype = (parsed or {}).get("doctype")
     from openexecutive.prompts.connected_systems import in_product_reply
 
-    noun = f"{doctype} draft" if doctype in DRAFT_TOOLS else "ERPNext draft"
+    operation = (parsed or {}).get("operation")
+    if operation in ("update", "comment") and isinstance(doctype, str):
+        noun = f"{'change to' if operation == 'update' else 'comment on'} a {_one_line(doctype, NAME_MAX)}"
+    else:
+        noun = f"{doctype} draft" if doctype in DRAFT_TOOLS else "ERPNext draft"
     return {
         "summary": in_product_reply(f"Waiting for your approval: {noun}").replace(": the ERP draft", ": a draft"),
         "link": "/",
@@ -1532,8 +1556,9 @@ async def _carry_out(
             # The claim was lost meanwhile; the card waits again, and approving
             # it once more returns this same draft (already_created).
             logger.warning("erpnext_drafts: card %d's draft was made but the card wasn't closed", instance.id)
-        audit("erpnext_draft_created", f"Person {person.id} approved an ERPNext {doctype} draft", {
+        audit("erpnext_draft_created", f"Person {person.id} approved an ERPNext {doctype} {_noun(operation)}", {
             "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "name": name,
+            **({"operation": operation} if operation != "create" else {}),
             "already_created": created["already_created"],
             **{k: created[k] for k in ("row_hash", "chain_index") if k in created},
         })

@@ -201,3 +201,51 @@ def test_approval_checks_the_operation_its_switch_and_the_tool(
         assert refused.value.code == "malformed"
         assert update_open_payload(card.id, payload, expected_json=stale.proposed_payload_json)
         card = get_decision_instance(card.id)
+
+
+def test_a_comment_on_a_dunning_is_not_held_to_a_new_letters_rules(erp: FakeErpnext, roster: SimpleNamespace,
+                                                                   monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ERPNEXT_DRAFT_COMMENT_DOCTYPES", "Dunning")
+    summary = {"operation": "comment", "doctype": "Dunning", "name": "DUNN-0001", "modified": "m", "text": "Called them."}
+    erp.replies.append(json.dumps({"ok": True, "summary": summary, "fingerprint": FP}))
+    out = _propose(_owner_turn(roster, "note that I called"),
+                   {"why": "x", "doctype": "Dunning", "operation": "comment", "name": "DUNN-0001",
+                    "fields": {"text": "Called them."}})
+    assert "decision_id" in out, out
+
+
+@pytest.mark.parametrize("name", ["Smith & Sons", "Müller GmbH", "Harbor (EU)", "ACC/2026/001", "O'Brien, Ltd"])
+def test_a_document_name_is_any_name_erpnext_allows(name: str) -> None:
+    assert not isinstance(changes.check_change("comment", "Purchase Invoice", name, {"text": "hi"}), str)
+
+
+@pytest.mark.parametrize("name", ["", "   ", "new\nline", "tab\there", "x" * 141])
+def test_a_malformed_name_is_refused(name: str) -> None:
+    assert isinstance(changes.check_change("comment", "Purchase Invoice", name, {"text": "hi"}), str)
+
+
+def test_a_summary_naming_a_change_not_asked_for_leaves_no_card(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    extra = {**UPDATE_SUMMARY, "changes": [*UPDATE_SUMMARY["changes"],
+                                           {"field": "supplier", "label": "Supplier", "before": "A", "after": "B"}]}
+    erp.replies.append(json.dumps({"ok": True, "summary": extra, "fingerprint": FP}))
+    assert "error" in _propose(_owner_turn(roster, "change it"), _ask("update", UPDATE))
+
+
+def test_the_model_chip_and_records_say_change_or_comment(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    erp.replies.append(json.dumps({"ok": True, "operation": "update", "doctype": "Purchase Invoice",
+                                   "name": UPDATE_SUMMARY["name"], "summary": UPDATE_SUMMARY, "fingerprint": FP}))
+    out = _propose(_owner_turn(roster, "change it"), _ask("update", UPDATE))
+    assert "submit in ERPNext" not in out["note"] and "stays unsubmitted" in out["note"]
+    chip = drafts.chip({}, out)
+    assert chip is not None and "change to a Purchase Invoice" in chip["summary"]
+    from openexecutive.integrations import erpnext_oversight
+
+    record = next(r for r in erpnext_oversight.records() if r["decision_id"] == out["decision_id"])
+    assert record["operation"] == "update" and record["target"] == UPDATE_SUMMARY["name"]
+
+
+def test_a_two_thousand_character_comment_is_shown_whole() -> None:
+    text = ("Line of the comment.\n" * 120)[:2000].strip()
+    summary = {"operation": "comment", "doctype": "Purchase Invoice", "name": "X-1", "text": text}
+    view = changes.card_view("comment", "Purchase Invoice", "X-1", summary)
+    assert {"label": "Comment", "value": text} in view["fields"]

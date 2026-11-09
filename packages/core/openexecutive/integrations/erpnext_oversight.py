@@ -135,6 +135,8 @@ CSV_COLUMNS = (
     "unchanged",
     "last_error",
     "private",
+    "operation",
+    "target",
 )
 
 
@@ -213,6 +215,9 @@ def records(
             "decision_id": card.id,
             "card_key": card.idempotency_key,
             "doctype": payload.get("doctype"),
+            # create, or update / comment on an existing document (erpnext_changes).
+            "operation": payload.get("operation") or "create",
+            "target": payload.get("name"),
             "proposed_at": card.created_at,
             "asked_by": payload.get("asked_by"),
             "asked_in": asked_in,
@@ -463,5 +468,6 @@ def to_csv(rows: list[dict[str, Any]]) -> str:
             erp.get("state"), erp.get("modified"), erp.get("modified_by"),
             _yes(r.get("seal_in_log")), _yes(erp.get("unchanged")),
             r.get("last_error"), "yes" if r.get("private") else "",
+            r.get("operation") or "create", r.get("target"),
         ]])
     return buffer.getvalue()
