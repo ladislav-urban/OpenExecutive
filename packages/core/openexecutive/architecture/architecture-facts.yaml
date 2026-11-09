@@ -10575,8 +10575,10 @@ integrations:
     install's model only.
     Withheld tools (connected_systems.ERPNEXT_WITHHELD_TOOLS, Nov 9, 2026):
     oe_connector serves, and this install pins, tools nothing here may call
-    yet, erpnext__read_attachment (intake) and erpnext__supplier_bank_changed
-    (the payment-check job). call_tool refuses them first in its ERPNext
+    yet, erpnext__read_attachment (intake), erpnext__supplier_bank_changed
+    (the payment-check job) and erpnext__customer_payment_record (phase 1's
+    collections job; many customers' payment behaviour in one call, so never
+    offered to chat). call_tool refuses them first in its ERPNext
     block, under every marker and on every turn, and _drop_blocked_tools
     hides them, with the draft tools no card uses yet (Dunning, update,
     comment), which _check_erpnext_draft refuses anyway. Each moves to a
