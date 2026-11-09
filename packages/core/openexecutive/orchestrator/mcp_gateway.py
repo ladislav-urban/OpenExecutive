@@ -4288,7 +4288,8 @@ class MCPGateway:
             return refused
         # A turn another AI app asked over Open Executive's MCP server runs
         # gateway reads only (schedule_tools.MCP_CLIENT_MCP_TOOLS), whether or
-        # not it may act, plus mail only to the owner (levels.only_to_owner):
+        # not it may act (mail only to the owner too: levels.only_to_owner
+        # never holds on someone else's turn):
         # anything else goes on an approval card. The
         # chat loop already refuses anything else; this holds for any other
         # path.

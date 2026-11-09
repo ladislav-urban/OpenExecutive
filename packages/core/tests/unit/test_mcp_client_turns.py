@@ -333,11 +333,12 @@ def test_an_mcp_client_turn_reaches_gateway_reads_only(roster: SimpleNamespace) 
     results = _results(provider)
     # A search shows every tool; the one check decides at dispatch.
     assert results["tu-1"] == _SEARCH_TEXT
-    # Mail only to the owner runs; the draft and the Slack post wait on cards.
-    for held in ("tu-3", "tu-4"):
+    # Another AI app's words are someone else's: even mail only to the owner
+    # waits on a card (the owner, Nov 9, 2026), as do the draft and the Slack post.
+    for held in ("tu-2", "tu-3", "tu-4"):
         assert _held(results[held])
     called = [args["tool_name"] for name, args in reached if name == "call_tool"]
-    assert called == ["google_workspace__send_gmail_message", "google_workspace__search_drive_files"]
+    assert called == ["google_workspace__search_drive_files"]
 
 
 def test_the_gateway_itself_refuses_a_send_on_an_mcp_client_turn(roster: SimpleNamespace) -> None:

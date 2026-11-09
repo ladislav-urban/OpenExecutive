@@ -140,6 +140,28 @@ def test_only_to_owner_reads_every_recipient() -> None:
     assert not levels.only_to_owner("call_tool", "not a dict")
 
 
+def test_a_message_only_to_the_owner_waits_on_someone_elses_turn() -> None:
+    owner = people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email=OWNER)
+    teammate = people_store.upsert_person(full_name="Ben Teammate", email="ben@co.example")
+    people_registry.invalidate()
+    to_owner = {"name": "google_workspace__send_gmail_message", "arguments": {"to": OWNER, "subject": "s"}}
+    # The owner's own turn and their own unattended run (a reminder they set).
+    for own in (Session(caller_person_id=owner), Session(unattended=True)):
+        with set_session(own):
+            assert levels.only_to_owner("call_tool", to_owner)
+    # Someone else's turn: a teammate, a stranger's mail, another AI app, a
+    # host page, a teammate's queued run.
+    for other in (
+        Session(caller_person_id=teammate),
+        Session(sender_off_team=True),
+        Session(from_mcp_client=True),
+        Session(from_host=True),
+        Session(unattended=True, run_for_person_id=teammate),
+    ):
+        with set_session(other):
+            assert not levels.only_to_owner("call_tool", to_owner), other
+
+
 def test_a_step_that_cant_be_carried_out_is_told_not_dropped() -> None:
     out = json.loads(levels.not_carriable_error("run_script", levels.PRIVATE))
     assert "run_script" in out["error"] and "can't wait on a card" in out["error"]
