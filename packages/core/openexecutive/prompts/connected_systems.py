@@ -171,8 +171,9 @@ ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, 
 # nothing here may call yet: reading an attachment (S4) waits for intake's
 # tool-less extraction, a supplier's bank-change fact (S5) for the
 # payment-check job, and customers' payment records (phase 1) for the
-# collections job, which reads many customers' payment behaviour at once. The gateway refuses them on every path, with no marker
-# that lifts it, and tool search never shows them. When one's own path
+# collections job, which reads many customers' payment behaviour at once.
+# The gateway refuses them on every path, with no marker that lifts it, and
+# tool search never shows them. When one's own path
 # exists it moves to a list gated by that path's marker, never to the tools
 # the model is offered.
 ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({

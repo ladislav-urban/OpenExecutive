@@ -34,8 +34,8 @@ ERPNEXT_PREFIX = "erpnext__"
 TOOL_DIGESTS: dict[str, str] = {
     "answer_check_context": "e47289b5bb6c6d13adf87286a8faacb55014aaca18b752ae25a424f482db59b6",
     "audit_drafts": "086c6aaa377a06f3104d176d57cd9201ff14ab9e0f510a059e373df67d992149",
-    "customer_payment_record": "fc960953b41f8a2cfc639e1d3277b38e348883a089bda0f5d60707ea18f7d4ea",
     "confirm_figure": "7e92126de1a33bced94e4b247220bac4fddaf8c26f0ec141fd612011cf34102b",
+    "customer_payment_record": "fc960953b41f8a2cfc639e1d3277b38e348883a089bda0f5d60707ea18f7d4ea",
     "describe_doctype": "857eb11de056c01ca1a85be1552e22e04068b63bf37ccdf7de15edfc99cc13a3",
     "describe_report": "702e1c25ef62f819c2efe0421270b83779f882ae709067cc2189696e32ff4f7c",
     "draft_check": "d203c32661b2c09d54815cca812e9e447243a121e4e9ce0487d08d35eed9921d",
