@@ -15,6 +15,7 @@ the hardcoded ``OPENROUTER_MODELS`` snapshot when nothing has been loaded.
 from __future__ import annotations
 
 import re
+import weakref
 from dataclasses import replace
 from typing import Any, Literal, TypedDict
 
@@ -490,10 +491,29 @@ def get_provider(model: str) -> LLMProvider:
     return _capped(wrap_provider(_openrouter(), "openrouter"))
 
 
+# One cost-cap wrapper per backend object, so a singleton backend stays one
+# object to its callers. Weak keys: a backend wrapped per call (tracing on)
+# isn't kept alive by it.
+_CAPPED: weakref.WeakKeyDictionary[Any, LLMProvider] = weakref.WeakKeyDictionary()
+
+
 def _capped(provider: LLMProvider) -> LLMProvider:
     from openexecutive.providers.capped import CappedProvider
 
-    return CappedProvider(provider)
+    try:
+        wrapped = _CAPPED.get(provider)
+        if wrapped is None:
+            wrapped = _CAPPED[provider] = CappedProvider(provider)
+    except TypeError:  # a backend that can't be weakly referenced: wrap it each time
+        wrapped = CappedProvider(provider)
+    return wrapped
+
+
+def backend_of(provider: Any) -> Any:
+    """The backend under the cost-cap and tracing wrappers."""
+    while hasattr(provider, "_inner"):
+        provider = provider._inner
+    return provider
 
 
 def pdf_input_supported(model: str) -> bool:

@@ -569,6 +569,36 @@ providers:
       what: Thin delegate over anthropic.AsyncAnthropic; default for the Claude trio when OPENROUTER_ENABLED is off.
     - id: OpenRouterProvider
       what: httpx-backed client targeting OpenRouter's OpenAI-format /chat/completions endpoint. Translates request/response/stream shape via openexecutive.providers.translator.
+  cost_caps: |
+    openexecutive.audit.cost_caps and providers.capped (S7, Nov 9, 2026).
+    Three caps in USD, each 0 (off) by default: COST_CAP_PERSON_DAILY_USD,
+    COST_CAP_JOB_DAILY_USD, COST_CAP_MONTHLY_USD. get_provider wraps every
+    hosted backend (Anthropic, OpenRouter; never a local model) in
+    CappedProvider, so every model call checks cost_caps.check before it is
+    sent and raises CostCapReached when the spend so far plus the call's
+    worst case (the prompt's JSON at one token per three characters at the
+    full input price, plus max_tokens at the output price) would pass a cap
+    that is on. With every cap off nothing is read. A call counts against up
+    to three scopes in the usage_counters table (scope, key, day; episodic
+    DB, so it survives a restart): person (Session.run_for_person_id, else
+    caller_person_id, else gate_sender_person_id), job (cost_caps.bind_job:
+    scheduled:<kind>[:<department>] for each scheduled action, alert-triage,
+    take-the-lead, action-card, and each of the scheduler's periodic sweeps;
+    an unattended session with none bound counts as "unattended") and total
+    ("all", which the monthly cap sums over the month). A day runs in the
+    company's time zone (workspace_settings.get_user_timezone). The principal
+    is never held to the person cap; the monthly cap holds for every call.
+    audit.usage.log_model_usage adds each finished call's cost (the
+    provider's, else the price table's; an unpriced hosted model at the
+    table's highest prices) and records person_id and job_id on the
+    cache_event row. Fails closed: a counter that can't be read refuses the
+    call. A refusal files one card a day per cap and key for the principal
+    (source cost_cap, private, external_id <scope>:<key>:<day>) and sends it
+    with deliver_to_person. providers.refusal.refusal_reply answers the
+    asker with CostCapReached.reply() on every route. A scheduled action a
+    cap stopped is rescheduled to the cap's reset (scheduler.runner.
+    _failed_or_retry, reschedule_action) without spending an attempt. Voice
+    transcription is billed per minute and isn't capped.
   feature_gate: |
     openexecutive.providers.feature_gate.apply_feature_gates(spec, kwargs)
     runs inside the OpenRouter provider before translation. Spec-driven
