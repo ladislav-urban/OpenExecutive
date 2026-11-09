@@ -173,7 +173,7 @@ def test_the_show_tool_stays_off_the_persons_own_page() -> None:
 
 
 def test_a_host_turn_proposes_only_as_a_signed_in_person(monkeypatch: pytest.MonkeyPatch) -> None:
-    # The owner's decision 114.a: the desk may propose a draft card, but only
+    # Decided Nov 6, 2026: the desk may propose a draft card, but only
     # as the person signed in to this app (tests/unit/test_desk_drafting.py);
     # a page that names no signed-in person is refused.
     monkeypatch.setattr(erpnext_drafts, "drafts_on", lambda: True)

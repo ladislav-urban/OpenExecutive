@@ -460,7 +460,7 @@ def offer_refusal(session: Any) -> str | None:
         # this app (``_proposer``: erpnext_caller's host caller, signed, on a
         # conversation private to them). It never approves: a card is
         # approved only in this app's own page or frame (``approve``), signed
-        # in (the owner's decision 114.a, Nov 6, 2026).
+        # in (decided Nov 6, 2026).
         if getattr(session, "private_to_principal", False) is True or str(getattr(session, "origin_channel", "") or "") == "email":
             return "ERPNext drafts are proposed only when the person asks in a chat, never from an email."
         who = _proposer(session)

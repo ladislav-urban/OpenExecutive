@@ -5596,8 +5596,8 @@ chat:
     disconnected saved as streamed. Fails open on an internal error; code
     alone when out of time. answer_check audit row, counts only.
     ERPNEXT_ANSWER_CHECK=off|correct|correct_keep (default correct;
-    correct_keep never replaces a reply whole, owner's decision 90.a). Why: the pilot's
-    reshoots (oe_connector#413-#415) quoted figures ERPNext didn't hold.
+    correct_keep never replaces a reply whole, decided Nov 5, 2026). Why: a test deployment's
+    replies quoted figures ERPNext didn't hold.
     Names (PR (b), orchestrator/name_check.py): document names exact or not
     known; table cells under a name label and bold list openers with a figure
     must be a source name; near one source name (case/punctuation, or 0/1/2
@@ -10396,7 +10396,7 @@ integrations:
     DM channel. Failure to schedule never blocks the booking.
   erpnext: |
     ERPNext is an optional URL MCP server served by the oe_connector Frappe
-    app (github.com/ladislav-urban/oe_connector) inside the ERPNext site:
+    app inside the ERPNext site (not part of this repository):
     "erpnext": {"url": "https://<site>/api/method/oe_connector.mcp.endpoint.handle"}
     in company/mcp_servers.json. extensible-mcp (pinned rev) sends a URL
     server's credential only as `Authorization: Bearer <token>` from a
@@ -11111,6 +11111,14 @@ integrations:
     _search. A release that changes a definition updates both pins in one
     pair of PRs; until then that tool is unavailable here. It guards this
     install's model only.
+    Withheld tools (connected_systems.ERPNEXT_WITHHELD_TOOLS, Nov 9, 2026):
+    oe_connector serves, and this install pins, tools nothing here may call
+    yet, erpnext__read_attachment (intake) and erpnext__supplier_bank_changed
+    (the payment-check job). call_tool refuses them first in its ERPNext
+    block, under every marker and on every turn, and _drop_blocked_tools
+    hides them, with the draft tools no card uses yet (Dunning, update,
+    comment), which _check_erpnext_draft refuses anyway. Each moves to a
+    marker-gated list when its own path exists, never to PINNED_ERPNEXT_TOOLS.
 
     A2A for suppliers' agents (design "Next", item 3;
     integrations/erpnext_a2a.py, erpnext_a2a_agent.py). A supplier's own AI

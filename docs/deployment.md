@@ -601,19 +601,16 @@ free/busy), so it is advisory in a narrower sense than Google's.
 
 ## ERPNext (oe_connector)
 
-ERPNext's data and reports come from the
-[oe_connector](https://github.com/ladislav-urban/oe_connector) Frappe app,
-installed in the ERPNext site. Unlike the two servers above it is not a child
-of the gateway: the app serves MCP over HTTP inside ERPNext, and the gateway
-reaches it by URL. It offers six read tools (`erpnext__search_catalog`,
+ERPNext's data and reports come from the oe_connector Frappe app, which
+runs inside the ERPNext site and is not part of this repository. Unlike the
+two servers above it is not a child of the gateway: the app serves MCP over
+HTTP inside ERPNext, and the gateway reaches it by URL. It offers six read tools (`erpnext__search_catalog`,
 `erpnext__run_report`, `erpnext__list_records`, …), all read-only, under a
 service user that holds only the "OE Reader" role.
 
-1. In the ERPNext bench, install the app and create the service user:
+1. In the ERPNext bench, with the app installed, create the service user:
 
    ```bash
-   bench get-app https://github.com/ladislav-urban/oe_connector
-   bench --site <site> install-app oe_connector
    bench --site <site> oe-connector-setup-reader [--company "Acme Ltd"]
    ```
 
@@ -974,8 +971,8 @@ reports only, rows capped at 500, and a company required for totals when the
 user sees several. Every `erpnext__*` call is in the audit log as a
 `tool_invocation` row, and its result reaches the model inside an
 `<untrusted_content source="erpnext">` block, since customers and suppliers
-write some of ERPNext's text. The design, including later phases (the
-morning brief's ERP block), is in the app's `docs/erpnext-integration.md`.
+write some of ERPNext's text. The design is in the oe_connector app's
+own documentation.
 
 ### Inside ERPNext's desk (the single UI)
 
@@ -1074,7 +1071,7 @@ UI, which reads it at start. Nothing in ERPNext needs restarting. From then on:
 
 Each app keeps working on its own: Open Executive at `exec.example.com`, ERPNext
 without the Dynocortex screens. oe_connector's half of the stop is in its
-[`docs/stop-runbook.md`](https://github.com/ladislav-urban/oe_connector/blob/main/docs/stop-runbook.md):
+own stop runbook:
 `bench --site <site> set-config oe_connector_openexecutive_ui_url None` removes
 every Dynocortex screen from the desk.
 
@@ -1135,8 +1132,7 @@ curl -s -H "x-api-key: $BACKEND_SHARED_SECRET" \
 ### Stopping ERPNext access
 
 OpenExecutive's half of the stop runbook. ERPNext's half, its own switches
-and the quarterly rehearsal are in oe_connector's
-[`docs/stop-runbook.md`](https://github.com/ladislav-urban/oe_connector/blob/main/docs/stop-runbook.md).
+and the quarterly rehearsal are in oe_connector's own stop runbook.
 Each setting below is read at start, so restart the API after changing it.
 
 - **No new drafts:** `ERPNEXT_DRAFTS_ENABLED=false`. No card is offered, and

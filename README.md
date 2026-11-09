@@ -1,3 +1,30 @@
+# OpenExecutive: Dynocortex's fork
+
+This repository is **Dynocortex Limited's fork of [OpenExecutive](https://github.com/SenteLabsAI/OpenExecutive)**, the open-source executive agent built by [SenteLabs](https://sentelabs.ai). It is licensed under the Apache License 2.0, like upstream (see [LICENSE](LICENSE) and [NOTICE](NOTICE)). SenteLabs doesn't endorse this fork, and isn't responsible for it.
+
+Everything upstream does still works here. The fork adds an integration with [ERPNext](https://erpnext.com), an open-source ERP. The ERP side is a separate app that runs inside the ERP and serves MCP over HTTP; it isn't part of this repository, and the ERP-side app isn't published.
+
+## What this fork adds
+
+- **Reading the ERP.** The ERP joins as a URL MCP server behind the gateway, with six read tools: run a report, list records, get one record, describe a DocType, describe a report, search the catalog. Every result names its company, currency and period, and reaches the model as untrusted content.
+- **Each call as the person asking.** The gateway adds a signed caller assertion to each ERP call: Ed25519, bound to the tool and its exact arguments, valid for 60 seconds, used once. The ERP runs the call as that person's own user, or refuses it.
+- **Pinned tool definitions.** Each ERP tool's name, description and schema is hashed, and a tool whose definition no longer matches its pin is dropped at discovery.
+- **Drafts a person approves.** The agent can propose four kinds of documents as drafts: restock requests, purchase orders, quotations and tasks. A person approves each card. The card carries a fingerprint of the draft, and the approval is refused if the draft changed since the card was proposed. Drafts are never submitted, paid, cancelled or deleted.
+- **An oversight record per draft.** `GET /erpnext/drafts/oversight` exports, as JSON or CSV, who asked, what the card showed, who approved it and what became of it, with the seal of the ERP's hash-chained draft log.
+- **Chat from inside the ERP.** Endpoints for the ERP's docked panel, alerts from the ERP into triage, and a supplier-only, read-only agent-to-agent endpoint, each with its own signed requests.
+- **OpenExecutive's pages inside the ERP's desk.** A frame contract (`oe-embed/v1`), a host-origin allowlist, and the pinned API the desk's native screens call. Approvals stay in OpenExecutive's own frame.
+- **One directory.** People can follow Keycloak groups, read through a read-only client, with back-channel logout.
+
+This side's configuration is in [docs/deployment.md](docs/deployment.md), section "ERPNext (oe_connector)", and [docs/auth.md](docs/auth.md). It needs the ERP-side app to connect to. Files changed from upstream are listed in [CHANGES-DYNOCORTEX.md](CHANGES-DYNOCORTEX.md).
+
+**Upstream's README follows.** Statements about SenteLabs' own plans and offerings, such as a managed cloud service, are SenteLabs' and not Dynocortex's.
+
+**Security:** report issues in this fork's changes to security@dynocortex.com ([SECURITY.md](SECURITY.md)), and issues in upstream's code to SenteLabs.
+
+*Dynocortex and the Dynocortex logo are trademarks of Dynocortex Limited. ERPNext is a trademark of its owner, and OpenExecutive is SenteLabs' project. Neither endorses this fork. The Apache License grants no trademark rights.*
+
+---
+
 # Open Executive
 
 [![CI](https://github.com/SenteLabsAI/OpenExecutive/actions/workflows/ci.yml/badge.svg)](https://github.com/SenteLabsAI/OpenExecutive/actions/workflows/ci.yml)
