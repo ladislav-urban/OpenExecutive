@@ -262,9 +262,11 @@ async def evaluate_and_dispatch(
         )
         if named:
             topic_tags = [*topic_tags, *(f"{NAMED_TAG_PREFIX}{i}" for i in named)]
-            # On the first named person's Home as theirs; the principal and
-            # the others named see it too.
-            routed_to = named[0]
+            # Still the principal's card (routed to them, theirs to act on);
+            # the named people only see it. A different set of readers is a
+            # card of its own: folding it into the open one would keep the
+            # old readers on the new figures.
+            dedup_key = f"{dedup_key}:named:{','.join(str(i) for i in sorted(named))}"
 
     # A replay of the SAME upstream event (webhook retry, re-poll) is a
     # no-op, exactly as before: the (source, external_id) row already exists.

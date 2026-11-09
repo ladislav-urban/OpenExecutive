@@ -10644,11 +10644,13 @@ integrations:
     erpnext_events.named_person_ids matches each to an active team member on
     People by email or alias (the principal and anyone not on People left
     out). The alert stays private (PRIVATE_ALERT_TAG) and gains a named:<id>
-    tag per match (alerts.models.named_people, private erpnext alerts only),
-    routed to the first: it shows on those people's own Home
-    (today._board_alerts) and opens on its route (alerts._visible_alert) for
-    them, and dispatcher.push_to_named sends it to each one's own private chat
-    only (deliver_to_person chat_only). It never reaches a broadcast, a live
+    tag per match (alerts.models.named_people, private erpnext alerts only).
+    It stays routed to the principal, whose card it is to act on: the named
+    people see it on their own Home (today._board_alerts), look-only
+    (card_actions as for a demo caller; the alert routes refuse them), and
+    dispatcher.push_to_named sends it to each one's own private chat only
+    (deliver_to_person chat_only, marked as ERPNext's figures). A different
+    set of readers keys a card of its own, and a demo person is never named. It never reaches a broadcast, a live
     push, a department or anyone's brief, digest or reflection. The pipeline
     strips any named: tag the triage model writes, so only the event's own
     list names anyone. No match: private to the principal, as before.

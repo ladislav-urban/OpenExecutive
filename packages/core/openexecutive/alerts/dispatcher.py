@@ -191,7 +191,17 @@ async def push_to_named(alert: Alert, person_ids: list[int]) -> int:
                 continue
             if not is_within_availability(person, now=datetime.now(UTC), quiet_hours=True, urgent=urgent):
                 continue
-            delivery = await deliver_to_person(person, _format_broadcast_body(alert), label="Alert", chat_only=True)
+            from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT
+
+            # ERPNext's figures: the chat it lands in is marked as having read
+            # ERPNext, so a reply restating them stays out of others' turns.
+            token = DELIVERING_ERPNEXT.set(True)
+            try:
+                delivery = await deliver_to_person(
+                    person, _format_broadcast_body(alert), label="Alert", chat_only=True,
+                )
+            finally:
+                DELIVERING_ERPNEXT.reset(token)
             sent += int(delivery.ok)
         except Exception:
             logger.exception("push_to_named failed for alert=%s person=%s", alert.id, person_id)

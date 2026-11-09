@@ -202,10 +202,15 @@ def named_person_ids(users: list[str]) -> list[int]:
     can't be read names no one. Never raises."""
     if not users:
         return []
+    from openexecutive.people.demo import is_demo_person
     from openexecutive.people.store import list_people
 
     try:
-        roster = [p for p in list_people() if p.active and not p.is_principal and p.id is not None]
+        # A demo person looks only, and is never told a real hold.
+        roster = [
+            p for p in list_people()
+            if p.active and not p.is_principal and p.id is not None and not is_demo_person(p.id)
+        ]
     except Exception:
         logger.exception("erpnext events: couldn't read People to name an alert's readers")
         return []
