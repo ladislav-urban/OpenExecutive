@@ -79,6 +79,9 @@ DRAFT_TOOLS: dict[str, str] = {
     # Phase 4b: they face a customer or commit money once submitted.
     "Quotation": "erpnext__draft_quotation",
     "Purchase Order": "erpnext__draft_purchase_order",
+    # Phase 0 (S2): a payment reminder for an overdue invoice. Submitting it
+    # sends nothing; the letter goes out only when a person prints or emails it.
+    "Dunning": "erpnext__draft_dunning",
 }
 # The drafts ERPNext prices: its draft_check returns each line's rate and
 # amount and the totals (a missing rate comes from its price list).
@@ -131,6 +134,13 @@ _MR_LINE_FIELDS = frozenset({"item_code", "qty", "warehouse"})
 _QUOTATION_FIELDS = frozenset({"company", "customer", "valid_till", "items"})
 _PO_FIELDS = frozenset({"company", "supplier", "schedule_date", "items", "material_request", "supplier_quotation"})
 _PRICED_LINE_FIELDS = frozenset({"item_code", "qty", "rate", "warehouse"})
+_DUNNING_FIELDS = frozenset({"sales_invoice", "dunning_type", "posting_date"})
+# How oe_connector refuses a Dunning whose invoice gained an overdue
+# installment after the card's check (build_dunning): nothing was made, and
+# approving again would refuse again, so the card closes as changed.
+_DUNNING_STALE = "posting_date must be after every overdue installment"
+# What the card shows of the letter's text: a preview, marked when cut.
+LETTER_SHOWN_MAX = 600
 
 
 def enabled_doctypes() -> tuple[str, ...]:
@@ -345,11 +355,46 @@ def _purchase_order(fields: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _dunning(fields: dict[str, Any]) -> dict[str, Any]:
+    _only(fields, _DUNNING_FIELDS, "Dunning")
+    out: dict[str, Any] = {"sales_invoice": _name(fields.get("sales_invoice"), "sales_invoice", required=True)}
+    dunning_type = _name(fields.get("dunning_type"), "dunning_type", required=False)
+    if dunning_type:
+        out["dunning_type"] = dunning_type
+    posting_date = _date(fields.get("posting_date"), "posting_date", required=False)
+    if posting_date:
+        # A day's grace for ERPNext's own time zone; it refuses a future date itself.
+        if posting_date > (datetime.now(UTC) + timedelta(days=1)).date().isoformat():
+            raise ValueError("posting_date can't be in the future.")
+        out["posting_date"] = posting_date
+    return out
+
+
+def pin_from_check(doctype: str, fields: dict[str, Any], summary: Any) -> dict[str, Any] | str:
+    """``fields`` with what ERPNext's check settled that approval must send
+    again, or why no card can be left. A Dunning keeps the letter date the
+    check used (its summary's ``posting_date``), so a card approved on a
+    later day builds the same letter with the same interest. Only the format
+    is checked here: ERPNext dates it in its own time zone, and checks the
+    date again at approval."""
+    if doctype != "Dunning" or fields.get("posting_date"):
+        return fields
+    got = summary.get("posting_date") if isinstance(summary, dict) else None
+    if not isinstance(got, str) or not _DATE_RE.fullmatch(got):
+        return "ERPNext didn't say which date the letter has, so no card was left. Try again in a moment."
+    try:
+        datetime.strptime(got, "%Y-%m-%d")
+    except ValueError:
+        return "ERPNext gave the letter an impossible date, so no card was left."
+    return {**fields, "posting_date": got}
+
+
 _SHAPES = {
     "ToDo": _todo,
     "Material Request": _material_request,
     "Quotation": _quotation,
     "Purchase Order": _purchase_order,
+    "Dunning": _dunning,
 }
 
 
@@ -596,6 +641,8 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
             shown.append({"label": "On", "value": _one_line(reference)})
     elif doctype in PRICED:
         _priced_view(doctype, got, fields, add, shown, lines, notes)
+    elif doctype == "Dunning":
+        _dunning_view(got, fields, add, shown, notes)
     else:
         add("Company", "company")
         add("Type", "material_request_type")
@@ -619,6 +666,56 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
             names = ", ".join(_one_line(u, NAME_MAX) for u in unpriced[:MAX_LINES])
             notes.append(f"No valuation or last purchase rate in ERPNext, so not in the estimate: {names}")
     return {"fields": shown, "lines": lines, "notes": notes}
+
+
+def _letter(value: Any) -> str:
+    """A letter's text as the card shows it: tags out, one line, a preview
+    marked when cut."""
+    from openexecutive.utils.html_tags import strip_tags
+
+    # A paragraph or line break is a space, so its words don't run together.
+    spaced = re.sub(r"<\s*(?:/\s*(?:p|div|li|h\d)|br\s*/?)\s*>", " ", str(value or ""), flags=re.IGNORECASE)
+    text = " ".join(strip_tags(spaced).split())
+    return text if len(text) <= LETTER_SHOWN_MAX else text[:LETTER_SHOWN_MAX].rstrip() + "…"
+
+
+def _dunning_view(
+    got: dict[str, Any], fields: dict[str, Any], add: Callable[..., None],
+    shown: list[dict[str, str]], notes: list[str],
+) -> None:
+    """A Dunning's card: whom it reminds of what, each overdue installment,
+    the charges it adds and what the letter says. All of it ERPNext's own
+    reading (draft_check's summary) of the stored fields."""
+    currency = _currency(got.get("currency"))
+    add("Customer", "customer_name", "customer")
+    add("Invoice", "sales_invoice")
+    add("Reminder type", "dunning_type")
+    add("Letter date", "posting_date")
+    raw_rows = got.get("rows")
+    rows: list[Any] = raw_rows if isinstance(raw_rows, list) else []
+    for row in rows[:MAX_LINES]:
+        if not isinstance(row, dict):
+            continue
+        due = _one_line(row.get("due_date"), 20)
+        days = row.get("overdue_days")
+        days_text = f", {days} days overdue" if isinstance(days, int) and not isinstance(days, bool) else ""
+        shown.append({
+            "label": f"Due {due}",
+            "value": f"{_money(row.get('outstanding'))} {currency} outstanding{days_text}, "
+                     f"interest {_money(row.get('interest'))}".replace("  ", " "),
+        })
+    if len(rows) > MAX_LINES:
+        notes.append(f"And {len(rows) - MAX_LINES} more overdue installments.")
+    for label, key in (("Fee", "dunning_fee"), ("Interest", "total_interest"),
+                       ("Charges it adds", "dunning_amount"), ("The letter asks for", "grand_total")):
+        if _number(got.get(key)) is not None:
+            shown.append({"label": label, "value": f"{_money(got.get(key))} {currency}".strip()})
+    # The letter as the customer would read it: a template's text, shown as
+    # a field (never in the app's own notes), tags out, a marked preview.
+    for label, key in (("Letter", "body_text"), ("Closing", "closing_text")):
+        text = _letter(got.get(key))
+        if text:
+            shown.append({"label": label, "value": text})
 
 
 def _number(value: Any) -> float | None:
@@ -722,6 +819,10 @@ def _priced_view(
 
 
 def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
+    if doctype == "Dunning":
+        # One letter per invoice and type: asking again on a later day is the
+        # same draft, whose new fingerprint replaces the waiting card.
+        fields = {k: v for k, v in fields.items() if k != "posting_date"}
     return hashlib.sha256(
         json.dumps([person_id, doctype, fields], sort_keys=True).encode()
     ).hexdigest()[:32]
@@ -909,6 +1010,12 @@ async def _call(tool: str, arguments: dict[str, Any]) -> str:
 
 # How each DocType's fields read in the tool's description.
 _FIELD_HELP: dict[str, str] = {
+    "Dunning": (
+        "Dunning fields (a payment reminder for one overdue, submitted Sales Invoice): "
+        "sales_invoice, optional dunning_type (the company's default otherwise). Give "
+        "posting_date (YYYY-MM-DD) only when they name the letter's date; otherwise "
+        "leave it out and ERPNext dates it today."
+    ),
     "ToDo": (
         "ToDo fields: description, allocated_to (the assignee's ERPNext user email), "
         "optional priority (Low/Medium/High), date (YYYY-MM-DD), reference_type and "
@@ -1057,6 +1164,13 @@ async def _check_and_leave(
             "ERPNext did not accept this draft, so no card was left. Tell them why, in "
             f"your own words, and fix it only with what they tell you. ERPNext said:\n{said}"
         ), False
+    if doctype == "Dunning" and fingerprint_of(checked) is None:
+        # Its figures are the point: never a card that approves blind.
+        return _error("ERPNext didn't fingerprint this letter, so no card was left. Try again in a moment."), False
+    pinned = pin_from_check(doctype, fields, checked.get("summary"))
+    if isinstance(pinned, str):
+        return _error(pinned), False
+    fields = pinned
     view = card_view(doctype, checked.get("summary"), fields)
     from_panel = erpnext_panel_turn(session)
     from openexecutive.orchestrator.schedule_tools import host_turn
@@ -1285,7 +1399,7 @@ async def _carry_out(
         return created
     reason = _refusal_text(raw)
     # Anywhere in it: the MCP layer may put its own words before a tool's error.
-    if CHANGED_SINCE_PROPOSED in reason:
+    if CHANGED_SINCE_PROPOSED in reason or (doctype == "Dunning" and _DUNNING_STALE in reason):
         # Nothing was made, and approving again would refuse again: the card
         # is closed, and asking again leaves one with the draft as it is now.
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})

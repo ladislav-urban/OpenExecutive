@@ -868,6 +868,29 @@ approved. Each draft is tagged "OpenExecutive", commented with who asked and
 approved, and logged in ERPNext's "OE Draft" list; OpenExecutive's audit log
 has a row for each card proposed, created, failed or dismissed.
 
+A Dunning (a payment reminder for one overdue Sales Invoice) is made through
+ERPNext's own "Create > Dunning", with the Dunning Type's fee, interest and
+letter (the company's default type unless one is named). List it on both
+sides to turn it on:
+
+```bash
+ERPNEXT_DRAFT_DOCTYPES=ToDo,Material Request,Dunning
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_draft_doctypes '["ToDo", "Material Request", "Dunning"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Material Request": 5000, "Dunning": 500}'
+```
+
+Its cap is on what the letter adds, the fee and interest, in company
+currency. The card shows each overdue installment, the charges and the
+letter's text as ERPNext renders it, and keeps the letter date its check
+used, so approving it on a later day makes the same letter. A payment, an
+edited letter template or an installment falling due since the card closes
+it, and asking again shows the letter as it is now. Submitting a Dunning
+sends nothing: the letter reaches the customer only when someone prints or
+emails it.
+
 Teammates (phase 4b) can have drafts prepared too, each for themselves, once
 the API's environment says so:
 
