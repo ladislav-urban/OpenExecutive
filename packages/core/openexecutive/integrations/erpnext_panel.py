@@ -781,19 +781,24 @@ async def _answer(person: Any, email: str, conversation_id: str, message: str, p
             standing=True,
         )
         where = page_block(page)
-        reply = await asyncio.wait_for(
-            Executive(mcp_gateway=get_active_gateway()).chat(
-                user_message=f"{where}\n\n{message}" if where else message,
-                session=session,
-                retrieved_context=retrieved_context,
-                channel_context_block=context_block(session),
-                memory_text=message,
-                # No standing facts: they include teammates' own, "(per
-                # <name>)", and ERPNext's word is all that names this person.
-                standing_facts="",
-            ),
-            timeout=TURN_TIMEOUT_S,
-        )
+        from openexecutive.audit import cost_caps
+
+        # Its model calls are spent for the person ERPNext signed in, under
+        # their own cap (and the principal's exemption), never a shared one.
+        with cost_caps.bind_spender(person.id):
+            reply = await asyncio.wait_for(
+                Executive(mcp_gateway=get_active_gateway()).chat(
+                    user_message=f"{where}\n\n{message}" if where else message,
+                    session=session,
+                    retrieved_context=retrieved_context,
+                    channel_context_block=context_block(session),
+                    memory_text=message,
+                    # No standing facts: they include teammates' own, "(per
+                    # <name>)", and ERPNext's word is all that names this person.
+                    standing_facts="",
+                ),
+                timeout=TURN_TIMEOUT_S,
+            )
         return reply
 
 

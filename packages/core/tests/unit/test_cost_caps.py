@@ -373,3 +373,67 @@ def test_counters_that_cant_be_read_are_retried_not_deferred(monkeypatch: pytest
     monkeypatch.setattr(runner, "mark_action_failed_or_retry", lambda *_a: "pending")
     sick = cost_caps.CostCapReached("unreadable", "OperationalError", 0.0, 0.0, NOW)
     assert runner._failed_or_retry(7, sick) == "pending"
+
+
+def test_an_openrouter_stream_settles_to_its_real_cost(db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.providers.capped import CappedProvider
+
+    _caps(monkeypatch, monthly=100.0)
+
+    class _OpenRouterLikeStream:
+        # No current_message_snapshot: the finished message is kept here.
+        _finalized = SimpleNamespace(usage=SimpleNamespace(input_tokens=1000, output_tokens=100))
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+    class _Backend:
+        def messages_stream(self, **_k: Any) -> Any:
+            return _OpenRouterLikeStream()
+
+    async def _run() -> None:
+        async with CappedProvider(_Backend()).messages_stream(**KW):  # type: ignore[arg-type]
+            pass
+
+    asyncio.run(_run())
+    assert 0 < cost_caps.spend_today("total", "all") < cost_caps.worst_case(MODEL, KW)
+
+
+def test_a_call_the_provider_refused_costs_nothing(db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    import anthropic
+    import httpx
+
+    from openexecutive.providers.capped import CappedProvider
+
+    _caps(monkeypatch, monthly=100.0)
+    request = httpx.Request("POST", "https://api.example/v1/messages")
+
+    class _Backend:
+        async def messages_create(self, **_k: Any) -> Any:
+            raise anthropic.APIConnectionError(request=request)
+
+    with pytest.raises(anthropic.APIConnectionError):
+        asyncio.run(CappedProvider(_Backend()).messages_create(**KW))  # type: ignore[arg-type]
+    assert cost_caps.spend_today("total", "all") == 0.0
+
+
+def test_a_bound_spender_is_who_a_nameless_session_spends_for(db: SimpleNamespace) -> None:
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    panel = Session(origin_channel="erpnext")
+    token = current_session.set(panel)
+    try:
+        with cost_caps.bind_spender(db.teammate):
+            assert cost_caps._person_key(panel) == str(db.teammate)
+        with cost_caps.bind_spender(f"{cost_caps.OUTSIDE_PREFIX}a2a"):
+            assert cost_caps._person_key(Session()) == "outside:a2a"
+    finally:
+        current_session.reset(token)
+    # A workflow's steps are spent for its creator.
+    from openexecutive.workflows.chat_tools import in_workflow
+
+    with in_workflow("wf", db.teammate):
+        assert cost_caps._person_key(Session(unattended=True)) == str(db.teammate)

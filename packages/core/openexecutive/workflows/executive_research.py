@@ -880,6 +880,10 @@ async def _executive_synthesis_loop(
         turn_principal_role=effective_principal_role(outer_session),
     )
     ctx_token = current_session.set(synth_session)
+    # Its model calls are spent for whoever's turn started the run.
+    from openexecutive.audit import cost_caps
+
+    spender = cost_caps._spender.set(cost_caps.spender_of(outer_session))
 
     # Synthesis tools = full toolkit MINUS the research tools themselves.
     # The Executive should not call `run_executive_research` from
@@ -1026,6 +1030,7 @@ async def _executive_synthesis_loop(
                 })
             messages.append({"role": "user", "content": tool_results})
     finally:
+        cost_caps._spender.reset(spender)
         current_session.reset(ctx_token)
 
     return final_text, tool_calls

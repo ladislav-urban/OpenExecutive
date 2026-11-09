@@ -12,6 +12,7 @@ free.
 """
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
@@ -27,7 +28,23 @@ def _snapshot(stream: Any) -> Any:
     try:
         return stream.current_message_snapshot
     except Exception:  # noqa: BLE001
-        return None
+        pass
+    # The OpenAI-compatible stream (OpenRouter) keeps its finished message
+    # here instead.
+    return getattr(stream, "_finalized", None)
+
+
+def _not_billed(exc: BaseException) -> bool:
+    """Whether a call that raised ``exc`` cost nothing: the provider answered
+    with an error, or the connection failed before a request went out. A
+    timeout or a cancel may have come after the provider began work, so its
+    worst case stays counted."""
+    import anthropic
+    import httpx
+
+    if isinstance(exc, anthropic.APITimeoutError | httpx.TimeoutException):
+        return False
+    return isinstance(exc, anthropic.APIStatusError | anthropic.APIConnectionError | httpx.HTTPStatusError | httpx.ConnectError)
 
 
 class CappedProvider:
@@ -36,21 +53,35 @@ class CappedProvider:
 
     async def messages_create(self, **kwargs: Any) -> Any:
         model = str(kwargs.get("model") or "")
-        reservation = cost_caps.reserve(model, kwargs)
-        message = await self._inner.messages_create(**kwargs)
-        cost_caps.settle(reservation, model, message)
+        # SQLite work off the event loop: a busy DB never stalls other turns.
+        reservation = await asyncio.to_thread(cost_caps.reserve, model, kwargs)
+        try:
+            message = await self._inner.messages_create(**kwargs)
+        except BaseException as exc:
+            if _not_billed(exc):
+                await asyncio.to_thread(cost_caps.release, reservation)
+            raise
+        await asyncio.to_thread(cost_caps.settle, reservation, model, message)
         return message
 
     @asynccontextmanager
     async def _stream(self, kwargs: dict[str, Any]) -> AsyncIterator[Any]:
         model = str(kwargs.get("model") or "")
-        reservation = cost_caps.reserve(model, kwargs)
+        reservation = await asyncio.to_thread(cost_caps.reserve, model, kwargs)
         stream: Any = None
         try:
             async with self._inner.messages_stream(**kwargs) as stream:
                 yield stream
+        except BaseException as exc:
+            if stream is None and _not_billed(exc):
+                await asyncio.to_thread(cost_caps.release, reservation)
+                reservation = None  # type: ignore[assignment]
+            raise
         finally:
-            cost_caps.settle(reservation, model, _snapshot(stream) if stream is not None else None)
+            if reservation is not None:
+                await asyncio.to_thread(
+                    cost_caps.settle, reservation, model, _snapshot(stream) if stream is not None else None,
+                )
 
     def messages_stream(self, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
         return self._stream(kwargs)

@@ -68,6 +68,33 @@ def bind_job(job_id: str) -> Iterator[None]:
         _job.reset(token)
 
 
+# Whom a call is spent for when its session doesn't say: a People id (as a
+# string) or an outside bucket (``OUTSIDE_PREFIX``). Bound by paths whose
+# session carries no speaker though one is known: the ERPNext panel, a
+# supplier's agent, a research run's synthesis, a workflow's steps.
+_spender: ContextVar[str | None] = ContextVar("cost_cap_spender", default=None)
+
+
+@contextlib.contextmanager
+def bind_spender(key: int | str | None) -> Iterator[None]:
+    """Count every model call inside the block against ``key`` (a People id,
+    or an outside bucket) when its session names no one. ``None`` binds
+    nothing."""
+    if key is None:
+        yield
+        return
+    token = _spender.set(str(key))
+    try:
+        yield
+    finally:
+        _spender.reset(token)
+
+
+def spender_of(session: Any) -> str | None:
+    """The person key ``session`` is spent for, to carry into work it starts."""
+    return _person_key(session)
+
+
 def current_job() -> str | None:
     """The job the current call counts against, or None outside one."""
     job = _job.get()
@@ -194,6 +221,9 @@ def _person_id(session: Any) -> int | None:
         if email and attr != "run_for_person_id" and not authenticated:
             return None
         return value
+    bound = _spender.get()
+    if bound is not None and bound.isdigit():
+        return int(bound)
     return None
 
 
@@ -216,12 +246,14 @@ def _person_key(session: Any) -> str | None:
     if person is not None:
         return str(person)
     channel = _outside_channel(session)
-    return f"{OUTSIDE_PREFIX}{channel}" if channel else None
+    if channel:
+        return f"{OUTSIDE_PREFIX}{channel}"
+    return _spender.get()
 
 
 def _asker_is_outside() -> bool:
-    session = _session()
-    return _person_id(session) is None and _outside_channel(session) is not None
+    key = _person_key(_session())
+    return key is not None and key.startswith(OUTSIDE_PREFIX)
 
 
 def _is_principal(person_id: int) -> bool:
@@ -419,10 +451,36 @@ class Reservation:
 
 
 def _write(scopes: Any, day: str, amount: float, *, calls: int) -> None:
-    with contextlib.closing(_connect()) as conn, conn:
-        conn.execute(_SCHEMA)
-        for scope, key in scopes:
-            conn.execute(_UPSERT, (scope, key, day, amount, calls))
+    """Add ``amount`` and ``calls`` to each scope, in one write transaction
+    taken at once (BEGIN IMMEDIATE), tried twice under contention."""
+    for attempt in (1, 2):
+        try:
+            with contextlib.closing(_connect()) as conn:
+                conn.isolation_level = None
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    conn.execute(_SCHEMA)
+                    for scope, key in scopes:
+                        conn.execute(_UPSERT, (scope, key, day, amount, calls))
+                    conn.execute("COMMIT")
+                except BaseException:
+                    conn.execute("ROLLBACK")
+                    raise
+            return
+        except sqlite3.OperationalError:
+            if attempt == 2:
+                raise
+
+
+def release(reservation: Reservation) -> None:
+    """Take back a call's reservation: it was never billed (refused or
+    failed before an answer). Never raises."""
+    if not reservation.amount:
+        return
+    try:
+        _write(reservation.scopes, reservation.day, -reservation.amount, calls=-1)
+    except Exception:  # noqa: BLE001
+        logger.exception("cost caps: couldn't release a reservation; its worst case stays counted")
 
 
 def add(model: str, counts: dict[str, Any] | None, *, now: datetime | None = None) -> None:
@@ -441,10 +499,11 @@ def add(model: str, counts: dict[str, Any] | None, *, now: datetime | None = Non
 
 def worst_case(model: str, kwargs: dict[str, Any]) -> float:
     """The most one call with these arguments could cost: every prompt
-    token at the full input price (a cache hit is cheaper), and every
-    ``max_tokens`` token at the output price. A prompt is taken as one token
-    per three characters of its JSON, which is more than any tokenizer
-    counts for text."""
+    token at the dearer of the input and the 1-hour cache-write price, and
+    every ``max_tokens`` token at the output price. A prompt is taken as one
+    token per two characters of its JSON, which covers text in any script
+    but the rare one where a character is more than one token; settling
+    puts it right once the call answers."""
     if _is_local(model):
         return 0.0
     from openexecutive.audit.pricing import price_for
@@ -456,7 +515,7 @@ def worst_case(model: str, kwargs: dict[str, Any]) -> float:
         )
     except Exception:  # noqa: BLE001
         prompt = str(kwargs.get("messages"))
-    prompt_tokens = len(prompt) // 3 + 1
+    prompt_tokens = len(prompt) // 2 + 1
     price = price_for(model, prompt_tokens=prompt_tokens) or _top_price()
     if price is None:
         return 0.0
@@ -464,7 +523,8 @@ def worst_case(model: str, kwargs: dict[str, Any]) -> float:
         max_tokens = max(int(kwargs.get("max_tokens") or 0), 0)
     except (TypeError, ValueError):
         max_tokens = 0
-    return (prompt_tokens * price.input + max_tokens * price.output) / 1_000_000
+    prompt_price = max(price.input, price.cache_write_1h)
+    return (prompt_tokens * prompt_price + max_tokens * price.output) / 1_000_000
 
 
 def reserve(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) -> Reservation:
@@ -548,9 +608,7 @@ def check(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) ->
     """Raise :class:`CostCapReached` when a call with ``kwargs`` could pass a
     cap that is on, reserving nothing (a voice note, whose cost :func:`add`
     counts after)."""
-    reservation = reserve(model, kwargs, now=now)
-    if reservation.amount:
-        _write(reservation.scopes, reservation.day, -reservation.amount, calls=-1)
+    release(reserve(model, kwargs, now=now))
 
 
 def _refusal(

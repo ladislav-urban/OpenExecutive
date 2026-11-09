@@ -224,9 +224,14 @@ def in_workflow(workflow_name: str, creator_id: int | None) -> Iterator[None]:
     )
     chain = _chain.set((*_chain.get(), workflow_name))
     creator = _creator.set(creator_id)
+    from openexecutive.audit import cost_caps
+
+    # Its steps' model calls are spent for whoever created it.
+    spender = cost_caps._spender.set(str(creator_id) if creator_id is not None else cost_caps._spender.get())
     try:
         yield
     finally:
+        cost_caps._spender.reset(spender)
         _creator.reset(creator)
         _chain.reset(chain)
         _by_a_pass.reset(by_a_pass)
