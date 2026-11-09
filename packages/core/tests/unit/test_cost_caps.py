@@ -413,7 +413,10 @@ def test_a_call_the_provider_refused_costs_nothing(db: SimpleNamespace, monkeypa
 
     class _Backend:
         async def messages_create(self, **_k: Any) -> Any:
-            raise anthropic.APIConnectionError(request=request)
+            try:
+                raise httpx.ConnectError("refused", request=request)
+            except httpx.ConnectError as cause:
+                raise anthropic.APIConnectionError(request=request) from cause
 
     with pytest.raises(anthropic.APIConnectionError):
         asyncio.run(CappedProvider(_Backend()).messages_create(**KW))  # type: ignore[arg-type]

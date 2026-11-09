@@ -50,7 +50,11 @@ def _not_billed(exc: BaseException) -> bool:
         return True
     if isinstance(exc, anthropic.APITimeoutError | httpx.TimeoutException):
         return False
-    return isinstance(exc, anthropic.APIStatusError | anthropic.APIConnectionError | httpx.HTTPStatusError)
+    if isinstance(exc, anthropic.APIConnectionError):
+        # Only a connection never made; a read error may come after the
+        # provider took (and billed) the request.
+        return isinstance(exc.__cause__, httpx.ConnectError | httpx.ConnectTimeout)
+    return isinstance(exc, anthropic.APIStatusError | httpx.HTTPStatusError)
 
 
 async def _reserve(model: str, kwargs: dict[str, Any]) -> cost_caps.Reservation:
