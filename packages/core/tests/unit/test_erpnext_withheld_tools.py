@@ -105,3 +105,11 @@ def test_a_model_written_check_cannot_ask_for_an_update_or_a_credit_raise(erp: A
 
         assert "error" in json.loads(asyncio.run(go()))
     assert erp.calls == []
+
+
+def test_customers_payment_records_are_withheld_from_chat() -> None:
+    # Many customers' payment behaviour in one call: the collections job's
+    # own read, never the chat model's (phase 1).
+    assert "erpnext__customer_payment_record" in cs.ERPNEXT_WITHHELD_TOOLS
+    assert "customer_payment_record" in erpnext_tool_pin.TOOL_DIGESTS
+    assert "erpnext__customer_payment_record" not in cs.PINNED_ERPNEXT_TOOLS
