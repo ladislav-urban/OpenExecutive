@@ -130,7 +130,8 @@ def record_for(alert: Any) -> dict[str, str] | None:
     for Home's Open; None for any other alert, or a rule without one.
     Only an alert of source ``erpnext`` counts, which the model's
     ``create_alert`` may not use (``alert_tools.RESERVED_SOURCES``): this
-    module's events, whose ``dedup_key`` is ``private:erpnext:<kind>:<key>``,
+    module's events, whose ``dedup_key`` is ``private:erpnext:<kind>:<key>`` (a
+    named one adds ``:named:<ids>``),
     and a demo bundle's alerts (``cli.demo_reset``), shown to demo people and
     so not private, as ``erpnext:<kind>:<key>``. It names a record only;
     ERPNext decides whether the person may open it."""
@@ -202,14 +203,13 @@ def named_person_ids(users: list[str]) -> list[int]:
     can't be read names no one. Never raises."""
     if not users:
         return []
-    from openexecutive.people.demo import is_demo_person
     from openexecutive.people.store import list_people
 
     try:
         # A demo person looks only, and is never told a real hold.
         roster = [
             p for p in list_people()
-            if p.active and not p.is_principal and p.id is not None and not is_demo_person(p.id)
+            if p.active and not p.is_principal and p.id is not None and not p.demo
         ]
     except Exception:
         logger.exception("erpnext events: couldn't read People to name an alert's readers")

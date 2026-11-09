@@ -214,7 +214,10 @@ def test_a_different_set_of_readers_is_a_card_of_its_own(
 
 
 def test_a_demo_person_is_never_named(roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("openexecutive.people.demo.is_demo_person", lambda pid: pid == roster.ben)
+    from openexecutive.people import store as people_store
+
+    with people_store._get_conn() as conn:
+        conn.execute("UPDATE people SET directory_demo = 1 WHERE id = ?", (roster.ben,))
     assert erpnext_events.named_person_ids(["sara@co.com", "ben@co.com"]) == [roster.sara]
 
 
