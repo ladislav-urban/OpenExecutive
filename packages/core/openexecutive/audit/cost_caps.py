@@ -120,7 +120,16 @@ class CostCapReached(Exception):
         self.name = name
 
     def reply(self) -> str:
-        """What the person whose call it was is told."""
+        """What the person whose call it was is told. Anyone off People (a
+        stranger's mail, a chat space, a supplier's agent, an AI app) hears
+        only that it can't answer: the company's budget is not theirs to know."""
+        outside = (self.scope == "person" and self.key.startswith(OUTSIDE_PREFIX)) or (
+            self.scope != "person" and _asker_is_outside()
+        )
+        if outside:
+            from openexecutive.providers.refusal import reply_text
+
+            return reply_text()
         if self.scope == "person":
             return "You've reached today's usage limit. It resets at midnight."
         if self.scope == "job":
@@ -160,17 +169,59 @@ def _session() -> Any:
         return None
 
 
+# The person key of a call no one on People made: one bucket per channel
+# (a stranger's mail, a chat space, a supplier's agent, an AI app), held to
+# the person cap like anyone else, so outsiders can't spend the month alone.
+OUTSIDE_PREFIX = "outside:"
+
+
 def _person_id(session: Any) -> int | None:
     """The People id the current call is spent for: a teammate's queued run,
-    else the signed-in or verified sender. None for a turn with no one on
-    People behind it."""
+    else the signed-in or verified sender. An email's sender counts only when
+    Gmail authenticated it: a From line alone proves nothing. None for a turn
+    with no one on People behind it."""
     if session is None:
         return None
+    email = str(getattr(session, "origin_channel", "") or "") == "email"
+    authenticated = (
+        getattr(session, "email_authenticated", False) is True
+        or getattr(session, "email_sender_authenticated", False) is True
+    )
     for attr in ("run_for_person_id", "caller_person_id", "gate_sender_person_id"):
         value = getattr(session, attr, None)
-        if isinstance(value, int) and not isinstance(value, bool):
-            return value
+        if not isinstance(value, int) or isinstance(value, bool):
+            continue
+        if email and attr != "run_for_person_id" and not authenticated:
+            return None
+        return value
     return None
+
+
+def _outside_channel(session: Any) -> str | None:
+    """The channel of a turn someone off People drove, else None."""
+    if session is None or getattr(session, "unattended", False) is True:
+        return None
+    if getattr(session, "from_mcp_client", False) is True:
+        return "mcp"
+    channel = str(getattr(session, "origin_channel", "") or "")
+    if getattr(session, "sender_off_team", False) is True:
+        return channel or "email"
+    return channel or None
+
+
+def _person_key(session: Any) -> str | None:
+    """The person scope's key: a People id, an outside channel's bucket, or
+    None (the system's own work, or a web caller resolved to no one)."""
+    person = _person_id(session)
+    if person is not None:
+        return str(person)
+    channel = _outside_channel(session)
+    return f"{OUTSIDE_PREFIX}{channel}" if channel else None
+
+
+def _asker_is_outside() -> bool:
+    session = _session()
+    return _person_id(session) is None and _outside_channel(session) is not None
 
 
 def _is_principal(person_id: int) -> bool:
@@ -325,40 +376,63 @@ def charge(model: str, counts: dict[str, Any]) -> float:
 
 def _scopes(session: Any, job: str | None) -> list[tuple[Scope, str]]:
     keys: list[tuple[Scope, str]] = [("total", "all")]
-    person = _person_id(session)
+    person = _person_key(session)
     if person is not None:
-        keys.append(("person", str(person)))
+        keys.append(("person", person))
     if job:
         keys.append(("job", job))
     return keys
 
 
-def add(model: str, counts: dict[str, Any] | None, *, now: datetime | None = None) -> dict[str, Any]:
-    """Count one finished call against its scopes. Never raises. Returns the
-    attribution the call's audit row records (``person_id``, ``job_id``)."""
+def attribution() -> dict[str, Any]:
+    """Who and what the current call is spent for, for its audit row."""
+    out: dict[str, Any] = {}
     session = _session()
-    job = current_job()
     person = _person_id(session)
-    attribution: dict[str, Any] = {}
     if person is not None:
-        attribution["person_id"] = person
+        out["person_id"] = person
+    else:
+        key = _person_key(session)
+        if key is not None:
+            out["person_key"] = key
+    job = current_job()
     if job:
-        attribution["job_id"] = job
+        out["job_id"] = job
+    return out
+
+
+_UPSERT = (
+    f"INSERT INTO {TABLE} (scope, key, day, cost_usd, calls) VALUES (?, ?, ?, ?, ?) "
+    "ON CONFLICT (scope, key, day) DO UPDATE SET "
+    "cost_usd = MAX(cost_usd + excluded.cost_usd, 0), calls = calls + excluded.calls"
+)
+
+
+@dataclass(frozen=True)
+class Reservation:
+    """What a call put on its scopes before it was sent (its worst case),
+    for :func:`settle` to put right once its cost is known."""
+
+    scopes: tuple[tuple[str, str], ...]
+    day: str
+    amount: float
+
+
+def _write(scopes: Any, day: str, amount: float, *, calls: int) -> None:
+    with contextlib.closing(_connect()) as conn, conn:
+        conn.execute(_SCHEMA)
+        for scope, key in scopes:
+            conn.execute(_UPSERT, (scope, key, day, amount, calls))
+
+
+def add(model: str, counts: dict[str, Any] | None, *, now: datetime | None = None) -> None:
+    """Count one finished call no :class:`Reservation` covers (a voice note).
+    Never raises."""
     try:
         cost = charge(model, counts or {})
-        day = day_key(now)
-        with contextlib.closing(_connect()) as conn, conn:
-            conn.execute(_SCHEMA)
-            for scope, key in _scopes(session, job):
-                conn.execute(
-                    f"INSERT INTO {TABLE} (scope, key, day, cost_usd, calls) VALUES (?, ?, ?, ?, 1) "
-                    "ON CONFLICT (scope, key, day) DO UPDATE SET "
-                    "cost_usd = cost_usd + excluded.cost_usd, calls = calls + 1",
-                    (scope, key, day, cost),
-                )
-    except Exception:  # noqa: BLE001 — counting must never fail the call it follows
+        _write(_scopes(_session(), current_job()), day_key(now), cost, calls=1)
+    except Exception:  # noqa: BLE001 - counting must never fail the call it follows
         logger.exception("cost caps: couldn't count a %s call", model)
-    return attribution
 
 
 # --------------------------------------------------------------------------- #
@@ -393,52 +467,103 @@ def worst_case(model: str, kwargs: dict[str, Any]) -> float:
     return (prompt_tokens * price.input + max_tokens * price.output) / 1_000_000
 
 
-def check(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) -> None:
-    """Raise :class:`CostCapReached` when this call could pass a cap that is
-    on. Does nothing, and reads nothing, when every cap is off."""
-    limits = caps()
-    if not limits.any_on or _is_local(model):
-        return
+def reserve(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) -> Reservation:
+    """Before a call is sent: raise :class:`CostCapReached` when its worst
+    case would pass a cap that is on, else put that worst case on its scopes
+    in the same write transaction as the check (BEGIN IMMEDIATE), so calls
+    made together can't all pass on the same spend. :func:`settle` turns it
+    into the real cost; a call that never settles (a stream the person
+    closed) stays counted at its worst case. With every cap off nothing is
+    read and nothing reserved."""
     session = _session()
     job = current_job()
-    estimate = worst_case(model, kwargs)
     day = day_key(now)
+    scopes = tuple(_scopes(session, job))
+    limits = caps()
+    if not limits.any_on or _is_local(model):
+        return Reservation(scopes, day, 0.0)
+    estimate = worst_case(model, kwargs)
     person = _person_id(session)
+    person_key = _person_key(session)
     try:
+        exempt = person is not None and _is_principal(person)
         with contextlib.closing(_connect()) as conn:
-            if limits.monthly > 0:
-                spent = _spent(conn, "total", "all", day, month=True)
-                if spent + estimate > limits.monthly:
-                    _refuse("total", "all", limits.monthly, spent, _next_month(now), now)
-            if limits.job_daily > 0 and job:
-                spent = _spent(conn, "job", job, day)
-                if spent + estimate > limits.job_daily:
-                    _refuse("job", job, limits.job_daily, spent, _next_day(now), now)
-            if limits.person_daily > 0 and person is not None and not _is_principal(person):
-                spent = _spent(conn, "person", str(person), day)
-                if spent + estimate > limits.person_daily:
-                    _refuse("person", str(person), limits.person_daily, spent, _next_day(now), now)
-    except CostCapReached:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute(_SCHEMA)
+                if limits.monthly > 0:
+                    spent = _spent(conn, "total", "all", day, month=True)
+                    if spent + estimate > limits.monthly:
+                        raise _refusal("total", "all", limits.monthly, spent, _next_month(now))
+                if limits.job_daily > 0 and job:
+                    spent = _spent(conn, "job", job, day)
+                    if spent + estimate > limits.job_daily:
+                        raise _refusal("job", job, limits.job_daily, spent, _next_day(now))
+                if limits.person_daily > 0 and person_key is not None and not exempt:
+                    spent = _spent(conn, "person", person_key, day)
+                    if spent + estimate > limits.person_daily:
+                        raise _refusal("person", person_key, limits.person_daily, spent, _next_day(now))
+                for scope, key in scopes:
+                    conn.execute(_UPSERT, (scope, key, day, estimate, 1))
+                conn.execute("COMMIT")
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+    except CostCapReached as refused:
+        logger.warning("cost caps: refused a call - %s", refused)
+        _tell_principal(refused, now)
         raise
     except Exception as exc:
-        logger.exception("cost caps: couldn't read the counters — refusing the call")
-        _refuse("unreadable", type(exc).__name__, 0.0, 0.0, _next_day(now), now)
+        logger.exception("cost caps: couldn't read the counters - refusing the call")
+        sick = _refusal("unreadable", type(exc).__name__, 0.0, 0.0, _next_day(now))
+        _tell_principal(sick, now)
+        raise sick from exc
+    return Reservation(scopes, day, estimate)
 
 
-def _refuse(
-    scope: Scope | Literal["unreadable"], key: str, cap: float, spent: float,
-    resets_at: datetime, now: datetime | None,
-) -> None:
-    name = _name_of(scope, key)
-    exc = CostCapReached(scope, key, cap, spent, resets_at, name=name)
-    logger.warning("cost caps: refused a call — %s", exc)
-    _tell_principal(exc, now)
-    raise exc
+def settle(reservation: Reservation, model: str, message: Any) -> None:
+    """Once a call answered: replace its reserved worst case with what it
+    cost (``message``'s usage, priced as its audit row is). A call that
+    reserved nothing (every cap off) is counted here in full. A message
+    without usage keeps the worst case. Never raises."""
+    try:
+        from openexecutive.audit.usage import _priced, usage_counts
+
+        counts = usage_counts(message) if message is not None else None
+        if counts is None:
+            if reservation.amount == 0.0:
+                _write(reservation.scopes, reservation.day, 0.0, calls=1)
+            return
+        if counts.get("cost_usd") is None:
+            _priced(counts, model)
+        cost = charge(model, counts)
+        calls = 1 if reservation.amount == 0.0 else 0
+        _write(reservation.scopes, reservation.day, cost - reservation.amount, calls=calls)
+    except Exception:  # noqa: BLE001
+        logger.exception("cost caps: couldn't settle a %s call; its worst case stays counted", model)
+
+
+def check(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) -> None:
+    """Raise :class:`CostCapReached` when a call with ``kwargs`` could pass a
+    cap that is on, reserving nothing (a voice note, whose cost :func:`add`
+    counts after)."""
+    reservation = reserve(model, kwargs, now=now)
+    if reservation.amount:
+        _write(reservation.scopes, reservation.day, -reservation.amount, calls=-1)
+
+
+def _refusal(
+    scope: Scope | Literal["unreadable"], key: str, cap: float, spent: float, resets_at: datetime,
+) -> CostCapReached:
+    return CostCapReached(scope, key, cap, spent, resets_at, name=_name_of(scope, key))
 
 
 def _name_of(scope: str, key: str) -> str:
     if scope != "person":
         return key
+    if key.startswith(OUTSIDE_PREFIX):
+        return f"Senders not on People ({key[len(OUTSIDE_PREFIX):]})"
     try:
         from openexecutive.people.store import get_person
 
@@ -529,7 +654,14 @@ async def _alert_principal(exc: CostCapReached, now: datetime | None) -> None:
         logger.exception("cost caps: couldn't deliver card %s", card_id)
 
 
+_told: set[tuple[str, str, str]] = set()
+
+
 def _tell_principal(exc: CostCapReached, now: datetime | None) -> None:
+    told = (str(exc.scope), exc.key, day_key(now) if exc.scope != "unreadable" else _local(now).isoformat()[:13])
+    if told in _told:
+        return
+    _told.add(told)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

@@ -1,9 +1,14 @@
-"""``LLMProvider`` decorator that checks the cost caps before each call.
+"""``LLMProvider`` decorator that holds every hosted model call to the cost
+caps (``audit.cost_caps``).
 
 ``get_provider()`` wraps every hosted backend in it, so no model call the
-package makes can skip the check (``audit.cost_caps``). A call that could
-pass a cap raises ``CostCapReached`` before anything is sent. The call
-site's ``log_model_usage`` counts what the call spent afterwards.
+package makes can skip it. Before a call is sent, ``cost_caps.reserve``
+refuses it (``CostCapReached``) when its worst case could pass a cap that
+is on, and otherwise puts that worst case on its scopes at once. Once the
+call answers, ``cost_caps.settle`` replaces it with what the call cost. A
+stream stopped early settles on what it had used by then; one that ended
+without any usage keeps its worst case, so closing a tab never spends for
+free.
 """
 from __future__ import annotations
 
@@ -15,19 +20,37 @@ from openexecutive.audit import cost_caps
 from openexecutive.providers.provider import LLMProvider
 
 
+def _snapshot(stream: Any) -> Any:
+    # What the stream had used when it ended: Anthropic's MessageStream keeps
+    # the message assembled so far, usage included; a translated backend may
+    # not, and one closed before message_start has none.
+    try:
+        return stream.current_message_snapshot
+    except Exception:  # noqa: BLE001
+        return None
+
+
 class CappedProvider:
     def __init__(self, inner: LLMProvider) -> None:
         self._inner = inner
 
     async def messages_create(self, **kwargs: Any) -> Any:
-        cost_caps.check(str(kwargs.get("model") or ""), kwargs)
-        return await self._inner.messages_create(**kwargs)
+        model = str(kwargs.get("model") or "")
+        reservation = cost_caps.reserve(model, kwargs)
+        message = await self._inner.messages_create(**kwargs)
+        cost_caps.settle(reservation, model, message)
+        return message
 
     @asynccontextmanager
     async def _stream(self, kwargs: dict[str, Any]) -> AsyncIterator[Any]:
-        cost_caps.check(str(kwargs.get("model") or ""), kwargs)
-        async with self._inner.messages_stream(**kwargs) as stream:
-            yield stream
+        model = str(kwargs.get("model") or "")
+        reservation = cost_caps.reserve(model, kwargs)
+        stream: Any = None
+        try:
+            async with self._inner.messages_stream(**kwargs) as stream:
+                yield stream
+        finally:
+            cost_caps.settle(reservation, model, _snapshot(stream) if stream is not None else None)
 
     def messages_stream(self, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
         return self._stream(kwargs)

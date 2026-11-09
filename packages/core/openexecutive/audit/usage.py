@@ -123,6 +123,7 @@ def log_model_usage(
     iteration: int = 0,
     session_id: str | None = None,
     turn_id: str | None = None,
+    count: bool = False,
 ) -> dict[str, Any] | None:
     """Record one ``cache_event`` row for a completed model call.
 
@@ -166,11 +167,17 @@ def log_model_usage(
     run_id = get_research_run_id()
     if run_id:
         details["run_id"] = run_id
-    # Count it against the person and job it was spent for (the cost caps),
-    # and say which on the row. Never raises.
+    # Say whom and what it was spent for (the cost caps). A hosted call was
+    # counted by providers.capped when it answered; one no provider wrapper
+    # saw (a voice note) is counted here.
     from openexecutive.audit import cost_caps
 
-    details.update(cost_caps.add(model, counts))
+    try:
+        details.update(cost_caps.attribution())
+    except Exception:  # noqa: BLE001
+        logger.warning("model usage: couldn't attribute a %s call", model, exc_info=True)
+    if count:
+        cost_caps.add(model, counts)
     try:
         log_event(
             EVENT_TYPE,

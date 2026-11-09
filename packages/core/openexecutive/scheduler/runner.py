@@ -463,7 +463,8 @@ def _failed_or_retry(action_id: int, exc: BaseException) -> str:
     """``mark_action_failed_or_retry``, except for a run a cost cap stopped:
     that one waits, without spending an attempt, until the cap resets."""
     cap = cost_caps.capped(exc)
-    if cap is not None and reschedule_action(action_id, cap.resets_at):
+    # Counters that couldn't be read are a fault, not a spent cap: retried as usual.
+    if cap is not None and cap.scope != "unreadable" and reschedule_action(action_id, cap.resets_at):
         logger.info("scheduler: action %d capped — runs again at %s", action_id, cap.resets_at.isoformat())
         return "deferred"
     return mark_action_failed_or_retry(action_id, str(exc))

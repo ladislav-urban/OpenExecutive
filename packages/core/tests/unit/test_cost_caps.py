@@ -271,4 +271,105 @@ def test_a_finished_calls_audit_row_names_its_person_and_job(db: SimpleNamespace
     finally:
         current_session.reset(token)
     assert rows[0]["person_id"] == db.teammate and rows[0]["job_id"] == "take-the-lead"
-    assert cost_caps.spend_today("job", "take-the-lead") > 0
+
+
+def _provider(stream_usage: Any = None, *, create_usage: Any = None) -> Any:
+    from openexecutive.providers.capped import CappedProvider
+
+    class _Stream:
+        current_message_snapshot = SimpleNamespace(usage=stream_usage) if stream_usage is not None else None
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+    class _Backend:
+        async def messages_create(self, **_k: Any) -> Any:
+            return SimpleNamespace(usage=create_usage)
+
+        def messages_stream(self, **_k: Any) -> Any:
+            return _Stream()
+
+    return CappedProvider(_Backend())  # type: ignore[arg-type]
+
+
+KW = {"model": MODEL, "max_tokens": 1000, "messages": [{"role": "user", "content": "hi"}]}
+
+
+def test_a_stream_closed_before_it_reported_usage_stays_counted_at_its_worst_case(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _caps(monkeypatch, monthly=100.0)
+    provider = _provider(stream_usage=None)
+
+    async def _closed_early() -> None:
+        async with provider.messages_stream(**KW):
+            raise asyncio.CancelledError  # the person closed the tab
+
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(_closed_early())
+    assert cost_caps.spend_today("total", "all") == pytest.approx(cost_caps.worst_case(MODEL, KW))
+
+
+def test_an_answered_call_settles_to_what_it_cost(db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:
+    _caps(monkeypatch, monthly=100.0)
+    usage = SimpleNamespace(input_tokens=1000, output_tokens=100)
+    asyncio.run(_provider(create_usage=usage).messages_create(**KW))
+    spent = cost_caps.spend_today("total", "all")
+    assert 0 < spent < cost_caps.worst_case(MODEL, KW)
+    # With every cap off it is still counted, once, at its cost.
+    _caps(monkeypatch)
+    asyncio.run(_provider(create_usage=usage).messages_create(**KW))
+    assert cost_caps.spend_today("total", "all") == pytest.approx(2 * spent)
+
+
+def test_calls_made_together_cant_all_pass_on_the_same_spend(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worst = cost_caps.worst_case(MODEL, KW)
+    _caps(monkeypatch, monthly=worst * 2.5)
+    passed = refused = 0
+    for _ in range(5):
+        try:
+            cost_caps.reserve(MODEL, KW, now=NOW)
+            passed += 1
+        except cost_caps.CostCapReached:
+            refused += 1
+    assert (passed, refused) == (2, 3)
+
+
+def test_an_unauthenticated_email_sender_is_nobody_on_people(db: SimpleNamespace) -> None:
+    spoofed = Session(origin_channel="email", caller_person_id=db.principal)
+    assert cost_caps._person_id(spoofed) is None
+    assert cost_caps._person_key(spoofed) == "outside:email"
+    proven = Session(origin_channel="email", caller_person_id=db.principal, email_authenticated=True)
+    assert cost_caps._person_id(proven) == db.principal
+
+
+def test_senders_off_people_share_a_capped_bucket_per_channel_and_hear_no_budget(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    _caps(monkeypatch, person=1.0)
+    space = Session(origin_channel="google_chat")
+    _spend(1.0, session=space)
+    token = current_session.set(space)
+    try:
+        with pytest.raises(cost_caps.CostCapReached) as refused:
+            cost_caps.check(MODEL, KW, now=NOW)
+        assert refused.value.key == "outside:google_chat"
+        assert "limit" not in refused.value.reply()
+    finally:
+        current_session.reset(token)
+
+
+def test_counters_that_cant_be_read_are_retried_not_deferred(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.scheduler import runner
+
+    monkeypatch.setattr(runner, "reschedule_action", lambda *_a: pytest.fail("deferred a fault"))
+    monkeypatch.setattr(runner, "mark_action_failed_or_retry", lambda *_a: "pending")
+    sick = cost_caps.CostCapReached("unreadable", "OperationalError", 0.0, 0.0, NOW)
+    assert runner._failed_or_retry(7, sick) == "pending"

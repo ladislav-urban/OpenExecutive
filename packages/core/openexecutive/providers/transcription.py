@@ -201,6 +201,13 @@ async def transcribe(
         headers["HTTP-Referer"] = s.openrouter_referer or "https://github.com/"
         headers["X-Title"] = s.openrouter_app_title
     name = Path(filename).name or "voice-note"
+    from openexecutive.audit import cost_caps
+
+    # Billed per minute, so no worst case: refused only once a cap is spent.
+    try:
+        cost_caps.check(where.model, {})
+    except cost_caps.CostCapReached as capped:
+        raise TranscriptionError("today's usage limit is reached") from capped
     if not _reserve(len(data)):
         raise TranscriptionError("today's limit on voice notes is used up")
     try:
@@ -396,6 +403,8 @@ def _record(where: Target, usage: dict[str, Any]) -> None:
             ),
             model=where.model,
             actor="transcription",
+            # No provider wrapper sees this call, so it is counted here.
+            count=True,
         )
     except Exception:  # noqa: BLE001 — recording never fails the transcription
         logger.exception("transcription usage not recorded")
