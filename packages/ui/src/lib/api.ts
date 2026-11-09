@@ -3063,8 +3063,11 @@ export interface ErpnextDraftCard {
   created_at: string;
   expires_at: string;
   why: string;
-  // "ToDo", "Material Request", "Quotation" or "Purchase Order".
+  // "ToDo", "Material Request", "Quotation", "Purchase Order", "Dunning", or
+  // for a change or a comment the document's DocType.
   doctype: string;
+  // "create" for a new draft; "update" or "comment" on an existing document.
+  operation?: string;
   fields: ErpnextDraftField[];
   lines: ErpnextDraftLine[];
   notes: string[];
@@ -3081,8 +3084,10 @@ export interface ErpnextDraftCreated {
   doctype: string;
   name: string;
   // ERPNext's desk link for it, or "" when it gave none.
-  url: string;
+  url?: string;
   already_created: boolean;
+  // "update" or "comment" when the card changed or commented on a document.
+  operation?: string;
 }
 
 // An open ERPNext alert that suggests a draft (a restock, a follow-up), for

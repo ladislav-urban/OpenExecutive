@@ -186,6 +186,9 @@ class DraftCard:
     # "erpnext_panel" (ERPNext's word named the person), "erpnext_desk"
     # (ERPNext's desk page sent the words, signed in), else "".
     asked_in: str = ""
+    # "create" for a new draft; "update" or "comment" for a card that
+    # changes or comments on an existing document (erpnext_changes).
+    operation: str = "create"
 
 
 def _one_line(value: Any, limit: int = SHOWN_MAX) -> str:
@@ -838,6 +841,16 @@ def _digest(person_id: int, doctype: str, fields: dict[str, Any]) -> str:
     ).hexdigest()[:32]
 
 
+def _tool_for(operation: str, doctype: str) -> str:
+    """The oe_connector tool a card's approval calls: a new draft's own,
+    or the update's or comment's."""
+    if operation == "create":
+        return DRAFT_TOOLS[doctype]
+    from openexecutive.integrations.erpnext_changes import OPERATION_TOOLS
+
+    return OPERATION_TOOLS[operation]
+
+
 def fingerprint_of(checked: dict[str, Any]) -> str | None:
     """draft_check's fingerprint of the draft it read, if it gave a sound one."""
     value = checked.get("fingerprint")
@@ -848,6 +861,7 @@ def propose(
     person: Any, doctype: str, fields: dict[str, Any], view: dict[str, Any], why: str,
     *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None, asked_in: str = "",
     from_alert: int | None = None, fingerprint: str | None = None,
+    operation: str = "create", name: str | None = None,
 ) -> tuple[int, bool, dict[str, Any]]:
     """Store a card for ``person`` (``fields`` already checked); returns its
     decision id, whether it is new and the view it shows. The same draft
@@ -859,7 +873,7 @@ def propose(
     ``waiting``: ``open_cards(person.id)``, if read."""
     from openexecutive.memory.decision_ledger import close_externally, create_decision_instance
 
-    digest = _digest(person.id, doctype, fields)
+    digest = _digest(person.id, doctype, _keyed(operation, name, fields))
     for card in open_cards(person.id) if waiting is None else waiting:
         stored = _payload(card)
         if stored.get("digest") == digest:
@@ -883,8 +897,9 @@ def propose(
         "why": _one_line(why, WHY_MAX),
         "digest": digest,
         "doctype": doctype,
-        "tool": DRAFT_TOOLS[doctype],
+        "tool": _tool_for(operation, doctype),
         "fields": fields,
+        **({"operation": operation, "name": name} if operation != "create" else {}),
         "asked_by": asked_by,
         **({"asked_in": asked_in} if asked_in else {}),
         # The ERPNext alert whose suggestion this is (erpnext_alert_drafts),
@@ -971,6 +986,7 @@ def cards(person: Any) -> list[DraftCard]:
             notes=[words(str(n)) for n in view.get("notes") or []],
             last_error=words(str(payload.get("last_error") or "")),
             asked_in=str(payload.get("asked_in")) if payload.get("asked_in") in (ASKED_IN_PANEL, ASKED_IN_DESK) else "",
+            operation=str(payload.get("operation")) if payload.get("operation") in ("update", "comment") else "create",
         ))
     return out
 
@@ -1050,8 +1066,11 @@ _FIELD_HELP: dict[str, str] = {
 }
 
 
-def propose_tool(doctypes: tuple[str, ...]) -> dict[str, Any]:
-    """``propose_erpnext_draft`` for the DocTypes this install drafts.
+def propose_tool(
+    doctypes: tuple[str, ...], *, updates: tuple[str, ...] = (), comments: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """``propose_erpnext_draft`` for the DocTypes this install drafts, and
+    the ones it may change (``updates``) or comment on (``comments``).
     Process-constant, so the turn's tool list stays cacheable."""
     priced = (
         "Give a Quotation's or Purchase Order's rate only when they state one; "
@@ -1072,6 +1091,7 @@ def propose_tool(doctypes: tuple[str, ...]) -> dict[str, Any]:
             + " ".join(_FIELD_HELP[d] for d in doctypes)
             + " "
             + priced
+            + _change_help(updates, comments)
             + "Tell them the card is waiting; never say the draft exists."
         ),
         "input_schema": {
@@ -1081,12 +1101,43 @@ def propose_tool(doctypes: tuple[str, ...]) -> dict[str, Any]:
                     "type": "string",
                     "description": "One line on what this is for, e.g. 'Restock ITEM-1, below its reorder level'.",
                 },
-                "doctype": {"type": "string", "enum": list(doctypes)},
+                "doctype": {"type": "string", "enum": sorted({*doctypes, *updates, *comments})},
                 "fields": {"type": "object", "description": "The draft's fields, as listed above for its doctype."},
+                **(
+                    {
+                        "operation": {
+                            "type": "string",
+                            "enum": ["create", *(["update"] if updates else []), *(["comment"] if comments else [])],
+                            "description": "create (a new draft, the default), update or comment.",
+                        },
+                        "name": {"type": "string", "description": "The document to update or comment on."},
+                    }
+                    if updates or comments else {}
+                ),
             },
             "required": ["why", "doctype", "fields"],
         },
     }
+
+
+def _change_help(updates: tuple[str, ...], comments: tuple[str, ...]) -> str:
+    help_ = ""
+    if updates:
+        help_ += (
+            f"To change an unsubmitted {', '.join(updates)} they own or were assigned, use operation "
+            "`update` with its `name` and fields {set: {field: value}, lines: {items: {row name: "
+            "{field: value}}}, remove_lines: {items: [row name]}}; read the document first for its row "
+            "names. A Purchase Invoice's header fields: bill_no, bill_date, due_date, posting_date, "
+            "set_posting_time, remarks, cost_center, project, on_hold, release_date, hold_comment, and "
+            "supplier only while empty; its line fields: qty, rate, uom, expense_account, cost_center, "
+            "project, description. Only the values they asked for; nothing is submitted. "
+        )
+    if comments:
+        help_ += (
+            f"To add their comment to a {', '.join(comments)}, use operation `comment` with its `name` "
+            "and fields {text}: their words as they gave them, plain text, at most 2,000 characters. "
+        )
+    return help_
 
 
 async def handle_propose(tool_input: dict[str, Any]) -> str:
@@ -1106,7 +1157,21 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
         return _error(f"{PROPOSE} is not available outside a chat turn.")
     if pinned.erpnext_drafts >= CARDS_PER_TURN:
         return _error(f"That's {CARDS_PER_TURN} draft cards this turn. Ask them to approve those first.")
-    fields = check_fields(tool_input.get("doctype"), tool_input.get("fields"))
+    operation = tool_input.get("operation") or "create"
+    target: str | None = None
+    if operation == "create":
+        if tool_input.get("name") not in (None, ""):
+            return _error("A new draft has no `name`; use operation update or comment to change a document.")
+        fields = check_fields(tool_input.get("doctype"), tool_input.get("fields"))
+    else:
+        from openexecutive.integrations import erpnext_changes
+
+        checked_change = erpnext_changes.check_change(
+            str(operation), tool_input.get("doctype"), tool_input.get("name"), tool_input.get("fields"),
+        )
+        fields = checked_change if isinstance(checked_change, str) else checked_change[1]
+        if not isinstance(checked_change, str):
+            target = checked_change[0]
     if isinstance(fields, str):
         return _error(fields)
     doctype = str(tool_input["doctype"])
@@ -1120,7 +1185,7 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
     if isinstance(who, str):
         return _error(f"{PROPOSE} is not available here: {who} Say so; do not retry.")
     person, email = who
-    full = _cards_full(person.id, doctype, fields)
+    full = _cards_full(person.id, doctype, _keyed(str(operation), target, fields))
     if full is not None:
         return _error(full)
     # The turn's slot is taken before the check, which waits on ERPNext, so
@@ -1129,11 +1194,22 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
     pinned.erpnext_drafts += 1
     new = False
     try:
-        result, new = await _check_and_leave(session, person, email, doctype, fields, str(tool_input.get("why") or ""))
+        result, new = await _check_and_leave(
+            session, person, email, doctype, fields, str(tool_input.get("why") or ""),
+            operation=str(operation), name=target,
+        )
         return result
     finally:
         if not new:
             pinned.erpnext_drafts -= 1
+
+
+def _keyed(operation: str, name: str | None, fields: dict[str, Any]) -> dict[str, Any]:
+    """What a card's dedupe digest covers: a new draft's fields as before;
+    an update's or comment's operation and document with them."""
+    if operation == "create":
+        return fields
+    return {"__operation": operation, "__name": name, **fields}
 
 
 def _cards_full(person_id: int, doctype: str, fields: dict[str, Any]) -> str | None:
@@ -1152,6 +1228,7 @@ def _cards_full(person_id: int, doctype: str, fields: dict[str, Any]) -> str | N
 
 async def _check_and_leave(
     session: Any, person: Any, email: str, doctype: str, fields: dict[str, Any], why: str,
+    *, operation: str = "create", name: str | None = None,
 ) -> tuple[str, bool]:
     """``handle_propose`` once the turn's slot is taken: ERPNext's check as
     the turn's caller, then the card. The tool result, and whether a new
@@ -1160,7 +1237,9 @@ async def _check_and_leave(
     from openexecutive.orchestrator.content_trust import wrap_untrusted
     from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
 
-    check_args = {"doctype": doctype, "fields": fields}
+    check_args: dict[str, Any] = {"doctype": doctype, "fields": fields}
+    if operation != "create":
+        check_args = {"doctype": doctype, "name": name, "operation": operation, "fields": fields}
     try:
         with erpnext_caller.draft_check_run(check_args):
             raw = await _call(erpnext_caller.DRAFT_CHECK_TOOL, check_args)
@@ -1174,6 +1253,16 @@ async def _check_and_leave(
             "ERPNext did not accept this draft, so no card was left. Tell them why, in "
             f"your own words, and fix it only with what they tell you. ERPNext said:\n{said}"
         ), False
+    if operation != "create":
+        from openexecutive.integrations import erpnext_changes
+
+        refusal = (
+            "ERPNext didn't fingerprint this change, so no card was left. Try again in a moment."
+            if fingerprint_of(checked) is None
+            else erpnext_changes.summary_refusal(operation, doctype, str(name), fields, checked)
+        )
+        if refusal is not None:
+            return _error(refusal), False
     if doctype == "Dunning" and fingerprint_of(checked) is None:
         # Its figures are the point: never a card that approves blind.
         return _error("ERPNext didn't fingerprint this letter, so no card was left. Try again in a moment."), False
@@ -1181,7 +1270,12 @@ async def _check_and_leave(
     if isinstance(pinned, str):
         return _error(pinned), False
     fields = pinned
-    view = card_view(doctype, checked.get("summary"), fields)
+    if operation == "create":
+        view = card_view(doctype, checked.get("summary"), fields)
+    else:
+        from openexecutive.integrations import erpnext_changes
+
+        view = erpnext_changes.card_view(operation, doctype, str(name), checked["summary"])
     from_panel = erpnext_panel_turn(session)
     from openexecutive.orchestrator.schedule_tools import host_turn
 
@@ -1194,7 +1288,7 @@ async def _check_and_leave(
         view["notes"] = [*view["notes"], DESK_NOTE]
     # Read again after the check, with no await before the card is stored,
     # so calls made together never pass OPEN_CARDS_MAX.
-    full = _cards_full(person.id, doctype, fields)
+    full = _cards_full(person.id, doctype, _keyed(operation, name, fields))
     if full is not None:
         return _error(full), False
     try:
@@ -1202,6 +1296,7 @@ async def _check_and_leave(
             person, doctype, fields, view, why,
             asked_by=email, session_id=getattr(session, "session_id", None),
             asked_in=asked_in, fingerprint=fingerprint_of(checked),
+            operation=operation, name=name,
         )
     except Exception:
         logger.warning("erpnext_drafts: couldn't store the card", exc_info=True)
@@ -1245,7 +1340,13 @@ async def _check_and_leave(
 
 def draft_tools() -> list[dict[str, Any]]:
     """The turn tools a turn ``offered`` drafts gets."""
-    return [propose_tool(enabled_doctypes())]
+    from openexecutive.integrations import erpnext_changes
+
+    return [propose_tool(
+        enabled_doctypes(),
+        updates=erpnext_changes.update_doctypes(),
+        comments=erpnext_changes.comment_doctypes(),
+    )]
 
 
 def chip(tool_input: dict[str, Any], parsed: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -1314,13 +1415,30 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         raise ApproveRefused(409, "principal_only", "For now only the account owner can approve ERPNext drafts.")
     if not drafts_on():
         raise ApproveRefused(409, "drafts_off", "ERPNext drafts are turned off here, or ERPNext isn't connected.")
-    if payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
+    from openexecutive.integrations import erpnext_changes
+
+    operation = payload.get("operation", "create")
+    if operation not in erpnext_changes.OPERATIONS:
+        raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it and ask again.")
+    if operation == "create" and payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
         raise ApproveRefused(409, "drafts_off", f"ERPNext {payload['doctype']} drafts are turned off here.")
+    if operation != "create" and payload.get("doctype") not in erpnext_changes.enabled(operation):
+        what = "changes" if operation == "update" else "comments"
+        raise ApproveRefused(409, "drafts_off", f"ERPNext {what} on {payload.get('doctype')} are turned off here.")
     if not _live(instance, datetime.now(UTC)):
         raise ApproveRefused(409, "expired", "This card is more than three days old. Ask again if it's still needed.")
     doctype, fields, key = payload.get("doctype"), payload.get("fields"), payload.get("card_key")
-    tool = DRAFT_TOOLS.get(doctype) if isinstance(doctype, str) else None
-    rechecked = check_fields(doctype, fields)
+    target = payload.get("name")
+    rechecked: Any
+    if operation == "create":
+        tool = DRAFT_TOOLS.get(doctype) if isinstance(doctype, str) else None
+        rechecked = "a new draft has no name" if target is not None else check_fields(doctype, fields)
+    else:
+        tool = erpnext_changes.OPERATION_TOOLS[operation]
+        again = erpnext_changes.check_change(operation, doctype, target, fields)
+        rechecked = again if isinstance(again, str) else (again[1] if again[0] == target else "name changed")
+        if not isinstance(payload.get("fingerprint"), str):
+            rechecked = "no fingerprint"
     if (
         tool is None or payload.get("tool") != tool or isinstance(rechecked, str) or rechecked != fields
         or not isinstance(key, str) or not _KEY_RE.fullmatch(key) or key != instance.idempotency_key
@@ -1359,8 +1477,12 @@ async def _carry_out(
     from openexecutive.orchestrator import erpnext_caller
 
     doctype = payload["doctype"]
+    operation = payload.get("operation", "create")
     asked_by = payload.get("asked_by") if isinstance(payload.get("asked_by"), str) else email
     arguments = {**fields, "idempotency_key": key, "asked_by": asked_by}
+    if operation != "create":
+        # The document it changes or comments on, as the card named it.
+        arguments = {"doctype": doctype, "name": payload["name"], **arguments}
     # Made only if ERPNext still builds the draft the card showed. A card
     # left before fingerprints has none, and is made as before.
     expected = payload.get("fingerprint")
@@ -1381,11 +1503,20 @@ async def _carry_out(
         raise
     result = _result(raw)
     name = result.get("name")
-    if result.get("ok") is True and result.get("docstatus") == 0 and isinstance(name, str) and _DOC_NAME_RE.fullmatch(name):
-        created = {
+    changed: dict[str, Any] | None = None
+    if operation != "create":
+        from openexecutive.integrations.erpnext_changes import made
+
+        changed = made(operation, doctype, payload["name"], result)
+    if changed is not None or (
+        operation == "create" and result.get("ok") is True and result.get("docstatus") == 0
+        and isinstance(name, str) and _DOC_NAME_RE.fullmatch(name)
+    ):
+        created = changed if changed is not None else {
             "doctype": doctype, "name": name, "url": _desk_link(result.get("url")),
             "already_created": result.get("already_created") is True,
         }
+        name = created["name"]
         # The "OE Draft" row's seal in oe_connector's hash chain: kept here too,
         # so the log in ERPNext and this record check each other.
         seal, place = result.get("row_hash"), result.get("chain_index")

@@ -15,7 +15,8 @@ import { openMessage } from "@/lib/embed";
 import {
   askedInNote,
   type CardOutcome,
-  draftKind,
+  cardKind,
+  changeMadeLine,
   draftMadeLine,
   draftsTip,
   openDraftLabel,
@@ -224,7 +225,7 @@ export function ErpnextDraftCardItem({
         <span className="inline-flex items-center rounded-lg bg-surface-overlay px-2 py-0.5 text-[13px] font-medium text-fg-muted">
           To approve
         </span>
-        <span className="text-[12px] font-medium text-fg-muted">{draftKind(card.doctype, named)}</span>
+        <span className="text-[12px] font-medium text-fg-muted">{cardKind(card.doctype, card.operation, named)}</span>
         {when && <span className="text-sm text-fg-subtle tabular-nums">{when}</span>}
       </div>
       {(card.asked_in === "erpnext_panel" || card.asked_in === "erpnext_desk") && (
@@ -284,7 +285,9 @@ export function ErpnextDraftCardItem({
       {done ? (
         <div className="mt-4 space-y-2">
           <p className="text-sm text-emerald-700 dark:text-emerald-300">
-            {draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
+            {card.operation === "update" || card.operation === "comment"
+              ? changeMadeLine(card.operation, card.doctype, created?.name ?? "", created?.already_created ?? false)
+              : draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {link && (

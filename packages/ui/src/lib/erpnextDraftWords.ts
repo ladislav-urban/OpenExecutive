@@ -36,6 +36,23 @@ export function draftMadeLine(doctype: string, name: string | null, alreadyCreat
     : `The draft is in ${erp}, unsubmitted. Review and submit it there.`;
 }
 
+/** The line an approved change or comment shows. */
+export function changeMadeLine(operation: string, doctype: string, name: string, already: boolean): string {
+  if (operation === "comment") {
+    return already ? `Your comment was already on ${doctype} ${name}.` : `Your comment is now on ${doctype} ${name}.`;
+  }
+  return already
+    ? `${doctype} ${name} already had this change. It is still unsubmitted.`
+    : `${doctype} ${name} is changed in the ERP, still unsubmitted.`;
+}
+
+/** The card's kind, over its headline: a new draft, a change or a comment. */
+export function cardKind(doctype: string, operation: string | undefined, named: boolean): string {
+  if (operation === "update") return `Change to a ${doctype}`;
+  if (operation === "comment") return `Comment on a ${doctype}`;
+  return draftKind(doctype, named);
+}
+
 /** The card's kind, over its headline. */
 export function draftKind(doctype: string, _named: boolean): string {
   return `${doctype} draft`;

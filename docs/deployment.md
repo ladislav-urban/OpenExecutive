@@ -891,6 +891,33 @@ it, and asking again shows the letter as it is now. Submitting a Dunning
 sends nothing: the letter reaches the customer only when someone prints or
 emails it.
 
+Two more kinds of card change what is already in ERPNext, each off until
+listed on both sides. An update changes listed fields of an unsubmitted
+Purchase Invoice the person owns or was assigned (an open ToDo they were
+given counts, so it gives nothing beyond their own write permission): the
+supplier's invoice number and date, the dates, remarks, cost center,
+project and hold, the supplier only while empty, and each line's qty, rate,
+UOM, expense account, cost center, project and description; never its
+company, currency, taxes or links. A comment adds the person's words, as
+plain text, to a listed document.
+
+```bash
+ERPNEXT_DRAFT_UPDATE_DOCTYPES=Purchase Invoice
+ERPNEXT_DRAFT_COMMENT_DOCTYPES=Purchase Invoice,Sales Invoice
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_update_doctypes '["Purchase Invoice"]'
+bench --site <site> set-config -p oe_connector_comment_doctypes '["Purchase Invoice", "Sales Invoice"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Purchase Invoice": 20000}'
+```
+
+Set the Purchase Invoice cap before listing updates: a rate or qty can
+change, and the cap is on the grand total after the change. The card shows
+every field, line and total before and after, as ERPNext reads it, or the
+comment's whole text; a document changed since the card refuses, and the
+card closes. Nothing is ever submitted, and the workflow never moves.
+
 Teammates (phase 4b) can have drafts prepared too, each for themselves, once
 the API's environment says so:
 

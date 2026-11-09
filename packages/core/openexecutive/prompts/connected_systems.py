@@ -146,11 +146,13 @@ ERPNEXT_DISCOVERY_QUERIES: dict[str, str] = {
 # but the approval-card path's own (integrations.erpnext_drafts).
 ERPNEXT_DRAFT_TOOLS: frozenset[str] = frozenset({
     "erpnext__draft_check",
+    "erpnext__draft_comment",
     "erpnext__draft_dunning",
     "erpnext__draft_material_request",
     "erpnext__draft_purchase_order",
     "erpnext__draft_quotation",
     "erpnext__draft_todo",
+    "erpnext__draft_update",
 })
 
 # oe_connector's oversight tool: what became of the drafts made here. Never

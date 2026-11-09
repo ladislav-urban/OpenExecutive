@@ -51,3 +51,15 @@ test("a chip follows its card's outcome", async () => {
   assert.equal(chipSummary("Waiting for your approval", "approved"), "Approved");
   assert.equal(chipSummary("Booked: Lunch", "approved"), "Booked: Lunch");
 });
+
+test("a change or a comment says what it did, never 'submit the new draft'", async () => {
+  const words = await import("../src/lib/erpnextDraftWords.ts");
+  assert.equal(words.cardKind("Purchase Invoice", "update", true), "Change to a Purchase Invoice");
+  assert.equal(words.cardKind("Purchase Invoice", "comment", true), "Comment on a Purchase Invoice");
+  assert.equal(words.cardKind("Quotation", undefined, true), "Quotation draft");
+  assert.equal(words.changeMadeLine("update", "Purchase Invoice", "PINV-1", false),
+    "Purchase Invoice PINV-1 is changed in the ERP, still unsubmitted.");
+  assert.equal(words.changeMadeLine("comment", "Purchase Invoice", "PINV-1", false),
+    "Your comment is now on Purchase Invoice PINV-1.");
+  assert.doesNotMatch(words.changeMadeLine("update", "Purchase Invoice", "PINV-1", true), /submit it/);
+});
