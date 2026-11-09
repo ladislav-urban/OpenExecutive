@@ -167,6 +167,18 @@ ERPNEXT_ANSWER_CHECK_TOOL = "erpnext__answer_check_context"
 ERPNEXT_CONFIRM_TOOL = "erpnext__confirm_figure"
 ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, ERPNEXT_CONFIRM_TOOL})
 
+# Tools oe_connector serves and this install pins (erpnext_tool_pin), but
+# nothing here may call yet: reading an attachment (S4) waits for intake's
+# tool-less extraction, and a supplier's bank-change fact (S5) for the
+# payment-check job. The gateway refuses them on every path, with no marker
+# that lifts it, and tool search never shows them. When one's own path
+# exists it moves to a list gated by that path's marker, never to the tools
+# the model is offered.
+ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({
+    "erpnext__read_attachment",
+    "erpnext__supplier_bank_changed",
+})
+
 # The tool ERPNext's panel uses to open what an answer talks about beside it
 # (oe_connector's views.py). Named only in the panel's own channel block
 # (integrations.erpnext_panel), never here in block 0: the gateway refuses it,
