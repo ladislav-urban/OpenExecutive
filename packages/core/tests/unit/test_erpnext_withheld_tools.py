@@ -97,7 +97,7 @@ def test_the_invoice_block_is_pinned_but_no_card_here_calls_it(erp: Any, roster:
         with set_session(_owner_turn(roster)):
             return await gateway.call_tool({"name": "erpnext__draft_block_invoice", "arguments": {
                 "name": "ACC-PINV-1", "duplicate_of": "ACC-PINV-0", "idempotency_key": "k" * 32,
-                "expected_fingerprint": "f" * 64, "asked_by": "job:payment_checks", "configured_by": "x@y.z"}})
+                "expected_fingerprint": "f" * 64, "asked_by": "job:payment-checks", "configured_by": "x@y.z"}})
 
     assert "error" in json.loads(asyncio.run(go()))
     assert erp.calls == []
