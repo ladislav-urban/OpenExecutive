@@ -10573,6 +10573,14 @@ integrations:
     _search. A release that changes a definition updates both pins in one
     pair of PRs; until then that tool is unavailable here. It guards this
     install's model only.
+    Withheld tools (connected_systems.ERPNEXT_WITHHELD_TOOLS, Nov 9, 2026):
+    oe_connector serves, and this install pins, tools nothing here may call
+    yet, erpnext__read_attachment (intake) and erpnext__supplier_bank_changed
+    (the payment-check job). call_tool refuses them first in its ERPNext
+    block, under every marker and on every turn, and _drop_blocked_tools
+    hides them, with the draft tools no card uses yet (Dunning, update,
+    comment), which _check_erpnext_draft refuses anyway. Each moves to a
+    marker-gated list when its own path exists, never to PINNED_ERPNEXT_TOOLS.
 
     A2A for suppliers' agents (design "Next", item 3;
     integrations/erpnext_a2a.py, erpnext_a2a_agent.py). A supplier's own AI
