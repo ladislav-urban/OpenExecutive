@@ -50,7 +50,7 @@ capped in this step. Triage's injectable `client` is for tests only.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `COST_CAP_PERSON_DAILY_USD` | 0 (off) | One person's calls in a calendar day, in the company's time zone |
+| `COST_CAP_PERSON_DAILY_USD` | 0 (off) | One person's calls in a calendar day, in the company's time zone. Never the principal's |
 | `COST_CAP_JOB_DAILY_USD` | 0 (off) | One job's calls in a day |
 | `COST_CAP_MONTHLY_USD` | 0 (off) | Every call in a calendar month |
 
@@ -61,9 +61,10 @@ capped in this step. Triage's injectable `client` is for tests only.
   counted spend plus the call's worst case (its `max_tokens` at the model's
   output price, plus the prompt at its input price) would pass it. A single
   call can't overrun a cap by more than its estimate's error.
-- **The principal's chat at the monthly cap.** It is refused like every
-  other call, so the monthly cap is a real ceiling. The reply tells the
-  principal where to raise it.
+- **The principal.** The person cap never applies to the principal's own
+  calls. The monthly cap does: at it, the principal's chat is refused like
+  every other call, so the monthly cap is a real ceiling. The reply tells
+  the principal where to raise it.
 
 ## Changes
 
@@ -89,12 +90,20 @@ capped in this step. Triage's injectable `client` is for tests only.
   existing `test_usage_recording.py` pattern pins this.
 - An unreadable counter table refuses the call.
 - A teammate's queued run counts against that teammate, not the principal.
+- The principal's calls pass the person cap and stop at the monthly cap.
+- A day turns over at midnight in the company's time zone.
 
 One `security-reviewer` round before the PR.
 
-## Open questions for the owner
+## Decisions
 
-1. **Defaults.** Ship with every cap off, or with a default monthly cap?
-2. **The principal at their own daily cap.** Exempt the principal from the
-   person cap, keeping only the monthly one?
-3. **Time zone for "a day".** The company's zone, or UTC?
+The owner answered the open questions on Nov 9, 2026 (decision 163):
+
+1. **Defaults.** Every cap is off by default, so an install that sets
+   nothing changes nothing. A deployment turns caps on in its own
+   configuration. Its monthly figure is suggested from its own spend: the
+   highest of its last three months in `GET /audit/usage`, plus half again.
+   It is set on the operator's word when the caps deploy.
+2. **The principal.** The principal is exempt from the person cap. The
+   monthly cap still applies to the principal's calls.
+3. **A day** runs in the company's time zone.
