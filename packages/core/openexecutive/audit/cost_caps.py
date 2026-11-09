@@ -527,7 +527,9 @@ def worst_case(model: str, kwargs: dict[str, Any]) -> float:
     return (prompt_tokens * prompt_price + max_tokens * price.output) / 1_000_000
 
 
-def reserve(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) -> Reservation:
+def reserve(
+    model: str, kwargs: dict[str, Any], *, now: datetime | None = None, tell: bool = True,
+) -> Reservation:
     """Before a call is sent: raise :class:`CostCapReached` when its worst
     case would pass a cap that is on, else put that worst case on its scopes
     in the same write transaction as the check (BEGIN IMMEDIATE), so calls
@@ -572,12 +574,14 @@ def reserve(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) 
                 raise
     except CostCapReached as refused:
         logger.warning("cost caps: refused a call - %s", refused)
-        _tell_principal(refused, now)
+        if tell:
+            _tell_principal(refused, now)
         raise
     except Exception as exc:
         logger.exception("cost caps: couldn't read the counters - refusing the call")
         sick = _refusal("unreadable", type(exc).__name__, 0.0, 0.0, _next_day(now))
-        _tell_principal(sick, now)
+        if tell:
+            _tell_principal(sick, now)
         raise sick from exc
     return Reservation(scopes, day, estimate)
 
@@ -715,6 +719,12 @@ async def _alert_principal(exc: CostCapReached, now: datetime | None) -> None:
 _told: set[tuple[str, str, str]] = set()
 
 
+def tell_principal(exc: CostCapReached) -> None:
+    """Tell the principal of a refusal raised where it couldn't be told (a
+    worker thread). Call it on the event loop."""
+    _tell_principal(exc, None)
+
+
 def _tell_principal(exc: CostCapReached, now: datetime | None) -> None:
     told = (str(exc.scope), exc.key, day_key(now) if exc.scope != "unreadable" else _local(now).isoformat()[:13])
     if told in _told:
@@ -741,4 +751,5 @@ def _bare_context() -> Any:
 
     ctx = contextvars.copy_context()
     ctx.run(_job.set, None)
+    ctx.run(_spender.set, None)
     return ctx

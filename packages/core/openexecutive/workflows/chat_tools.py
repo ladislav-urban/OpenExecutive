@@ -226,8 +226,12 @@ def in_workflow(workflow_name: str, creator_id: int | None) -> Iterator[None]:
     creator = _creator.set(creator_id)
     from openexecutive.audit import cost_caps
 
-    # Its steps' model calls are spent for whoever created it.
-    spender = cost_caps._spender.set(str(creator_id) if creator_id is not None else cost_caps._spender.get())
+    # Its steps' model calls are spent for whoever asked for the run; the
+    # workflow's owner only when nobody did (the scheduler's own run).
+    asker = cost_caps.spender_of(current_session.get())
+    spender = cost_caps._spender.set(
+        asker if asker is not None else str(creator_id) if creator_id is not None else cost_caps._spender.get()
+    )
     try:
         yield
     finally:

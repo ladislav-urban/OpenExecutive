@@ -42,9 +42,24 @@ def _not_billed(exc: BaseException) -> bool:
     import anthropic
     import httpx
 
+    from openexecutive.providers.refusal import ProviderRefused
+
+    # Never sent: held back after a billing refusal, refused by a nested cap,
+    # or no connection made (a connect timeout included).
+    if isinstance(exc, ProviderRefused | cost_caps.CostCapReached | httpx.ConnectError | httpx.ConnectTimeout):
+        return True
     if isinstance(exc, anthropic.APITimeoutError | httpx.TimeoutException):
         return False
-    return isinstance(exc, anthropic.APIStatusError | anthropic.APIConnectionError | httpx.HTTPStatusError | httpx.ConnectError)
+    return isinstance(exc, anthropic.APIStatusError | anthropic.APIConnectionError | httpx.HTTPStatusError)
+
+
+async def _reserve(model: str, kwargs: dict[str, Any]) -> cost_caps.Reservation:
+    """Reserve off the event loop; a refusal tells the principal from it."""
+    try:
+        return await asyncio.to_thread(cost_caps.reserve, model, kwargs, tell=False)
+    except cost_caps.CostCapReached as refused:
+        cost_caps.tell_principal(refused)
+        raise
 
 
 class CappedProvider:
@@ -54,7 +69,7 @@ class CappedProvider:
     async def messages_create(self, **kwargs: Any) -> Any:
         model = str(kwargs.get("model") or "")
         # SQLite work off the event loop: a busy DB never stalls other turns.
-        reservation = await asyncio.to_thread(cost_caps.reserve, model, kwargs)
+        reservation = await _reserve(model, kwargs)
         try:
             message = await self._inner.messages_create(**kwargs)
         except BaseException as exc:
@@ -67,7 +82,7 @@ class CappedProvider:
     @asynccontextmanager
     async def _stream(self, kwargs: dict[str, Any]) -> AsyncIterator[Any]:
         model = str(kwargs.get("model") or "")
-        reservation = await asyncio.to_thread(cost_caps.reserve, model, kwargs)
+        reservation = await _reserve(model, kwargs)
         stream: Any = None
         try:
             async with self._inner.messages_stream(**kwargs) as stream:

@@ -437,3 +437,56 @@ def test_a_bound_spender_is_who_a_nameless_session_spends_for(db: SimpleNamespac
 
     with in_workflow("wf", db.teammate):
         assert cost_caps._person_key(Session(unattended=True)) == str(db.teammate)
+
+
+def test_a_workflow_is_spent_for_whoever_asked_not_its_owner(db: SimpleNamespace) -> None:
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.workflows.chat_tools import in_workflow
+
+    token = current_session.set(Session(caller_person_id=db.teammate))
+    try:
+        # A workflow the principal saved, run by the teammate.
+        with in_workflow("wf", db.principal):
+            assert cost_caps._person_key(Session(unattended=True)) == str(db.teammate)
+    finally:
+        current_session.reset(token)
+
+
+def test_a_call_held_back_after_a_billing_refusal_costs_nothing(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.providers.capped import CappedProvider
+    from openexecutive.providers.refusal import ProviderRefused
+
+    _caps(monkeypatch, monthly=100.0)
+
+    class _Backend:
+        async def messages_create(self, **_k: Any) -> Any:
+            raise ProviderRefused("billing")
+
+    with pytest.raises(ProviderRefused):
+        asyncio.run(CappedProvider(_Backend()).messages_create(**KW))  # type: ignore[arg-type]
+    assert cost_caps.spend_today("total", "all") == 0.0
+
+
+def test_a_refusal_in_the_worker_tells_the_principal_on_the_loop(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from openexecutive.providers.capped import CappedProvider
+
+    _caps(monkeypatch, monthly=0.000001)
+    _spend(1.0)
+    where: list[bool] = []
+    monkeypatch.setattr(
+        cost_caps, "_tell_principal", lambda exc, now: where.append(threading.current_thread() is threading.main_thread()),
+    )
+
+    class _Backend:
+        async def messages_create(self, **_k: Any) -> Any:
+            raise AssertionError("sent")
+
+    with pytest.raises(cost_caps.CostCapReached):
+        asyncio.run(CappedProvider(_Backend()).messages_create(**KW))  # type: ignore[arg-type]
+    assert where == [True]
