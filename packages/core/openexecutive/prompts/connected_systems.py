@@ -105,7 +105,7 @@ GOOGLE_TOOLS_ABOVE_CORE: frozenset[str] = frozenset({
 
 ERPNEXT_SERVER = "erpnext"
 
-# The oe_connector app's read tools (github.com/ladislav-urban/oe_connector),
+# The oe_connector app's read tools (the app runs inside the ERP),
 # as the gateway names them. All six only read: oe_connector rolls back every
 # request and serves them under a read-only "OE Reader" service user. Like the
 # Google names, pinning one never widens access; it only spares the model a

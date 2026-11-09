@@ -33,7 +33,7 @@ jobs:
       github.event.pull_request.draft == false &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]'
-    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
+    runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && (!startsWith(github.event_name, 'pull_request') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
     permissions:
       contents: read
       pull-requests: write

@@ -55,10 +55,10 @@ export default function OversightExport() {
       className="mb-6 rounded-xl border border-line bg-surface-elevated px-4 py-3"
     >
       <h2 id="oversight-heading" className="text-[15px] font-semibold text-fg">
-        {named ? "Draft oversight record" : "ERPNext draft oversight record"}
+        Draft oversight record
       </h2>
       <p className="mt-1 text-sm text-fg-muted">
-        Every {named ? "" : "ERPNext "}draft card in the range: who asked, what it showed, who decided, and what
+        Every draft card in the range: who asked, what it showed, who decided, and what
         became of it in {erpName(named)}. Leave a date empty for an open end.
       </p>
       <div className="mt-3 flex flex-wrap items-end gap-3">
