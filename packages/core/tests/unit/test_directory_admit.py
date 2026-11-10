@@ -33,6 +33,8 @@ DEMO_ROLE = "Demo user"
 # The shipped limits, before the fixture widens them for a loaded test machine.
 REAL_BUDGET_S = directory_sync.ADMIT_BUDGET_S
 REAL_CALL_TIMEOUT_S = directory_sync.ADMIT_CALL_TIMEOUT_S
+REAL_LOCK_WAIT_S = directory_sync.ADMIT_LOCK_WAIT_S
+UI_AUTH = Path(__file__).resolve().parents[3] / "ui" / "src" / "auth.ts"
 
 
 def uid(n: int) -> str:
@@ -582,6 +584,16 @@ def test_the_reads_share_one_time_budget(kc: Keycloak, monkeypatch: pytest.Monke
     # The groups read never started: the budget was spent.
     assert kc.requests == ["users/" + subject]
     assert everyone() == []
+
+
+def test_the_api_gives_up_before_the_web_app_stops_waiting() -> None:
+    # Otherwise an admit could land after the web app told the person no.
+    import re
+
+    match = re.search(r"const ADMIT_TIMEOUT_MS = (\d+);", UI_AUTH.read_text(encoding="utf-8"))
+    assert match, "ADMIT_TIMEOUT_MS moved out of packages/ui/src/auth.ts"
+    ui_wait_s = int(match.group(1)) / 1000
+    assert ui_wait_s - 0.25 >= REAL_BUDGET_S + REAL_LOCK_WAIT_S
 
 
 def test_each_call_carries_the_admit_timeout_under_the_budget(

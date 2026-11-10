@@ -717,9 +717,10 @@ def _suspend(person: Person, settings: Settings) -> None:
 # on the network.
 
 ADMIT_CALL_TIMEOUT_S = 3.0
-# Under the web app's 4 s wait for the answer.
-ADMIT_BUDGET_S = 3.5
-ADMIT_LOCK_WAIT_S = 2.0
+# The reads' budget plus the lock wait stay under the web app's 4 s wait for
+# the answer, so the API never admits someone after the web app gave up.
+ADMIT_BUDGET_S = 3.0
+ADMIT_LOCK_WAIT_S = 0.5
 ADMIT_SUBJECT_WINDOW_S = 30.0
 ADMIT_SUBJECT_CAP = 10_000
 ADMIT_GLOBAL_PER_MINUTE = 20

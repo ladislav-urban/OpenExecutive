@@ -8291,7 +8291,7 @@ integrations:
     process-wide slot of one admit (busy at once), the global cap (20 a
     minute, counting only admits that reach the provider). Reads, all
     before _run_lock, through KeycloakReader with an admit timeout (3 s a
-    call, 3.5 s budget in all, the 401 token retry inside it; the client
+    call, 3 s budget in all, the 401 token retry inside it; the client
     closed in a finally): users/{id} (404 -> unknown; body id must equal
     the subject), _member (inactive, email_mismatch), users/{id}/groups
     paged. Member = a path at or under DIRECTORY_SYNC_GROUP AND that
@@ -8300,7 +8300,8 @@ integrations:
     a path under DIRECTORY_SYNC_DEMO_GROUP OR the id in its tree (either,
     the narrower role). Trees cached 60 s per (issuer, admin URL, path),
     at most 50 groups (else error), a failed read never cached. Then
-    _run_lock with a 2 s wait (busy), the subject and email re-checked,
+    _run_lock with a 0.5 s wait (busy; the budget plus this wait stay
+    under the web app's 4 s, so nothing is admitted after it gave up), the subject and email re-checked,
     _add, registry.invalidate; after_roster_write after the lock. Any
     failure writes nothing and answers error. Audit directory_admit
     (code, email domain, subject SHA-256 prefix, person id) only for
