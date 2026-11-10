@@ -5330,7 +5330,32 @@ chat:
     must be a source name; near one source name (case/punctuation, or 0/1/2
     edits by length) is written in by code; otherwise left out or removed.
     Source names only from name fields (answer_check_context's names, report
-    Link/*_name columns, company), never remarks.
+    Link/*_name columns, company), never remarks. An Account / Cost Center /
+    Warehouse name less its " - <abbr>" company suffix (1-10 capitals or
+    digits) is confirmed (NameSources.short, from fields linking those
+    DocTypes); answer_correct.remove drops a table whole when its rows added
+    up to a kept total row's figure and no longer do.
+    Held to the figure's own kind (demo reshoot, Nov 10, 2026): check 2's
+    "wrong" value is refused (cannot_tell) when the figure plainly isn't
+    money (Figure.not_money: a count, or days/hours/stars/units after it)
+    and every operand is only ever a money column's value (Sources.money;
+    any op but ratio/percent/percent_change), or when it is more than
+    MAX_FACTOR (3) times off the figure (never for ratio/percent/
+    percent_change, nor to or from 0). Why: "averaging 62.5 days" came
+    back as a mean of paid amounts.
+    Numeric strings: check 1 reads a rating field's string ("4") and a
+    dotted child field's (list_records fields "parameters.rating") when the
+    child table's numeric fields name it; check 2 accepts a plain numeric
+    string operand (still one of ERPNext's own values).
+    Own differences (figure_check._own_differences): "$A … $B, $D under/over
+    the <noun>" in one sentence (answer_correct.units), the noun named right
+    before B ("a BOM of $B"), where D isn't |A - B| but is |T - B| for
+    exactly one figure T of the reply's own table total row: A gets T as its
+    arithmetic and is written in like a wrong product. No table total, no
+    flag: a mismatch alone may compare with something the sentence omits.
+    record_titles: an id alone in its brackets gets ", title" inside them;
+    one sharing its brackets gets nothing. A string rating ("1") is never
+    read as a Rating fraction (only a JSON number is).
     Check 3 (PR (c), orchestrator/figure_confirm.py): a figure matched to a
     list_records total that is a MEASURES quick way (no other narrowing; GL
     reads with named accounts for cash/COGS) is asked of oe_connector's

@@ -15,7 +15,10 @@ and the operation is worked out here, never taken from the model. So it can
 neither confirm a figure nor supply a value that isn't in what ERPNext
 returned, and a value it supplies must be one check 1 would itself confirm
 (``Sources.knows``): a value, a whole list's aggregate, a difference, or a
-share or change.
+share or change. Nor may it be another quantity than the figure's: a figure
+that plainly isn't money (a number of days, a count, a rating) is never
+written from money columns' values alone, and no value more than
+``MAX_FACTOR`` times off the figure is written in.
 
 The reviewer runs on ``ROUTING_MODEL``'s provider. When that isn't the turn's
 own model's provider, it is one more recipient of the turn's ERPNext results. A verdict that doesn't parse, names a number that isn't there, or
@@ -87,9 +90,45 @@ def _results_text(results: list[ErpnextResult]) -> str:
 
 
 def _number(value: Any) -> float | None:
+    """A number the reviewer names: a JSON number, or a plain numeric string
+    as ERPNext gives some fields ("4" for a rating). Either must still be one
+    of ERPNext's own values (``read_verdict``)."""
+    if isinstance(value, str) and _NUMERIC_STRING.fullmatch(value.strip()):
+        value = float(value.strip())
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value) if math.isfinite(float(value)) else None
+
+
+_NUMERIC_STRING = re.compile(r"-?\d{1,15}(?:\.\d{1,9})?")
+
+
+# A right value more than this many times the figure, or less than its
+# share, is never written in: that's another quantity, not a slip.
+MAX_FACTOR = 3.0
+_SCALE_FREE = frozenset({"ratio", "percent", "percent_change"})
+
+
+def _far(fig: Figure, op: object, value: float) -> bool:
+    """Whether ``value`` is more than MAX_FACTOR times off the figure as
+    written (a percentage read as a fraction too). Never for a share or a
+    change, whose right value may be any multiple of a wrong one, nor to or
+    from 0 ("still owes $1,150" when nothing is owed)."""
+    written = abs(fig.readings[0][0] * fig.scale)
+    if op in _SCALE_FREE or value == 0 or written == 0:
+        return False
+    candidates = [abs(value), abs(value) * 100.0] if fig.percent else [abs(value)]
+    for x in candidates:
+        lo, hi = sorted((written, x))
+        if hi == 0 or (lo > 0 and hi / lo <= MAX_FACTOR):
+            return False
+    return True
+
+
+def _money_for_other(fig: Figure, op: object, numbers: list[float], sources: Sources) -> bool:
+    """Whether a figure that isn't money ("62.5 days", "13 payments") would
+    be written from money columns' values (a mean of paid amounts)."""
+    return fig.not_money and op not in _SCALE_FREE and all(sources.is_money(v) for v in numbers)
 
 
 def _worked_out(op: object, operands: list[float]) -> float | None:
@@ -139,6 +178,11 @@ def read_verdict(item: object, fig: Figure, sources: Sources) -> Review:
         value *= 100.0  # a share, written as a percentage
     if fig.matches(value):
         return Review("supported", value)
+    if verdict == "wrong" and (_money_for_other(fig, op, numbers, sources) or _far(fig, op, value)):
+        # Another quantity than the figure's: a mean of paid amounts for a
+        # number of days, or a value three times off (a demo reshoot's
+        # "averaging 62.5 days" written as "1340.6").
+        return CANNOT_TELL
     if verdict == "wrong" and sources.knows(value, percent=fig.percent):
         # Only a value check 1 itself would confirm is written into the reply:
         # arithmetic of the reviewer's choosing over real numbers can reach
