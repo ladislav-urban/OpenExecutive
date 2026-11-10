@@ -400,7 +400,8 @@ def draft_check_for_job(
         set(arguments) - DRAFT_CHECK_KEYS or not {"operation", "doctype", "fields"} <= set(arguments)
         or not isinstance(operation, str) or not isinstance(doctype, str) or not isinstance(fields, dict)
         or ("name" in arguments) == (operation == "create")
-        or job.check_fields(operation, doctype, fields) != fields
+        or ("name" in arguments and not isinstance(arguments["name"], str))
+        or job.check_fields(operation, doctype, fields, str(arguments.get("name") or "")) != fields
     ):
         raise JobCheckRefused("job-check-arguments")
     asker = email.strip().lower()

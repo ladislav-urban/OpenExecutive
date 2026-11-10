@@ -4,7 +4,8 @@ A job is a ``WatchJob``: the reads it makes (``WatchRead``: an oe_connector
 tool and the shape of its arguments, the same entry and slot names as the
 job's ``oe_connector_watch_jobs`` listing on the ERPNext side), the rules that
 turn their results into notices and draft cards (``build``, pure code
-returning ``CardSpec``\\ s and ``DraftSpec``\\ s), when it runs, how many cards
+returning ``CardSpec``\\ s and ``DraftSpec``\\ s), when it runs (once a day at
+``schedule``, or at each of its ``slots`` on its ``weekdays``), how many cards
 a day it may leave, and the settings the principal may change.
 
 A read may depend on the ones before it (``WatchRead.arguments`` gets their
@@ -14,7 +15,8 @@ the read (``None``); one cut to its first 50 says so (``Derived``).
 
 There is no way to add a job at run time: no settings row, chat turn or API
 names one. ``JOBS`` is read-only and holds what this module lists in
-``_LISTED``: phase 1's collections job (``watch.jobs.collections``). The
+``_LISTED``: phase 1's collections job (``watch.jobs.collections``) and its
+payment-checks job (``watch.jobs.payment_checks``). The
 test job, ``watch.jobs._example``, is put in by the tests alone.
 
 A tool the gateway withholds from every turn
@@ -22,11 +24,23 @@ A tool the gateway withholds from every turn
 ``JOB_WITHHELD_EXCEPTIONS`` gives it to, and the gateway opens it only under
 that job's own read.
 
-**Shapes** are oe_connector's (its ``watch.py``): a fixed value must match
-exactly; a typed slot takes any value of its type (``SLOTS``); a ``fields``
-list is the most a call may ask for; an object must have exactly the listed
-keys. The runner checks each read's arguments here before the call, and
-oe_connector checks them again, as the job's ERP user, when it answers.
+**Shapes** are oe_connector's (its ``watch.py``, ladislav-urban/oe_connector#536):
+
+- a literal matches only the same JSON type and value (``true`` is never
+  ``1``, and ``1.0`` never ``1``);
+- a typed slot takes any value of its type (``SLOTS``);
+- the top-level ``fields`` list is the most a call may ask for;
+- any other list matches a list of the same length, element by element: a
+  filter such as ``["<=", "$date"]`` or ``["in", "$parties"]``, never "any
+  list";
+- an object must have exactly the listed keys.
+
+The runner checks each read's arguments here before the call, and
+oe_connector checks them again, as the job's ERP user, when it answers. A
+read whose shape breaks oe_connector's soundness rules (``shape_problem``: a
+mistyped slot, a list or object inside a list, a slot in a list anywhere but
+``[operator, slot]``, a list slot as a filter's value on its own) is refused
+when its job is defined, so the registry never imports one.
 """
 from __future__ import annotations
 
@@ -41,6 +55,11 @@ from typing import Any
 # `sub` of a watch assertion.
 JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOTS: tuple[str, ...] = ("$company", "$date", "$party", "$parties", "$customers", "$int")
+LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers")
+# The operators a slot may follow inside a list: a single value's, or a list
+# slot's (in, not in). Never like, where a name's % or _ would widen the read.
+VALUE_OPERATORS: tuple[str, ...] = ("=", "!=", "<", "<=", ">", ">=")
+LIST_OPERATORS: tuple[str, ...] = ("in", "not in")
 DATE_RANGE_DAYS = 400
 MAX_LIST = 50
 MAX_INT = 500
@@ -142,22 +161,29 @@ class DraftSpec:
       (cleaned when the card is left).
     - ``reason_key``: the notice item whose reason line the card shows as
       "Why now".
-    - ``group``: what the notice groups it under (a customer)."""
+    - ``group``: what the notice groups it under (a customer).
+    - ``name``: the document a change or a block is on ("" for a new draft).
+    - ``notice``: the finding told as a notice when no card can be left for
+      it (the run went to the principal, the reviewer can't see the
+      document, the day's cap); None when the job's notices already cover it."""
 
     key: str
     operation: str
     doctype: str
     fields: Mapping[str, Any]
-    expect: Mapping[str, str]
+    expect: Mapping[str, Any]
     title: str
     reason_key: str = ""
     group: str = ""
+    name: str = ""
+    notice: CardSpec | None = None
 
 
-# A job's own builder of a card's fields, by operation and DocType: the
-# fields as they will be checked, stored and sent, or why not. Run before
-# each check and again at approval, so a tampered card is refused.
-CheckFields = Callable[[str, str, Mapping[str, Any]], dict[str, Any] | str]
+# A job's own builder of a card's fields, by operation, DocType and the
+# document's name ("" for a new draft): the fields as they will be checked,
+# stored and sent, or why not. Run before each check and again at approval,
+# so a tampered card is refused.
+CheckFields = Callable[[str, str, Mapping[str, Any], str], dict[str, Any] | str]
 
 
 @dataclass(frozen=True)
@@ -195,7 +221,8 @@ class WatchJob:
     title: str
     reads: tuple[WatchRead, ...]
     build: Build
-    # Its hour (and minute) each day, in the company's time zone.
+    # Its hour (and minute) each day, in the company's time zone; for a job
+    # with ``slots``, its first.
     schedule: time
     card_cap_day: int
     default_settings: Mapping[str, Any]
@@ -206,6 +233,12 @@ class WatchJob:
     setting_bounds: Mapping[str, tuple[int, int]] = field(default_factory=dict)
     # What a notice calls its draft cards ("reminder drafts").
     card_noun: str = "drafts"
+    # The times it runs each day (company time), when more than once: a run
+    # per slot, the day's card cap counted across them. Empty: once a day at
+    # ``schedule``.
+    slots: tuple[time, ...] = ()
+    # The days it runs (Monday 0 to Sunday 6).
+    weekdays: frozenset[int] = frozenset(range(7))
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -228,6 +261,9 @@ class WatchJob:
                 raise ValueError(f"a job may not list {read.tool!r}")
             if not isinstance(read.shape, Mapping) or not read.label or not read.label.isprintable():
                 raise ValueError("each read has a shape and a label")
+            unsound = shape_problem(read.shape)
+            if unsound:
+                raise ValueError(f"a read's shape is unsound: {unsound}")
         if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
             raise ValueError("a job's card cap is 1 to 50 a day")
         for key, bound in self.setting_bounds.items():
@@ -241,6 +277,26 @@ class WatchJob:
                 raise ValueError(f"setting {key!r} isn't a bool, a number, a line of text or a list of names")
         if not self.card_noun or not self.card_noun.isprintable() or len(self.card_noun) > 40:
             raise ValueError("a job's card noun is a few words")
+        if self.slots and (
+            list(self.slots) != sorted(set(self.slots)) or self.slots[0] != self.schedule
+            or len(self.slots) > 24 or any(s.second or s.microsecond or s.tzinfo for s in self.slots)
+        ):
+            raise ValueError("a job's slots are distinct times, in order, from its schedule")
+        if not self.weekdays or not self.weekdays <= frozenset(range(7)):
+            raise ValueError("a job runs on some of the week's days, Monday 0 to Sunday 6")
+
+    def slot_keys(self) -> tuple[tuple[time, str], ...]:
+        """Its slots and their keys ("HH:MM"), or its schedule with key ""
+        for a job that runs once a day."""
+        if not self.slots:
+            return ((self.schedule, ""),)
+        return tuple((s, s.strftime("%H:%M")) for s in self.slots)
+
+    def due_slots(self, now: time, weekday: int) -> tuple[str, ...]:
+        """The keys of the slots due by ``now`` on a day of ``weekday``, in order."""
+        if weekday not in self.weekdays:
+            return ()
+        return tuple(key for at, key in self.slot_keys() if at <= now)
 
     def tools(self) -> frozenset[str]:
         """The gateway names of the tools it lists."""
@@ -290,30 +346,94 @@ def _slot_holds(slot: str, value: Any, today: date) -> bool:
     return False
 
 
-def shape_mismatch(shape: Any, value: Any, today: date, where: str = "") -> str:
-    """Why ``value`` doesn't fit ``shape``, or "" when it does. The reason
-    names keys and slots only, never a value."""
+# Whether a slot holds a value: the runner's own check (``_slot_holds``), or
+# a test's oracle.
+SlotHolds = Callable[[str, Any], bool]
+
+
+def _is_scalar(value: Any) -> bool:
+    return value is None or isinstance(value, str | int | float | bool)
+
+
+def shape_problem(shape: Any, where: str = "", in_filters: bool = False) -> str:
+    """Why a read's shape is unsound (oe_connector's ``watch._shape_problem``),
+    or "" when it is sound. An unsound read leaves its job out on both sides."""
+    if isinstance(shape, str) and shape.startswith("$"):
+        if shape not in SLOTS:
+            return f"{where or 'value'}: {shape} isn't a slot"
+        if in_filters and shape in LIST_SLOTS:
+            return f'{where}: a list slot in a filter goes in ["in", {shape}]'
+        return ""
+    if isinstance(shape, Mapping):
+        for key, sub in shape.items():
+            path = f"{where}.{key}" if where else str(key)
+            why = shape_problem(sub, path, in_filters or key == "filters")
+            if why:
+                return why
+        return ""
+    if isinstance(shape, list | tuple):
+        if where == "fields":
+            ok = all(isinstance(f, str) and not f.startswith("$") for f in shape)
+            return "" if ok else "fields: only field names"
+        if not all(_is_scalar(e) for e in shape):
+            return f"{where}: a list inside a list or an object inside one"
+        slots = [e for e in shape if isinstance(e, str) and e.startswith("$")]
+        if not slots:
+            return ""
+        unknown = [e for e in slots if e not in SLOTS]
+        if unknown:
+            return f"{where}: {unknown[0]} isn't a slot"
+        if len(shape) != 2 or shape[1] not in SLOTS:
+            return f"{where}: a slot in a list only as [operator, slot]"
+        operator, slot = shape
+        if operator in VALUE_OPERATORS and slot not in LIST_SLOTS:
+            return ""
+        if operator in LIST_OPERATORS and slot in LIST_SLOTS:
+            return ""
+        return f"{where}: {slot} can't follow {operator!r}"
+    return "" if _is_scalar(shape) else f"{where or 'value'}: not a JSON value"
+
+
+def shape_mismatch(
+    shape: Any, value: Any, today: date, where: str = "", *, holds: SlotHolds | None = None,
+) -> str:
+    """Why ``value`` doesn't fit ``shape``, or "" when it does (oe_connector's
+    ``watch._mismatch``). The reason names keys and slots only, never a
+    value. ``holds``: whether a slot takes a value; the runner's own check on
+    ``today`` unless given."""
     if isinstance(shape, str) and shape in SLOTS:
-        return "" if _slot_holds(shape, value, today) else f"{where or 'value'} isn't a {shape[1:]}"
+        held = holds(shape, value) if holds is not None else _slot_holds(shape, value, today)
+        return "" if held else f"{where or 'value'} isn't a {shape[1:]}"
     if isinstance(shape, Mapping):
         if not isinstance(value, Mapping):
             return f"{where or 'arguments'} should be an object"
-        extra = sorted(set(value) - set(shape))
+        extra = sorted(str(k) for k in set(value) - set(shape))
         if extra:
-            return f"{', '.join(str(k) for k in extra)[:200]} isn't listed"
+            return f"{', '.join(extra)[:200]} isn't listed"
         missing = sorted(set(shape) - set(value))
         if missing:
             return f"{', '.join(missing)} is missing"
         for key, sub in shape.items():
-            why = shape_mismatch(sub, value[key], today, f"{where}.{key}" if where else key)
+            why = shape_mismatch(sub, value[key], today, f"{where}.{key}" if where else key, holds=holds)
             if why:
                 return why
         return ""
-    if isinstance(shape, list | tuple) and where.split(".")[-1] == "fields":
+    if isinstance(shape, list | tuple) and where == "fields":
+        # The top-level fields only: the most a call may ask for.
         if not isinstance(value, list) or not value or not all(isinstance(f, str) for f in value):
             return f"{where} should be a list of fields"
         return f"{where} asks for a field that isn't listed" if set(value) - set(shape) else ""
-    return "" if value == shape else f"{where or 'value'} isn't the listed value"
+    if isinstance(shape, list | tuple):
+        # Any other list: the same length, element by element.
+        if not isinstance(value, list) or len(value) != len(shape):
+            return f"{where or 'value'} should be a list of {len(shape)}"
+        for i, (sub, item) in enumerate(zip(shape, value, strict=True)):
+            why = shape_mismatch(sub, item, today, f"{where}[{i}]", holds=holds)
+            if why:
+                return why
+        return ""
+    # A literal: the same JSON type and value, so true is never 1 and 1.0 never 1.
+    return "" if type(value) is type(shape) and value == shape else f"{where or 'value'} isn't the listed value"
 
 
 def read_for(job: WatchJob, gateway_tool: str, arguments: Mapping[str, Any], today: date) -> WatchRead | None:
@@ -365,11 +485,11 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
     return out
 
 
-# The jobs this install runs, each with its entry in oe_connector_watch_jobs
-# (payment-checks joins in its own PR). Imported here, once everything a job
-# module uses is defined.
+# The jobs this install runs, each with its entry in oe_connector_watch_jobs.
+# Imported here, once everything a job module uses is defined.
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
+from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
 
-_LISTED: tuple[WatchJob, ...] = (_collections.JOB,)
+_LISTED: tuple[WatchJob, ...] = (_collections.JOB, _payment_checks.JOB)
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

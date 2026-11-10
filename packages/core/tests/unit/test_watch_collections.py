@@ -231,7 +231,7 @@ def test_collections_is_listed_with_its_shared_reads() -> None:
 
 
 def test_a_withheld_tool_is_listed_only_by_the_job_that_owns_it() -> None:
-    assert {"collections": frozenset({"erpnext__customer_payment_record"})} == JOB_WITHHELD_EXCEPTIONS
+    assert JOB_WITHHELD_EXCEPTIONS["collections"] == frozenset({"erpnext__customer_payment_record"})
     assert all(tools <= ERPNEXT_WITHHELD_TOOLS for tools in JOB_WITHHELD_EXCEPTIONS.values())
     record = WatchRead("customer_payment_record", collections.RECORD_SHAPE, collections._record, "r")
     for other in ("payment-checks", "example", "collection"):

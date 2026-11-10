@@ -1007,6 +1007,13 @@ class Settings(BaseSettings):
     # ERPNext jobs defined in code. Off, no job runs whatever its row in
     # `watch_jobs` says. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
     erpnext_watch_jobs_enabled: bool = Field(False, alias="ERPNEXT_WATCH_JOBS_ENABLED")
+    # The payment-checks job's block card (integrations/erpnext_block.py):
+    # ERPNext's own Block Invoice on a submitted supplier invoice that likely
+    # repeats another, approved by the job's reviewer. The one card that
+    # changes a submitted document, so off by default; it also needs the
+    # job's block_submitted setting and oe_connector's draft_block_invoice
+    # pinned, and oe_connector_block_invoices on the site.
+    erpnext_block_invoice: bool = Field(False, alias="ERPNEXT_BLOCK_INVOICE")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools

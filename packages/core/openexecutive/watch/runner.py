@@ -1,13 +1,21 @@
-"""Running the watch jobs: once a day each, from the scheduler's tick.
+"""Running the watch jobs: once a day, or at each of a job's slots, from the
+scheduler's tick.
 
 ``maybe_run`` (called by ``scheduler.runner`` every tick) starts each job
-that is on, under the operator's master switch, once it's past the job's hour
-in the company's time zone, and only when this caller wins the day's claim:
-a row in ``watch_runs`` taken under ``BEGIN IMMEDIATE``, so a restart or a
-second worker never runs a job twice in a day. A run left ``running`` past
-``STALE_AFTER`` (the process died) is taken again once; after that it fails.
-A day whose hour daylight saving skipped still runs: what counts is being
-past the hour with no row for the day.
+that is on, under the operator's master switch, on its weekdays, once it's
+past one of its slots (a once-a-day job: its hour) in the company's time
+zone, and only when this caller wins that slot's claim: a row in
+``watch_runs`` keyed by (job, day, slot), taken under ``BEGIN IMMEDIATE``, so
+a restart or a second worker never runs a slot twice. Only the latest due
+slot is claimed: the earlier ones of the day still unclaimed are marked
+``skipped`` in the same transaction, so a worker that was down at 09:00 runs
+once at 11:05, not three times. A run left ``running`` past ``STALE_AFTER``
+(the process died) is taken again once, while its slot is still the latest
+due; one a later slot has overtaken is marked failed instead. A day whose
+hour daylight saving skipped still runs: what counts is being past the slot
+with no row for it. The day's draft cards are counted across its slots
+(``settings.take_day_cards``), and a job leaves at most one failure notice a
+calendar day (``settings.take_failure_notice``).
 
 A run (``run_job``, its own task):
 
@@ -70,6 +78,7 @@ from openexecutive.watch.settings import (
     get_row,
     job_enabled,
     master_on,
+    take_failure_notice,
 )
 
 logger = logging.getLogger(__name__)
@@ -104,6 +113,7 @@ REASONS: dict[str, str] = {
     "read_build_failed": "the job couldn't build the read from its settings",
     "read_shape": "the read the job built didn't fit its listed shape",
     "read_refused": "ERPNext refused the read",
+    "bank_facts_off": "supplier bank checks are off in ERPNext's settings",
     "read_timeout": "ERPNext didn't answer in time",
     "read_failed": "the read couldn't be made",
     "acting_job_mismatch": "ERPNext answered the read for a different job",
@@ -114,6 +124,16 @@ REASONS: dict[str, str] = {
 # Turned off between its claim and its reads: nothing to tell the principal,
 # who turned it off.
 _QUIET = frozenset({"watch-job-off"})
+# What a failure notice says, whole, for a stop that needs an ERPNext
+# operator rather than a look at the job (code's words, never ERPNext's).
+FAIL_LINES: dict[str, str] = {
+    # ladislav-urban/oe_connector#534: supplier_bank_changed refuses until the
+    # site sets oe_connector_bank_facts.
+    "bank_facts_off": "Supplier bank checks are off in ERPNext's settings.",
+}
+# A refusal's own setting name, read only to pick the reason code above: the
+# text is never stored or shown.
+_REFUSAL_SETTINGS: dict[str, str] = {"oe_connector_bank_facts": "bank_facts_off"}
 
 _tasks: dict[str, asyncio.Task[RunOutcome]] = {}
 
@@ -234,36 +254,70 @@ def dedup_key(job_id: str, finding_key: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# The day's claim
+# The slot's claim
 # --------------------------------------------------------------------------- #
 
 
-def claim(job_id: str, day: str, now: datetime, *, path: Path | None = None) -> str | None:
-    """Take ``(job_id, day)`` for a run, atomically: "run" when this caller
-    may run it (no row yet, or a stale ``running`` row on its first retry),
-    "stalled" when a stale row has had its retry (the caller fails it), else
-    None (already done, failed or running)."""
+def claim(
+    job_id: str, day: str, now: datetime, *, slots: Sequence[str] = ("",), path: Path | None = None,
+) -> str | None:
+    """Take the latest of ``slots`` (the day's due slots, in order; "" for a
+    once-a-day job) for a run, atomically: "run" when this caller may run it
+    (no row yet, or a stale ``running`` row on its first retry), "stalled"
+    when a stale row has had its retry (the caller fails it), else None
+    (already done, failed or skipped, running, or an earlier slot of the day
+    is still running). In the same transaction the earlier slots with no row
+    are marked ``skipped``, and an earlier one left ``running`` past
+    ``STALE_AFTER`` is marked failed: a later slot overtook it, so it is
+    never retried."""
+    if not slots:
+        return None
+    latest, earlier = slots[-1], list(slots[:-1])
+    stamp = now.astimezone(UTC).isoformat()
     conn = connect(path)
     try:
         conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute(
-            f"SELECT status, started_at, attempts FROM {RUNS_TABLE} WHERE job = ? AND day = ?",  # noqa: S608
-            (job_id, day),
-        ).fetchone()
+        rows = {
+            r[0]: r[1:] for r in conn.execute(
+                f"SELECT slot, status, started_at, attempts FROM {RUNS_TABLE} WHERE job = ? AND day = ?",  # noqa: S608
+                (job_id, day),
+            )
+        }
+        busy = False
+        for slot in earlier:
+            held = rows.get(slot)
+            if held is None:
+                conn.execute(
+                    f"INSERT INTO {RUNS_TABLE} (job, day, slot, status, started_at, attempts) "  # noqa: S608
+                    "VALUES (?, ?, ?, 'skipped', ?, 0)",
+                    (job_id, day, slot, stamp),
+                )
+            elif held[0] == "running":
+                if _stale(held[1], now):
+                    conn.execute(
+                        f"UPDATE {RUNS_TABLE} SET status = 'failed', error = 'run_overtaken', finished_at = ? "  # noqa: S608
+                        "WHERE job = ? AND day = ? AND slot = ? AND status = 'running'",
+                        (stamp, job_id, day, slot),
+                    )
+                else:
+                    busy = True
+        row = rows.get(latest)
         outcome: str | None = None
-        if row is None:
+        if busy:
+            outcome = None
+        elif row is None:
             conn.execute(
-                f"INSERT INTO {RUNS_TABLE} (job, day, status, started_at, attempts) "  # noqa: S608
-                "VALUES (?, ?, 'running', ?, 1)",
-                (job_id, day, now.astimezone(UTC).isoformat()),
+                f"INSERT INTO {RUNS_TABLE} (job, day, slot, status, started_at, attempts) "  # noqa: S608
+                "VALUES (?, ?, ?, 'running', ?, 1)",
+                (job_id, day, latest, stamp),
             )
             outcome = "run"
         elif row[0] == "running" and _stale(row[1], now):
             if int(row[2] or 0) < MAX_ATTEMPTS:
                 conn.execute(
                     f"UPDATE {RUNS_TABLE} SET started_at = ?, attempts = attempts + 1 "  # noqa: S608
-                    "WHERE job = ? AND day = ? AND status = 'running'",
-                    (now.astimezone(UTC).isoformat(), job_id, day),
+                    "WHERE job = ? AND day = ? AND slot = ? AND status = 'running'",
+                    (stamp, job_id, day, latest),
                 )
                 outcome = "run"
             else:
@@ -288,12 +342,14 @@ def _stale(started_at: object, now: datetime) -> bool:
     return now - started >= STALE_AFTER
 
 
-def _finish(job_id: str, day: str, outcome: RunOutcome, reads: list[dict[str, Any]], *, path: Path | None) -> None:
+def _finish(
+    job_id: str, day: str, outcome: RunOutcome, reads: list[dict[str, Any]], *, path: Path | None, slot: str = "",
+) -> None:
     conn = connect(path)
     try:
         conn.execute(
             f"UPDATE {RUNS_TABLE} SET status = ?, finished_at = ?, cards = ?, error = ?, reads = ?, "  # noqa: S608
-            "detail = ? WHERE job = ? AND day = ?",
+            "detail = ? WHERE job = ? AND day = ? AND slot = ?",
             (
                 outcome.status,
                 datetime.now(UTC).isoformat(),
@@ -303,6 +359,7 @@ def _finish(job_id: str, day: str, outcome: RunOutcome, reads: list[dict[str, An
                 json.dumps(outcome.detail()),
                 job_id,
                 day,
+                slot,
             ),
         )
     finally:
@@ -310,18 +367,9 @@ def _finish(job_id: str, day: str, outcome: RunOutcome, reads: list[dict[str, An
 
 
 def _take_failure_notice(job_id: str, day: str, *, path: Path | None) -> bool:
-    """True once per job and day: whether this caller leaves the failure
-    notice."""
-    conn = connect(path)
-    try:
-        cur = conn.execute(
-            f"UPDATE {RUNS_TABLE} SET failure_noticed = 1 "  # noqa: S608
-            "WHERE job = ? AND day = ? AND failure_noticed = 0",
-            (job_id, day),
-        )
-        return cur.rowcount == 1
-    finally:
-        conn.close()
+    """True once per job and calendar day, whichever slot asks first: whether
+    this caller leaves the failure notice."""
+    return take_failure_notice(job_id, day, path=path)
 
 
 # --------------------------------------------------------------------------- #
@@ -342,24 +390,26 @@ def maybe_run(now: datetime) -> int:
         day = local.date().isoformat()
         started = 0
         for job in list(registry.JOBS.values()):
-            if local.time() < job.schedule or not job_enabled(job.id):
+            due = job.due_slots(local.time(), local.weekday())
+            if not due or not job_enabled(job.id):
                 continue
             running = _tasks.get(job.id)
             if running is not None and not running.done():
                 continue
-            taken = claim(job.id, day, now)
+            slot = due[-1]
+            taken = claim(job.id, day, now, slots=due)
             if taken == "stalled":
                 outcome = RunOutcome("failed", error="run_stalled")
-                _finish(job.id, day, outcome, [], path=None)
+                _finish(job.id, day, outcome, [], path=None, slot=slot)
                 if _take_failure_notice(job.id, day, path=None):
                     _fail_notice(job, day, "run_stalled", "")
-                _audit(job, day, outcome, reads=0)
+                _audit(job, day, outcome, reads=0, slot=slot)
                 continue
             if taken != "run":
                 continue
             # Unattended: its task starts with no audit scope and no turn.
             with unscoped_audit_rows():
-                task = asyncio.get_running_loop().create_task(run_job(job, day))
+                task = asyncio.get_running_loop().create_task(run_job(job, day, slot=slot))
             _tasks[job.id] = task
             started += 1
         return started
@@ -373,12 +423,12 @@ def maybe_run(now: datetime) -> int:
 # --------------------------------------------------------------------------- #
 
 
-async def run_job(job: registry.WatchJob, day: str, *, path: Path | None = None) -> RunOutcome:
-    """Run ``job`` for ``day`` (claimed already). Never raises."""
+async def run_job(job: registry.WatchJob, day: str, *, slot: str = "", path: Path | None = None) -> RunOutcome:
+    """Run ``job`` for ``day``'s ``slot`` (claimed already). Never raises."""
     from openexecutive.audit.context import set_turn
 
     reads: list[dict[str, Any]] = []
-    with set_turn(turn_id=f"watch:{job.id}:{day}"), _cost_budget(job.id):
+    with set_turn(turn_id=f"watch:{job.id}:{day}" + (f":{slot}" if slot else "")), _cost_budget(job.id):
         try:
             outcome = await _run(job, day, reads)
         except _Stop as stop:
@@ -394,10 +444,10 @@ async def run_job(job: registry.WatchJob, day: str, *, path: Path | None = None)
                 _fail_notice(job, day, "run_failed", "")
         outcome.as_job_user = [bool(r.get("as_job_user")) for r in reads if not r.get("skipped")]
         try:
-            _finish(job.id, day, outcome, reads, path=path)
+            _finish(job.id, day, outcome, reads, path=path, slot=slot)
         except Exception:
             logger.error("watch: couldn't record job %s's run", job.id)
-        _audit(job, day, outcome, reads=len(reads))
+        _audit(job, day, outcome, reads=len(reads), slot=slot)
     return outcome
 
 
@@ -440,10 +490,24 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
     except Exception:
         raise _Stop("read_failed", read.label) from None
     try:
-        return json.loads(raw)
+        result = json.loads(raw)
     except (TypeError, ValueError, RecursionError):
         # A plain-text refusal ("Tool error: …") is not JSON.
-        raise _Stop("read_refused", read.label) from None
+        raise _Stop(_refusal_reason(raw), read.label) from None
+    if isinstance(result, dict) and "error" in result:
+        raise _Stop(_refusal_reason(result.get("error")), read.label)
+    return result
+
+
+def _refusal_reason(said: object) -> str:
+    """The reason code for a refused read: one an operator setting it names
+    picks (``_REFUSAL_SETTINGS``), else ``read_refused``. The text is only
+    searched, never kept."""
+    text = said if isinstance(said, str) else ""
+    for setting, reason in _REFUSAL_SETTINGS.items():
+        if setting in text:
+            return reason
+    return "read_refused"
 
 
 async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) -> RunOutcome:
@@ -521,12 +585,15 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         # Nothing the reviewer could act on: the principal hears of it.
         to, outcome.routed = _principal_id(), "principal"
         outcome.routed_principal = "checks_refused"
+    # A finding whose card couldn't be left (the run went to the principal,
+    # ERPNext refused the reviewer's check, the cap) is told as its notice.
+    notices = notices + [s.notice for s in made.unproposed if s.notice is not None]
     # The cap counts attempts, not successes, so a notice that fails to
     # store never lets another finding through in its place.
     attempts = 0
     for n, spec in enumerate(notices):
         key = dedup_key(job.id, spec.key)
-        if _still_open(key):
+        if _still_open(key) or _raised_today(key, day):
             outcome.repeats += 1
             continue
         if attempts >= job.card_cap_day:
@@ -673,6 +740,20 @@ def _still_open(key: str) -> bool:
     return row is not None
 
 
+def _raised_today(key: str, day: str) -> bool:
+    """Whether this finding's notice was left already today, in any state:
+    a job that runs at several slots raises a finding once a day."""
+    from openexecutive.alerts import store
+
+    if not store._resolve_db_path(None).exists():
+        return False
+    with store._get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM alerts WHERE source = ? AND external_id = ? LIMIT 1", (SOURCE, f"{key}:{day}"),
+        ).fetchone()
+    return row is not None
+
+
 def notice_body(
     job: registry.WatchJob, day: str, spec: registry.CardSpec, reason: str,
     *, reasons: Mapping[str, str] | None = None, notes: Sequence[str] = (),
@@ -754,13 +835,16 @@ def _fail_notice(job: registry.WatchJob, day: str, reason: str, read: str) -> No
 
     why = REASONS.get(reason, REASONS["run_failed"])
     where = f" at {read}" if read else ""
+    body = f"The watch job {job.title} stopped{where}: {why}. Nothing from today's run was raised."
+    if reason in FAIL_LINES:
+        body = f"{FAIL_LINES[reason]} The watch job {job.title} stopped{where}, so nothing from today's run was raised."
     try:
         store.insert_alert(
             source=SOURCE,
             external_id=f"failed:{job.id}:{day}",
             severity="medium",
             headline=f"{job.title} didn't run today",
-            body=f"The watch job {job.title} stopped{where}: {why}. Nothing from today's run was raised.",
+            body=body,
             suggested_action="Check the job's setup, or turn it off in Settings.",
             topic_tags=[PRIVATE_ALERT_TAG],
             dedup_key=f"private:failed:{job.id}",
@@ -771,17 +855,18 @@ def _fail_notice(job: registry.WatchJob, day: str, reason: str, read: str) -> No
         logger.error("watch: couldn't leave job %s's failure notice", job.id)
 
 
-def _audit(job: registry.WatchJob, day: str, outcome: RunOutcome, *, reads: int) -> None:
+def _audit(job: registry.WatchJob, day: str, outcome: RunOutcome, *, reads: int, slot: str = "") -> None:
     """The run's audit row: counts and a reason code only."""
     from openexecutive.audit import log_event
 
     log_event(
         "watch_run",
-        f"Watch job {job.id} {outcome.status} for {day}: {outcome.cards} notice(s)",
+        f"Watch job {job.id} {outcome.status} for {day}{f' {slot}' if slot else ''}: {outcome.cards} notice(s)",
         actor=f"watch:{job.id}",
         details={
             "job": job.id,
             "day": day,
+            **({"slot": slot} if slot else {}),
             "status": outcome.status,
             "reason": outcome.error,
             "reads": reads,

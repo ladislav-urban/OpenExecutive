@@ -438,13 +438,13 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
     return [notice, *drafts[:DRAFTS_MAX]]
 
 
-def check_fields(operation: str, doctype: str, fields: Mapping[str, Any]) -> dict[str, Any] | str:
+def check_fields(operation: str, doctype: str, fields: Mapping[str, Any], name: str = "") -> dict[str, Any] | str:
     """A collections card's fields: a Dunning's {sales_invoice, dunning_type,
     posting_date} exactly as ``erpnext_drafts`` checks a Dunning, and only
     those. Run before each check and again at approval."""
     from openexecutive.integrations.erpnext_drafts import _DUNNING_FIELDS, _dunning
 
-    if operation != "create" or doctype != DOCTYPE:
+    if operation != "create" or doctype != DOCTYPE or name:
         return "The collections job leaves Dunning drafts only."
     if not isinstance(fields, Mapping) or not fields or set(fields) - _DUNNING_FIELDS:
         return "A collections card's fields are sales_invoice, dunning_type and posting_date."

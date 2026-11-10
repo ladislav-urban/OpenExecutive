@@ -65,6 +65,8 @@ def _principal(request: Request) -> Any:
 
 class WatchRunOut(BaseModel):
     day: str
+    # Its slot that day ("HH:MM"); "" for a job that runs once a day.
+    slot: str = ""
     status: str
     cards: int
     error: str
@@ -87,8 +89,13 @@ class WatchJobOut(BaseModel):
     configured_by_person_id: int | None
     configured_at: str | None
     reviewer_person_id: int | None
-    # "HH:MM" in the company's time zone.
+    # "HH:MM" in the company's time zone (its first slot, for a job that
+    # runs several times a day).
     runs_at: str
+    # Every time it runs each day ("HH:MM", company time), and on which days
+    # (Monday 0 to Sunday 6).
+    slots: list[str] = []
+    weekdays: list[int] = []
     card_cap_day: int
     last_run: WatchRunOut | None = None
     # What Settings says beside the reviewer (REVIEWER_NOTE).
@@ -117,12 +124,15 @@ def _last_run(job_id: str) -> WatchRunOut | None:
     conn = connect()
     try:
         row = conn.execute(
-            f"SELECT day, status, cards, error FROM {RUNS_TABLE} WHERE job = ? ORDER BY day DESC LIMIT 1",  # noqa: S608
+            f"SELECT day, slot, status, cards, error FROM {RUNS_TABLE} "  # noqa: S608
+            "WHERE job = ? AND status != 'skipped' ORDER BY day DESC, slot DESC LIMIT 1",
             (job_id,),
         ).fetchone()
     finally:
         conn.close()
-    return WatchRunOut(day=row[0], status=row[1], cards=int(row[2] or 0), error=row[3] or "") if row else None
+    return WatchRunOut(
+        day=row[0], slot=row[1] or "", status=row[2], cards=int(row[3] or 0), error=row[4] or "",
+    ) if row else None
 
 
 def _job_out(job: Any) -> WatchJobOut:
@@ -139,6 +149,8 @@ def _job_out(job: Any) -> WatchJobOut:
         configured_at=row.configured_at,
         reviewer_person_id=row.reviewer_person_id,
         runs_at=job.schedule.strftime("%H:%M"),
+        slots=[key or at.strftime("%H:%M") for at, key in job.slot_keys()],
+        weekdays=sorted(job.weekdays),
         card_cap_day=job.card_cap_day,
         last_run=_last_run(job.id),
     )
