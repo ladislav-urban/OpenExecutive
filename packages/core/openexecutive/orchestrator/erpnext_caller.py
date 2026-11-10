@@ -72,6 +72,17 @@ and the digest of its exact arguments:
 
 Any other ``erpnext__draft*`` call is refused in the gateway
 (``mcp_gateway._check_erpnext_draft``).
+
+**Watch jobs** (phase 0's S5, ``openexecutive.watch``). A job's runner sets
+``watch_run(job, tool, arguments)`` around each of its reads: bound to a job
+that is registered and on, to one of the tools it lists, and to the digest of
+that call's exact arguments, which must fit the read's listed shape. It is
+refused while a turn's session is bound or any other marker is set, and
+without ``ERPNEXT_CALLER_PRIVATE_KEY`` (``watch-needs-keys``): a job never
+takes the brief's unsigned service path. Inside it ``caller_for`` answers
+``watch`` with ``sub`` the job's id before any session logic; oe_connector
+holds the call to the job's listed reads. A draft tool is never signed as
+``watch`` (``mint``).
 """
 from __future__ import annotations
 
@@ -79,12 +90,14 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Literal
 
 from openexecutive.api.caller_signing import load_private_key
@@ -104,7 +117,9 @@ PURPOSE_DRAFT = "draft"
 DRAFT_TOOL_PREFIX = "erpnext__draft"
 DRAFT_CHECK_TOOL = "erpnext__draft_check"
 
-ErpnextCallerKind = Literal["user", "service", "supplier"]
+ErpnextCallerKind = Literal["user", "service", "supplier", "watch"]
+# oe_connector's watch.JOB_ID (watch.registry.JOB_ID is the same pattern).
+WATCH_JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
 
 # Set only by briefing.erp_numbers, around the report runs it makes itself.
 _brief_run: ContextVar[bool] = ContextVar("erpnext_brief_run", default=False)
@@ -210,6 +225,8 @@ class ErpnextCaller:
     email: str = ""
     # The Supplier's name in ERPNext, for ``supplier`` only.
     supplier: str = ""
+    # The job's id, for ``watch`` only.
+    job: str = ""
 
 
 @dataclass(frozen=True)
@@ -268,6 +285,96 @@ def draft_call_for(tool: str, arguments: dict[str, Any]) -> DraftCall | None:
     if call is None or call.tool != tool or call.digest != arguments_digest(arguments):
         return None
     return call
+
+
+@dataclass(frozen=True)
+class WatchCall:
+    """One read a watch job's runner is about to make: the job, the gateway
+    tool and the digest of its exact arguments."""
+
+    job: str
+    tool: str
+    digest: str
+
+
+_watch_call: ContextVar[WatchCall | None] = ContextVar("erpnext_watch_call", default=None)
+
+
+class WatchRefused(Exception):
+    """A watch marker that may not be set; ``reason`` is a short code for the
+    run's record and the log, never ERPNext's text."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+def other_marker_bound() -> bool:
+    """Whether any marker but a watch read's is set: the brief's, the
+    oversight export's, the answer check's, a supplier's or a draft's."""
+    return bool(
+        _brief_run.get()
+        or _oversight_run.get()
+        or _answer_check_run.get()
+        or _supplier_run.get()
+        or _draft_call.get() is not None
+    )
+
+
+def _watch_today() -> date:
+    from datetime import datetime
+
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    return datetime.now(get_user_timezone()).date()
+
+
+@contextmanager
+def watch_run(job_id: str, tool: str, arguments: dict[str, Any], *, today: date | None = None) -> Iterator[None]:
+    """Mark the one ERPNext read (gateway ``tool`` with exactly
+    ``arguments``) a watch job's runner makes. Code only: no tool sets it.
+
+    Raises ``WatchRefused`` when a turn's session or any other marker is
+    bound, without per-person access, or unless ``job_id`` is registered and
+    on and ``tool`` with ``arguments`` fits one of its listed reads
+    (``today``, the run's day, bounds a ``$date``). It saves the marker it
+    found and puts it back on exit, so it can't leak into what runs after."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.watch import registry
+    from openexecutive.watch.settings import job_enabled
+
+    if current_session.get() is not None:
+        raise WatchRefused("watch-in-turn")
+    if other_marker_bound() or _watch_call.get() is not None:
+        raise WatchRefused("watch-with-other-marker")
+    setting = signing_setting()
+    if not setting:
+        raise WatchRefused("watch-needs-keys")
+    try:
+        load_private_key(setting)
+    except ValueError:
+        raise WatchRefused("key-malformed") from None
+    job = registry.get(job_id)
+    if job is None:
+        raise WatchRefused("watch-unknown-job")
+    if not job_enabled(job.id):
+        raise WatchRefused("watch-job-off")
+    if tool not in job.tools():
+        raise WatchRefused("watch-tool-not-listed")
+    plain = {k: v for k, v in arguments.items() if k != ASSERTION_ARG}
+    if registry.read_for(job, tool, plain, today or _watch_today()) is None:
+        raise WatchRefused("watch-arguments")
+    prior = _watch_call.get()
+    _watch_call.set(WatchCall(job.id, tool, arguments_digest(plain)))
+    try:
+        yield
+    finally:
+        _watch_call.set(prior)
+
+
+def watch_call() -> WatchCall | None:
+    """The watch read being made, or None outside one."""
+    return _watch_call.get()
 
 
 class CallerRefused(Exception):
@@ -346,6 +453,16 @@ def caller_for(session: Any) -> ErpnextCaller:
     from openexecutive.orchestrator.content_trust import principal_speaking
     from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
 
+    # A watch job's read first, before any session logic: it is `watch`
+    # only alone, with no turn bound and no other marker set.
+    watch = _watch_call.get()
+    if watch is not None:
+        if session is not None or other_marker_bound():
+            raise CallerRefused(
+                "A watch job's read runs on its own, never inside a turn or another run.",
+                "watch-not-alone",
+            )
+        return ErpnextCaller("watch", job=watch.job)
     supplier = in_supplier_run()
     if supplier:
         return ErpnextCaller("supplier", supplier=supplier)
@@ -451,6 +568,13 @@ def mint(
     ``run_report``) with exactly ``arguments``; ``purpose`` adds that claim
     (``PURPOSE_DRAFT``, a person's only). Raises ``ValueError`` on a
     malformed key; the message never includes it."""
+    if caller.kind == "watch":
+        if caller.email or caller.supplier or not WATCH_JOB_ID.fullmatch(caller.job):
+            raise ValueError("a watch caller is named by its job's id")
+        if purpose is not None or tool.startswith("draft"):
+            raise ValueError("a watch job only reads: no draft tool, no purpose")
+    elif caller.job:
+        raise ValueError("only a watch caller names a job")
     if caller.kind == "user" and "@" not in caller.email:
         raise ValueError("a user is named by their email")
     if caller.kind == "service" and (caller.email or caller.supplier):
@@ -471,7 +595,9 @@ def mint(
         "jti": jti or secrets.token_urlsafe(18),
         "kid": kid,
         "kind": caller.kind,
-        "sub": caller.supplier if caller.kind == "supplier" else caller.email,
+        "sub": (
+            caller.supplier if caller.kind == "supplier" else caller.job if caller.kind == "watch" else caller.email
+        ),
         "tool": tool,
     }
     if purpose is not None:

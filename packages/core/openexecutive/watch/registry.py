@@ -1,0 +1,276 @@
+"""The watch jobs, in code only.
+
+A job is a ``WatchJob``: the reads it makes (``WatchRead``: an oe_connector
+tool and the shape of its arguments, the same entry and slot names as the
+job's ``oe_connector_watch_jobs`` listing on the ERPNext side), the rules that
+turn their results into notices (``build``, pure code returning
+``CardSpec``\\ s), when it runs, how many notices a day it may leave, and the
+settings the principal may change.
+
+There is no way to add a job at run time: no settings row, chat turn or API
+names one. ``JOBS`` is read-only and holds what this module lists in
+``_LISTED``, which phase 0 leaves empty (its test job,
+``watch.jobs._example``, is put in by the tests alone).
+
+**Shapes** are oe_connector's (its ``watch.py``): a fixed value must match
+exactly; a typed slot takes any value of its type (``SLOTS``); a ``fields``
+list is the most a call may ask for; an object must have exactly the listed
+keys. The runner checks each read's arguments here before the call, and
+oe_connector checks them again, as the job's ERP user, when it answers.
+"""
+from __future__ import annotations
+
+import re
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import date, time
+from types import MappingProxyType
+from typing import Any
+
+# oe_connector's watch.JOB_ID: the key in oe_connector_watch_jobs, and the
+# `sub` of a watch assertion.
+JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
+SLOTS: tuple[str, ...] = ("$company", "$date", "$party", "$parties", "$customers", "$int")
+DATE_RANGE_DAYS = 400
+MAX_LIST = 50
+MAX_INT = 500
+# A Company, Customer or Supplier name, and a setting's text (oe_connector
+# bounds a supplier's name at 140 too).
+MAX_TEXT = 140
+# The gateway's name for an oe_connector tool is this plus its own name.
+GATEWAY_PREFIX = "erpnext__"
+# The only oe_connector tools a job may list in phase 0. A tool the gateway
+# withholds (customer_payment_record, supplier_bank_changed) joins this list
+# in the phase 1 PR that uses it, with its pin round.
+READ_TOOLS: frozenset[str] = frozenset({"run_report", "list_records"})
+MAX_CARD_CAP = 50
+
+Settings = Mapping[str, Any]
+
+
+class SettingsError(ValueError):
+    """Settings that don't fit the job's; the message is ours, for a 400."""
+
+
+@dataclass(frozen=True)
+class WatchRead:
+    """One read a job makes: oe_connector's ``tool`` with arguments of
+    ``shape``, built for each run by ``arguments`` (the run's settings and
+    day). ``label`` is how a notice names it ("the receivables report")."""
+
+    tool: str
+    shape: Mapping[str, Any]
+    arguments: Callable[[Settings, date], dict[str, Any]]
+    label: str
+
+    @property
+    def gateway_tool(self) -> str:
+        return GATEWAY_PREFIX + self.tool
+
+
+@dataclass(frozen=True)
+class CardSpec:
+    """One finding a job's rules leave the principal a notice for.
+
+    - ``key``: the finding's own id in code (e.g. ``overdue:<customer>``).
+      Only its digest is kept, as the notice's dedupe key, and it's what the
+      reason step keys its line by, never shown.
+    - ``summary``: the notice's one line.
+    - ``values``: (label, value) pairs; the label is code's, the value
+      ERPNext's.
+    - ``facts``: what the reason step is shown about the finding (bounded).
+
+    Every string here may carry ERPNext's text, so the runner strips and caps
+    each one and wraps the body as untrusted; the notice's subject never uses
+    any of it."""
+
+    key: str
+    summary: str
+    values: tuple[tuple[str, str], ...] = ()
+    facts: Mapping[str, str | int | float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReasonSchema:
+    """A job's reason step: one short line per finding, written by a model
+    from the findings' ``facts``. ``instruction`` says what a line explains
+    (a constant in the job's code)."""
+
+    instruction: str
+    max_findings: int = 20
+
+
+# (each read's result, in the order of ``reads``; the run's settings; its day)
+# -> the findings. Pure code: every figure comes from the results.
+Build = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[CardSpec]]
+
+
+def _setting_ok(value: object) -> bool:
+    if isinstance(value, bool):
+        return True
+    if isinstance(value, int):
+        return 1 <= value <= MAX_INT
+    if isinstance(value, str):
+        return _text_ok(value, allow_empty=True)
+    if isinstance(value, list):
+        return len(value) <= MAX_LIST and all(isinstance(v, str) and _text_ok(v) for v in value)
+    return False
+
+
+@dataclass(frozen=True)
+class WatchJob:
+    id: str
+    title: str
+    reads: tuple[WatchRead, ...]
+    build: Build
+    # Its hour (and minute) each day, in the company's time zone.
+    schedule: time
+    card_cap_day: int
+    default_settings: Mapping[str, Any]
+    reason_schema: ReasonSchema | None = None
+
+    def __post_init__(self) -> None:
+        if not JOB_ID.fullmatch(self.id):
+            raise ValueError("a job's id is oe_connector's: [a-z0-9-]{1,40}")
+        if not self.title or not self.title.isprintable() or len(self.title) > 80:
+            raise ValueError("a job's title is one short line")
+        if not self.reads:
+            raise ValueError("a job reads something")
+        for read in self.reads:
+            if read.tool not in READ_TOOLS:
+                raise ValueError(f"a job may not list {read.tool!r}")
+            if not isinstance(read.shape, Mapping) or not read.label or not read.label.isprintable():
+                raise ValueError("each read has a shape and a label")
+        if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
+            raise ValueError("a job's card cap is 1 to 50 a day")
+        for key, value in self.default_settings.items():
+            if not isinstance(key, str) or not key or not _setting_ok(value):
+                raise ValueError(f"setting {key!r} isn't a bool, a number, a line of text or a list of names")
+
+    def tools(self) -> frozenset[str]:
+        """The gateway names of the tools it lists."""
+        return frozenset(read.gateway_tool for read in self.reads)
+
+
+# The jobs this install runs. Phase 0 lists none; phase 1 adds collections
+# and payment-checks, each with its entry in oe_connector_watch_jobs.
+_LISTED: tuple[WatchJob, ...] = ()
+_JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
+JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)
+
+
+def get(job_id: object) -> WatchJob | None:
+    """The registered job with this id, or None."""
+    if not isinstance(job_id, str) or not JOB_ID.fullmatch(job_id):
+        return None
+    return JOBS.get(job_id)
+
+
+# --------------------------------------------------------------------------- #
+# Shapes (oe_connector's watch.py, checked here before the call)
+# --------------------------------------------------------------------------- #
+
+
+def _text_ok(value: str, *, allow_empty: bool = False) -> bool:
+    return (
+        (allow_empty or bool(value))
+        and len(value) <= MAX_TEXT
+        and value == value.strip()
+        and value.isprintable()
+    )
+
+
+def _slot_holds(slot: str, value: Any, today: date) -> bool:
+    if slot == "$int":
+        return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_INT
+    if slot == "$date":
+        if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            return False
+        try:
+            day = date.fromisoformat(value)
+        except ValueError:
+            return False
+        return abs((day - today).days) <= DATE_RANGE_DAYS
+    if slot in ("$company", "$party"):
+        return isinstance(value, str) and _text_ok(value)
+    if slot in ("$parties", "$customers"):
+        return (
+            isinstance(value, list)
+            and 0 < len(value) <= MAX_LIST
+            and all(isinstance(v, str) and _text_ok(v) for v in value)
+        )
+    return False
+
+
+def shape_mismatch(shape: Any, value: Any, today: date, where: str = "") -> str:
+    """Why ``value`` doesn't fit ``shape``, or "" when it does. The reason
+    names keys and slots only, never a value."""
+    if isinstance(shape, str) and shape in SLOTS:
+        return "" if _slot_holds(shape, value, today) else f"{where or 'value'} isn't a {shape[1:]}"
+    if isinstance(shape, Mapping):
+        if not isinstance(value, Mapping):
+            return f"{where or 'arguments'} should be an object"
+        extra = sorted(set(value) - set(shape))
+        if extra:
+            return f"{', '.join(str(k) for k in extra)[:200]} isn't listed"
+        missing = sorted(set(shape) - set(value))
+        if missing:
+            return f"{', '.join(missing)} is missing"
+        for key, sub in shape.items():
+            why = shape_mismatch(sub, value[key], today, f"{where}.{key}" if where else key)
+            if why:
+                return why
+        return ""
+    if isinstance(shape, list | tuple) and where.split(".")[-1] == "fields":
+        if not isinstance(value, list) or not value or not all(isinstance(f, str) for f in value):
+            return f"{where} should be a list of fields"
+        return f"{where} asks for a field that isn't listed" if set(value) - set(shape) else ""
+    return "" if value == shape else f"{where or 'value'} isn't the listed value"
+
+
+def read_for(job: WatchJob, gateway_tool: str, arguments: Mapping[str, Any], today: date) -> WatchRead | None:
+    """The job's read that ``gateway_tool`` with ``arguments`` fits, or None."""
+    for read in job.reads:
+        if read.gateway_tool == gateway_tool and not shape_mismatch(read.shape, arguments, today):
+            return read
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Settings
+# --------------------------------------------------------------------------- #
+
+
+def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
+    """``settings`` when they have exactly the job's keys, each of its
+    default's type and within bounds; raises ``SettingsError``."""
+    if not isinstance(settings, Mapping):
+        raise SettingsError("Settings are an object.")
+    expected = set(job.default_settings)
+    given = set(settings)
+    if given != expected:
+        unknown = sorted(str(k)[:40] for k in given - expected)
+        missing = sorted(expected - given)
+        parts = ([f"unknown: {', '.join(unknown)[:200]}"] if unknown else []) + (
+            [f"missing: {', '.join(missing)}"] if missing else []
+        )
+        raise SettingsError(f"Settings must have exactly this job's keys ({'; '.join(parts)}).")
+    out: dict[str, Any] = {}
+    for key, default in job.default_settings.items():
+        value = settings[key]
+        if isinstance(default, bool):
+            ok = isinstance(value, bool)
+        elif isinstance(default, int):
+            ok = isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_INT
+        elif isinstance(default, str):
+            ok = isinstance(value, str) and _text_ok(value, allow_empty=True)
+        else:
+            ok = (
+                isinstance(value, list)
+                and len(value) <= MAX_LIST
+                and all(isinstance(v, str) and _text_ok(v) for v in value)
+            )
+        if not ok:
+            raise SettingsError(f"Setting {key} isn't of its type or is out of bounds.")
+        out[key] = list(value) if isinstance(value, list) else value
+    return out
