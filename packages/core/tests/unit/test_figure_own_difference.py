@@ -90,3 +90,35 @@ def test_the_correction_writes_the_total_in(monkeypatch: pytest.MonkeyPatch) -> 
     out = asyncio.run(answer_check.check_reply(text, turn, question="What does a panel cost?", model="m"))
     assert out == fixed
     assert calls == ['1. "$174.90" should be "$192.16".']
+
+
+STAFF = ErpnextResult(
+    "erpnext__run_report",
+    {"report_name": "Cost Summary"},
+    {"report_name": "Cost Summary", "rows": [
+        {"line": "Sales", "amount": 84000.0},
+        {"line": "Planned costs", "amount": 70000.0},
+        {"line": "Labour", "amount": 41000.0},
+        {"line": "Lease", "amount": 26000.0},
+    ]},
+)
+STAFF_TABLE = "\n\n| Line | Actual |\n|---|---|\n| Labour | $41,000 |\n| Lease | $26,000 |\n| **Total** | **$67,000** |\n"
+
+
+def _staff(text: str) -> dict[str, Any]:
+    return {f.text: f for f in check_figures(text, sources_for([STAFF], fmt=FMT), FMT)}
+
+
+def test_a_difference_in_another_sentence_is_not_about_the_figures_before_it() -> None:
+    for text in (
+        "Sales were $84,000 against costs of $70,000 planned. Costs came in $3,000 under plan.",
+        "Sales were $84,000 and a year ago $70,000. Separately, lease ran $3,000 over plan.",
+    ):
+        got = _staff(text + STAFF_TABLE)
+        assert all(f.arithmetic is None for f in got.values()), text
+
+
+def test_a_difference_must_name_one_of_its_two_figures() -> None:
+    # "under plan", but neither figure before it is the plan's.
+    got = _staff("Sales were $84,000 and costs $70,000, so lease came in $3,000 under plan." + STAFF_TABLE)
+    assert all(f.arithmetic is None for f in got.values())

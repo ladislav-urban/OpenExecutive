@@ -1248,6 +1248,8 @@ _DIFFERENCE_AFTER = re.compile(
     r"(?:under|over|below|above|less[ \t]+than|more[ \t]+than|cheaper[ \t]+than|short[ \t]+of)\b"
     r"(?![ \t]+(?:the[ \t]+)?(?:next|last|past|previous|coming|period|time|year|month|week|quarter)\b)"
     r"(?![ \t]*[\d" + _CURRENCY_SYMBOLS + r"])"
+    # What it is under or over: "the BOM", "budget".
+    r"[ \t]+(?:(?:the|its|our|their|a|an)[ \t]+)?(?P<noun>[A-Za-z][\w-]*)"
 )
 _TOTAL_CELL = re.compile(r"(?i)(?:grand[ \t]+)?totals?\b")
 
@@ -1280,20 +1282,30 @@ def _own_differences(text: str, figures: list[Figure]) -> None:
     neither the two figures before it, but does when the table's total takes
     one of their places: that one is written from the total (``arithmetic``),
     as a product the reply works out wrong is. Only then: any other mismatch
-    may compare with something the sentence doesn't show (a demo reshoot)."""
+    may compare with something the sentence doesn't show (a demo reshoot).
+
+    All three figures lie in one sentence, and what the difference is under or
+    over ("the BOM") names one of the two figures right before it ("a BOM of
+    $188.40"): that one is the reference, and only the other is ever written
+    from the total."""
+    from openexecutive.orchestrator.answer_correct import unit_of, units
+
     totals = _total_row_figures(text, figures)
     if not totals:
         return
+    all_units = units(text)
     for i, diff in enumerate(figures):
-        if not diff.currency_text or diff.percent or not _DIFFERENCE_AFTER.match(text, diff.end):
+        if not diff.currency_text or diff.percent:
             continue
-        if _in_table_line(text, diff.start):
+        stated = _DIFFERENCE_AFTER.match(text, diff.end)
+        if stated is None or _in_table_line(text, diff.start):
             continue
-        paragraph = text.rfind("\n\n", 0, diff.start)
+        sentence = unit_of(all_units, diff.start, diff.end)
+        if sentence is None or sentence.kind != "sentence":
+            continue
         before = [
             f for f in figures[:i]
-            if f.start > paragraph and not f.percent and f.currency_text == diff.currency_text
-            and not _in_table_line(text, f.start)
+            if sentence.start <= f.start and not f.percent and f.currency_text == diff.currency_text
         ]
         if len(before) < 2:
             continue
@@ -1302,14 +1314,19 @@ def _own_differences(text: str, figures: list[Figure]) -> None:
             continue
         if diff.matches(abs(_written(a) - _written(b))):
             continue
+        noun = re.compile(r"\b" + re.escape(stated.group("noun")) + r"\b[^$\d]{0,12}$", re.I)
+        named = [f for f in (a, b) if noun.search(text[max(sentence.start, f.start - 40):f.start])]
+        if len(named) != 1:
+            continue
+        (reference,) = named
+        x = b if reference is a else a
         fixes = {
-            (id(x), round(_written(t), 6)): (x, _written(t))
+            round(_written(t), 6): _written(t)
             for t in totals if t.currency_text == diff.currency_text
-            for x, other in ((a, b), (b, a))
-            if not x.matches(_written(t)) and diff.matches(abs(_written(t) - _written(other)))
+            if not x.matches(_written(t)) and diff.matches(abs(_written(t) - _written(reference)))
         }
         if len(fixes) == 1:
-            ((x, value),) = fixes.values()
+            (value,) = fixes.values()
             x.status, x.matched, x.how, x.arithmetic = "unconfirmed", None, "", value
 
 
