@@ -109,10 +109,14 @@ MAX_FACTOR = 3.0
 _SCALE_FREE = frozenset({"ratio", "percent", "percent_change"})
 
 
-def _far(fig: Figure, value: float) -> bool:
+def _far(fig: Figure, op: object, value: float) -> bool:
     """Whether ``value`` is more than MAX_FACTOR times off the figure as
-    written (a percentage read as a fraction too)."""
+    written (a percentage read as a fraction too). Never for a share or a
+    change, whose right value may be any multiple of a wrong one, nor to or
+    from 0 ("still owes $1,150" when nothing is owed)."""
     written = abs(fig.readings[0][0] * fig.scale)
+    if op in _SCALE_FREE or value == 0 or written == 0:
+        return False
     candidates = [abs(value), abs(value) * 100.0] if fig.percent else [abs(value)]
     for x in candidates:
         lo, hi = sorted((written, x))
@@ -174,7 +178,7 @@ def read_verdict(item: object, fig: Figure, sources: Sources) -> Review:
         value *= 100.0  # a share, written as a percentage
     if fig.matches(value):
         return Review("supported", value)
-    if verdict == "wrong" and (_money_for_other(fig, op, numbers, sources) or _far(fig, value)):
+    if verdict == "wrong" and (_money_for_other(fig, op, numbers, sources) or _far(fig, op, value)):
         # Another quantity than the figure's: a mean of paid amounts for a
         # number of days, or a value three times off (a demo reshoot's
         # "averaging 62.5 days" written as "1340.6").

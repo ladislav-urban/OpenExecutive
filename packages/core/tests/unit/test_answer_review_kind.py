@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openexecutive.orchestrator import answer_review
+from openexecutive.orchestrator import answer_correct, answer_review
 from openexecutive.orchestrator.answer_review import CANNOT_TELL, Review
 from openexecutive.orchestrator.figure_check import (
     ErpnextResult,
@@ -73,3 +73,23 @@ def test_a_correction_more_than_three_times_off_is_refused() -> None:
     assert answer_review.read_verdict(near, fig, src) == Review("wrong", 1801.2)
 
 
+
+def test_a_correction_to_zero_or_of_a_change_is_never_too_far() -> None:
+    owed = ErpnextResult(
+        "erpnext__list_records", {"doctype": "Sales Invoice"},
+        {"doctype": "Sales Invoice", "rows": [
+            {"name": "SI-1", "outstanding_amount": 2400.0}, {"name": "SI-2", "outstanding_amount": 0.0},
+        ]},
+    )
+    fig, src = _flag("SI-2 still owes $1,150.00.", "$1,150.00", [owed])
+    got = answer_review.read_verdict({"verdict": "wrong", "op": "value", "operands": [0.0]}, fig, src)
+    assert got == Review("wrong", 0.0)
+    assert answer_correct.written(answer_correct.Correction(fig, got.right)) == "$0.00"
+    totals = ErpnextResult(
+        "erpnext__get_record", {"doctype": "Sales Order", "name": "SO-1"},
+        {"doctype": "Sales Order", "name": "SO-1", "record": {"base_total": 400.0, "grand_total": 472.0}},
+    )
+    fig, src = _flag("Billing went up 5% on the order.", "5%", [totals])
+    change = {"verdict": "wrong", "op": "percent_change", "operands": [400.0, 472.0]}
+    got = answer_review.read_verdict(change, fig, src)
+    assert got.verdict == "wrong" and got.right is not None and abs(got.right - 18.0) < 1e-9
