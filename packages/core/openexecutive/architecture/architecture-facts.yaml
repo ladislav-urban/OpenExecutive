@@ -11274,7 +11274,7 @@ integrations:
     offered to chat). call_tool refuses them first in its ERPNext
     block, under every marker and on every turn, and _drop_blocked_tools
     hides them, with the draft tools no card uses yet (Dunning, update,
-    comment), which _check_erpnext_draft refuses anyway. Each moves to a
+    comment, the invoice block), which _check_erpnext_draft refuses anyway. Each moves to a
     marker-gated list when its own path exists, never to PINNED_ERPNEXT_TOOLS.
 
     A2A for suppliers' agents (design "Next", item 3;

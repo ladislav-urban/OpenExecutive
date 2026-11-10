@@ -113,3 +113,28 @@ def test_customers_payment_records_are_withheld_from_chat() -> None:
     assert "erpnext__customer_payment_record" in cs.ERPNEXT_WITHHELD_TOOLS
     assert "customer_payment_record" in erpnext_tool_pin.TOOL_DIGESTS
     assert "erpnext__customer_payment_record" not in cs.PINNED_ERPNEXT_TOOLS
+
+
+def test_the_invoice_block_is_pinned_but_no_card_here_calls_it(erp: Any, roster: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.integrations import erpnext_drafts
+    from openexecutive.orchestrator.schedule_tools import set_session
+    from tests.unit._erpnext_pins import pin_listing
+
+    assert "draft_block_invoice" in erpnext_tool_pin.TOOL_DIGESTS
+    assert "erpnext__draft_block_invoice" not in set(erpnext_drafts.DRAFT_TOOLS.values()) | set(cs.ERPNEXT_DRAFT_TOOLS)
+    listing = "## erpnext__draft_block_invoice\n**Description:** x\n\n## erpnext__run_report\n**Description:** y\n\n"
+    pin_listing(monkeypatch, listing)
+    kept = mcp_gateway._drop_blocked_tools(listing)
+    assert "erpnext__draft_block_invoice" not in kept and "erpnext__run_report" in kept
+    gateway = mcp_gateway.get_active_gateway()
+    assert gateway is not None
+
+    async def go() -> str:
+        with set_session(_owner_turn(roster)):
+            return await gateway.call_tool({"name": "erpnext__draft_block_invoice", "arguments": {
+                "name": "ACC-PINV-1", "duplicate_of": "ACC-PINV-0", "idempotency_key": "k" * 32,
+                "expected_fingerprint": "f" * 64, "asked_by": "job:payment-checks", "configured_by": "x@y.z"}})
+
+    out = json.loads(asyncio.run(go()))
+    assert "error" in out and "card" in out["error"]
+    assert erp.calls == []
