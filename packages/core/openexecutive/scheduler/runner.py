@@ -234,6 +234,19 @@ def _maybe_release_held(now: datetime) -> bool:
         return False
 
 
+def _maybe_run_watch_jobs(now: datetime) -> int:
+    """Start the watch jobs due today (watch/runner.py): each once a day,
+    at its hour, in its own task, under ERPNEXT_WATCH_JOBS_ENABLED and its
+    row's switch. A hook like the reminders. Never raises."""
+    try:
+        from openexecutive.watch.runner import maybe_run
+
+        return maybe_run(now)
+    except Exception:
+        logger.exception("scheduler: watch jobs failed to start")
+        return 0
+
+
 def _maybe_clear_answer_check_text(now: datetime) -> int:
     """Once a day, clear the text of the answer check's change records past
     their 30 days (orchestrator/answer_check.py), so a quiet install keeps
@@ -416,6 +429,7 @@ async def run_scheduler(
             _maybe_release_held(now)
             _maybe_push_cards(now)
             _maybe_send_monthly_value(now)
+            _maybe_run_watch_jobs(now)
             due = claim_due_actions(now)
             if due:
                 logger.info("scheduler: %d due action(s)", len(due))
