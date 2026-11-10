@@ -5,8 +5,9 @@ reads each figure the reply gives (an amount, a percentage, a scaled number, a
 quantity of something) and looks for where it came from, among:
 
 - **ERPNext's values**: a JSON number in an ``erpnext__*`` result of the turn,
-  or a numeric string in a field or report column whose type is numeric. A
-  number written inside a text field (a remark, a description) never counts:
+  or a numeric string in a field or report column whose type is numeric (a
+  child table's, read through a dotted field such as ``parameters.rating``),
+  or in a rating field ("4"). A number written inside a text field (a remark, a description) never counts:
   customers and suppliers write those too.
 - **A simple combination of them**: a column's sum, average or count, the same
   for the rows that share one value of another column ("the overdue ones"),
@@ -782,7 +783,9 @@ class _Reader:
                     if value and all(isinstance(v, dict) for v in value):
                         children.setdefault(key, []).extend(value)
                     continue
-                got = _number(value, key in numeric)
+                # A rating may come as a string ("4"), from a child table's
+                # field the parent's numeric fields don't name.
+                got = _number(value, key in numeric or _is_rating(key))
                 if got is not None:
                     table.numeric.setdefault(key, [None] * len(rows))[i] = got
                     self.cells.append((got, truncated))
@@ -812,7 +815,7 @@ class _Reader:
             for v in value:
                 self.scalars(v, numeric, key)
         else:
-            got = _number(value, key in numeric)
+            got = _number(value, key in numeric or _is_rating(key))
             if got is not None:
                 self.cells.append((got, False))
                 self.headline.append(got)
@@ -834,6 +837,15 @@ class _Reader:
         self._company = company if isinstance(company, str) else None
         document = payload.get("document_currency")
         self._document = document if isinstance(document, str) else None
+        # list_records' dotted child fields ("parameters.rating") come back
+        # under the child's own name ("rating"): numeric when the child
+        # table's field is.
+        fields = result.arguments.get("fields")
+        for dotted in fields if isinstance(fields, list) else []:
+            if isinstance(dotted, str) and dotted.count(".") == 1:
+                child, _, name = dotted.partition(".")
+                if name in self.types.numeric(doctype, child):
+                    numeric |= {name}
         columns = payload.get("columns")
         self._currency_fields = frozenset()
         if isinstance(columns, list):

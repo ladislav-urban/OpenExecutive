@@ -90,9 +90,17 @@ def _results_text(results: list[ErpnextResult]) -> str:
 
 
 def _number(value: Any) -> float | None:
+    """A number the reviewer names: a JSON number, or a plain numeric string
+    as ERPNext gives some fields ("4" for a rating). Either must still be one
+    of ERPNext's own values (``read_verdict``)."""
+    if isinstance(value, str) and _NUMERIC_STRING.fullmatch(value.strip()):
+        value = float(value.strip())
     if isinstance(value, bool) or not isinstance(value, int | float):
         return None
     return float(value) if math.isfinite(float(value)) else None
+
+
+_NUMERIC_STRING = re.compile(r"-?\d{1,15}(?:\.\d{1,9})?")
 
 
 # A right value more than this many times the figure, or less than its
