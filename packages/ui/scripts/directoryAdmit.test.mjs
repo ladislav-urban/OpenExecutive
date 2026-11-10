@@ -127,8 +127,15 @@ test("a hung API is given up on at the timeout", async () => {
     new Promise((_resolve, reject) => {
       init.signal.addEventListener("abort", () => reject(init.signal.reason));
     });
+  // AbortSignal.timeout's timer doesn't hold the event loop open (a real
+  // request's socket does), so without this Node can exit mid-test.
+  const keepAlive = setTimeout(() => {}, 5000);
   const started = Date.now();
-  assert.deepEqual(await requestAdmit(SUB, NEW, opts(hanging, { timeoutMs: 30 })), { admitted: false, code: "timeout" });
+  try {
+    assert.deepEqual(await requestAdmit(SUB, NEW, opts(hanging, { timeoutMs: 30 })), { admitted: false, code: "timeout" });
+  } finally {
+    clearTimeout(keepAlive);
+  }
   assert.ok(Date.now() - started < 2000);
 });
 
