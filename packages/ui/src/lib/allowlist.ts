@@ -153,6 +153,33 @@ export function decideSessionAction(decision: AllowDecision): SessionAction {
   return "revoke";
 }
 
+/**
+ * The allow-list decision for an existing session. Like `resolveAllowed`,
+ * except that a session signed in after this loader's roster was read is not
+ * revoked on that older roster: the roster is read once more first.
+ *
+ * Each Next.js bundle (the middleware's, the server's) has its own loader, so
+ * the read that sign-in made after admitting someone doesn't reach the one
+ * `authorized` uses. Without this, a person admitted at sign-in would be
+ * revoked by the middleware's older roster until it expired, bouncing between
+ * `/` and `/signin`. After the re-read the cache is newer than the sign-in,
+ * so a session causes at most one (sign-in times are whole seconds, so a
+ * re-read in the same second may repeat within that second).
+ */
+export async function resolveSessionAllowed(
+  email: string,
+  envAllowed: ReadonlySet<string>,
+  loadRoster: RosterLoader,
+  signedInAtS: number | null,
+): Promise<AllowDecision> {
+  const decision = await resolveAllowed(email, envAllowed, loadRoster);
+  if (decideSessionAction(decision) !== "revoke" || signedInAtS === null) return decision;
+  const readAt = loadRoster.fetchedAt();
+  if (readAt !== null && readAt >= (signedInAtS + 1) * 1000) return decision;
+  const fresh = await loadRoster.refresh();
+  return decideAllowed(email, envAllowed, fresh?.emails ?? null);
+}
+
 /** Human clause for audit summaries. Mirrored in docs/auth.md's Debugging table. */
 export function describeDenial(source: AllowSource): string {
   switch (source) {
@@ -207,11 +234,15 @@ export type RosterLoader = {
   /**
    * Read the roster now, after any fetch already in flight, and replace the
    * cache with it: the sign-in that just had someone admitted calls it, so
-   * that sign-in and the `authorized` checks after it see the new Person.
+   * that sign-in sees the new Person. (`authorized` runs in the middleware's
+   * bundle, with a loader of its own: `resolveSessionAllowed` covers it.)
    * Null on failure, which leaves the cache as it was (and, as ever, never
    * served past its TTL).
    */
   refresh(): Promise<RosterRead | null>;
+  /** When the cached roster's read started (ms, the loader's clock), or null
+   *  before any read succeeded. */
+  fetchedAt(): number | null;
 };
 
 /**
@@ -325,5 +356,5 @@ export function createRosterLoader(opts: RosterLoaderOptions): RosterLoader {
     return tracked;
   }
 
-  return Object.assign(loadRoster, { refresh });
+  return Object.assign(loadRoster, { refresh, fetchedAt: () => cache?.fetchedAt ?? null });
 }

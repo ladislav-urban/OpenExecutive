@@ -36,9 +36,12 @@ make sure the owner's entry has an email. Only the owner can change the People l
 
 Membership is re-checked on every request the middleware gates, not just at sign-in, so a
 roster removal takes effect within the cache window rather than waiting out the 24h JWT.
-One thing reads the roster before the 5 minutes are up: an SSO sign-in that the directory
-sync has just let in (see "Following your identity provider's directory") reads it fresh and
-replaces the cache, so the requests after it see the new Person.
+Two things read the roster before the 5 minutes are up. An SSO sign-in that the directory
+sync has just let in (see "Following your identity provider's directory") reads it fresh. And
+the middleware, which keeps a cache of its own, reads it again before revoking an SSO session
+that signed in after its cached copy was read, so a person just let in isn't sent back to
+the sign-in page. That happens at most once per session; a person removed from the roster is
+still revoked on the next request.
 
 If the roster fetch fails, `ALLOWED_EMAILS` users are unaffected (their check never
 consults the roster). Roster-only users with an existing session keep working — the UI

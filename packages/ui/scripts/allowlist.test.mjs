@@ -8,6 +8,7 @@ import {
   normalizeEmail,
   parseAllowedEmails,
   resolveAllowed,
+  resolveSessionAllowed,
 } from "../src/lib/allowlist.ts";
 
 const set = (...emails) => new Set(emails);
@@ -670,4 +671,90 @@ test("a refresh whose fetch throws is null, and the next load retries", async ()
   assert.equal(await load.refresh(), null);
   assert.deepEqual([...(await load())], ["a@example.com"]);
   assert.equal(n, 2);
+});
+
+// --- resolveSessionAllowed: the middleware's own roster -----------------------
+
+/** A loader that answers at once with `state.rows`, on a clock the test sets. */
+function liveLoader(state) {
+  return createRosterLoader({
+    baseUrl: "http://api:8000",
+    sharedSecret: "",
+    ttlMs: 5 * 60 * 1000,
+    timeoutMs: 1000,
+    now: () => state.now,
+    fetchImpl: async () => {
+      state.fetches += 1;
+      if (state.fail) return { ok: false, status: 503, json: async () => null };
+      return { ok: true, status: 200, json: async () => state.rows };
+    },
+  });
+}
+
+test("a session signed in after the roster was read is judged on a fresh read", async () => {
+  // The middleware read the roster at t=10 s; someone admitted at sign-in
+  // (t=20 s) isn't on it, and must not be revoked for that.
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  assert.deepEqual([...(await load())], ["old@example.com"]);
+  state.now = 21_000;
+  state.rows = rosterRows("old@example.com", "new@example.com");
+  const decision = await resolveSessionAllowed("New@Example.com", NONE, load, 20);
+  assert.equal(decision.allowed, true);
+  assert.equal(state.fetches, 2);
+  assert.equal(load.fetchedAt(), 21_000);
+  // The next request is served from the cache, now newer than the sign-in.
+  assert.equal((await resolveSessionAllowed("new@example.com", NONE, load, 20)).allowed, true);
+  assert.equal(state.fetches, 2);
+});
+
+test("a session older than the roster is revoked without another read", async () => {
+  const state = { now: 30_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  const decision = await resolveSessionAllowed("gone@example.com", NONE, load, 20);
+  assert.equal(decideSessionAction(decision), "revoke");
+  assert.equal(state.fetches, 1);
+});
+
+test("a removed person is still revoked: one fresh read, then no more", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  for (let i = 0; i < 3; i++) {
+    const decision = await resolveSessionAllowed("gone@example.com", NONE, load, 20);
+    assert.equal(decideSessionAction(decision), "revoke");
+  }
+  assert.equal(state.fetches, 2, "only the first refusal read again");
+});
+
+test("no sign-in time (not an SSO session), no re-read", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  assert.equal(decideSessionAction(await resolveSessionAllowed("x@example.com", NONE, load, null)), "revoke");
+  assert.equal(state.fetches, 1);
+});
+
+test("a failed re-read keeps the old contract: roster unknown, not revoked", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  state.fail = true;
+  const decision = await resolveSessionAllowed("new@example.com", NONE, load, 20);
+  assert.equal(decideSessionAction(decision), "allow_roster_unknown");
+  assert.equal(load.fetchedAt(), 10_000);
+});
+
+test("allowed sessions and ALLOWED_EMAILS never cause a re-read", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  assert.equal((await resolveSessionAllowed("old@example.com", NONE, load, 20)).allowed, true);
+  assert.equal((await resolveSessionAllowed("op@example.com", set("op@example.com"), load, 20)).allowed, true);
+  assert.equal(state.fetches, 1);
 });

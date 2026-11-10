@@ -8340,7 +8340,13 @@ integrations:
     chains after any in-flight fetch and stores the tracked promise so it
     clears) replaces the roster cache and gives the sign-in its subjects;
     the allow-list and directoryRefusal then run again. loadDirectorySubjects
-    stays uncached. not_member, busy and rate_limited redirect to
+    stays uncached. That cache is the server bundle's; the middleware's
+    bundle (authorized) has a loader of its own, so judgeSession uses
+    resolveSessionAllowed: a refusal of an SSO session whose signedInAt is
+    newer than that loader's fetchedAt reads the roster once more before
+    revoking (a failed read keeps the roster-unknown contract). Without it
+    the middleware revoked the just-admitted session on its older roster and
+    the browser looped between / and /signin until that cache expired. not_member, busy and rate_limited redirect to
     /signin?error=AccessDenied&reason=directory_waiting, whose text is
     keyed on that fixed value (lib/signinError.ts). After an admit in a
     re-created realm the "none came back" stop can't trip, but the brake

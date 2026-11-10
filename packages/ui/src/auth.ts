@@ -9,6 +9,7 @@ import {
   describeDenial,
   parseAllowedEmails,
   resolveAllowed,
+  resolveSessionAllowed,
   type AllowDecision,
 } from "@/lib/allowlist";
 import {
@@ -202,7 +203,14 @@ async function judgeSession(session: Session | null, host: string | null): Promi
   if (session?.providerSession && (await providerSessionOver(session.providerSession))) {
     return { kind: "ended", email };
   }
-  const decision = await checkEmailAllowed(email);
+  // A session newer than this bundle's roster is judged on a fresh read, so
+  // someone admitted at sign-in isn't revoked by an older roster here.
+  const decision = await resolveSessionAllowed(
+    email,
+    ENV_ALLOWED,
+    loadRoster,
+    session?.providerSession?.signedInAt ?? null,
+  );
   // Exhaustive on purpose: a `!== "revoke"` test would admit any future
   // SessionAction, i.e. fail open. This way adding one is a build error.
   switch (decideSessionAction(decision)) {
