@@ -17,6 +17,8 @@ import {
   type CardOutcome,
   cardKind,
   changeMadeLine,
+  CREDIT_CHANGED_NOTE,
+  creditMadeLine,
   draftMadeLine,
   draftsTip,
   openDraftLabel,
@@ -239,6 +241,11 @@ export function ErpnextDraftCardItem({
       {card.why && (
         <div className="text-base sm:text-[17px] font-semibold leading-snug text-fg break-words">{card.why}</div>
       )}
+      {card.changed && !done && (
+        <div className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-sm text-amber-800 dark:text-amber-200">
+          {CREDIT_CHANGED_NOTE}
+        </div>
+      )}
 
       <div className="mt-3 rounded-xl border border-line bg-surface px-3 py-2">
         <span className="block text-xs font-semibold uppercase tracking-wide text-fg-muted">
@@ -285,9 +292,16 @@ export function ErpnextDraftCardItem({
       {done ? (
         <div className="mt-4 space-y-2">
           <p className="text-sm text-emerald-700 dark:text-emerald-300">
-            {card.operation === "update" || card.operation === "comment"
-              ? changeMadeLine(card.operation, card.doctype, created?.name ?? "", created?.already_created ?? false)
-              : draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
+            {card.operation === "credit"
+              ? creditMadeLine(
+                  created?.name ?? "",
+                  created?.credit?.company ?? "",
+                  created?.credit?.limit ?? "",
+                  created?.already_created ?? false,
+                )
+              : card.operation === "update" || card.operation === "comment"
+                ? changeMadeLine(card.operation, card.doctype, created?.name ?? "", created?.already_created ?? false)
+                : draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {link && (

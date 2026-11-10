@@ -3066,7 +3066,8 @@ export interface ErpnextDraftCard {
   // "ToDo", "Material Request", "Quotation", "Purchase Order", "Dunning", or
   // for a change or a comment the document's DocType.
   doctype: string;
-  // "create" for a new draft; "update" or "comment" on an existing document.
+  // "create" for a new draft; "update" or "comment" on an existing document;
+  // "credit" for a credit-limit raise.
   operation?: string;
   fields: ErpnextDraftField[];
   lines: ErpnextDraftLine[];
@@ -3077,6 +3078,8 @@ export interface ErpnextDraftCard {
   // named you; "erpnext_desk" when from ERPNext's desk, whose page sent the
   // words; "" or absent otherwise.
   asked_in?: string;
+  // A credit-limit raise the ERP now reads differently: approving is refused.
+  changed?: boolean;
 }
 
 // What an approval made in ERPNext.
@@ -3086,12 +3089,16 @@ export interface ErpnextDraftCreated {
   // ERPNext's desk link for it, or "" when it gave none.
   url?: string;
   already_created: boolean;
-  // "update" or "comment" when the card changed or commented on a document.
+  // "update" or "comment" when the card changed or commented on a document;
+  // "credit" for a raised credit limit.
   operation?: string;
+  // A raised credit limit: the company and the new limit, formatted.
+  credit?: { company: string; limit: string };
 }
 
-// An open ERPNext alert that suggests a draft (a restock, a follow-up), for
-// its "Prepare" button. The principal's alone; [] for anyone else.
+// An open ERPNext alert that suggests a draft (a restock, a follow-up, a
+// credit-limit raise), for its "Prepare" button. The principal's, and a
+// credit hold's raise for the people it names; [] for anyone else.
 export interface ErpnextAlertDraft {
   alert_id: number;
   label: string;
@@ -3107,13 +3114,20 @@ export async function getErpnextAlertDrafts(signal?: AbortSignal): Promise<Erpne
 }
 
 // The tap: ERPNext checks the suggested draft as you and leaves its card in
-// Needs you. Nothing is in ERPNext until you approve that card.
-export async function prepareErpnextAlertDraft(
-  alertId: number,
-): Promise<{ decision_id: number; already_waiting: boolean }> {
+// Needs you. Nothing is in ERPNext until you approve that card. A credit
+// hold's raise may wait for someone else's approval, or leave no card when
+// only someone with credit authority can prepare it (decision_id null);
+// `message` then says so.
+export interface ErpnextAlertDraftPrepared {
+  decision_id: number | null;
+  already_waiting: boolean;
+  message?: string;
+}
+
+export async function prepareErpnextAlertDraft(alertId: number): Promise<ErpnextAlertDraftPrepared> {
   const res = await fetch(`${API_BASE}/erpnext/alert-drafts/${alertId}`, { method: "POST" });
   if (!res.ok) throw await delegationError(res, "Couldn't prepare that draft.");
-  return (await res.json()) as { decision_id: number; already_waiting: boolean };
+  return (await res.json()) as ErpnextAlertDraftPrepared;
 }
 
 // [] for a viewer with none, or a backend without them (404).
