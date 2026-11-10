@@ -21,7 +21,8 @@ approves its cards (separation of duties).
 
 **Cards** (``leave_drafts``), only once ``route`` named the reviewer, and only
 of kinds that are on (a DocType listed for drafts or changes; a block only
-while ``erpnext_block.unavailable`` says nothing). For each ``DraftSpec``, in
+while ``erpnext_block.unavailable`` says nothing; a bank match only while
+``erpnext_match.unavailable`` says nothing). For each ``DraftSpec``, in
 the job's order: none while the same finding's card waits or once one was
 left that day; at most ``card_cap_day`` a day across the job's slots
 (``settings.take_day_cards``), ``erpnext_drafts.JOB_OPEN_MAX`` waiting for
@@ -31,7 +32,10 @@ reviewer (``erpnext_caller.draft_check_for_job``, audited ``watch_job_check``
 with a reason code, never ERPNext's text); the check must read back the card
 (a new draft: the operation, DocType and what the job expects; a change:
 ``erpnext_changes``' reading, and a draft the reviewer owns or is assigned;
-a block: ``erpnext_block``'s), and give a fingerprint; then
+a block: ``erpnext_block``'s; a bank match: ``erpnext_match``'s, with the
+reviewer neither the statement's importer nor a voucher's creator), and
+give a fingerprint; a bank match must also fit what is left of the job's
+``amount_cap_day`` for the day's cards (``settings.take_day_amount``); then
 ``erpnext_drafts.leave_job_card`` leaves the card. A check ERPNext refuses
 leaves no card, and the notice says how many in code's words. A finding no
 card was left for is told as its ``DraftSpec.notice``, when the job gave one.
@@ -79,7 +83,20 @@ CHECK_CODES = frozenset({
     "check_fields", "job-check-in-turn", "job-check-with-other-marker", "job-check-needs-keys",
     "key-malformed", "job-check-unknown-job", "job-check-job-off", "job-check-arguments",
     "job-check-reviewer", "job-check-cap",
+    "check_currency", "check_not_whole", "check_reviewer_sod", "check_amount_cap",
 })
+# What a run's notice says of the findings no card was left for, by code,
+# when the code says more than "ERPNext didn't accept them" (``{n}`` how
+# many, ``{noun}`` the job's card noun).
+CHECK_LINES: dict[str, str] = {
+    "check_currency": "{n} {noun} weren't prepared: not matched, the account is in another currency than the company's.",
+    "check_not_whole": "{n} {noun} weren't prepared: the voucher wouldn't match the whole bank line in ERPNext.",
+    "check_reviewer_sod": (
+        "{n} {noun} weren't prepared: they need a different reviewer, since ERPNext names the reviewer as the "
+        "statement's importer or a voucher's creator."
+    ),
+    "check_amount_cap": "{n} {noun} weren't prepared: today's matching limit is reached.",
+}
 
 
 @dataclass(frozen=True)
@@ -152,6 +169,8 @@ class DraftOutcome:
     # The findings no card was left for (none waits either): each is told as
     # its ``notice``, when the job gave one.
     unproposed: list[registry.DraftSpec] = field(default_factory=list)
+    # How many findings each ``CHECK_LINES`` code left without a card.
+    codes: dict[str, int] = field(default_factory=dict)
 
     @property
     def all_refused_for_permissions(self) -> bool:
@@ -184,18 +203,25 @@ def _permission(said: str) -> bool:
     )
 
 
-def _echo_refusal(spec: registry.DraftSpec, fields: dict[str, Any], checked: dict[str, Any]) -> str | None:
+def _echo_refusal(
+    spec: registry.DraftSpec, fields: dict[str, Any], checked: dict[str, Any], email: str = "",
+) -> str | None:
     """Why ERPNext's check doesn't read back the card the job built, as a
     reason code, or None. A new draft: the operation, DocType and what the
     job expects in the summary. A change: ``erpnext_changes``' own reading
     (the same document and change, and whose: the reviewer's own draft or one
     assigned to them, else ``check_not_theirs``). A block:
-    ``erpnext_block``'s."""
+    ``erpnext_block``'s. A bank match: ``erpnext_match``'s, as the reviewer
+    (``email``)."""
     summary = checked.get("summary")
     if spec.operation == "block":
         from openexecutive.integrations.erpnext_block import echo_refusal
 
         return echo_refusal(spec.name, fields, checked, dict(spec.expect))
+    if spec.operation == "match":
+        from openexecutive.integrations import erpnext_match
+
+        return erpnext_match.echo_refusal(spec.name, fields, checked, dict(spec.expect), email)
     if checked.get("doctype") != spec.doctype or checked.get("operation", "create") != spec.operation:
         return "check_mismatch"
     if not isinstance(summary, dict) or any(summary.get(k) != v for k, v in spec.expect.items()):
@@ -240,7 +266,7 @@ async def _check(
     checked = drafts._result(raw)
     if checked.get("ok") is not True:
         return ("check_permission" if _permission(drafts._refusal_text(raw)) else "check_refused"), {}
-    why = _echo_refusal(spec, fields, checked)
+    why = _echo_refusal(spec, fields, checked, email)
     if why is not None:
         return why, {}
     if drafts.fingerprint_of(checked) is None:
@@ -252,7 +278,8 @@ async def _kinds_off(job: registry.WatchJob, row: Any, specs: Sequence[registry.
     """The kinds of card (operation, DocType) that are off on this server
     now: a new draft's DocType not listed, a change's not listed for updates,
     a block while the job's setting, ``ERPNEXT_BLOCK_INVOICE`` or the pin
-    doesn't hold."""
+    doesn't hold, a bank match while ``ERPNEXT_BANK_MATCH`` or the pin
+    doesn't."""
     from openexecutive.integrations import erpnext_changes
     from openexecutive.integrations import erpnext_drafts as drafts
 
@@ -264,6 +291,13 @@ async def _kinds_off(job: registry.WatchJob, row: Any, specs: Sequence[registry.
             from openexecutive.integrations import erpnext_block
 
             on = job.id == erpnext_block.JOB_ID and await erpnext_block.unavailable(job, row) is None
+        elif operation == "match":
+            from openexecutive.integrations import erpnext_match
+
+            on = (
+                job.id == erpnext_match.JOB_ID and doctype == erpnext_match.DOCTYPE
+                and await erpnext_match.unavailable() is None
+            )
         else:
             on = doctype in erpnext_changes.enabled(operation)
         if not on:
@@ -354,6 +388,9 @@ async def leave_drafts(
         )
     if out.check_refused > out.permission_refused:
         out.lines.append(f"{out.check_refused - out.permission_refused} {noun} couldn't be prepared: ERPNext didn't accept them.")
+    for code, count in sorted(out.codes.items()):
+        if code in CHECK_LINES:
+            out.lines.append(CHECK_LINES[code].format(n=count, noun=noun))
     if out.capped:
         out.lines.append(f"{out.capped} more {noun} are due; they come once the waiting ones are handled.")
     return out
@@ -384,7 +421,11 @@ async def _leave_one(
             code = "check_fields"
     _audit_check(job, day, spec.operation, reviewer.id, code)
     if code != "ok":
-        out.check_refused += 1
+        if code in CHECK_LINES:
+            # Our own reading of ERPNext's answer, not ERPNext's refusal.
+            out.codes[code] = out.codes.get(code, 0) + 1
+        else:
+            out.check_refused += 1
         if code in ("check_permission", "check_not_theirs"):
             out.permission_refused += 1
         out.unproposed.append(spec)
@@ -392,22 +433,49 @@ async def _leave_one(
     if not isinstance(pinned, dict):
         out.unproposed.append(spec)
         return False
+    kept: dict[str, Any] | None = None
+    amount = 0.0
+    if spec.operation == "match":
+        from openexecutive.integrations import erpnext_match
+        from openexecutive.watch.settings import take_day_amount
+
+        kept = erpnext_match.slice_of(checked.get("summary"))
+        cap = erpnext_match.amount_cap(job)
+        found = erpnext_match.card_amount(checked)
+        if kept is None or cap is None or found is None:
+            out.unproposed.append(spec)
+            return False
+        amount = found
+        if not take_day_amount(job.id, day, amount, cap):
+            _audit_check(job, day, spec.operation, reviewer.id, "check_amount_cap")
+            out.codes["check_amount_cap"] = out.codes.get("check_amount_cap", 0) + 1
+            out.unproposed.append(spec)
+            return False
     # Read again after the check, with no await before the card is stored.
-    if drafts.job_room(job.id, reviewer.id) is not None:
-        out.capped = 1
-        out.unproposed.append(spec)
-        return False
+    left = False
     try:
-        _id, new = drafts.leave_job_card(
-            job, day, spec.operation, spec.doctype, pinned, checked,
-            reviewer=reviewer, configured_by_person_id=configured_by, dedup_key=key,
-            why=clean(spec.title, 140), reason=clean(reasons.get(spec.reason_key, ""), MAX_REASON_CHARS),
-            name=spec.name if spec.operation != "create" else None,
-        )
-    except Exception:
-        logger.error("watch: job %s couldn't leave a card", job.id)
-        out.unproposed.append(spec)
-        return False
+        if drafts.job_room(job.id, reviewer.id) is not None:
+            out.capped = 1
+            out.unproposed.append(spec)
+            return False
+        try:
+            _id, new = drafts.leave_job_card(
+                job, day, spec.operation, spec.doctype, pinned, checked,
+                reviewer=reviewer, configured_by_person_id=configured_by, dedup_key=key,
+                why=clean(spec.title, 140), reason=clean(reasons.get(spec.reason_key, ""), MAX_REASON_CHARS),
+                name=spec.name if spec.operation != "create" else None, kept=kept, also=spec.shown,
+            )
+        except Exception:
+            logger.error("watch: job %s couldn't leave a card", job.id)
+            out.unproposed.append(spec)
+            return False
+        left = new
+    finally:
+        if amount and not left:
+            # Not a new card after all: its amount goes back to the day's cap.
+            from openexecutive.watch.settings import take_day_amount
+
+            take_day_amount(job.id, day, -amount, 0.0)
     if new:
         out.left += 1
     else:

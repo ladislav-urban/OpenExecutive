@@ -11268,15 +11268,22 @@ integrations:
     install's model only.
     Withheld tools (connected_systems.ERPNEXT_WITHHELD_TOOLS, Nov 9, 2026):
     oe_connector serves, and this install pins, tools nothing here may call
-    yet, erpnext__read_attachment (intake), erpnext__supplier_bank_changed
-    (phase 1's payment-checks job; never chat's, whoever asks) and
+    yet, erpnext__read_attachment (intake), erpnext__mail_invoices_to_fill
+    (the invoice-capture job, not built yet), erpnext__supplier_bank_changed
+    (phase 1's payment-checks job; never chat's, whoever asks),
     erpnext__customer_payment_record (phase 1's collections job; many
-    customers' payment behaviour in one call, so never offered to chat).
+    customers' payment behaviour in one call, so never offered to chat),
+    and erpnext__bank_lines_to_match and erpnext__bank_line_candidates
+    (phase 2's bank-matching job). The phase 2 pin is fe432f87, 30 tools:
+    draft_check takes fill and match, and draft_match_bank_line and
+    draft_fill_purchase_invoice are pinned (no card uses the fill yet).
     call_tool refuses them first in its ERPNext block, under every marker and
     on every turn, but a watch job's own read (JOB_WITHHELD_EXCEPTIONS), and
     _drop_blocked_tools hides them, with the draft tools outside
-    ERPNEXT_DRAFT_TOOLS (erpnext__draft_block_invoice, called only by the
-    payment-checks job's card executor), which _check_erpnext_draft refuses
+    ERPNEXT_DRAFT_TOOLS (erpnext__draft_block_invoice and
+    erpnext__draft_match_bank_line, mcp_gateway.ERPNEXT_JOB_WRITE_TOOLS,
+    each called only by its own job's card executor), which
+    _check_erpnext_draft refuses
     outside their marker anyway. ERPNEXT_DRAFT_TOOLS stays a static set.
     _is_undiscovered_refusal lets a withheld tool and the block tool be
     discovered on their own call (each reaches it only through its gate).
@@ -11617,8 +11624,9 @@ watch:
     applies rules in code and leaves notices and draft cards; it never runs
     the Executive's tool loop, no model picks a read, and no model writes a
     figure or a card's field (a model writes only reason lines). Listed:
-    collections (watch.jobs.collections) and payment checks
-    (watch.jobs.payment_checks).
+    collections (watch.jobs.collections), payment checks
+    (watch.jobs.payment_checks) and bank matching
+    (watch.jobs.bank_matching, phase 2).
   registry: |
     watch.registry: WatchJob(id, title, reads, build, schedule,
     card_cap_day, default_settings, reason_schema=None, ..., slots=(),
@@ -11627,7 +11635,11 @@ watch:
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same
     slot names ($company, $date within 400 days, $party, $parties and
-    $customers up to 50, $int 1-500; the top-level `fields` a most; any other
+    $customers up to 50, $int 1-500, $bank_line a Bank Transaction's name
+    that oe_connector also checks is on an account listed for bank
+    matching; LOCAL_SLOTS holds this side's own $bank_account, a value
+    oe_connector's listing holds as a literal, one read per account; the
+    top-level `fields` a most; any other
     list the same length, element by element, so ["<=", "$date"] and
     ["in", "$parties"]; a literal only the same JSON type and value, true
     never 1, 1.0 never 1; objects exact keys), mirroring oe_connector's
@@ -11643,12 +11655,19 @@ watch:
     (connected_systems.ERPNEXT_WITHHELD_TOOLS) may be listed only by the job
     connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to
     (customer_payment_record: collections; supplier_bank_changed:
-    payment-checks), checked in
+    payment-checks; bank_lines_to_match and bank_line_candidates:
+    bank-matching), checked in
     WatchJob.__post_init__, mirroring the gateway's one exception.
     Dependent reads: arguments(settings, today, prior), prior the earlier
     results without acting; None skips the read (an empty derived list:
     recorded {read, skipped: true}, build gets {}, never as_job_user);
-    Derived(arguments, truncated) records a list cut to 50. build(results,
+    Derived(arguments, truncated) records a list cut to 50. Repeated reads
+    (WatchRead.repeat 1-50, MAX_REPEAT): arguments return
+    Repeated(arguments tuple, truncated); the runner makes at most repeat
+    calls, each with its own shape check, watch_run marker, timeout and
+    acting entry, records a longer list as truncated, and build gets
+    {"each": [results], "truncated"}; one refused call ends the run.
+    build(results,
     settings, today) is pure code returning CardSpec(key, summary, values,
     facts, items, notes, count) notices and DraftSpec(key, operation,
     doctype, fields, expect, title, reason_key, group, name, notice) cards
@@ -11656,11 +11675,14 @@ watch:
     as a notice when no card can be left). WatchJob also takes check_fields
     (operation, doctype, fields, name: the job's own builder of a card's
     fields, run before each check and again at approval), setting_bounds
-    (whole-number settings outside 1-500), card_noun, slots (the times a
+    (whole-number settings outside 1-500, or a list setting's count of
+    names other than 0-50), extra_notices (settings, day -> notices from
+    this install's own records, after build), card_noun, slots (the times a
     job runs each day, in order, the first its schedule; empty: once a day)
     and weekdays (0 Monday to 6 Sunday); due_slots(now, weekday) gives the
     keys ("HH:MM", "" for a daily job) due by now. JOBS is a read-only
-    mapping of _LISTED (collections, payment-checks), imported at the
+    mapping of _LISTED (collections, payment-checks, bank-matching),
+    imported at the
     module's end (watch.jobs imports the registry first); the test job
     watch.jobs._example is put in by tests only.
     tests/unit/watch_job_vectors.json pins the id pattern, the slots,
@@ -11859,6 +11881,88 @@ watch:
     limit", "unblocked by a person", "a block comes only from the
     payment-checks job's card" (FINAL) and oe_connector's separation of
     duties (SOD_JOB_TEXT). Any other refusal leaves it waiting.
+  match_card: |
+    integrations.erpnext_match: the bank-matching job's match card,
+    oe_connector's draft_match_bank_line (ladislav-urban/oe_connector#540;
+    pinned with the phase 2 tools, TOOLS_DIGEST fe432f87, 30 tools, until
+    the final combined pin replaces it). Operation "match" is in
+    erpnext_changes.OPERATIONS with OPERATION_TOOLS["match"] =
+    erpnext__draft_match_bank_line; enabled("match") is (), so neither chat
+    nor ERPNext's panel can propose one. Off two ways besides the job
+    (unavailable: match_switch_off, match_not_pinned): ERPNEXT_BANK_MATCH
+    (default false) and pinned(). The check: draft_check {operation match,
+    doctype Bank Transaction, name, fields {vouchers [{doctype, name}]}},
+    no amounts (ERPNext computes the allocation in a rolled-back
+    savepoint); match_fields takes 1-5 Payment or Journal Entries, names
+    as _DOC_RE, each once, sorted. echo_refusal: the same line and
+    operation, then slice_of (a key the rules need missing is "can't
+    tell", no card; at most 5 vouchers and 20 creators; creators, importer
+    and voucher creators normalized as emails, never the bank's text),
+    the expected company and bank account, the card's own vouchers, each on
+    the line's direction, dated on or before it, for the line's party when
+    it has one, allocated and cleared; check_currency when the line's
+    currency isn't the company's; check_not_whole unless after.status is
+    Reconciled with nothing left, total equals line.unallocated_amount and
+    the allocations and total_company_currency agree; check_reviewer_sod
+    when the reviewer's email is the importer or a voucher's creator
+    ("Administrator" never matches). cards._leave_one then takes the card's
+    total_company_currency from the day's amount_cap_day
+    (settings.take_day_amount in watch_days.amount, given back when no new
+    card is left) and leave_job_card stores the slice as payload["slice"].
+    CHECK_LINES tells those four codes in the run's notice in code's words.
+    approve: _job_approval, then approval_refusal (source watch, job
+    bank-matching, Bank Transaction, switch and pin now, else 409
+    match_off with nothing claimed; slice_of_stored must read back
+    unchanged, name and vouchers the card's, slice_refusal none; the
+    approver's current email named in it closes the card sod_refused),
+    match_fields and the fingerprint again; after claim_for_execution,
+    take_approved counts total_company_currency against what this approver
+    approved of the job's cards on the company's day
+    (settings.take_approved_amount, table watch_approved, one row per
+    card, never given back, fails closed); over amount_cap_day the claim
+    is released and the card waits (409 match_limit, LIMIT_TEXT).
+    _carry_out sends exactly {name, vouchers, idempotency_key, asked_by
+    job:bank-matching, configured_by, expected_fingerprint}, and
+    refuses any match not the bank-matching job's. Success:
+    erpnext_match.made. Final, closing the card failed:
+    CHANGED_SINCE_PROPOSED (CHANGED_TEXT), "Matching limit", "is no longer
+    unreconciled", "a match comes only from the bank-matching job's card"
+    (FINAL) and oe_connector's separation of duties. OE checks from the
+    stored slice (whole match, vouchers, importer and creators, the day's
+    cap); oe_connector rebuilds the card under lock against its fingerprint
+    and checks its own separation of duties and caps at the write.
+  bank_matching: |
+    watch.jobs.bank_matching: daily 10:00 company time, card_cap_day 30,
+    no reason step; settings company, bank_accounts (at most 10, each also
+    in oe_connector_bank_matching), amount_cap_day 50000 (1-1000000).
+    Reads: bank_lines_to_match {bank_account $bank_account, from_date
+    today - 60} repeated per account; bank_line_candidates {bank_transaction
+    $bank_line} repeated per line unallocated and at least a day old,
+    oldest first, at most 50 (CUT_LINE when more); list_records Sales
+    Invoice {company, docstatus 1, outstanding_amount > 0, customer in
+    $customers} and Purchase Invoice (supplier in $parties) for the parties
+    of the lines nothing fits, each skipped when empty. listing(accounts)
+    is the operator's oe_connector_watch_jobs entry, read 1 once per
+    account by name. Each account's and each candidates' result must name
+    the job's company. Rules: confidence(line, candidate), only in the
+    line's currency, dated on or before it, never another party's; high
+    same party and amount; medium same amount, the line's party explicitly
+    none, and the voucher's reference (6+ chars, word boundaries, not a
+    redacted number) in the bank's reference or description; low same
+    amount or party only, shown on the card as "Also possible, not
+    proposed" (DraftSpec.shown) and never in a notice; a missing party key
+    is "can't tell", low at most. classify: a candidate with exactly the
+    line's reference leaves the line to ERPNext's own rules; one voucher
+    at the best of high or medium is a match DraftSpec (expect company and
+    bank_account, with its notice); two at the same level, ambiguous; a
+    larger voucher of the line's party, partial; else by_invoices on the
+    party's unpaid invoices (one of exactly the amount: no voucher yet;
+    2-4 of the first 15 adding up: several; a larger one: partial). The
+    run's notices: "Bank lines to match in ERPNext's Banking app" (PERSON_LINE),
+    "Bank lines with nothing to match" (NOTHING_LINE), "No bank accounts to
+    match" when none is set, and month_notices (extra_notices): the
+    previous month's approved match cards from the job's own cards, left
+    once (runner.raised_ever).
   collections: |
     watch.jobs.collections: 07:00 company time, card_cap_day 5, settings
     company, first_after_days 7, repeat_after_days 14, min_amount 0,

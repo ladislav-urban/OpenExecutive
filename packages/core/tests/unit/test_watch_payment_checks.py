@@ -303,6 +303,7 @@ def test_the_bank_tool_opens_to_payment_checks_alone() -> None:
     assert dict(JOB_WITHHELD_EXCEPTIONS) == {
         "collections": frozenset({"erpnext__customer_payment_record"}),
         "payment-checks": frozenset({"erpnext__supplier_bank_changed"}),
+        "bank-matching": frozenset({"erpnext__bank_lines_to_match", "erpnext__bank_line_candidates"}),
     }
     assert "erpnext__supplier_bank_changed" in ERPNEXT_WITHHELD_TOOLS
     bank = WatchRead("supplier_bank_changed", payment_checks.BANK_SHAPE, payment_checks._bank, "b")

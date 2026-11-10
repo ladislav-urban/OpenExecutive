@@ -16,8 +16,16 @@ the read (``None``); one cut to its first 50 says so (``Derived``).
 There is no way to add a job at run time: no settings row, chat turn or API
 names one. ``JOBS`` is read-only and holds what this module lists in
 ``_LISTED``: phase 1's collections job (``watch.jobs.collections``) and its
-payment-checks job (``watch.jobs.payment_checks``). The
-test job, ``watch.jobs._example``, is put in by the tests alone.
+payment-checks job (``watch.jobs.payment_checks``), and phase 2's
+bank-matching job (``watch.jobs.bank_matching``). The test job,
+``watch.jobs._example``, is put in by the tests alone.
+
+A read may also be **repeated** (``WatchRead.repeat``): its ``arguments``
+return ``Repeated``, one call's arguments per item (bank matching's
+candidates, one read per bank line), at most ``repeat`` of them and never
+more than ``MAX_REPEAT``. Each call is made on its own: its own shape check,
+read marker, ``acting`` record and timeout. ``build`` gets ``{"each":
+[results...], "truncated": bool}`` for it.
 
 A tool the gateway withholds from every turn
 (``connected_systems.ERPNEXT_WITHHELD_TOOLS``) may be listed only by the job
@@ -54,8 +62,13 @@ from typing import Any
 # oe_connector's watch.JOB_ID: the key in oe_connector_watch_jobs, and the
 # `sub` of a watch assertion.
 JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
-SLOTS: tuple[str, ...] = ("$company", "$date", "$party", "$parties", "$customers", "$int")
+SLOTS: tuple[str, ...] = ("$company", "$date", "$party", "$parties", "$customers", "$int", "$bank_line")
 LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers")
+# Slots this side only: a value oe_connector's listing holds as a literal,
+# one read per value (an operator lists bank matching's
+# ``bank_lines_to_match`` once per Bank Account). Checked here as a name;
+# oe_connector checks the literal and its own list of accounts.
+LOCAL_SLOTS: tuple[str, ...] = ("$bank_account",)
 # The operators a slot may follow inside a list: a single value's, or a list
 # slot's (in, not in). Never like, where a name's % or _ would widen the read.
 VALUE_OPERATORS: tuple[str, ...] = ("=", "!=", "<", "<=", ">", ">=")
@@ -63,11 +76,16 @@ LIST_OPERATORS: tuple[str, ...] = ("in", "not in")
 DATE_RANGE_DAYS = 400
 MAX_LIST = 50
 MAX_INT = 500
+# The most calls one repeated read makes in a run.
+MAX_REPEAT = 50
 # A Company, Customer or Supplier name, and a setting's text (oe_connector
 # bounds a supplier's name at 140 too).
 MAX_TEXT = 140
 # The gateway's name for an oe_connector tool is this plus its own name.
 GATEWAY_PREFIX = "erpnext__"
+# A document's name as a slot takes it (a Bank Transaction's, a Bank
+# Account's): no control characters, no leading or trailing space.
+_NAME_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^\x00-\x1f\x7f-\x9f\s])?")
 # The oe_connector tools any job may list. A withheld one is listed only by
 # the job connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to.
 READ_TOOLS: frozenset[str] = frozenset({"run_report", "list_records"})
@@ -90,12 +108,23 @@ class Derived:
     truncated: bool = False
 
 
+@dataclass(frozen=True)
+class Repeated:
+    """A repeated read's calls this run: one arguments dict per item, in the
+    job's order, and whether the job's own list was cut. The runner makes at
+    most the read's ``repeat`` of them and records any more as cut."""
+
+    arguments: tuple[dict[str, Any], ...]
+    truncated: bool = False
+
+
 # The results of the reads before this one, in order, each without its
 # ``acting`` key; a skipped read's is {}.
 Prior = tuple[Mapping[str, Any], ...]
 # A read's arguments: a dict, a ``Derived`` one, or None to skip the read
-# (a derived list came out empty: never sent with an empty list).
-ReadArguments = dict[str, Any] | Derived | None
+# (a derived list came out empty: never sent with an empty list); for a
+# repeated read, ``Repeated`` (or None).
+ReadArguments = dict[str, Any] | Derived | Repeated | None
 
 
 @dataclass(frozen=True)
@@ -109,6 +138,9 @@ class WatchRead:
     shape: Mapping[str, Any]
     arguments: Callable[[Settings, date, Prior], ReadArguments]
     label: str
+    # A repeated read: at most this many calls a run (1 to MAX_REPEAT), its
+    # arguments ``Repeated``. 0: one call.
+    repeat: int = 0
 
     @property
     def gateway_tool(self) -> str:
@@ -165,7 +197,10 @@ class DraftSpec:
     - ``name``: the document a change or a block is on ("" for a new draft).
     - ``notice``: the finding told as a notice when no card can be left for
       it (the run went to the principal, the reviewer can't see the
-      document, the day's cap); None when the job's notices already cover it."""
+      document, the day's cap); None when the job's notices already cover it.
+    - ``shown``: (label, value) lines the card shows besides ERPNext's check,
+      built by code from the reads (bank matching's weaker candidates, never
+      proposed); never sent, and never in its notice."""
 
     key: str
     operation: str
@@ -177,6 +212,7 @@ class DraftSpec:
     group: str = ""
     name: str = ""
     notice: CardSpec | None = None
+    shown: tuple[tuple[str, str], ...] = ()
 
 
 # A job's own builder of a card's fields, by operation, DocType and the
@@ -200,9 +236,16 @@ class ReasonSchema:
 # run's settings; its day) -> the findings. Pure code: every figure comes
 # from the results.
 Build = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[CardSpec | DraftSpec]]
+# A job's notices that come from this install's own records rather than a
+# read (bank matching's monthly list of the matches made): (the run's
+# settings, its day) -> notices. Called after ``build``.
+ExtraNotices = Callable[[Settings, date], Sequence[CardSpec]]
 
 
 def _setting_ok(value: object, bounds: tuple[int, int] | None = None) -> bool:
+    """A setting's value of its type, within bounds: a whole number's own
+    (1 to MAX_INT unless given), or a list's count of names (0 to MAX_LIST
+    unless given)."""
     if isinstance(value, bool):
         return True
     if isinstance(value, int):
@@ -211,7 +254,8 @@ def _setting_ok(value: object, bounds: tuple[int, int] | None = None) -> bool:
     if isinstance(value, str):
         return _text_ok(value, allow_empty=True)
     if isinstance(value, list):
-        return len(value) <= MAX_LIST and all(isinstance(v, str) and _text_ok(v) for v in value)
+        low, high = bounds or (0, MAX_LIST)
+        return low <= len(value) <= min(high, MAX_LIST) and all(isinstance(v, str) and _text_ok(v) for v in value)
     return False
 
 
@@ -229,7 +273,8 @@ class WatchJob:
     reason_schema: ReasonSchema | None = None
     # Its draft cards' builder (``CheckFields``); None: a job of notices only.
     check_fields: CheckFields | None = None
-    # A whole-number setting's bounds other than 1 to MAX_INT (e.g. an amount).
+    # A whole-number setting's bounds other than 1 to MAX_INT (e.g. an
+    # amount), or a list setting's count of names other than 0 to MAX_LIST.
     setting_bounds: Mapping[str, tuple[int, int]] = field(default_factory=dict)
     # What a notice calls its draft cards ("reminder drafts").
     card_noun: str = "drafts"
@@ -239,6 +284,8 @@ class WatchJob:
     slots: tuple[time, ...] = ()
     # The days it runs (Monday 0 to Sunday 6).
     weekdays: frozenset[int] = frozenset(range(7))
+    # Its notices from this install's own records (``ExtraNotices``), if any.
+    extra_notices: ExtraNotices | None = None
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -264,6 +311,11 @@ class WatchJob:
             unsound = shape_problem(read.shape)
             if unsound:
                 raise ValueError(f"a read's shape is unsound: {unsound}")
+            if (
+                not isinstance(read.repeat, int) or isinstance(read.repeat, bool)
+                or not 0 <= read.repeat <= MAX_REPEAT
+            ):
+                raise ValueError(f"a read repeats at most {MAX_REPEAT} times")
         if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
             raise ValueError("a job's card cap is 1 to 50 a day")
         for key, bound in self.setting_bounds.items():
@@ -337,6 +389,8 @@ def _slot_holds(slot: str, value: Any, today: date) -> bool:
         return abs((day - today).days) <= DATE_RANGE_DAYS
     if slot in ("$company", "$party"):
         return isinstance(value, str) and _text_ok(value)
+    if slot in ("$bank_line", "$bank_account"):
+        return isinstance(value, str) and _text_ok(value) and _NAME_RE.fullmatch(value) is not None
     if slot in ("$parties", "$customers"):
         return (
             isinstance(value, list)
@@ -359,7 +413,7 @@ def shape_problem(shape: Any, where: str = "", in_filters: bool = False) -> str:
     """Why a read's shape is unsound (oe_connector's ``watch._shape_problem``),
     or "" when it is sound. An unsound read leaves its job out on both sides."""
     if isinstance(shape, str) and shape.startswith("$"):
-        if shape not in SLOTS:
+        if shape not in SLOTS and shape not in LOCAL_SLOTS:
             return f"{where or 'value'}: {shape} isn't a slot"
         if in_filters and shape in LIST_SLOTS:
             return f'{where}: a list slot in a filter goes in ["in", {shape}]'
@@ -401,7 +455,7 @@ def shape_mismatch(
     ``watch._mismatch``). The reason names keys and slots only, never a
     value. ``holds``: whether a slot takes a value; the runner's own check on
     ``today`` unless given."""
-    if isinstance(shape, str) and shape in SLOTS:
+    if isinstance(shape, str) and (shape in SLOTS or shape in LOCAL_SLOTS):
         held = holds(shape, value) if holds is not None else _slot_holds(shape, value, today)
         return "" if held else f"{where or 'value'} isn't a {shape[1:]}"
     if isinstance(shape, Mapping):
@@ -474,9 +528,10 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
         elif isinstance(default, str):
             ok = isinstance(value, str) and _text_ok(value, allow_empty=True)
         else:
+            low, high = job.setting_bounds.get(key, (0, MAX_LIST))
             ok = (
                 isinstance(value, list)
-                and len(value) <= MAX_LIST
+                and low <= len(value) <= min(high, MAX_LIST)
                 and all(isinstance(v, str) and _text_ok(v) for v in value)
             )
         if not ok:
@@ -487,9 +542,10 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
 
 # The jobs this install runs, each with its entry in oe_connector_watch_jobs.
 # Imported here, once everything a job module uses is defined.
+from openexecutive.watch.jobs import bank_matching as _bank_matching  # noqa: E402
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
 
-_LISTED: tuple[WatchJob, ...] = (_collections.JOB, _payment_checks.JOB)
+_LISTED: tuple[WatchJob, ...] = (_collections.JOB, _payment_checks.JOB, _bank_matching.JOB)
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

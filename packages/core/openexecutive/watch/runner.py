@@ -30,9 +30,14 @@ A run (``run_job``, its own task):
    run's record and the audit hold a reason code only, never ERPNext's text.
    oe_connector's ``acting`` (top-level key of the result) is recorded per
    read as whether it ran as the job's own ERP user; its ``job`` must be this
-   job's.
+   job's. A repeated read (``WatchRead.repeat``) makes one such call per
+   item, each with its own shape check, marker, timeout and ``acting``
+   record, at most ``repeat`` a run (more are recorded ``truncated``); a
+   refused call ends the run as any read's would.
 2. **Rules.** ``job.build`` turns the results into notices (``CardSpec``)
-   and draft cards (``DraftSpec``), in code.
+   and draft cards (``DraftSpec``), in code; a job's ``extra_notices`` adds
+   notices from this install's own records (skipped for the run when they
+   can't be read).
 3. **Reasons** (only for a job with a ``reason_schema``): one tool-less model
    call whose output must be a JSON object of short reason lines keyed by the
    finding ids it was shown; anything else is dropped. Its input is the
@@ -527,30 +532,25 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             built = read.arguments(settings, today, tuple(results))
         except Exception:
             raise _Stop("read_build_failed", read.label) from None
-        if built is None:
+        if built is None or (isinstance(built, registry.Repeated) and not built.arguments):
             # A derived list came out empty: never sent with an empty list.
             reads.append({"read": read.label, "skipped": True})
             results.append({})
             continue
+        if isinstance(built, registry.Repeated) != (read.repeat > 0):
+            raise _Stop("read_build_failed", read.label)
+        if isinstance(built, registry.Repeated):
+            # One call per item, at most the read's own bound.
+            calls = list(built.arguments[:read.repeat])
+            cut = built.truncated or len(built.arguments) > read.repeat
+            each = []
+            for arguments in calls:
+                each.append(await _one_read(job, read, arguments, today, cut, reads, users))
+            results.append({"each": each, "truncated": cut})
+            continue
         truncated = isinstance(built, registry.Derived) and built.truncated
         arguments = built.arguments if isinstance(built, registry.Derived) else built
-        if not isinstance(arguments, dict) or registry.shape_mismatch(read.shape, arguments, today):
-            raise _Stop("read_shape", read.label)
-        result = await _read(job, read, arguments, today)
-        if not isinstance(result, dict) or "error" in result:
-            raise _Stop("read_refused", read.label)
-        # Only the top-level key is oe_connector's own word on who it ran as.
-        acting = result.get("acting")
-        if isinstance(acting, dict) and acting.get("job") != job.id:
-            raise _Stop("acting_job_mismatch", read.label)
-        as_user, user = _as_job_user(acting, job.id)
-        if as_user:
-            users.add(user)
-        entry: dict[str, Any] = {"read": read.label, "as_job_user": as_user}
-        if truncated:
-            entry["truncated"] = True
-        reads.append(entry)
-        results.append({k: v for k, v in result.items() if k != "acting"})
+        results.append(await _one_read(job, read, arguments, today, truncated, reads, users))
     if len(users) > 1:
         # Not one job user across the run: none of its reads counts as one.
         for entry in reads:
@@ -560,6 +560,13 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         specs = list(job.build(tuple(results), settings, today))
     except Exception:
         raise _Stop("rules_failed") from None
+    if job.extra_notices is not None:
+        # From this install's own records: one that can't be read is left
+        # for the next run, never a reason to drop what ERPNext's reads found.
+        try:
+            specs.extend(job.extra_notices(settings, today))
+        except Exception:
+            logger.warning("watch: job %s's own notices couldn't be read this run", job.id)
     if not all(
         isinstance(s, registry.CardSpec | registry.DraftSpec) and isinstance(s.key, str) and s.key for s in specs
     ):
@@ -606,6 +613,32 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         ) is not None:
             outcome.cards += 1
     return outcome
+
+
+async def _one_read(
+    job: registry.WatchJob, read: registry.WatchRead, arguments: Any, today: date, truncated: bool,
+    reads: list[dict[str, Any]], users: set[str],
+) -> dict[str, Any]:
+    """One call of a read: its arguments checked against its shape, made
+    under its own marker, and its ``acting`` recorded. Returns the result
+    without ``acting``. Raises ``_Stop``."""
+    if not isinstance(arguments, dict) or registry.shape_mismatch(read.shape, arguments, today):
+        raise _Stop("read_shape", read.label)
+    result = await _read(job, read, arguments, today)
+    if not isinstance(result, dict) or "error" in result:
+        raise _Stop("read_refused", read.label)
+    # Only the top-level key is oe_connector's own word on who it ran as.
+    acting = result.get("acting")
+    if isinstance(acting, dict) and acting.get("job") != job.id:
+        raise _Stop("acting_job_mismatch", read.label)
+    as_user, user = _as_job_user(acting, job.id)
+    if as_user:
+        users.add(user)
+    entry: dict[str, Any] = {"read": read.label, "as_job_user": as_user}
+    if truncated:
+        entry["truncated"] = True
+    reads.append(entry)
+    return {k: v for k, v in result.items() if k != "acting"}
 
 
 def _reasoned(notices: Sequence[registry.CardSpec]) -> list[registry.CardSpec]:
@@ -750,6 +783,20 @@ def _raised_today(key: str, day: str) -> bool:
     with store._get_conn() as conn:
         row = conn.execute(
             "SELECT 1 FROM alerts WHERE source = ? AND external_id = ? LIMIT 1", (SOURCE, f"{key}:{day}"),
+        ).fetchone()
+    return row is not None
+
+
+def raised_ever(key: str) -> bool:
+    """Whether a notice with this dedupe key (``dedup_key``) was ever left,
+    in any state: a job's once-a-month notice is left once."""
+    from openexecutive.alerts import store
+
+    if not store._resolve_db_path(None).exists():
+        return False
+    with store._get_conn() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM alerts WHERE source = ? AND dedup_key = ? LIMIT 1", (SOURCE, f"private:{key}"),
         ).fetchone()
     return row is not None
 

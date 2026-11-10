@@ -1014,6 +1014,13 @@ class Settings(BaseSettings):
     # job's block_submitted setting and oe_connector's draft_block_invoice
     # pinned, and oe_connector_block_invoices on the site.
     erpnext_block_invoice: bool = Field(False, alias="ERPNEXT_BLOCK_INVOICE")
+    # The bank-matching job's match card (integrations/erpnext_match.py):
+    # ERPNext's own reconciliation of a bank line with the submitted
+    # vouchers the card shows, approved by the job's reviewer. It changes
+    # financial state, so off by default; it also needs oe_connector's
+    # draft_match_bank_line pinned, and the accounts listed in
+    # oe_connector_bank_matching on the site.
+    erpnext_bank_match: bool = Field(False, alias="ERPNEXT_BANK_MATCH")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
