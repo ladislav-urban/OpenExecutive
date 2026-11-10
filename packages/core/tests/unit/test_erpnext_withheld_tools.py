@@ -89,7 +89,8 @@ def test_the_invoice_block_is_pinned_but_no_card_here_calls_it(erp: Any, roster:
     assert "erpnext__draft_block_invoice" not in set(erpnext_drafts.DRAFT_TOOLS.values()) | set(cs.ERPNEXT_DRAFT_TOOLS)
     listing = "## erpnext__draft_block_invoice\n**Description:** x\n\n## erpnext__run_report\n**Description:** y\n\n"
     pin_listing(monkeypatch, listing)
-    assert "erpnext__draft_block_invoice" not in mcp_gateway._drop_blocked_tools(listing)
+    kept = mcp_gateway._drop_blocked_tools(listing)
+    assert "erpnext__draft_block_invoice" not in kept and "erpnext__run_report" in kept
     gateway = mcp_gateway.get_active_gateway()
     assert gateway is not None
 
@@ -99,5 +100,6 @@ def test_the_invoice_block_is_pinned_but_no_card_here_calls_it(erp: Any, roster:
                 "name": "ACC-PINV-1", "duplicate_of": "ACC-PINV-0", "idempotency_key": "k" * 32,
                 "expected_fingerprint": "f" * 64, "asked_by": "job:payment-checks", "configured_by": "x@y.z"}})
 
-    assert "error" in json.loads(asyncio.run(go()))
+    out = json.loads(asyncio.run(go()))
+    assert "error" in out and "card" in out["error"]
     assert erp.calls == []
