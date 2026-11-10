@@ -36,8 +36,14 @@ export function draftMadeLine(doctype: string, name: string | null, alreadyCreat
     : `The draft is in ${erp}, unsubmitted. Review and submit it there.`;
 }
 
-/** The line an approved change or comment shows. */
+/** The line an approved change, comment or hold shows. */
 export function changeMadeLine(operation: string, doctype: string, name: string, already: boolean): string {
+  if (operation === "block") {
+    // ERPNext's own Block Invoice on a submitted invoice: held until a person unblocks it.
+    return already
+      ? `${doctype} ${name} was already on hold in the ERP, until someone unblocks it.`
+      : `${doctype} ${name} is on hold in the ERP, until someone unblocks it. Nothing was paid or cancelled.`;
+  }
   if (operation === "comment") {
     return already ? `Your comment was already on ${doctype} ${name}.` : `Your comment is now on ${doctype} ${name}.`;
   }
@@ -60,9 +66,10 @@ export const CREDIT_CHANGED_NOTE =
   "This changed in the ERP since it was left (what the customer owes, the order or its limit). " +
   "Approving it is refused: dismiss it and prepare the raise again from the alert.";
 
-/** The card's kind, over its headline: a new draft, a change, a comment or a raise. */
+/** The card's kind, over its headline: a new draft, a change, a comment, a raise or a hold. */
 export function cardKind(doctype: string, operation: string | undefined, named: boolean): string {
   if (operation === "credit") return "Raise a credit limit";
+  if (operation === "block") return `Hold a submitted ${doctype}`;
   if (operation === "update") return `Change to a ${doctype}`;
   if (operation === "comment") return `Comment on a ${doctype}`;
   return draftKind(doctype, named);

@@ -308,7 +308,7 @@ export function ErpnextDraftCardItem({
                   created?.credit?.limit ?? "",
                   created?.already_created ?? false,
                 )
-              : card.operation === "update" || card.operation === "comment"
+              : card.operation === "update" || card.operation === "comment" || card.operation === "block"
                 ? changeMadeLine(card.operation, card.doctype, created?.name ?? "", created?.already_created ?? false)
                 : draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
           </p>
