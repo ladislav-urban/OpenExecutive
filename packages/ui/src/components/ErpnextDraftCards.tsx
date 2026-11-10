@@ -21,7 +21,9 @@ import {
   creditMadeLine,
   draftMadeLine,
   draftsTip,
+  jobCardKind,
   openDraftLabel,
+  whyNowLine,
 } from "@/lib/erpnextDraftWords";
 import { erpnextLink } from "@/lib/erpnextLinks";
 import { formatRelativeTime } from "@/lib/relativeTime";
@@ -227,7 +229,9 @@ export function ErpnextDraftCardItem({
         <span className="inline-flex items-center rounded-lg bg-surface-overlay px-2 py-0.5 text-[13px] font-medium text-fg-muted">
           To approve
         </span>
-        <span className="text-[12px] font-medium text-fg-muted">{cardKind(card.doctype, card.operation, named)}</span>
+        <span className="text-[12px] font-medium text-fg-muted">
+          {card.job_title ? jobCardKind(card.doctype, card.operation, card.job_title) : cardKind(card.doctype, card.operation, named)}
+        </span>
         {when && <span className="text-sm text-fg-subtle tabular-nums">{when}</span>}
       </div>
       {(card.asked_in === "erpnext_panel" || card.asked_in === "erpnext_desk") && (
@@ -240,6 +244,11 @@ export function ErpnextDraftCardItem({
       )}
       {card.why && (
         <div className="text-base sm:text-[17px] font-semibold leading-snug text-fg break-words">{card.why}</div>
+      )}
+      {card.job_title && card.why_now && (
+        // A watch job's reason line: a model's words, never a figure, shown
+        // as plain text under the code-built headline.
+        <div className="mt-1 text-sm text-fg-muted break-words">{whyNowLine(card.why_now)}</div>
       )}
       {card.changed && !done && (
         <div className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-sm text-amber-800 dark:text-amber-200">

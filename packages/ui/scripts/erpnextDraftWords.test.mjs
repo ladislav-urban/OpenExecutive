@@ -76,3 +76,10 @@ test("a credit-limit raise card says what it raises and that the order is still 
   assert.match(words.creditMadeLine("H", "A", "1.00 USD", true), /^H's credit limit at A was already 1\.00 USD\./);
   assert.doesNotMatch(words.CREDIT_CHANGED_NOTE, /ERPNext/);
 });
+
+test("a watch job's card names its job and labels its reason line", async () => {
+  const words = await import("../src/lib/erpnextDraftWords.ts");
+  assert.equal(words.jobCardKind("Dunning", "create", "Collections"), "Dunning draft from the Collections job");
+  assert.equal(words.whyNowLine("Usually pays in 5 days; 30 days late now."),
+    "Why now: Usually pays in 5 days; 30 days late now.");
+});

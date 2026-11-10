@@ -68,6 +68,17 @@ export function cardKind(doctype: string, operation: string | undefined, named: 
   return draftKind(doctype, named);
 }
 
+/** A watch job's card's kind: what it drafts and the job that found it
+ * ("Dunning draft from the Collections job"). */
+export function jobCardKind(doctype: string, operation: string | undefined, jobTitle: string): string {
+  return `${cardKind(doctype, operation, true)} from the ${jobTitle} job`;
+}
+
+/** A watch job's card's reason line: a model's words, labelled as such. */
+export function whyNowLine(whyNow: string): string {
+  return `Why now: ${whyNow}`;
+}
+
 /** The card's kind, over its headline. */
 export function draftKind(doctype: string, _named: boolean): string {
   return `${doctype} draft`;
