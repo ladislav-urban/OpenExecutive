@@ -12,7 +12,14 @@ from collections.abc import Mapping, Sequence
 from datetime import date, time
 from typing import Any
 
-from openexecutive.watch.registry import CardSpec, ReasonSchema, Settings, WatchJob, WatchRead
+from openexecutive.watch.registry import (
+    CardSpec,
+    Prior,
+    ReasonSchema,
+    Settings,
+    WatchJob,
+    WatchRead,
+)
 
 JOB_ID = "example"
 
@@ -24,7 +31,7 @@ RECEIVABLES_SHAPE: Mapping[str, Any] = {
 }
 
 
-def _receivables(settings: Settings, today: date) -> dict[str, Any]:
+def _receivables(settings: Settings, today: date, prior: Prior = ()) -> dict[str, Any]:
     return {
         "report_name": "Accounts Receivable",
         "filters": {"company": settings["company"], "report_date": today.isoformat(), "ageing_based_on": "Due Date"},

@@ -4,8 +4,11 @@
 One row per job: ``enabled`` (off until the principal turns it on), who
 configured it last and when, ``settings`` (JSON, exactly the job's
 ``default_settings`` keys and types: ``registry.check_settings``) and an
-optional ``reviewer_person_id``, stored for phase 1's separation of duties.
-The runner never reads the reviewer: every notice goes to the principal.
+optional ``reviewer_person_id``: the person a run's notices and draft cards
+go to, but only when oe_connector says every read ran as the job's own ERP
+user (``watch.cards.route``); the principal otherwise, with notices only.
+Whoever configured it never approves its cards (separation of duties,
+``integrations.erpnext_drafts``).
 
 Only the principal changes a row, through ``PUT /watch/jobs/{id}``
 (``api.routes.watch_jobs``). ``ERPNEXT_WATCH_JOBS_ENABLED`` is the operator's
@@ -52,9 +55,12 @@ _DDL = (
         error TEXT NOT NULL DEFAULT '',
         reads TEXT NOT NULL DEFAULT '[]',
         failure_noticed INTEGER NOT NULL DEFAULT 0,
+        detail TEXT NOT NULL DEFAULT '{{}}',
         PRIMARY KEY (job, day)
     )""",
 )
+# Columns added after the table first shipped: name -> its definition.
+_RUN_COLUMNS = {"detail": "TEXT NOT NULL DEFAULT '{}'"}
 
 
 def db_path(path: Path | None = None) -> Path:
@@ -71,6 +77,14 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path(path)), timeout=10, isolation_level=None)
     for statement in _DDL:
         conn.execute(statement)
+    have = {row[1] for row in conn.execute(f"PRAGMA table_info({RUNS_TABLE})")}
+    for column, definition in _RUN_COLUMNS.items():
+        if column not in have:
+            try:
+                conn.execute(f"ALTER TABLE {RUNS_TABLE} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                # Another connection added it meanwhile.
+                logger.debug("watch: column %s already added", column)
     return conn
 
 
