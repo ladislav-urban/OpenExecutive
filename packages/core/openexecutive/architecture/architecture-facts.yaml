@@ -11586,14 +11586,20 @@ watch:
     log_model_usage actor watch:<id>. A reason is shown as "Reason (a
     model's words, not a figure)" and never reaches a key, title or routing.
   notices: |
-    Private alerts through alerts.pipeline.evaluate_and_dispatch
-    (AlertEvent source watch, private=True, needs fyi, dedup_hint
-    watch:<id>:<sha256 of the finding key>, external_id <key>:<day>), so the
-    private path routes them to the principal whatever reviewer is stored.
-    Subject: the job's title and counts only. Body: a code preamble and
-    wrap_untrusted(source erpnext, author watch:<id>) of the stripped,
-    capped summary, values and reason. At most card_cap_day a day; a finding
-    whose notice is still unread or read is skipped (repeats). Audit: one
+    Private alerts stored directly with alerts.store.insert_alert
+    (runner._leave_notice), never through alerts.pipeline or triage, whose
+    model would store its own headline, body and suggested action, or drop
+    the finding: source watch, topic tag PRIVATE_ALERT_TAG,
+    routed_to_person_id the principal (whatever reviewer is stored),
+    dedup_key private:watch:<id>:<sha256 of the finding key>, external_id
+    <key>:<day>, needs fyi, severity NOTICE_SEVERITY (code's). Headline:
+    runner.notice_subject, the job's title and counts only. Body:
+    runner.notice_body, a code preamble and wrap_untrusted(source erpnext,
+    author watch:<id>) of the stripped, capped summary, values and the
+    labelled reason. A run takes at most MAX_FINDINGS (200) findings from
+    build; card_cap_day counts attempts, not stored notices, so a notice
+    that fails to store never lets another through; a finding whose notice
+    is still unread or read is skipped (repeats). Audit: one
     private watch_run row per run (status, reason code, counts, as_job_user
     list; never figures or text).
 
