@@ -16,7 +16,8 @@ replaces it. The alert text plays no part.
 **Which alert it belongs to** (``suggestion_for``): only the alert that
 event became, as ``erpnext_events`` raises it: private to the principal,
 source ``erpnext``, ``dedup_key`` exactly ``private:<ref>`` (the pipeline's
-``_make_private``) and ``external_id`` ``<ref>:<YYYY-MM>``. The model's
+``_make_private``; a kind that names its readers adds ``:named:<ids>``, and
+none of those suggests a draft) and ``external_id`` ``<ref>:<YYYY-MM>``. The model's
 ``create_alert`` may not use the ``erpnext`` source
 (``alert_tools.RESERVED_SOURCES``), so no other alert can carry those.
 
