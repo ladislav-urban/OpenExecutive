@@ -179,7 +179,7 @@ def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> Wat
     log_event(
         "watch_job_configured",
         f"Watch job {job.id} configured: {'on' if after.enabled else 'off'}",
-        actor="user",
+        actor=api_caller.actor(request),
         details={
             "job": job.id,
             "enabled_before": before.enabled,

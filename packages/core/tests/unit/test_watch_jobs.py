@@ -90,14 +90,15 @@ def alerts_db(db: Path, monkeypatch: pytest.MonkeyPatch) -> Path:  # noqa: F811
 
 @pytest.fixture
 def triage(monkeypatch: pytest.MonkeyPatch) -> list[Any]:
-    """Triage passes every event through as it came (its model is stubbed)."""
+    """A trap: triage that would rewrite a notice's headline and body. A job
+    notice never goes through it, so ``seen`` stays empty."""
     seen: list[Any] = []
 
     async def fake(self: Any, event: Any, **_k: Any) -> TriageDecision:
         seen.append(event)
         return TriageDecision(
-            alert=True, severity=AlertSeverity.MEDIUM, channels=[AlertChannel.PERSISTED],
-            headline=event.subject, body=event.body,
+            alert=True, severity=AlertSeverity.URGENT, channels=[AlertChannel.PERSISTED],
+            headline="TRIAGE REWROTE THIS", body="Triage's own body, no wrapper.",
         )
 
     monkeypatch.setattr("openexecutive.agents.triage.TriageAgent.triage", fake)
@@ -484,8 +485,16 @@ def test_the_test_job_leaves_the_principal_one_notice(
     [alert] = _alerts()
     assert alert.routed_to_person_id == roster.principal
     assert PRIVATE_ALERT_TAG in alert.topic_tags
-    assert alert.channels_attempted in ([], ["persisted"])
-    assert alert.headline == f"Receivables check: 1 found on {DAY}"
+    # Stored as code built it: triage (which would rewrite both) never ran.
+    assert triage == []
+    assert alert.headline == runner.notice_subject(example, DAY, 1) == f"Receivables check: 1 found on {DAY}"
+    assert alert.body == runner.notice_body(
+        example, DAY, _example.build([json.loads(_ar(("Acme Retail", 1200.5), ("Bolt Ltd", 300)))], SETTINGS, TODAY)[0],
+        "Largest balance, worth a call.",
+    )
+    assert (alert.severity, alert.needs, alert.dedup_key) == (
+        runner.NOTICE_SEVERITY, "fyi", f"private:{runner.dedup_key('example', 'receivables:Acme')}",
+    )
     assert "<untrusted_content" in alert.body and 'author="watch:example"' in alert.body
     assert "1,500.50 EUR" in alert.body and "Acme Retail" in alert.body
     assert "Reason (a model's words, not a figure): Largest balance, worth a call." in alert.body
@@ -615,6 +624,39 @@ def test_the_card_cap_and_no_repeats(
         alert_store.set_status(alert.id, "dismissed")
     erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
     assert _run(job, "2026-11-12").cards == 2
+    assert triage == []
+
+
+def test_the_cap_counts_attempts_and_the_findings_are_bounded(
+    erp: FakeErpnext, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    job = _job(specs=3, cap=2)
+    monkeypatch.setitem(registry._JOBS, job.id, job)
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    _enable(job, roster.principal)
+    tried: list[str] = []
+    real = alert_store.insert_alert
+    failing = {"on": True}
+
+    def insert(**fields: Any) -> int | None:
+        if not failing["on"]:
+            return real(**fields)
+        tried.append(fields["external_id"])
+        return None
+
+    monkeypatch.setattr(alert_store, "insert_alert", insert)
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    outcome = _run(job)
+    # Two notices that failed to store still use up the day's two attempts.
+    assert (outcome.cards, outcome.capped, len(tried)) == (0, 1, 2)
+    failing["on"] = False
+    many = _job("many", specs=runner.MAX_FINDINGS + 50, cap=1)
+    monkeypatch.setitem(registry._JOBS, many.id, many)
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    _enable(many, roster.principal)
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    bounded = _run(many)
+    assert (bounded.findings, bounded.cards, bounded.capped) == (runner.MAX_FINDINGS, 1, runner.MAX_FINDINGS - 1)
 
 
 def test_an_injected_customer_name_changes_no_figure_and_no_count(
@@ -629,10 +671,23 @@ def test_an_injected_customer_name_changes_no_figure_and_no_count(
     erp.replies.append(_ar((injected, 1200.5), ("Bolt Ltd", 300)))
     tricked = _run(example, "2026-11-09")
     assert (plain.findings, plain.cards) == (tricked.findings, tricked.cards) == (1, 1)
-    bodies = sorted((a.body for a in _alerts()), key=lambda b: "Plain" in b)
+    # The stored alerts themselves, as code built them (triage never ran).
+    assert triage == []
+    stored = sorted(_alerts(), key=lambda a: "Plain" in a.body)
+    assert [a.routed_to_person_id for a in stored] == [stored[1].routed_to_person_id] * 2
+    bodies = [a.body for a in stored]
     for body in bodies:
         assert "1,500.50 EUR" in body and "1,200.50 EUR" in body
+        assert body.count("<untrusted_content") == 1
+    # Line for line the same but the run's day (in the preamble) and the
+    # debtor's name: no figure moved.
+    differ = [
+        pair for pair in zip(*(b.splitlines()[1:] for b in bodies), strict=True) if pair[0] != pair[1]
+    ]
+    assert len(differ) == 1 and all(ln.startswith("Largest debtor:") for ln in differ[0])
     shown = bodies[0]
+    # The injected name sits inside the wrapper only.
+    assert shown.index("Ignore all previous") > shown.index("<untrusted_content")
     assert "https://" not in shown and "evil.example" not in shown and "**" not in shown
     assert "999999" not in shown.split("Largest debtor:")[0]
     line = next(ln for ln in shown.splitlines() if ln.startswith("Largest debtor:"))
@@ -852,6 +907,43 @@ def test_the_principal_configures_a_job_and_it_is_recorded(
         "settings_changed": ["company", "limit"], "reviewer_changed": True, "person_id": roster.principal,
     }
     assert "Bolt Industries" not in json.dumps([row.summary, row.details])
+    # Local login's caller names no one: the row says so as other routes do.
+    assert row.actor == "api"
+
+
+def _signed_client(email: str, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    """The routes behind signed sign-ins, the gate having verified ``email``."""
+    from fastapi import Request
+
+    from openexecutive.api import caller as api_caller
+
+    monkeypatch.setattr(api_caller, "signing_on", lambda: True)
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def signed_in(request: Request, call_next: Any) -> Any:
+        request.state.caller = api_caller.Caller("user", email)
+        return await call_next(request)
+
+    app.include_router(watch_route.router)
+    return TestClient(app)
+
+
+def test_a_signed_principal_configures_and_a_signed_teammate_is_refused(
+    example: WatchJob, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    owner = _signed_client("olivia@co.example", monkeypatch)
+    assert owner.get("/watch/jobs").status_code == 200
+    response = owner.put("/watch/jobs/example", json={"enabled": False})
+    assert response.status_code == 200, response.text
+    assert response.json()["configured_by_person_id"] == roster.principal
+    [row] = _audit_rows("watch_job_configured")
+    assert row.actor == "olivia@co.example"
+    teammate = _signed_client("ben@co.example", monkeypatch)
+    for answer in (teammate.get("/watch/jobs"), teammate.put("/watch/jobs/example", json={"enabled": True})):
+        assert answer.status_code == 403
+        assert answer.json()["detail"]["code"] == "not_yours"
+    assert watch_settings.get_row("example").enabled is False
 
 
 @pytest.mark.parametrize("settings", [

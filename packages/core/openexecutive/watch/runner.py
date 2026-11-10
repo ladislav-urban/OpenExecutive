@@ -27,12 +27,13 @@ A run (``run_job``, its own task):
    findings' bounded facts, wrapped as untrusted. A reason is labelled on the
    notice as the model's, never as a figure, and never used in a key, title
    or routing.
-4. **Notices.** Private alerts (source ``watch``), routed to the principal by
-   the alert pipeline's private path; never the stored reviewer. The subject
-   is the job's title and counts only; every ERPNext string in the body is
+4. **Notices.** Private alerts (source ``watch``), stored directly, never
+   through triage, so no model rewrites or drops one: tagged private and
+   routed to the principal, never the stored reviewer. The subject is the
+   job's title and counts only; every ERPNext string in the body is
    stripped and capped, and the body is wrapped as untrusted. At most
-   ``card_cap_day`` a day, and a finding whose notice is still open isn't
-   raised again.
+   ``card_cap_day`` attempts a day, and a finding whose notice is still open
+   isn't raised again.
 
 PR 4 leaves notices only: job draft cards come with phase 1's jobs.
 """
@@ -76,6 +77,10 @@ MAX_LABEL_CHARS = 40
 MAX_REASON_CHARS = 200
 MAX_REASON_FINDINGS = 20
 MAX_FACTS = 8
+# The most findings a run takes from a job's rules.
+MAX_FINDINGS = 200
+# Every job notice's severity, chosen here, never by a model.
+NOTICE_SEVERITY = "medium"
 
 # What a notice says stopped a run, by reason code: our words, never ERPNext's.
 REASONS: dict[str, str] = {
@@ -450,17 +455,24 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         raise _Stop("rules_failed") from None
     if not all(isinstance(s, registry.CardSpec) and isinstance(s.key, str) and s.key for s in specs):
         raise _Stop("rules_failed")
+    # Bounded whatever the job's rules return: the reason step, the dedupe
+    # reads and the audit's counts never see more.
+    specs = specs[:MAX_FINDINGS]
     reasons = await reason_step(job, specs) if job.reason_schema is not None and specs else {}
     outcome = RunOutcome("done", findings=len(specs))
-    for spec in specs:
+    # The cap counts attempts, not successes, so a notice that fails to
+    # store never lets another finding through in its place.
+    attempts = 0
+    for n, spec in enumerate(specs):
         key = dedup_key(job.id, spec.key)
         if _still_open(key):
             outcome.repeats += 1
             continue
-        if outcome.cards >= job.card_cap_day:
-            outcome.capped += 1
-            continue
-        if await _leave_notice(job, day, spec, reasons.get(spec.key, ""), key, found=len(specs)) is not None:
+        if attempts >= job.card_cap_day:
+            outcome.capped = len(specs) - n
+            break
+        attempts += 1
+        if _leave_notice(job, day, spec, reasons.get(spec.key, ""), key, found=len(specs)) is not None:
             outcome.cards += 1
     return outcome
 
@@ -581,7 +593,7 @@ def _still_open(key: str) -> bool:
     with store._get_conn() as conn:
         row = conn.execute(
             "SELECT 1 FROM alerts WHERE source = ? AND dedup_key = ? AND status IN ('unread', 'read') LIMIT 1",
-            # The private path keys a private alert's dedupe as private:<key>.
+            # A notice's dedupe key is private:<key>, as a private alert's.
             (SOURCE, f"private:{key}"),
         ).fetchone()
     return row is not None
@@ -603,31 +615,35 @@ def notice_body(job: registry.WatchJob, day: str, spec: registry.CardSpec, reaso
     )
 
 
-async def _leave_notice(
+def notice_subject(job: registry.WatchJob, day: str, found: int) -> str:
+    """A notice's subject: code only, the job's title and counts."""
+    return f"{job.title}: {found} found on {day}"
+
+
+def _leave_notice(
     job: registry.WatchJob, day: str, spec: registry.CardSpec, reason: str, key: str, *, found: int,
 ) -> int | None:
-    from openexecutive.alerts.models import NEEDS_FYI, AlertEvent
-    from openexecutive.alerts.pipeline import evaluate_and_dispatch
+    """Store the notice as is: no triage, so no model rewrites its subject or
+    body, or drops it. Private to the principal, whoever the job's reviewer
+    is (read with the service view or the job's own user)."""
+    from openexecutive.alerts import store
+    from openexecutive.alerts.models import NEEDS_FYI, PRIVATE_ALERT_TAG
 
-    event = AlertEvent(
-        source=SOURCE,
-        external_id=f"{key}:{day}",
-        # Code only: the job's title and counts.
-        subject=f"{job.title}: {found} found on {day}",
-        body=notice_body(job, day, spec, reason),
-        user=f"watch:{job.id}",
-        dedup_hint=key,
-        # Read with the service view (or the job's own user): the principal's
-        # alone, whoever the job's reviewer is.
-        private=True,
-        needs=NEEDS_FYI,
-    )
     try:
-        _decision, alert_id = await evaluate_and_dispatch(event)
+        return store.insert_alert(
+            source=SOURCE,
+            external_id=f"{key}:{day}",
+            severity=NOTICE_SEVERITY,
+            headline=notice_subject(job, day, found),
+            body=notice_body(job, day, spec, reason),
+            topic_tags=[PRIVATE_ALERT_TAG],
+            dedup_key=f"private:{key}",
+            routed_to_person_id=_principal_id(),
+            needs=NEEDS_FYI,
+        )
     except Exception:
         logger.error("watch: job %s couldn't leave a notice", job.id)
         return None
-    return alert_id
 
 
 def _principal_id() -> int | None:
