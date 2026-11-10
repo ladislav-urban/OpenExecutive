@@ -8,7 +8,9 @@ oe_connector's ``list_records`` and ``get_record`` give a ``titles`` map,
 customer, a project's name. For each id there, the first time the reply names
 it with no title beside it (on its line, in the same sentence or cell), the
 title is written in after it in brackets. Never inside code or a link, never
-where a bracket already follows. The title is ERPNext's text, written by
+where a bracket already follows. An id the reply already wrote in brackets
+gets ", title" inside them ("(PO-1, Birch)"), never a second pair; one in
+brackets with more after it gets nothing. The title is ERPNext's text, written by
 whoever keyed the record: written in as one plain line, with no Markdown, no
 brackets and no link, and at most ``TITLE_MAX`` characters."""
 from __future__ import annotations
@@ -67,6 +69,12 @@ def _context(text: str, start: int, end: int) -> str:
     return text[line_start:len(text) if line_end == -1 else line_end]
 
 
+def _open_bracket(text: str, start: int) -> bool:
+    """Whether ``start`` lies inside a bracket opened earlier on its line."""
+    line = text[text.rfind("\n", 0, start) + 1:start]
+    return line.count("(") > line.count(")")
+
+
 def add_titles(text: str, results: Iterable[Any], *, limit: int = 40) -> tuple[str, int]:
     """``text`` with each record id's title after its first bare mention, and
     how many were written in (module docstring)."""
@@ -97,7 +105,13 @@ def add_titles(text: str, results: Iterable[Any], *, limit: int = 40) -> tuple[s
         line = _context(text, m.start(), m.end())
         if title.casefold() in line.casefold() or text[m.end():m.end() + 2].lstrip().startswith("("):
             continue  # already named, or bracketed: nothing to add
-        edits.append((m.end(), f" ({title})"))
+        if _open_bracket(text, m.start()):
+            # "(ACC-SINV-1)" never becomes "(ACC-SINV-1 (Title))".
+            if text[m.end():m.end() + 1] != ")":
+                continue
+            edits.append((m.end(), f", {title}"))
+        else:
+            edits.append((m.end(), f" ({title})"))
         if len(edits) >= limit:
             break
     out = text

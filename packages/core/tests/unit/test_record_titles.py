@@ -94,3 +94,16 @@ def test_many_ids_and_mentions_stay_one_pass() -> None:
     out, n = add_titles(text, [_with(titles)])
     assert n == 40
     assert out.startswith("PO-0000 (Supplier 0) is due. PO-0001 (Supplier 1) is due.")
+
+
+def test_an_id_the_reply_bracketed_gets_no_second_bracket() -> None:
+    results = [_with({"ACC-SINV-1": "Harbour Rail Services"})]
+    out, n = add_titles("The invoice (ACC-SINV-1) is old.", results)
+    assert "))" not in out and n == 1
+    assert out == "The invoice (ACC-SINV-1, Harbour Rail Services) is old."
+    # In brackets with more after it: nothing is written in.
+    text = "Two are open (ACC-SINV-1 and one more)."
+    assert add_titles(text, results) == (text, 0)
+    # Brackets closed before it don't count.
+    out, _ = add_titles("Overdue (by far): ACC-SINV-1 is old.", results)
+    assert out == "Overdue (by far): ACC-SINV-1 (Harbour Rail Services) is old."
