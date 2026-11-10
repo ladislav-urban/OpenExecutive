@@ -8302,6 +8302,56 @@ integrations:
     the UI proxy (proxySegments SERVER_ONLY). Person.directory_subject is
     never serialised elsewhere.
 
+    Admit at sign-in (directory_sync.admit_one, POST /auth/directory-admit):
+    the invariant is that it does only what the next run would do for one
+    person (create a team or demo Person through the run's own _add, in
+    admit mode, which never links) or nothing, believing nothing from the
+    web app but who to look up. Order: sync off or config_problem ->
+    disabled; subject not a lowercase UUID (<= 64) or email not an address
+    (<= 254, normalised) -> invalid; a non-archived Person linked to the
+    subject -> exists (untouched, a suspended one stays so); anyone holding
+    the email, alias included -> address_held. None of these reads the
+    provider or is audited. Then the per-subject limit (30 s; the map pruned
+    and capped at 10,000, refusing at the cap rather than evicting), a
+    process-wide slot of one admit (busy at once), the global cap (20 a
+    minute, counting only admits that reach the provider). Reads, all
+    before _run_lock, through KeycloakReader with an admit timeout (3 s a
+    call, 3 s budget in all, the 401 token retry inside it; the client
+    closed in a finally): users/{id} (404 -> unknown; body id must equal
+    the subject), _member (inactive, email_mismatch), users/{id}/groups
+    paged. Member = a path at or under DIRECTORY_SYNC_GROUP AND that
+    group's id in the group's tree as _group_tree walks it (both, so a
+    slash-named root group and a moved-out group are not_member); demo =
+    a path under DIRECTORY_SYNC_DEMO_GROUP OR the id in its tree (either,
+    the narrower role). Trees cached 60 s per (issuer, admin URL, path),
+    at most 50 groups (else error), a failed read never cached. Then
+    _run_lock with a 0.5 s wait (busy; the budget plus this wait stay
+    under the web app's 4 s, so nothing is admitted after it gave up), the subject and email re-checked,
+    _add, registry.invalidate; after_roster_write after the lock. Any
+    failure writes nothing and answers error. Audit directory_admit
+    (code, email domain, subject SHA-256 prefix, person id) only for
+    admits that reached the provider; busy and rate_limited log a warning
+    with a counter. The route is server-only (_server_only, the shared
+    secret, never in _UNAUTHENTICATED_PATHS, the UI proxy's SERVER_ONLY).
+    UI: signIn calls it only for OIDC, DIRECTORY_SYNC_ENABLED mirrored on
+    the UI, a verified email, a non-env roster denial and a string sub,
+    with a 4 s timeout (lib/directoryAdmit.ts). On admitted or exists one
+    fresh /auth/allowed-emails read (createRosterLoader's refresh(), which
+    chains after any in-flight fetch and stores the tracked promise so it
+    clears) replaces the roster cache and gives the sign-in its subjects;
+    the allow-list and directoryRefusal then run again. loadDirectorySubjects
+    stays uncached. That cache is the server bundle's; the middleware's
+    bundle (authorized) has a loader of its own, so judgeSession uses
+    resolveSessionAllowed: a refusal of an SSO session whose signedInAt is
+    newer than that loader's fetchedAt reads the roster once more before
+    revoking (a failed read keeps the roster-unknown contract). Without it
+    the middleware revoked the just-admitted session on its older roster and
+    the browser looped between / and /signin until that cache expired. not_member, busy and rate_limited redirect to
+    /signin?error=AccessDenied&reason=directory_waiting, whose text is
+    keyed on that fixed value (lib/signinError.ts). After an admit in a
+    re-created realm the "none came back" stop can't trip, but the brake
+    still holds and a teammate can't be admitted (address_held).
+
     People and Setup status (step 8): GET /people/directory (principal
     only) maps the last finished run's candidate addresses to unlinked
     active People; POST /people/{id}/directory-link calls link(). The cards
