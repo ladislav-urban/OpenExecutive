@@ -546,10 +546,27 @@ def test_the_fresh_read_is_the_approvers_own_and_errors_change_nothing(
     signed["refusal"] = None
     raises.replies.append(json.dumps({"error": "ERPNext is busy"}))
     assert client.get("/erpnext/drafts", headers={"x-caller-email": CARA}).json()["cards"][0]["changed"] is False
+    # Remembered for the minute like any read: no second call until it's stale.
+    assert client.get("/erpnext/drafts", headers={"x-caller-email": CARA}).json()["cards"][0]["changed"] is False
+    assert len(raises.calls) == calls + 1
+    for read in credit._RECHECKED.values():
+        read.at -= credit.RECHECK_TTL_S + 1
     # A read that matches marks nothing.
     raises.replies.append(_checked())
     assert client.get("/erpnext/drafts", headers={"x-caller-email": CARA}).json()["cards"][0]["changed"] is False
     assert len(raises.calls) == calls + 2
+
+
+def test_a_submitted_order_shows_the_card_changed_and_is_read_once_a_minute(
+    raises: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], client: TestClient,
+) -> None:
+    _cara_card(raises, roster)
+    calls = len(raises.calls)
+    raises.replies.append(json.dumps({"error": "Sales Order SAL-ORD-2026-00800 is submitted or cancelled; "
+                                                "a raise is for a held draft."}))
+    for _ in range(3):
+        assert client.get("/erpnext/drafts", headers={"x-caller-email": CARA}).json()["cards"][0]["changed"] is True
+    assert len(raises.calls) == calls + 1
 
 
 def test_the_fresh_read_is_capped_least_recently_read_first(

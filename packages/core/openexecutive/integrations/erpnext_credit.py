@@ -542,6 +542,11 @@ class _Read:
     changed: bool
 
 
+# oe_connector's refusals (draft_changes._credit_summary) that mean the raise
+# no longer applies: the order was submitted or cancelled, or ERPNext no
+# longer checks this customer's credit.
+NO_LONGER_APPLIES = ("is submitted or cancelled", "there is nothing to raise")
+
 # By decision id; served only to that card's approver.
 _RECHECKED: dict[int, _Read] = {}
 
@@ -606,9 +611,17 @@ async def recheck(viewer: Any, cards: list[Any], caller: Any) -> None:
                 raw = await drafts._call(erpnext_caller.DRAFT_CHECK_TOOL, args)
         except Exception:
             logger.warning("erpnext_credit: the fresh check of card %d failed", card.decision_id, exc_info=True)
-            continue
-        checked = drafts._result(raw)
+            raw = None
+        checked = drafts._result(raw) if raw is not None else {}
         if checked.get("ok") is not True:
+            # Remembered for the TTL either way, so a card ERPNext keeps
+            # refusing costs one read a minute, not one a page load. Only a
+            # refusal that says the raise no longer applies marks it changed;
+            # anything else (a timeout, a gateway fault) shows nothing new,
+            # and approval refuses on the same path if it still applies.
+            gone = raw is not None and any(p in drafts._refusal_text(raw) for p in NO_LONGER_APPLIES)
+            _RECHECKED[card.decision_id] = _Read(at=time.monotonic(), approver_id=int(viewer.id), changed=gone)
+            card.changed = card.changed or gone
             continue
         summary = checked.get("summary")
         order = summary.get("sales_order") if isinstance(summary, dict) else None
