@@ -11610,10 +11610,11 @@ watch:
   purpose: |
     Watch jobs (openexecutive.watch, prebuilt/watch.json): unattended
     ERPNext runs defined in code. A job reads a fixed set of ERPNext data,
-    applies rules in code and leaves the principal notices; it never runs
+    applies rules in code and leaves notices and draft cards; it never runs
     the Executive's tool loop, no model picks a read, and no model writes a
-    figure. Job draft cards come with the jobs themselves (collections and
-    payment checks); until then a job leaves notices only.
+    figure or a card's field (a model writes only reason lines). Listed:
+    collections (watch.jobs.collections). Payment checks come in their own
+    PR.
   registry: |
     watch.registry: WatchJob(id, title, reads, build, schedule,
     card_cap_day, default_settings, reason_schema=None). id is oe_connector's
@@ -11622,19 +11623,37 @@ watch:
     arguments, label), oe_connector's tool and argument shape with the same
     slot names ($company, $date within 400 days, $party, $parties and
     $customers up to 50, $int 1-500; `fields` a most; objects exact keys);
-    READ_TOOLS is run_report and list_records only (the withheld
-    customer_payment_record and supplier_bank_changed join with their jobs
-    and pin round). build(results, settings, today) is pure code returning
-    CardSpec(key, summary, values, facts). JOBS is a read-only mapping of
-    _LISTED, which is empty; the test job watch.jobs._example is put in by
-    tests only. tests/unit/watch_job_vectors.json pins the id pattern, the
-    slots, shapes and one signed watch assertion against oe_connector.
+    READ_TOOLS is run_report and list_records; a withheld tool
+    (connected_systems.ERPNEXT_WITHHELD_TOOLS) may be listed only by the job
+    connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to
+    (customer_payment_record: collections), checked in
+    WatchJob.__post_init__, mirroring the gateway's one exception.
+    Dependent reads: arguments(settings, today, prior), prior the earlier
+    results without acting; None skips the read (an empty derived list:
+    recorded {read, skipped: true}, build gets {}, never as_job_user);
+    Derived(arguments, truncated) records a list cut to 50. build(results,
+    settings, today) is pure code returning CardSpec(key, summary, values,
+    facts, items, notes, count) notices and DraftSpec(key, operation,
+    doctype, fields, expect, title, reason_key, group) cards. WatchJob also
+    takes check_fields (the job's own builder of a card's fields, run before
+    each check and again at approval), setting_bounds (whole-number
+    settings outside 1-500) and card_noun. JOBS is a read-only mapping of
+    _LISTED (collections), imported at the module's end (watch.jobs imports
+    the registry first); the test job watch.jobs._example is put in by tests
+    only. tests/unit/watch_job_vectors.json pins the id pattern, the slots,
+    shapes, collections' four reads and one signed watch assertion against
+    oe_connector.
   settings: |
     watch.settings, table watch_jobs (job, enabled, settings JSON,
     configured_by_person_id, configured_at, reviewer_person_id). Settings
     must be exactly default_settings' keys and types within bounds
-    (registry.check_settings; 400 otherwise). reviewer_person_id is stored
-    for the later separation of duties and never read by the runner.
+    (registry.check_settings; 400 otherwise). reviewer_person_id: who the
+    job's notices and cards go to when routing allows (cards.route); PUT
+    refuses (400 bad_reviewer) anyone not an active team member, the
+    principal (who configures every job and never approves its cards) and a
+    demo person. GET carries reviewer_note (REVIEWER_NOTE), Settings' text
+    that the reviewer sees the job's notices, figures read as the job's
+    user, and approves its cards.
     GET /watch/jobs and PUT /watch/jobs/{id} (api.routes.watch_jobs) need
     delegation.verified.caller_refusal(caller, principal email) is None
     (409 caller_signing_required, 403 not_yours); PUT records the configurer
@@ -11660,7 +11679,10 @@ watch:
     check in call_tool) refuses any other call inside the marker, ERPNext's
     or any server's (outside-watch-read), compares the digest after
     _erpnext_arguments' coercion, re-checks no session and no other marker
-    at call time, and _check_erpnext_caller refuses watch-needs-keys.
+    at call time, and _check_erpnext_caller refuses watch-needs-keys. A
+    withheld tool passes only via mcp_gateway._job_reads_withheld: inside
+    watch_run with exactly that tool bound, for a job JOB_WITHHELD_EXCEPTIONS
+    gives it to, no session, no other marker.
     oe_connector answers a watch call only for a listed job and a listed
     read, as oe-watch-<id>@<site> when as_job_user is set, else the OE
     Reader service view, and puts {kind, job, as_job_user, user} in the
@@ -11685,7 +11707,91 @@ watch:
     as_job_user per read (kind watch, as_job_user is True, job equal, user
     exactly oe-watch-<id>@host, the same user across the run) stored in
     watch_runs.reads without the user's name; acting.job naming another job
-    fails the run (acting_job_mismatch). Nothing routes on it yet.
+    fails the run (acting_job_mismatch). watch_runs.detail (added by
+    settings.connect's column migration) keeps codes and counts: routed,
+    routed_principal, draft_cards, draft_repeats, draft_capped, checks,
+    check_refused. Each run starts erpnext_caller.begin_job_checks(job, day).
+  routing: |
+    watch.cards.route(job, row, reads): the reviewer only when every made
+    read (at least one; skipped reads count neither way) was as_job_user,
+    the reviewer (read from watch_jobs, never a model or a read) is an
+    active team member, not demo, not the principal, not the job's
+    configurer, with an email, and ERPNEXT_DRAFTS_TEAMMATES and
+    api.caller.signing_on are on. Otherwise the principal, notices only,
+    code no_reads / not_job_user / no_reviewer / reviewer_unavailable /
+    reviewer_is_configurer / teammates_off / signing_off / lookup_failed,
+    with a code line on the notice when the job had cards (ROUTE_LINES). A
+    run whose every check was refused for the reviewer's permissions sends
+    its notice to the principal (routed_principal checks_refused).
+  job_check: |
+    erpnext_caller.draft_check_for_job(job, arguments, email, person_id=,
+    day=): DraftCall(DRAFT_CHECK_TOOL, digest, user caller, unattended=True,
+    job, person_id). Refused (JobCheckRefused) under current_session
+    (job-check-in-turn), any other marker or a watch read
+    (job-check-with-other-marker), without the key (job-check-needs-keys),
+    a malformed key, an unknown or cardless job, a job off, arguments not
+    exactly {operation, doctype, [name,] fields} with fields equal to
+    job.check_fields' output (job-check-arguments; so never asked_by or
+    configured_by), a person who isn't the job's current reviewer under that
+    email (active, team, not demo, not principal), and past card_cap_day +
+    JOB_CHECK_RETRIES (2) per (job, day). _marked refuses any draft marker
+    inside it. The gateway: any other tool under it is outside-job-check;
+    _check_erpnext_draft refuses it under a session, a watch read, the
+    brief, oversight, answer check or supplier markers, for any tool but
+    draft_check, and re-reads the reviewer (job_check_refusal) at signing.
+  cards: |
+    watch.cards.leave_drafts, only for a reviewer-routed run (no check runs
+    for a principal-routed one) with drafts on and the DocType enabled: per
+    DraftSpec in order, skipped while erpnext_drafts.job_card_waiting(its
+    dedup key); capped at card_cap_day a day (cards already left that
+    run_day count), erpnext_drafts.JOB_OPEN_MAX (10) open per job and
+    OPEN_CARDS_MAX - JOB_HEADROOM (5) open for the reviewer. The check
+    (CHECK_TRIES 2 for one that doesn't answer) must echo doctype,
+    operation and DraftSpec.expect in its summary and give a fingerprint;
+    pin_from_check settles a Dunning's posting_date and check_fields must
+    accept the result; then erpnext_drafts.leave_job_card. Each check is a
+    private watch_job_check audit row (job, day, operation, person_id,
+    result code). Refusals are counted (permission ones apart, read from
+    the refusal in memory only) and told on the notice in code's words.
+  job_cards: |
+    erpnext_drafts.leave_job_card(job, run_day, operation, doctype, fields,
+    check, reviewer=, configured_by_person_id=, dedup_key=, why=, reason=)
+    goes through propose (digest dedupe scoped "watch:<id>", fingerprint
+    replacement, never changed in place) with extra source watch, job,
+    run_day, asked_by_person_id, approver_person_id, configured_by_person_id,
+    dedup_key, reason; asked_by is the reviewer's email. cards() adds
+    job_title (the registry's) and why_now (the reason, capped 200).
+    approve: _job_approval before the claim. Separation of duties first,
+    whatever ERPNEXT_DRAFT_SOD says: the approver equal to the stored or the
+    row's current configurer, or a configurer row missing, inactive or
+    without email, closes the card sod_refused (close_externally), audits
+    erpnext_draft_sod_refused and refuses 409 separation_of_duties
+    (SOD_JOB_TEXT). Then job_off (master switch or row), 403 principal /
+    demo, not_yours (stored approver and asker), not_reviewer (row's current
+    reviewer), malformed (check_fields again, a Dunning's posting_date, the
+    fingerprint). _carry_out(wire=) gives the write tool asked_by
+    "job:<id>" and configured_by the configurer's current People email;
+    draft_check never gets either. oe_connector's own "Separation of
+    duties" refusal on a job card finishes it failed, 409.
+  collections: |
+    watch.jobs.collections: 07:00 company time, card_cap_day 5, settings
+    company, first_after_days 7, repeat_after_days 14, min_amount 0,
+    type_first, type_repeat, phone_only. Reads: run_report Accounts
+    Receivable (limit 500), list_records Dunning submitted (name, customer,
+    posting_date, dunning_type, overdue_payments.sales_invoice) and draft
+    (name, customer), limit 500 each, and customer_payment_record for the
+    50 largest overdue by amount x days (derived, skipped when none). Rules:
+    rank (median amount and LONG_DAYS 60 first, then usually prompt:
+    PROMPT_MIN_SETTLED 3 settled and none late, then the rest; within each
+    amount x days, amount, name), due_invoices (first_after_days with none
+    sent, or the last older than repeat_after_days), dunning_type by
+    number. Never: a draft Dunning, below min_amount, phone_only, no record
+    (not_shown or beyond 50). A truncated Dunning list leaves no cards.
+    Outputs one "Who to chase today" notice (NOTICE_MAX 10 rows, count the
+    overdue customers) and a DraftSpec per (customer, invoice), fields
+    {sales_invoice, dunning_type?}, key dunning:<invoice>:<type>, expect
+    invoice, customer and company. check_fields: create Dunning only,
+    exactly erpnext_drafts._dunning's output.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds
@@ -11701,7 +11807,10 @@ watch:
     (runner._leave_notice), never through alerts.pipeline or triage, whose
     model would store its own headline, body and suggested action, or drop
     the finding: source watch, topic tag PRIVATE_ALERT_TAG,
-    routed_to_person_id the principal (whatever reviewer is stored),
+    routed_to_person_id as cards.route said (the failure notice always the
+    principal), a notice's rows each with "Why now (a model's words, not a
+    figure)", and code's own lines (CardSpec.notes, the cards' lines) after
+    the untrusted block,
     dedup_key private:watch:<id>:<sha256 of the finding key>, external_id
     <key>:<day>, needs fyi, severity NOTICE_SEVERITY (code's). Headline:
     runner.notice_subject, the job's title and counts only. Body:
