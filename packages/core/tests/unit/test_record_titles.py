@@ -107,3 +107,11 @@ def test_an_id_the_reply_bracketed_gets_no_second_bracket() -> None:
     # Brackets closed before it don't count.
     out, _ = add_titles("Overdue (by far): ACC-SINV-1 is old.", results)
     assert out == "Overdue (by far): ACC-SINV-1 (Harbour Rail Services) is old."
+
+
+
+def test_an_id_sharing_its_brackets_gets_no_title_there() -> None:
+    results = [_with({"PO-1": "Alder Mills", "PO-2": "Birch Works"})]
+    for text in ("Open: (PO-1, PO-2).", "Open (see PO-2).", "Two (PO-2 and more)."):
+        assert add_titles(text, results) == (text, 0), text
+    assert add_titles("Open: (PO-2).", results) == ("Open: (PO-2, Birch Works).", 1)

@@ -8,9 +8,9 @@ oe_connector's ``list_records`` and ``get_record`` give a ``titles`` map,
 customer, a project's name. For each id there, the first time the reply names
 it with no title beside it (on its line, in the same sentence or cell), the
 title is written in after it in brackets. Never inside code or a link, never
-where a bracket already follows. An id the reply already wrote in brackets
-gets ", title" inside them ("(PO-1, Birch)"), never a second pair; one in
-brackets with more after it gets nothing. The title is ERPNext's text, written by
+where a bracket already follows. An id the reply already wrote alone in
+brackets gets ", title" inside them ("(PO-1, Birch)"), never a second pair;
+one in brackets with anything else gets nothing. The title is ERPNext's text, written by
 whoever keyed the record: written in as one plain line, with no Markdown, no
 brackets and no link, and at most ``TITLE_MAX`` characters."""
 from __future__ import annotations
@@ -106,8 +106,10 @@ def add_titles(text: str, results: Iterable[Any], *, limit: int = 40) -> tuple[s
         if title.casefold() in line.casefold() or text[m.end():m.end() + 2].lstrip().startswith("("):
             continue  # already named, or bracketed: nothing to add
         if _open_bracket(text, m.start()):
-            # "(ACC-SINV-1)" never becomes "(ACC-SINV-1 (Title))".
-            if text[m.end():m.end() + 1] != ")":
+            # "(ACC-SINV-1)" never becomes "(ACC-SINV-1 (Title))"; and only
+            # an id alone in its brackets gets its title there: "(PO-1,
+            # PO-2)" never becomes "(PO-1, PO-2, Title)".
+            if text[m.start() - 1:m.start()] != "(" or text[m.end():m.end() + 1] != ")":
                 continue
             edits.append((m.end(), f", {title}"))
         else:
