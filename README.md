@@ -23,6 +23,8 @@ This side's configuration is in [docs/deployment.md](docs/deployment.md), sectio
 
 *Dynocortex and the Dynocortex logo are trademarks of Dynocortex Limited. ERPNext is a trademark of its owner, and OpenExecutive is SenteLabs' project. Neither endorses this fork. The Apache License grants no trademark rights.*
 
+See it working: a free 14-day demo at https://www.dynocortex.com/try/
+
 ---
 
 # Open Executive
