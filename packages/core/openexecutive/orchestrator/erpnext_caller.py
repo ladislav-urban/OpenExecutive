@@ -72,7 +72,15 @@ and the digest of its exact arguments:
   ``verified.caller_refusal`` proved the viewer is that approver),
   ``draft_check`` only, asked as them (an API request, with no session);
 - ``draft_executor_run``: the card executor carrying out an approved card,
-  asked as the approver it names (an API request, with no session).
+  asked as the approver it names (an API request, with no session);
+- ``draft_check_for_job``: a watch job's runner checking one of its draft
+  cards before leaving it, ``draft_check`` only, asked as the job's reviewer
+  with nobody watching (``DraftCall.unattended``). Its arguments must be
+  exactly what the job's ``check_fields`` builds; it is refused under a
+  session or any other marker (a watch read's too), without the caller key,
+  and past the run's cap (the job's ``card_cap_day`` plus 2 retries); the
+  gateway re-reads the reviewer from People when it signs, and refuses the
+  call under a session or a watch read, or for any tool but ``draft_check``.
 
 Any other ``erpnext__draft*`` call is refused in the gateway
 (``mcp_gateway._check_erpnext_draft``).
@@ -236,11 +244,16 @@ class ErpnextCaller:
 @dataclass(frozen=True)
 class DraftCall:
     """One draft call code is about to make: the gateway tool, the digest of
-    its exact arguments, and who it runs as (None: the turn's own caller)."""
+    its exact arguments, and who it runs as (None: the turn's own caller).
+    ``unattended``: a watch job's check (``draft_check_for_job``), for
+    ``job``, as its reviewer ``person_id``, with nobody watching."""
 
     tool: str
     digest: str
     caller: ErpnextCaller | None = None
+    unattended: bool = False
+    job: str = ""
+    person_id: int | None = None
 
 
 _draft_call: ContextVar[DraftCall | None] = ContextVar("erpnext_draft_call", default=None)
@@ -248,6 +261,10 @@ _draft_call: ContextVar[DraftCall | None] = ContextVar("erpnext_draft_call", def
 
 @contextmanager
 def _marked(call: DraftCall) -> Iterator[None]:
+    held = _draft_call.get()
+    if held is not None and held.unattended:
+        # A job's check never has another draft marker set inside it.
+        raise ValueError("no draft marker inside a watch job's check")
     token = _draft_call.set(call)
     try:
         yield
@@ -293,6 +310,132 @@ def draft_executor_run(tool: str, arguments: dict[str, Any], approver_email: str
     if "@" not in email or not tool.startswith(DRAFT_TOOL_PREFIX + "_") or tool == DRAFT_CHECK_TOOL:
         raise ValueError("a draft is created by a draft tool, as the person who approved it")
     return _marked(DraftCall(tool, arguments_digest(arguments), ErpnextCaller("user", email)))
+
+
+class JobCheckRefused(Exception):
+    """A job's check that may not be marked; ``reason`` is a short code for
+    the run's record, the audit and the log."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+# Checks made by each job's run, by (job, day): bounded by its cap.
+_JOB_CHECKS: dict[tuple[str, str], int] = {}
+# A run's checks beyond its card cap, for a retry of a check that didn't answer.
+JOB_CHECK_RETRIES = 2
+DRAFT_CHECK_KEYS = frozenset({"operation", "doctype", "name", "fields"})
+
+
+def begin_job_checks(job_id: str, day: str) -> None:
+    """A run starts its count of checks (``watch.runner``, at each run)."""
+    for key in [k for k in _JOB_CHECKS if k[0] == job_id]:
+        del _JOB_CHECKS[key]
+    _JOB_CHECKS[(job_id, day)] = 0
+
+
+def _reviewer_refusal(job_id: str, person_id: int | None, email: str) -> str | None:
+    """Why ``person_id`` (asked as ``email``) can't have this job's card
+    checked as them now, read from People and the job's row; None when they
+    can: the job's current reviewer, on the team, active, not a demo person,
+    not the principal, with that email."""
+    from openexecutive.people.store import get_person
+    from openexecutive.watch.settings import get_row
+
+    if not isinstance(person_id, int) or isinstance(person_id, bool):
+        return "job-check-reviewer"
+    try:
+        person = get_person(person_id)
+        reviewer = get_row(job_id).reviewer_person_id
+    except Exception:
+        logger.warning("erpnext_caller: reviewer lookup for job %s failed — refusing", job_id, exc_info=True)
+        return "job-check-reviewer"
+    if (
+        person is None or person.id != reviewer or not person.active or person.kind != "team"
+        or person.demo or person.is_principal or _email_of(person) != email
+    ):
+        return "job-check-reviewer"
+    return None
+
+
+@contextmanager
+def draft_check_for_job(
+    job_id: str, arguments: dict[str, Any], email: str, *, person_id: int, day: str,
+) -> Iterator[None]:
+    """Mark the one ``erpnext__draft_check`` call with exactly ``arguments``
+    a watch job's runner makes to check a card it will leave, asked as the
+    job's reviewer (``person_id``, ``email``) with nobody watching. Code only:
+    no tool sets it.
+
+    Raises ``JobCheckRefused`` under a turn's session or any other marker (a
+    watch read's included: it never nests), without per-person access, for a
+    job that isn't registered and on or has no cards, unless ``arguments``
+    are ``{operation, doctype, [name,] fields}`` with the fields exactly as
+    the job's ``check_fields`` builds them (never ``asked_by`` or
+    ``configured_by``: draft_check takes neither), unless the person is the
+    job's current reviewer under that email, and past the run's cap."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.watch import registry
+    from openexecutive.watch.settings import job_enabled
+
+    if current_session.get() is not None:
+        raise JobCheckRefused("job-check-in-turn")
+    if other_marker_bound() or _watch_call.get() is not None:
+        raise JobCheckRefused("job-check-with-other-marker")
+    setting = signing_setting()
+    if not setting:
+        raise JobCheckRefused("job-check-needs-keys")
+    try:
+        load_private_key(setting)
+    except ValueError:
+        raise JobCheckRefused("key-malformed") from None
+    job = registry.get(job_id)
+    if job is None or job.check_fields is None:
+        raise JobCheckRefused("job-check-unknown-job")
+    if not job_enabled(job.id):
+        raise JobCheckRefused("job-check-job-off")
+    operation, doctype, fields = arguments.get("operation"), arguments.get("doctype"), arguments.get("fields")
+    if (
+        set(arguments) - DRAFT_CHECK_KEYS or not {"operation", "doctype", "fields"} <= set(arguments)
+        or not isinstance(operation, str) or not isinstance(doctype, str) or not isinstance(fields, dict)
+        or ("name" in arguments) == (operation == "create")
+        or job.check_fields(operation, doctype, fields) != fields
+    ):
+        raise JobCheckRefused("job-check-arguments")
+    asker = email.strip().lower()
+    if "@" not in asker:
+        raise JobCheckRefused("job-check-reviewer")
+    refused = _reviewer_refusal(job.id, person_id, asker)
+    if refused is not None:
+        raise JobCheckRefused(refused)
+    made = _JOB_CHECKS.get((job.id, day), 0)
+    if made >= job.card_cap_day + JOB_CHECK_RETRIES:
+        raise JobCheckRefused("job-check-cap")
+    _JOB_CHECKS[(job.id, day)] = made + 1
+    token = _draft_call.set(DraftCall(
+        DRAFT_CHECK_TOOL, arguments_digest(arguments), ErpnextCaller("user", asker),
+        unattended=True, job=job.id, person_id=person_id,
+    ))
+    try:
+        yield
+    finally:
+        _draft_call.reset(token)
+
+
+def job_check_call() -> DraftCall | None:
+    """The watch job's check being made (``draft_check_for_job``), or None."""
+    call = _draft_call.get()
+    return call if call is not None and call.unattended else None
+
+
+def job_check_refusal(call: DraftCall) -> str | None:
+    """At call time, why a job's check may not be signed, or None: the
+    reviewer read again from People (an email changed, or someone else
+    reviews the job now, since the marker was set)."""
+    if not call.unattended or call.caller is None or call.tool != DRAFT_CHECK_TOOL:
+        return "job-check-tool"
+    return _reviewer_refusal(call.job, call.person_id, call.caller.email)
 
 
 def draft_call_for(tool: str, arguments: dict[str, Any]) -> DraftCall | None:

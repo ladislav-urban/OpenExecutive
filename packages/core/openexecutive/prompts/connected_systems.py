@@ -15,7 +15,8 @@ so block 0's 1h cache stays warm.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -171,18 +172,24 @@ ERPNEXT_CONFIRM_TOOL = "erpnext__confirm_figure"
 ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, ERPNEXT_CONFIRM_TOOL})
 
 # Tools oe_connector serves and this install pins (erpnext_tool_pin), but
-# nothing here may call yet: reading an attachment (S4) waits for intake's
-# tool-less extraction, a supplier's bank-change fact (S5) for the
-# payment-check job, and customers' payment records (phase 1) for the
-# collections job, which reads many customers' payment behaviour at once.
-# The gateway refuses them on every path, with no marker that lifts it, and
-# tool search never shows them. When one's own path
-# exists it moves to a list gated by that path's marker, never to the tools
-# the model is offered.
+# no turn may call: reading an attachment (S4) waits for intake's tool-less
+# extraction, a supplier's bank-change fact (S5) for the payment-check job,
+# and customers' payment records (phase 1) belong to the collections job,
+# which reads many customers' payment behaviour at once. The gateway refuses
+# them on every path but one: a watch job's own read of a tool
+# JOB_WITHHELD_EXCEPTIONS gives that job, under its watch_run marker with
+# exactly that tool bound. Tool search never shows them, and the model is
+# never offered one.
 ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({
     "erpnext__customer_payment_record",
     "erpnext__read_attachment",
     "erpnext__supplier_bank_changed",
+})
+
+# The one job each withheld tool opens to (watch.registry refuses a job that
+# lists a withheld tool it doesn't own, so the two stay in step).
+JOB_WITHHELD_EXCEPTIONS: Mapping[str, frozenset[str]] = MappingProxyType({
+    "collections": frozenset({"erpnext__customer_payment_record"}),
 })
 
 # The tool ERPNext's panel uses to open what an answer talks about beside it
