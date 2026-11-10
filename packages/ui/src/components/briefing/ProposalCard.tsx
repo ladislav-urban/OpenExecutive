@@ -306,7 +306,7 @@ export default function ProposalCard({
   const showActions = Boolean(onApprove || onDismiss || onApproveWithEdits);
 
   const status = isMonitoring ? null : proposalStatusChip(proposal);
-  const visibleTags = proposal.topic_tags.filter((t) => t !== "artifact" && !t.startsWith("failed_run:"));
+  const visibleTags = proposal.topic_tags.filter((t) => t !== "artifact" && !t.startsWith("failed_run:") && !t.startsWith("research_run:"));
   const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal);
   const surfacedNote = proposal.surfaced_reason ? (
     <p className="text-sm text-fg-muted leading-snug">{proposal.surfaced_reason}</p>

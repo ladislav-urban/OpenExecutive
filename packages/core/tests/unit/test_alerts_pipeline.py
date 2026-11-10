@@ -504,3 +504,88 @@ def test_private_alerts_stay_out_of_triage_for_events_others_may_see(monkeypatch
     run(AlertEvent(source="erpnext", external_id="erp-2", subject="s", body="b", private=True))
     assert seen[1] == []
     assert "Headline for erp-1" in seen[2]
+
+
+def test_an_alert_raised_in_a_research_run_is_stamped_with_it(monkeypatch, db: Path) -> None:
+    """A demo reset keeps a research run's alerts by this tag
+    (monitoring/research/carry.py); one raised outside a run gets none."""
+    from openexecutive.alerts import pipeline
+    from openexecutive.audit.usage import bind_research_run
+
+    _stub_triage(monkeypatch, tags=["pricing"], dedup_key=None)
+    _count_dispatches(monkeypatch)
+
+    async def run():
+        with bind_research_run("R1"):
+            # A task started inside the run (the triage task) inherits it.
+            _, inside = await asyncio.create_task(pipeline.evaluate_and_dispatch(
+                AlertEvent(source="research", external_id="in", body="x"), db_path=db,
+            ))
+        _, outside = await pipeline.evaluate_and_dispatch(
+            AlertEvent(source="research", external_id="out", body="x"), db_path=db,
+        )
+        return inside, outside
+
+    inside, outside = asyncio.run(run())
+    assert alert_store.get_alert(inside, db_path=db).topic_tags == ["pricing", "research_run:R1"]  # type: ignore[union-attr]
+    assert alert_store.get_alert(outside, db_path=db).topic_tags == ["pricing"]  # type: ignore[union-attr]
+
+
+def test_a_research_run_tag_from_triage_is_never_kept(monkeypatch, db: Path) -> None:
+    from openexecutive.alerts import pipeline
+
+    _stub_triage(monkeypatch, tags=["pricing", "research_run:forged"], dedup_key=None)
+    _count_dispatches(monkeypatch)
+
+    async def run():
+        _, aid = await pipeline.evaluate_and_dispatch(
+            AlertEvent(source="research", external_id="f", body="x"), db_path=db,
+        )
+        return aid
+
+    aid = asyncio.run(run())
+    assert alert_store.get_alert(aid, db_path=db).topic_tags == ["pricing"]  # type: ignore[union-attr]
+
+
+def test_a_repeat_in_a_later_research_run_adds_that_runs_tag(monkeypatch, db: Path) -> None:
+    from openexecutive.alerts import pipeline
+    from openexecutive.audit.usage import bind_research_run
+
+    _stub_triage(monkeypatch, tags=["pricing"], dedup_key="competitor-prices")
+    _count_dispatches(monkeypatch)
+
+    async def run():
+        with bind_research_run("R1"):
+            _, first = await pipeline.evaluate_and_dispatch(
+                AlertEvent(source="research", external_id="w1", body="x"), db_path=db,
+            )
+        with bind_research_run("R2"):
+            _, second = await pipeline.evaluate_and_dispatch(
+                AlertEvent(source="research", external_id="w2", body="x"), db_path=db,
+            )
+        return first, second
+
+    first, second = asyncio.run(run())
+    assert second is None  # coalesced
+    row = alert_store.get_alert(first, db_path=db)
+    assert row is not None and row.occurrence_count == 2
+    assert row.topic_tags == ["pricing", "research_run:R1", "research_run:R2"]
+
+
+def test_triage_never_sees_research_run_tags(monkeypatch, db: Path) -> None:
+    from openexecutive.agents import triage as triage_module
+    from openexecutive.alerts import pipeline
+
+    alert_store.insert_alert(
+        source="research", external_id="old", severity="medium", headline="h", body="b",
+        topic_tags=["pricing", "research_run:R1"], db_path=db,
+    )
+    seen: list = []
+
+    async def fake_triage(self, event, *, recent_alerts, mute_patterns, active_initiatives):  # noqa: ARG001
+        seen.extend(recent_alerts)
+        return TriageDecision(alert=False, dedup_key="k")
+
+    monkeypatch.setattr(triage_module.TriageAgent, "triage", fake_triage)
+    asyncio.run(pipeline.evaluate_and_dispatch(AlertEvent(source="email", external_id="n", body="x"), db_path=db))
+    assert seen and seen[0]["topic_tags"] == ["pricing"]

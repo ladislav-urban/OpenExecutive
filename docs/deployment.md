@@ -178,6 +178,10 @@ approval scope other rows hold (they could have been put there by anyone while
 nobody was the principal), the demo roster's included, so a roster loaded
 before the claim keeps its scopes only from the next reset on.
 
+A reset keeps the last watch-list research run when the install already holds
+the bundle's company and one of that run's alerts is still open, so the research
+scan runs about once a week on a demo instead of after every reset.
+
 ---
 
 ## Required configuration
