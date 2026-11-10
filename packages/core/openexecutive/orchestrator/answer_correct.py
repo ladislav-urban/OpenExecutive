@@ -21,7 +21,9 @@ Three steps, cheapest first, each checked in code:
    total row, leave a table or list empty, or leave fewer than half the reply's
    figures, the whole reply becomes ``WHOLE_REPLY`` instead (question 9). A
    table that would keep its total row alone goes whole instead, header and
-   total too: a total with nothing to add up is no table.
+   total too: a total with nothing to add up is no table. So does one whose
+   rows added up to a figure of its total row and, once rows are left out,
+   no longer do: a total beside rows that don't make it misleads.
 
 Nothing here says a figure was wrong, checked or corrected: the person reads
 only the final text.
@@ -374,6 +376,7 @@ def remove(
     """``text`` without the unit holding each failed figure, or
     ``WHOLE_REPLY`` when leaving them out could mislead (module docstring).
     ``keep``'s known values are written in, in the same pass."""
+    loose = list(loose)
     all_units = units(text)
     gone: set[Unit] = set()
     for fig in failed:
@@ -395,6 +398,10 @@ def remove(
         kept = [u for u in top if not any(g.start <= u.start and u.end <= g.end for g in gone)]
         if kept and all(u.lead and u.kind == "row" for u in kept):
             gone.update(u for u in all_units if u.block == block)
+        elif _no_longer_adds_up(text, top, kept, every, loose):
+            # A demo reshoot's budget table kept its Total beside one row
+            # once the others' names were left out.
+            gone.update(u for u in all_units if u.block == block)
     left = [f for f in every if not any(u.start <= f.start and f.end <= u.end for u in gone)]
     if every and len(left) * 2 < len(every):
         return WHOLE_REPLY
@@ -414,6 +421,43 @@ def remove(
     out = re.sub(r"[ \t]+\n", "\n", out)
     out = re.sub(r"\n{3,}", "\n\n", out).strip()
     return out or WHOLE_REPLY
+
+
+def _column(text: str, pos: int) -> int:
+    """The table column ``pos`` lies in, counted from 0."""
+    line = text[text.rfind("\n", 0, pos) + 1:pos]
+    return line.count("|") - (1 if line.lstrip().startswith("|") else 0)
+
+
+def _no_longer_adds_up(
+    text: str, rows: list[Unit], kept: list[Unit], every: list[Figure], loose: Iterable[Figure],
+) -> bool:
+    """Whether a figure of a kept total row was its table's rows' sum and the
+    rows kept (without ``loose`` figures, which become "—") no longer give it."""
+    totals = [u for u in kept if u.lead and u.kind == "row"]
+    if not totals:
+        return False
+    blanked = {id(f) for f in loose}
+
+    def column_sum(units: list[Unit], column: int, *, keep_loose: bool) -> float:
+        return sum(
+            f.readings[0][0] * f.scale for f in every
+            if (keep_loose or id(f) not in blanked) and not f.percent
+            and any(u.start <= f.start and f.end <= u.end for u in units) and _column(text, f.start) == column
+        )
+
+    body = [u for u in rows if not u.lead]
+    body_kept = [u for u in kept if not u.lead]
+    for total in totals:
+        for fig in every:
+            if fig.percent or not (total.start <= fig.start and fig.end <= total.end):
+                continue
+            column = _column(text, fig.start)
+            if fig.matches(column_sum(body, column, keep_loose=True)) and not fig.matches(
+                column_sum(body_kept, column, keep_loose=False)
+            ):
+                return True
+    return False
 
 
 def allowed_spans(text: str, failed: Iterable[Figure | Name]) -> list[tuple[int, int]]:
