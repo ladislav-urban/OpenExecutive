@@ -30,6 +30,9 @@ ADMIN = "http://keycloak:8180"
 GROUP = "/dynocortex"
 DEMO = "/dynocortex/demo"
 DEMO_ROLE = "Demo user"
+# The shipped limits, before the fixture widens them for a loaded test machine.
+REAL_BUDGET_S = directory_sync.ADMIT_BUDGET_S
+REAL_CALL_TIMEOUT_S = directory_sync.ADMIT_CALL_TIMEOUT_S
 
 
 def uid(n: int) -> str:
@@ -145,6 +148,11 @@ def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, dict
     directory_sync._tokens.clear()
     directory_sync._trees.clear()
     directory_sync._admit_limits.reset()
+    # A busy CI worker must not turn a slow fake answer into "error" or
+    # "busy": the tests of the budget and the lock wait set their own.
+    monkeypatch.setattr(directory_sync, "ADMIT_BUDGET_S", 30.0)
+    monkeypatch.setattr(directory_sync, "ADMIT_CALL_TIMEOUT_S", 30.0)
+    monkeypatch.setattr(directory_sync, "ADMIT_LOCK_WAIT_S", 30.0)
     for name, value in {
         "DIRECTORY_SYNC_ENABLED": "true",
         "DIRECTORY_SYNC_ISSUER": ISSUER,
@@ -576,7 +584,11 @@ def test_the_reads_share_one_time_budget(kc: Keycloak, monkeypatch: pytest.Monke
     assert everyone() == []
 
 
-def test_each_call_carries_the_admit_timeout_under_the_budget(kc: Keycloak) -> None:
+def test_each_call_carries_the_admit_timeout_under_the_budget(
+    kc: Keycloak, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(directory_sync, "ADMIT_BUDGET_S", REAL_BUDGET_S)
+    monkeypatch.setattr(directory_sync, "ADMIT_CALL_TIMEOUT_S", REAL_CALL_TIMEOUT_S)
     seen: list[float] = []
     subject = kc.user(40)
     inner = kc.handle
@@ -586,8 +598,9 @@ def test_each_call_carries_the_admit_timeout_under_the_budget(kc: Keycloak) -> N
         return inner(request)
 
     assert directory_sync.admit_one(subject, "user40@example.com", transport=httpx.MockTransport(handle)).admitted
-    assert seen and all(0 < t <= directory_sync.ADMIT_CALL_TIMEOUT_S for t in seen)
-    assert directory_sync.ADMIT_BUDGET_S < 4.0
+    assert seen and all(0 < t <= REAL_CALL_TIMEOUT_S for t in seen)
+    # Under the web app's 4 s wait for the answer.
+    assert REAL_CALL_TIMEOUT_S <= REAL_BUDGET_S < 4.0
 
 
 def test_the_readers_client_is_closed_whatever_happens(kc: Keycloak, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -658,19 +671,19 @@ def test_the_lock_is_never_held_while_reading_and_a_run_goes_ahead(kc: Keycloak)
         held_during_io.append(directory_sync._run_lock.locked())
         if rest == "users/" + subject:
             entered.set()
-            assert go.wait(5)
+            assert go.wait(30)
 
     kc.hook = hang
     out: list[directory_sync.AdmitResult] = []
     worker = threading.Thread(target=lambda: out.append(admit(kc, subject, "user52@example.com")))
     worker.start()
-    assert entered.wait(5)
+    assert entered.wait(30)
     # A heartbeat run started mid-admit gets the lock and runs.
     member = directory_sync._member(subject, kc.users[subject])
     report = directory_sync.sync(reader=_Members({subject: member}))
     assert report.stopped is None and report.count("created") == 1
     go.set()
-    worker.join(5)
+    worker.join(30)
     assert not worker.is_alive()
     assert out[0].code == "exists"
     assert len(everyone()) == 1
@@ -707,18 +720,18 @@ def test_a_second_concurrent_admit_is_busy_at_once(kc: Keycloak, env: list[tuple
     def hang(rest: str) -> None:
         if rest == "users/" + first:
             entered.set()
-            assert go.wait(5)
+            assert go.wait(30)
 
     kc.hook = hang
     out: list[directory_sync.AdmitResult] = []
     worker = threading.Thread(target=lambda: out.append(admit(kc, first, "user55@example.com")))
     worker.start()
-    assert entered.wait(5)
+    assert entered.wait(30)
     start = time.monotonic()
     assert admit(kc, second, "user56@example.com").code == "busy"
     assert time.monotonic() - start < 1
     go.set()
-    worker.join(5)
+    worker.join(30)
     assert out[0].admitted
     assert [p.email for p in everyone()] == ["user55@example.com"]
     # No audit row for busy; the admit that ran has one.
@@ -743,7 +756,7 @@ def test_concurrent_admits_of_the_same_person_make_one_person(kc: Keycloak) -> N
     for w in workers:
         w.start()
     for w in workers:
-        w.join(10)
+        w.join(30)
     codes = sorted(r.code for r in out)
     assert codes.count("admitted") == 1
     assert set(codes) <= {"admitted", "busy", "rate_limited", "exists"}
@@ -766,7 +779,7 @@ def test_concurrent_admits_of_different_people_never_interleave(kc: Keycloak) ->
     for w in workers:
         w.start()
     for w in workers:
-        w.join(10)
+        w.join(30)
     admitted = [r for r in out if r.admitted]
     assert len(admitted) >= 1 and all(r.code in ("admitted", "busy") for r in out)
     assert len(everyone()) == len(admitted)
