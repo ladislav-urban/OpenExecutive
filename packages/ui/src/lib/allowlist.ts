@@ -194,6 +194,26 @@ export type RosterLoaderOptions = {
   onWarn?: (message: string) => void;
 };
 
+/** One read of GET /auth/allowed-emails: the emails, and the rows as the API
+ *  sent them (sign-in reads each managed person's identity from them). */
+export type RosterRead = {
+  readonly emails: ReadonlySet<string>;
+  readonly rows: readonly unknown[];
+};
+
+/** The roster, cached for its TTL; `refresh()` reads it anew. */
+export type RosterLoader = {
+  (): Promise<ReadonlySet<string> | null>;
+  /**
+   * Read the roster now, after any fetch already in flight, and replace the
+   * cache with it: the sign-in that just had someone admitted calls it, so
+   * that sign-in and the `authorized` checks after it see the new Person.
+   * Null on failure, which leaves the cache as it was (and, as ever, never
+   * served past its TTL).
+   */
+  refresh(): Promise<RosterRead | null>;
+};
+
 /**
  * Build a cached loader for GET /auth/allowed-emails. The cache and the
  * in-flight promise live in the returned closure, so there is one per Next.js
@@ -210,16 +230,14 @@ export type RosterLoaderOptions = {
  * deliberately NOT served past its TTL, because "serve stale on refresh
  * failure" is a different revocation contract than the one docs/auth.md states.
  */
-export function createRosterLoader(
-  opts: RosterLoaderOptions,
-): () => Promise<ReadonlySet<string> | null> {
+export function createRosterLoader(opts: RosterLoaderOptions): RosterLoader {
   const { baseUrl, sharedSecret, ttlMs, timeoutMs, fetchImpl } = opts;
   const now = opts.now ?? (() => Date.now());
   const warn = opts.onWarn ?? (() => {});
   let cache: { fetchedAt: number; emails: ReadonlySet<string> } | null = null;
-  let inFlight: Promise<ReadonlySet<string> | null> | null = null;
+  let inFlight: Promise<RosterRead | null> | null = null;
 
-  async function fetchRoster(at: number): Promise<ReadonlySet<string> | null> {
+  async function fetchRoster(at: number): Promise<RosterRead | null> {
     try {
       const headers: Record<string, string> = {};
       if (sharedSecret) headers["x-api-key"] = sharedSecret;
@@ -258,9 +276,10 @@ export function createRosterLoader(
       // fetch in flight: without that, an earlier-started but slower fetch
       // could resolve last, clobber a fresher roster and stamp it with the
       // older `fetchedAt`, keeping an archived Person admitted for up to an
-      // extra TTL window.
+      // extra TTL window. `refresh()` keeps that: it starts only after the
+      // fetch in flight has settled.
       cache = { fetchedAt: at, emails };
-      return emails;
+      return { emails, rows: body };
     } catch (err) {
       warn(
         `[auth] roster fetch error; ALLOWED_EMAILS still applies, ` +
@@ -270,7 +289,9 @@ export function createRosterLoader(
     }
   }
 
-  return function loadRoster(): Promise<ReadonlySet<string> | null> {
+  const emailsOf = (read: RosterRead | null) => read?.emails ?? null;
+
+  function loadRoster(): Promise<ReadonlySet<string> | null> {
     const at = now();
     // `age >= 0` matters: a backwards clock step makes the delta negative,
     // which would otherwise read as "fresh" and serve an expired roster for
@@ -282,11 +303,27 @@ export function createRosterLoader(
     // backend calls, and it is why at most one fetch is ever in flight.
     // Cleared in `finally`, so a failure is not retained and the next caller
     // retries rather than being pinned out for a TTL.
-    if (inFlight) return inFlight;
+    if (inFlight) return inFlight.then(emailsOf);
     const pending = fetchRoster(at).finally(() => {
       if (inFlight === pending) inFlight = null;
     });
     inFlight = pending;
-    return pending;
-  };
+    return pending.then(emailsOf);
+  }
+
+  // `inFlight` is assigned before any await, so a caller arriving next joins
+  // this read rather than starting its own: still at most one fetch in
+  // flight, and the fresher result always lands last. Its time is taken when
+  // its fetch starts, not when it was asked for. The promise compared in
+  // `finally` is the one stored, so it is cleared once settled.
+  function refresh(): Promise<RosterRead | null> {
+    const next = (inFlight ?? Promise.resolve(null)).then(() => fetchRoster(now()));
+    const tracked: Promise<RosterRead | null> = next.finally(() => {
+      if (inFlight === tracked) inFlight = null;
+    });
+    inFlight = tracked;
+    return tracked;
+  }
+
+  return Object.assign(loadRoster, { refresh });
 }

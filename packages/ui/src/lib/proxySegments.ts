@@ -15,9 +15,11 @@ export function upstreamSegment(segment: string): string {
 
 // API paths for this app's own server only, which the proxy never forwards:
 // the store of sessions the identity provider ended (lib/endedSessionsServer.ts),
-// and the sign-in list with each managed person's identity at the provider
-// (auth.ts reads it server-side; no page needs everyone's address).
-const SERVER_ONLY = ["auth/ended-sessions", "auth/allowed-emails"];
+// the sign-in list with each managed person's identity at the provider
+// (auth.ts reads it server-side; no page needs everyone's address), and the
+// sign-in's request to admit someone the directory just approved
+// (lib/directoryAdmit.ts).
+const SERVER_ONLY = ["auth/ended-sessions", "auth/allowed-emails", "auth/directory-admit"];
 
 /** Whether the proxy must refuse these segments: a server-only API path,
  *  or any `.` / `..` segment (which would otherwise resolve to one). Judge

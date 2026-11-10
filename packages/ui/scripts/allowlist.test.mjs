@@ -489,3 +489,185 @@ test("a backwards clock step does not make an expired roster look fresh", async 
   clock = 0; // NTP steps the clock backwards past the entry's fetchedAt
   assert.deepEqual([...(await load())], ["p2@corp.com"], "refetched rather than served stale");
 });
+
+// --- refresh() ------------------------------------------------------------------
+
+/** A loader over fetches the test settles by hand, counting them. */
+function manualLoader({ ttlMs = 1000, clock = { now: 0 } } = {}) {
+  const pending = [];
+  let fetches = 0;
+  let open = 0;
+  let peak = 0;
+  const load = createRosterLoader({
+    baseUrl: "http://api:8000",
+    sharedSecret: "",
+    ttlMs,
+    timeoutMs: 1000,
+    now: () => clock.now,
+    fetchImpl: () => {
+      fetches += 1;
+      open += 1;
+      peak = Math.max(peak, open);
+      return new Promise((resolve) => {
+        pending.push((body, status = 200) => {
+          open -= 1;
+          resolve({ ok: status === 200, status, json: async () => body });
+        });
+      });
+    },
+  });
+  const tick = () => new Promise((r) => setImmediate(r));
+  return {
+    load,
+    get fetches() {
+      return fetches;
+    },
+    get peak() {
+      return peak;
+    },
+    tick,
+    /** Settle the oldest open fetch, then let anything chained on it start. */
+    async settle(body, status) {
+      await tick();
+      pending.shift()(body, status);
+      await tick();
+      await tick();
+    },
+  };
+}
+
+const rosterRows = (...emails) => emails.map((email, i) => ({ email, person_id: i + 1 }));
+
+test("refresh() fetches anew, replaces a fresh cache and returns the rows", async () => {
+  const h = manualLoader();
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  assert.deepEqual([...(await first)], ["old@example.com"]);
+  const fresh = h.load.refresh();
+  const body = [{ email: "New@Example.com", person_id: 2, directory_subject: "kc-new" }];
+  await h.settle(body);
+  const read = await fresh;
+  assert.deepEqual([...read.emails], ["new@example.com"]);
+  assert.deepEqual(read.rows, body);
+  assert.equal(h.fetches, 2);
+  // `authorized`, inside the TTL, is served the refreshed roster.
+  assert.deepEqual([...(await h.load())], ["new@example.com"]);
+  assert.equal(h.fetches, 2);
+});
+
+test("refresh() waits for a TTL fetch in flight, then fetches: one at a time", async () => {
+  const h = manualLoader();
+  const ttlFetch = h.load();
+  const fresh = h.load.refresh();
+  await h.tick();
+  assert.equal(h.fetches, 1, "the refresh hasn't started while the TTL fetch is open");
+  await h.settle(rosterRows("stale@example.com"));
+  assert.deepEqual([...(await ttlFetch)], ["stale@example.com"]);
+  assert.equal(h.fetches, 2, "the refresh started once the first settled");
+  await h.settle(rosterRows("stale@example.com", "new@example.com"));
+  assert.deepEqual([...(await fresh).emails].sort(), ["new@example.com", "stale@example.com"]);
+  assert.equal(h.peak, 1, "never two fetches at once");
+  assert.ok((await h.load()).has("new@example.com"), "the fresher read landed last");
+  assert.equal(h.fetches, 2);
+});
+
+test("a load joining a refresh gets the refreshed roster, with no fetch of its own", async () => {
+  const h = manualLoader();
+  const fresh = h.load.refresh();
+  const joiner = h.load();
+  await h.settle(rosterRows("a@example.com"));
+  await fresh;
+  assert.deepEqual([...(await joiner)], ["a@example.com"]);
+  assert.equal(h.fetches, 1);
+});
+
+test("two concurrent refreshes run one after the other, the second landing last", async () => {
+  const h = manualLoader();
+  const one = h.load.refresh();
+  const two = h.load.refresh();
+  await h.settle(rosterRows("first@example.com"));
+  assert.deepEqual([...(await one).emails], ["first@example.com"]);
+  await h.settle(rosterRows("second@example.com"));
+  assert.deepEqual([...(await two).emails], ["second@example.com"]);
+  assert.equal(h.fetches, 2);
+  assert.equal(h.peak, 1);
+  assert.deepEqual([...(await h.load())], ["second@example.com"]);
+  assert.equal(h.fetches, 2);
+});
+
+test("once a refresh settles nothing is left in flight: a TTL-expired load fetches anew", async () => {
+  const clock = { now: 0 };
+  const h = manualLoader({ clock });
+  const fresh = h.load.refresh();
+  await h.settle(rosterRows("a@example.com"));
+  await fresh;
+  clock.now = 999;
+  await h.load();
+  assert.equal(h.fetches, 1, "inside the TTL: the cache");
+  clock.now = 1000;
+  const expired = h.load();
+  await h.tick();
+  assert.equal(h.fetches, 2, "past the TTL: a new fetch, not a settled refresh's promise");
+  await h.settle(rosterRows("b@example.com"));
+  assert.deepEqual([...(await expired)], ["b@example.com"]);
+});
+
+test("the refresh's time is taken when its fetch starts, not when it was asked for", async () => {
+  const clock = { now: 0 };
+  const h = manualLoader({ clock });
+  const ttlFetch = h.load();
+  const fresh = h.load.refresh();
+  clock.now = 500; // the TTL fetch takes a while
+  await h.settle(rosterRows("a@example.com"));
+  await ttlFetch;
+  await h.settle(rosterRows("b@example.com"));
+  await fresh;
+  clock.now = 1499;
+  assert.deepEqual([...(await h.load())], ["b@example.com"], "fresh until 500 + TTL");
+  assert.equal(h.fetches, 2);
+  clock.now = 1500;
+  const after = h.load();
+  await h.tick();
+  assert.equal(h.fetches, 3);
+  await h.settle(rosterRows("c@example.com"));
+  await after;
+});
+
+test("a failed refresh returns null and keeps the old cache, never past its TTL", async () => {
+  const clock = { now: 0 };
+  const h = manualLoader({ clock });
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  await first;
+  clock.now = 100;
+  const fresh = h.load.refresh();
+  await h.settle(null, 500);
+  assert.equal(await fresh, null);
+  assert.deepEqual([...(await h.load())], ["old@example.com"], "still the old roster within its TTL");
+  assert.equal(h.fetches, 2);
+  clock.now = 1000; // the old roster's TTL, from its own fetch
+  const expired = h.load();
+  await h.tick();
+  assert.equal(h.fetches, 3, "not served past its TTL");
+  await h.settle(null, 500);
+  assert.equal(await expired, null);
+});
+
+test("a refresh whose fetch throws is null, and the next load retries", async () => {
+  let n = 0;
+  const load = createRosterLoader({
+    baseUrl: "http://api:8000",
+    sharedSecret: "",
+    ttlMs: 1000,
+    timeoutMs: 1000,
+    now: () => 0,
+    fetchImpl: async () => {
+      n += 1;
+      if (n === 1) throw new TypeError("fetch failed");
+      return { ok: true, status: 200, json: async () => rosterRows("a@example.com") };
+    },
+  });
+  assert.equal(await load.refresh(), null);
+  assert.deepEqual([...(await load())], ["a@example.com"]);
+  assert.equal(n, 2);
+});
