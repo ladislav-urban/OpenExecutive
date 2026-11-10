@@ -257,6 +257,16 @@ class Figure:
     # The value it was matched to, when one was (a source value or a combination).
     matched: float | None = None
     how: str = ""
+    # The word right after it ("days" in "62.5 days"), lowercased, or "".
+    unit: str = ""
+
+    @property
+    def not_money(self) -> bool:
+        """Whether it plainly isn't an amount of money: a count of records,
+        or a number of days, hours, stars or units, with no currency mark."""
+        if self.currency_text or self.percent:
+            return False
+        return bool(self.count) or self.unit in _NOT_MONEY_UNITS
 
     @property
     def flagged(self) -> bool:
@@ -418,6 +428,11 @@ _TIME_UNITS = frozenset({
     "second", "seconds", "minute", "minutes", "min", "mins", "hour", "hours", "hr", "hrs",
     "day", "days", "week", "weeks", "month", "months", "year", "years", "yr", "yrs",
 })
+# Words after a figure that make it something other than money ("62.5 days",
+# "4.5 stars", "120 units"): never corrected to a money column's value.
+_NOT_MONEY_UNITS = _TIME_UNITS | frozenset({
+    "star", "stars", "out", "unit", "units", "pcs", "pieces", "piece", "kg", "km", "times", "points",
+})
 
 
 def _cells(line: str) -> list[str]:
@@ -545,6 +560,7 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
                     else ""
                 ),
                 currency_text=(pre.strip() or post.strip()) if (pre.strip() or post.strip()) else "",
+                unit=_word_after(text, end),
             )
         )
     if not everything:
@@ -582,7 +598,7 @@ def _word_figures(text: str, masked: list[tuple[int, int]], found: list[Figure])
                 start=start, end=end, text=m.group(1), num=m.group(1), pre="", post="",
                 readings=((float(_NUMBER_WORDS[m.group(1).lower()]), 0),), scale=1.0, scale_text="",
                 percent=False, fmt=PLAIN, multiple=multiple,
-                count="" if multiple else _counts_records(text, end),
+                count="" if multiple else _counts_records(text, end), unit=following,
             )
         )
     return out
@@ -674,6 +690,26 @@ def _number(value: Any, numeric_field: bool) -> float | None:
     return got if math.isfinite(got) else None
 
 
+# A field whose name holds one of these words, and none of the others, holds
+# money; so does a report's Currency column.
+_MONEY_WORDS = frozenset({
+    "amount", "amt", "price", "cost", "costs", "outstanding", "balance", "paid", "debit", "credit", "revenue",
+    "income", "expense", "expenses", "profit", "salary", "valuation", "fee", "fees", "total", "budget",
+    "actual", "variance",
+})
+_NOT_MONEY_WORDS = frozenset({
+    "qty", "quantity", "count", "days", "day", "hours", "hour", "weight", "percent", "percentage", "pct",
+    "rating", "score", "age", "weeks", "months", "years", "rate", "ratio", "units", "conversion",
+})
+
+
+def _is_money_key(key: str, currency_fields: frozenset[str]) -> bool:
+    if key in currency_fields:
+        return True
+    words = set(re.split(r"[^a-z]+", key.lower()))
+    return bool(words & _MONEY_WORDS) and not words & _NOT_MONEY_WORDS
+
+
 def _aggregate_names(arguments: dict[str, Any]) -> frozenset[str]:
     """list_records' own names for its aggregates: ``as``, else
     ``<function>_<field>`` or ``count`` (oe_connector's records.py)."""
@@ -709,6 +745,14 @@ class _Reader:
         # with what they count: the field and its result's DocType.
         self.counts: list[tuple[float, str]] = []
         self._doctype = ""
+        # Values seen in money columns, and in any other numeric column.
+        self.money: set[float] = set()
+        self.other: set[float] = set()
+        self._currency_fields: frozenset[str] = frozenset()
+
+    def _note_kind(self, value: float, key: str) -> None:
+        kind = self.money if _is_money_key(key, self._currency_fields) else self.other
+        kind.add(round(abs(value), 6))
 
     def _note_count(self, value: float, key: str) -> None:
         name = key.lower()
@@ -743,6 +787,7 @@ class _Reader:
                     table.numeric.setdefault(key, [None] * len(rows))[i] = got
                     self.cells.append((got, truncated))
                     self._note_currency(got, key, row.get("currency"))
+                    self._note_kind(got, key)
                     if not truncated:
                         self._note_count(got, key)
                     if _is_rating(key) and 0 <= got <= 1:
@@ -772,6 +817,7 @@ class _Reader:
                 self.cells.append((got, False))
                 self.headline.append(got)
                 self._note_currency(got, key)
+                self._note_kind(got, key)
                 self._note_count(got, key)
 
     def result(self, result: ErpnextResult) -> None:
@@ -789,11 +835,16 @@ class _Reader:
         document = payload.get("document_currency")
         self._document = document if isinstance(document, str) else None
         columns = payload.get("columns")
+        self._currency_fields = frozenset()
         if isinstance(columns, list):
             numeric |= frozenset(
                 c["fieldname"] for c in columns
                 if isinstance(c, dict) and isinstance(c.get("fieldname"), str)
                 and c.get("fieldtype") in _NUMERIC_FIELDTYPES
+            )
+            self._currency_fields = frozenset(
+                c["fieldname"] for c in columns
+                if isinstance(c, dict) and isinstance(c.get("fieldname"), str) and c.get("fieldtype") == "Currency"
             )
         label = str(payload.get("report_name") or doctype or result.tool)
         cut = payload.get("truncated_child_tables")
@@ -889,6 +940,8 @@ class Sources:
     symbols: dict[str, frozenset[str]] = field(default_factory=dict)
     # Each currency's own symbol, as answer_check_context gives it.
     marks: dict[str, str] = field(default_factory=dict)
+    # Values seen only in money columns (an amount, a price, a total).
+    money: set[float] = field(default_factory=set)
     _complete_keys: list[float] = field(default_factory=list)
     _truncated_keys: list[float] = field(default_factory=list)
 
@@ -901,6 +954,10 @@ class Sources:
     def has_value(self, x: float) -> bool:
         """Whether ``x`` is one of ERPNext's own values."""
         return _near(self.values, abs(x))
+
+    def is_money(self, x: float) -> bool:
+        """Whether ``x`` is only ever an amount of money in the results."""
+        return round(abs(x), 6) in self.money
 
     def in_cut_off_rows_only(self, x: float) -> bool:
         """Whether ``x`` appears only in rows of a result ERPNext cut off."""
@@ -986,6 +1043,7 @@ def sources_for(
     extra = [abs(v) for v in extra]
     src = Sources()
     src.value_currencies = reader.currencies
+    src.money = reader.money - reader.other
     src.symbols = _symbols(currencies)
     src.marks = {
         code: info["symbol"].strip()
