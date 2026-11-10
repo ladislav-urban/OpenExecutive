@@ -20,6 +20,12 @@ the web app reads to sign those sessions out (``memory.ended_sessions``,
 docs/auth.md "Signing out"). Both are for the web app's server only: the
 proxy refuses them, and a call made as someone is refused here too.
 
+``POST /auth/directory-admit`` is the web app's sign-in asking, for an SSO
+sign-in the roster refused, whether the provider's directory has just
+approved that one person (``integrations.directory_sync.admit_one``). Server
+only, the same way; it answers ``{admitted, code}`` and nothing the
+provider said.
+
 ``GET /auth/me`` returns the email this request is made as
 (``api.caller``), so a host origin's own page (docs/auth.md, "Host
 origins") can warn when the session signed in here is someone else's, as
@@ -31,7 +37,7 @@ import math
 import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from openexecutive.people import store as people_store
 
@@ -160,3 +166,33 @@ def list_ended_sessions(request: Request) -> list[EndedSessionOut]:
 
     _server_only(request)
     return [EndedSessionOut(**row) for row in ended_sessions.recent()]
+
+
+class DirectoryAdmitIn(BaseModel):
+    """Who signed in: the provider's id for them and their email. Only who
+    to look up; everything else is read from the provider."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    subject: str = Field(min_length=1, max_length=64)
+    email: str = Field(min_length=3, max_length=254)
+
+
+class DirectoryAdmitOut(BaseModel):
+    admitted: bool
+    # One of directory_sync.ADMIT_CODES.
+    code: str
+
+
+@router.post("/auth/directory-admit", response_model=DirectoryAdmitOut)
+def directory_admit(body: DirectoryAdmitIn, request: Request) -> DirectoryAdmitOut:
+    """Admit the one person the web app's sign-in just refused, if the
+    provider's directory says they are an active member of the group: a
+    Person is created for them as the next sync run would. Rate limited;
+    answers 200 whatever happened. A plain ``def``: the reads are blocking,
+    so it runs in the threadpool."""
+    from openexecutive.integrations import directory_sync
+
+    _server_only(request)
+    result = directory_sync.admit_one(body.subject, body.email)
+    return DirectoryAdmitOut(admitted=result.admitted, code=result.code)
