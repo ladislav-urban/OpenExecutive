@@ -162,21 +162,35 @@ export function decideSessionAction(decision: AllowDecision): SessionAction {
  * the read that sign-in made after admitting someone doesn't reach the one
  * `authorized` uses. Without this, a person admitted at sign-in would be
  * revoked by the middleware's older roster until it expired, bouncing between
- * `/` and `/signin`. After the re-read the cache is newer than the sign-in,
- * so a session causes at most one (sign-in times are whole seconds, so a
- * re-read in the same second may repeat within that second).
+ * `/` and `/signin`. After a successful re-read the cache is newer than the
+ * sign-in, so a session causes one (sign-in times are whole seconds, so a
+ * re-read in the same second may repeat within that second). Requests that
+ * arrive together share one re-read.
+ *
+ * A failed re-read answers "roster unknown", which lets an existing session
+ * through as it always has, and the next refused request reads again. That
+ * is on purpose: revoking on the older roster instead would bring the loop
+ * back while the API is unreachable (the middleware revoking, /signin, on
+ * the server's newer roster, sending the person back).
+ *
+ * `signedInAt` is the signing-in server's clock. One ahead of this server's
+ * counts as the start of this second, so a skewed clock costs a refused
+ * session at most one re-read a second rather than one per request.
  */
 export async function resolveSessionAllowed(
   email: string,
   envAllowed: ReadonlySet<string>,
   loadRoster: RosterLoader,
   signedInAtS: number | null,
+  nowMs: number = Date.now(),
 ): Promise<AllowDecision> {
   const decision = await resolveAllowed(email, envAllowed, loadRoster);
   if (decideSessionAction(decision) !== "revoke" || signedInAtS === null) return decision;
+  const nowS = Math.floor(nowMs / 1000);
+  const newerThan = signedInAtS > nowS ? nowS * 1000 : (signedInAtS + 1) * 1000;
   const readAt = loadRoster.fetchedAt();
-  if (readAt !== null && readAt >= (signedInAtS + 1) * 1000) return decision;
-  const fresh = await loadRoster.refresh();
+  if (readAt !== null && readAt >= newerThan) return decision;
+  const fresh = await loadRoster.refreshFrom(newerThan);
   return decideAllowed(email, envAllowed, fresh?.emails ?? null);
 }
 
@@ -243,6 +257,10 @@ export type RosterLoader = {
   /** When the cached roster's read started (ms, the loader's clock), or null
    *  before any read succeeded. */
   fetchedAt(): number | null;
+  /** Like `refresh()`, but joins a refresh still in flight that was asked for
+   *  at or after `atMs` (its read starts later still) instead of queueing
+   *  another behind it. */
+  refreshFrom(atMs: number): Promise<RosterRead | null>;
 };
 
 /**
@@ -267,6 +285,7 @@ export function createRosterLoader(opts: RosterLoaderOptions): RosterLoader {
   const warn = opts.onWarn ?? (() => {});
   let cache: { fetchedAt: number; emails: ReadonlySet<string> } | null = null;
   let inFlight: Promise<RosterRead | null> | null = null;
+  let lastRefresh: { askedAt: number; promise: Promise<RosterRead | null> } | null = null;
 
   async function fetchRoster(at: number): Promise<RosterRead | null> {
     try {
@@ -353,8 +372,20 @@ export function createRosterLoader(opts: RosterLoaderOptions): RosterLoader {
       if (inFlight === tracked) inFlight = null;
     });
     inFlight = tracked;
+    lastRefresh = { askedAt: now(), promise: tracked };
     return tracked;
   }
 
-  return Object.assign(loadRoster, { refresh, fetchedAt: () => cache?.fetchedAt ?? null });
+  function refreshFrom(atMs: number): Promise<RosterRead | null> {
+    if (lastRefresh && inFlight === lastRefresh.promise && lastRefresh.askedAt >= atMs) {
+      return lastRefresh.promise;
+    }
+    return refresh();
+  }
+
+  return Object.assign(loadRoster, {
+    refresh,
+    refreshFrom,
+    fetchedAt: () => cache?.fetchedAt ?? null,
+  });
 }

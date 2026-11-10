@@ -758,3 +758,56 @@ test("allowed sessions and ALLOWED_EMAILS never cause a re-read", async () => {
   assert.equal((await resolveSessionAllowed("op@example.com", set("op@example.com"), load, 20)).allowed, true);
   assert.equal(state.fetches, 1);
 });
+
+test("requests that arrive together share one re-read", async () => {
+  const clock = { now: 10_000 };
+  const h = manualLoader({ ttlMs: 5 * 60 * 1000, clock });
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  await first;
+  clock.now = 21_000;
+  const together = [1, 2, 3, 4].map(() => resolveSessionAllowed("new@example.com", NONE, h.load, 20, 21_000));
+  await h.settle(rosterRows("old@example.com", "new@example.com"));
+  for (const decision of await Promise.all(together)) assert.equal(decision.allowed, true);
+  assert.equal(h.fetches, 2, "one re-read for all four");
+  assert.equal(h.peak, 1);
+});
+
+test("a refresh asked for before the sign-in isn't joined", async () => {
+  const clock = { now: 10_000 };
+  const h = manualLoader({ ttlMs: 5 * 60 * 1000, clock });
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  await first;
+  clock.now = 15_000;
+  const early = h.load.refresh(); // e.g. another sign-in's, before this one
+  clock.now = 21_000;
+  const decision = resolveSessionAllowed("new@example.com", NONE, h.load, 20, 21_000);
+  await h.settle(rosterRows("old@example.com"));
+  await early;
+  await h.settle(rosterRows("old@example.com", "new@example.com"));
+  assert.equal((await decision).allowed, true);
+  assert.equal(h.fetches, 3);
+});
+
+test("a sign-in time ahead of this server's clock counts as now", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  // Signed in "at 500 s" by a server whose clock runs ahead; here it's 30 s.
+  state.now = 30_000;
+  for (let i = 0; i < 3; i++) {
+    assert.equal(decideSessionAction(await resolveSessionAllowed("gone@example.com", NONE, load, 500, 30_000)), "revoke");
+  }
+  assert.equal(state.fetches, 2, "one re-read, not one per request until 500 s");
+});
+
+test("a roster read earlier in the sign-in's own second still counts as older", async () => {
+  const state = { now: 20_100, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load(); // read at 20.1 s; the sign-in was at 20.5 s, stamped 20
+  state.now = 20_600;
+  state.rows = rosterRows("old@example.com", "new@example.com");
+  assert.equal((await resolveSessionAllowed("new@example.com", NONE, load, 20, 20_600)).allowed, true);
+  assert.equal(state.fetches, 2);
+});

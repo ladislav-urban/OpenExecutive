@@ -40,8 +40,9 @@ Two things read the roster before the 5 minutes are up. An SSO sign-in that the 
 sync has just let in (see "Following your identity provider's directory") reads it fresh. And
 the middleware, which keeps a cache of its own, reads it again before revoking an SSO session
 that signed in after its cached copy was read, so a person just let in isn't sent back to
-the sign-in page. That happens at most once per session; a person removed from the roster is
-still revoked on the next request.
+the sign-in page. While the API answers that's one read per session (requests arriving together
+share it); while it doesn't, the session is let through as roster-unknown and the next request
+reads again. A person removed from the roster is still revoked on the next request.
 
 If the roster fetch fails, `ALLOWED_EMAILS` users are unaffected (their check never
 consults the roster). Roster-only users with an existing session keep working — the UI
