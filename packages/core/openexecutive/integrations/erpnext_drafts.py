@@ -187,8 +187,13 @@ class DraftCard:
     # (ERPNext's desk page sent the words, signed in), else "".
     asked_in: str = ""
     # "create" for a new draft; "update" or "comment" for a card that
-    # changes or comments on an existing document (erpnext_changes).
+    # changes or comments on an existing document (erpnext_changes); "credit"
+    # for a credit-limit raise (erpnext_credit).
     operation: str = "create"
+    # A credit-limit raise ERPNext reads differently now than when the card
+    # was left (erpnext_credit.recheck, GET /erpnext/drafts only): approving
+    # it is refused.
+    changed: bool = False
 
 
 def _one_line(value: Any, limit: int = SHOWN_MAX) -> str:
@@ -861,7 +866,7 @@ def propose(
     person: Any, doctype: str, fields: dict[str, Any], view: dict[str, Any], why: str,
     *, asked_by: str, session_id: str | None, waiting: list[Any] | None = None, asked_in: str = "",
     from_alert: int | None = None, fingerprint: str | None = None,
-    operation: str = "create", name: str | None = None,
+    operation: str = "create", name: str | None = None, extra: dict[str, Any] | None = None,
 ) -> tuple[int, bool, dict[str, Any]]:
     """Store a card for ``person`` (``fields`` already checked); returns its
     decision id, whether it is new and the view it shows. The same draft
@@ -870,7 +875,8 @@ def propose(
     then that card is closed and a new one left. Never changed in place,
     since a screen still showing the old card would approve the new draft
     (security review); the old card's screen gets "already handled".
-    ``waiting``: ``open_cards(person.id)``, if read."""
+    ``waiting``: ``open_cards(person.id)``, if read. ``extra``: more of the
+    payload (a credit raise's identities, erpnext_credit)."""
     from openexecutive.memory.decision_ledger import close_externally, create_decision_instance
 
     digest = _digest(person.id, doctype, _keyed(operation, name, fields))
@@ -909,6 +915,7 @@ def propose(
         "view": view,
         # What ERPNext read, sent back on approval so only this draft is made.
         **({"fingerprint": fingerprint} if fingerprint is not None else {}),
+        **(extra or {}),
         "attempts": 0,
     }
     return create_decision_instance(
@@ -986,7 +993,9 @@ def cards(person: Any) -> list[DraftCard]:
             notes=[words(str(n)) for n in view.get("notes") or []],
             last_error=words(str(payload.get("last_error") or "")),
             asked_in=str(payload.get("asked_in")) if payload.get("asked_in") in (ASKED_IN_PANEL, ASKED_IN_DESK) else "",
-            operation=str(payload.get("operation")) if payload.get("operation") in ("update", "comment") else "create",
+            operation=(
+                str(payload.get("operation")) if payload.get("operation") in ("update", "comment", "credit") else "create"
+            ),
         ))
     return out
 
@@ -1205,7 +1214,7 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
 
 
 def _noun(operation: str) -> str:
-    return {"update": "change", "comment": "comment"}.get(operation, "draft")
+    return {"update": "change", "comment": "comment", "credit": "credit-limit raise"}.get(operation, "draft")
 
 
 def _after_approval(operation: str) -> str:
@@ -1444,9 +1453,15 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     operation = payload.get("operation", "create")
     if operation not in erpnext_changes.OPERATIONS:
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it and ask again.")
-    if operation == "create" and payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
+    if operation == "credit":
+        # A credit-limit raise (erpnext_credit): its own switches, authority
+        # and both identities, checked before anything is claimed.
+        from openexecutive.integrations import erpnext_credit
+
+        erpnext_credit.approval_refusal(instance, payload, person)
+    elif operation == "create" and payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
         raise ApproveRefused(409, "drafts_off", f"ERPNext {payload['doctype']} drafts are turned off here.")
-    if operation != "create" and payload.get("doctype") not in erpnext_changes.enabled(operation):
+    elif operation != "create" and payload.get("doctype") not in erpnext_changes.enabled(operation):
         what = "changes" if operation == "update" else "comments"
         raise ApproveRefused(409, "drafts_off", f"ERPNext {what} on {payload.get('doctype')} are turned off here.")
     if not _live(instance, datetime.now(UTC)):
@@ -1457,6 +1472,17 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     if operation == "create":
         tool = DRAFT_TOOLS.get(doctype) if isinstance(doctype, str) else None
         rechecked = "a new draft has no name" if target is not None else check_fields(doctype, fields)
+    elif operation == "credit":
+        from openexecutive.integrations import erpnext_credit
+
+        tool = erpnext_changes.OPERATION_TOOLS[operation]
+        again_credit = erpnext_credit.credit_fields(fields)
+        rechecked = (
+            "malformed" if again_credit is None or doctype != erpnext_credit.DOCTYPE
+            or erpnext_credit._doc_name(target) is None else again_credit
+        )
+        if not (isinstance(payload.get("fingerprint"), str) and _FINGERPRINT_RE.fullmatch(payload["fingerprint"])):
+            rechecked = "no fingerprint"
     else:
         tool = erpnext_changes.OPERATION_TOOLS[operation]
         again = erpnext_changes.check_change(operation, doctype, target, fields)
@@ -1474,7 +1500,9 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     # The card was checked as the person who asked: if their People email
     # changed since, it may now name someone else, so it isn't theirs to make.
     asked_by = payload.get("asked_by")
-    if not isinstance(asked_by, str) or normalize_email(asked_by) != email:
+    # A credit raise may be approved by someone other than who prepared it:
+    # erpnext_credit.approval_refusal held both to the card instead.
+    if operation != "credit" and (not isinstance(asked_by, str) or normalize_email(asked_by) != email):
         raise ApproveRefused(409, "changed", "Your email changed since this card was left. Dismiss it and ask again.")
     if not claim_for_execution(instance.id, resolver_person_id=resolver):
         raise ApproveRefused(409, "already_handled", "This card was already handled.")
@@ -1531,7 +1559,12 @@ async def _carry_out(
     if operation != "create":
         from openexecutive.integrations.erpnext_changes import made
 
-        changed = made(operation, doctype, payload["name"], result)
+        # A credit raise is draft_update's: its success is an update's.
+        changed = made("update" if operation == "credit" else operation, doctype, payload["name"], result)
+        if changed is not None and operation == "credit":
+            from openexecutive.integrations.erpnext_credit import made_extra
+
+            changed = {**changed, "operation": operation, **made_extra(payload)}
     if changed is not None or (
         operation == "create" and result.get("ok") is True and result.get("docstatus") == 0
         and isinstance(name, str) and _DOC_NAME_RE.fullmatch(name)
@@ -1559,11 +1592,28 @@ async def _carry_out(
         audit("erpnext_draft_created", f"Person {person.id} approved an ERPNext {doctype} {_noun(operation)}", {
             "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "name": name,
             **({"operation": operation} if operation != "create" else {}),
+            **_identities(payload),
             "already_created": created["already_created"],
             **{k: created[k] for k in ("row_hash", "chain_index") if k in created},
         })
         return created
     reason = _refusal_text(raw)
+    if operation == "credit":
+        from openexecutive.integrations import erpnext_credit
+
+        # Final either way: approving again would refuse again.
+        final_text = (
+            erpnext_credit.CHANGED_TEXT if CHANGED_SINCE_PROPOSED in reason
+            else erpnext_credit.SOD_TEXT if erpnext_credit.SOD_REFUSED in reason else None
+        )
+        if final_text is not None:
+            finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})
+            audit("erpnext_draft_changed", f"Person {person.id}'s credit-limit raise wasn't made and its card closed", {
+                "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "operation": operation,
+                **_identities(payload),
+            })
+            code = "changed_since_proposed" if final_text == erpnext_credit.CHANGED_TEXT else "separation_of_duties"
+            raise ApproveRefused(409, code, final_text)
     # Anywhere in it: the MCP layer may put its own words before a tool's error.
     if CHANGED_SINCE_PROPOSED in reason or (doctype == "Dunning" and _DUNNING_STALE in reason):
         # Nothing was made, and approving again would refuse again: the card
@@ -1580,6 +1630,7 @@ async def _carry_out(
     attempts = int(payload.get("attempts") or 0) + 1
     audit("erpnext_draft_failed", f"Person {person.id}'s ERPNext {doctype} draft wasn't made", {
         "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "attempts": attempts,
+        **_identities(payload),
     })
     if attempts >= ATTEMPTS_MAX:
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "attempts": attempts, "last_error": reason})
@@ -1598,6 +1649,13 @@ async def _carry_out(
         502, "draft_failed",
         f"ERPNext didn't make the draft: {reason} You can approve it again; it won't make a second one.",
     )
+
+
+def _identities(payload: dict[str, Any]) -> dict[str, Any]:
+    """A credit raise's audit rows name who prepared it and who approves."""
+    if payload.get("operation") != "credit":
+        return {}
+    return {k: payload.get(k) for k in ("asked_by_person_id", "approver_person_id")}
 
 
 async def dismissed(instance: Any) -> None:

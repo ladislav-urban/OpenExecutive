@@ -16,14 +16,17 @@ replaces it. The alert text plays no part.
 **Which alert it belongs to** (``suggestion_for``): only the alert that
 event became, as ``erpnext_events`` raises it: private to the principal,
 source ``erpnext``, ``dedup_key`` exactly ``private:<ref>`` (the pipeline's
-``_make_private``; a kind that names its readers adds ``:named:<ids>``, and
-none of those suggests a draft) and ``external_id`` ``<ref>:<YYYY-MM>``. The model's
+``_make_private``; a kind that names its readers adds ``:named:<ids>``, of
+which exactly one is stripped) and ``external_id`` ``<ref>:<YYYY-MM>``, which
+stays the arbiter. The model's
 ``create_alert`` may not use the ``erpnext`` source
 (``alert_tools.RESERVED_SOURCES``), so no other alert can carry those.
 
 **The button** (``GET /erpnext/alert-drafts``): the principal's open ERPNext
 alerts that have one. ERPNext alerts are the principal's alone, as the checks
-run with the service user's wider view, so nobody else is shown any.
+run with the service user's wider view, so nobody else is shown any, except a
+credit hold's "Prepare the raise" (``erpnext_credit``), also offered to the
+people that alert names.
 
 **The tap** (``prepare``, ``POST /erpnext/alert-drafts/{alert_id}``): the
 principal, known to the API as them (``verified.caller_refusal``: signed
@@ -35,7 +38,7 @@ stays out). ERPNext checks it as the principal (``draft_check``, inside
 (``erpnext_drafts.propose``), to approve like any other.
 
 **Once per alert** (``_taken``): the card carries the alert's id
-(``from_alert``). While it waits, or once its draft is made, the alert offers
+(``from_alert``), whoever's card it is. While it waits, or once its draft is made, the alert offers
 no button, and a tap answers with the waiting card or says the draft is
 already in ERPNext. Dismissed, expired or failed, the alert offers it again.
 oe_connector's next month's alert for the same document is a new alert.
@@ -59,8 +62,12 @@ logger = logging.getLogger(__name__)
 SUGGESTING: dict[str, str] = {
     "stock_below_reorder": "Material Request",
     "overdue_receivable": "ToDo",
+    # A credit-limit raise (erpnext_credit): its own card and approver.
+    "credit_hold": "Customer",
 }
-LABELS: dict[str, str] = {"Material Request": "Prepare restock", "ToDo": "Prepare follow-up"}
+LABELS: dict[str, str] = {
+    "Material Request": "Prepare restock", "ToDo": "Prepare follow-up", "Customer": "Prepare the raise",
+}
 # A suggestion older than this is dropped on the next write: oe_connector
 # resends a still-matching alert monthly.
 KEEP_FOR = timedelta(days=62)
@@ -68,6 +75,8 @@ AMOUNT_MAX = 1_000_000_000_000
 
 _DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 _CURRENCY_RE = re.compile(r"[A-Z]{3}")
+# The readers a named alert's dedup_key ends with (alerts.pipeline).
+_NAMED_SUFFIX_RE = re.compile(r":named:[0-9,]+\Z")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS erpnext_alert_suggestions (
@@ -99,6 +108,10 @@ def parse_suggestion(kind: str, key: str, raw: Any) -> dict[str, Any] | None:
     suggest, isn't well formed, or names another document than ``key``."""
     if SUGGESTING.get(kind) is None or not isinstance(raw, dict) or raw.get("doctype") != SUGGESTING[kind]:
         return None
+    if kind == "credit_hold":
+        from openexecutive.integrations.erpnext_credit import parse_suggestion as credit_suggestion
+
+        return credit_suggestion(key, raw)
     if kind == "stock_below_reorder":
         raw_fields = raw.get("fields")
         if not isinstance(raw_fields, dict):
@@ -163,12 +176,18 @@ def _ref_of(alert: Any) -> tuple[str, str, str] | None:
     dedup_key = getattr(alert, "dedup_key", "") or ""
     if getattr(alert, "source", None) != "erpnext" or not is_private_alert(alert):
         return None
-    for kind in SUGGESTING:
-        prefix = f"private:erpnext:{kind}:"
-        if dedup_key.startswith(prefix) and len(dedup_key) > len(prefix):
-            ref = dedup_key[len("private:"):]
-            if re.fullmatch(re.escape(ref) + r":\d{4}-\d{2}", getattr(alert, "external_id", "") or ""):
-                return ref, kind, dedup_key[len(prefix):]
+    external_id = getattr(alert, "external_id", "") or ""
+    # A named alert's key ends with its readers (exactly one such suffix);
+    # the external id, which the pipeline never changes, decides which
+    # reading is the event's.
+    unnamed = _NAMED_SUFFIX_RE.sub("", dedup_key, count=1)
+    for candidate in dict.fromkeys((unnamed, dedup_key)):
+        for kind in SUGGESTING:
+            prefix = f"private:erpnext:{kind}:"
+            if candidate.startswith(prefix) and len(candidate) > len(prefix):
+                ref = candidate[len("private:"):]
+                if re.fullmatch(re.escape(ref) + r":\d{4}-\d{2}", external_id):
+                    return ref, kind, candidate[len(prefix):]
     return None
 
 
@@ -245,7 +264,8 @@ async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
             "Preparing a draft needs signed sign-ins on this server, so that nobody else can do it for you.",
         )
     suggestion = suggestion_for(alert)
-    if suggestion is None:
+    # A credit raise is erpnext_credit.prepare's, with its own approver.
+    if suggestion is None or suggestion["doctype"] not in ("Material Request", "ToDo"):
         raise refused(404, "no_suggestion", "This alert has no draft to prepare.")
     try:
         _already(person.id, alert)
@@ -300,18 +320,29 @@ class _Waiting(Exception):
         self.decision_id = decision_id
 
 
-def _taken(person_id: int) -> dict[int, Any]:
-    """``person_id``'s cards that still count, by the alert they came from:
-    a card tagged ``from_alert``, or one from before cards were tagged that
-    its ``erpnext_draft_proposed`` audit row ties to an alert. One query (and
-    one for the audit rows), after ``open_cards`` has closed any waiting card
-    past its time."""
+def _taken(person_id: int | None = None) -> dict[int, Any]:
+    """The cards that still count, by the alert they came from, whoever's
+    card each is (a credit raise may wait on someone other than who tapped,
+    and still counts for its alert): a card tagged ``from_alert``, or one
+    from before cards were tagged that its ``erpnext_draft_proposed`` audit
+    row ties to an alert. After ``open_cards`` has closed any waiting card
+    past its time, for ``person_id`` and every approver with one waiting."""
     from types import SimpleNamespace
 
     from openexecutive.memory.decision_ledger import _db_path as ledger_path
     from openexecutive.memory.episodic import _get_conn
 
-    drafts.open_cards(person_id)
+    with _get_conn(ledger_path()) as conn:
+        approvers = {
+            row[0] for row in conn.execute(
+                "SELECT DISTINCT approver_person_id FROM decision_instances WHERE decision_class = ? "
+                "AND status IN ('proposed', 'executing') "
+                "AND json_extract(proposed_payload_json, '$.from_alert') IS NOT NULL",
+                (drafts.DECISION_CLASS,),
+            ) if isinstance(row[0], int)
+        }
+    for approver in sorted({*approvers, *([person_id] if isinstance(person_id, int) else [])}):
+        drafts.open_cards(approver)
     legacy: dict[int, int] = {}
     statuses = ",".join("?" * len(_TAKEN))
     with _get_conn(ledger_path()) as conn:
@@ -327,9 +358,9 @@ def _taken(person_id: int) -> dict[int, Any]:
             logger.warning("erpnext_alert_drafts: couldn't read the proposal audit rows", exc_info=True)
         rows = conn.execute(
             "SELECT id, status, final_payload_json, json_extract(proposed_payload_json, '$.from_alert') "
-            f"FROM decision_instances WHERE decision_class = ? AND approver_person_id = ? AND status IN ({statuses}) "
+            f"FROM decision_instances WHERE decision_class = ? AND status IN ({statuses}) "
             "ORDER BY id",
-            (drafts.DECISION_CLASS, person_id, *_TAKEN),
+            (drafts.DECISION_CLASS, *_TAKEN),
         ).fetchall()
     out: dict[int, Any] = {}
     for card_id, status, final_json, tagged in rows:
@@ -340,8 +371,8 @@ def _taken(person_id: int) -> dict[int, Any]:
 
 
 def _already(person_id: int, alert: Any) -> None:
-    """Raise ``_Waiting`` when ``alert``'s card waits, ``ApproveRefused``
-    when its draft was made; nothing when it may have one."""
+    """Raise ``_Waiting`` when ``alert``'s card waits (whoever's it is),
+    ``ApproveRefused`` when its draft was made; nothing when it may have one."""
     alert_id = getattr(alert, "id", None)
     card = _taken(person_id).get(alert_id) if isinstance(alert_id, int) else None
     if card is None:
@@ -386,19 +417,34 @@ def _room_for(person_id: int, doctype: str, fields: dict[str, Any]) -> list[Any]
     return waiting
 
 
-def open_suggestions(*, limit: int = 200) -> list[tuple[int, str]]:
+def open_suggestions(*, limit: int = 200, viewer: Any = None) -> list[tuple[int, str]]:
     """``(alert_id, label)`` for each open ERPNext alert with a suggestion
-    and no card that still counts (``_taken``)."""
+    ``viewer`` (default: the principal) may prepare and no card that still
+    counts (``_taken``). The principal gets every one; anyone else only a
+    credit hold's raise on an alert that names them, while raises are on
+    (``erpnext_credit.credit_on``)."""
     from openexecutive.alerts import store
+    from openexecutive.alerts.models import named_for
+    from openexecutive.integrations.erpnext_credit import credit_on
     from openexecutive.people.store import find_principal_person
 
-    principal = find_principal_person()
-    taken = _taken(principal.id) if principal is not None and principal.id is not None else {}
+    person = viewer if viewer is not None else find_principal_person()
+    if person is None or person.id is None:
+        return []
+    principal = bool(person.is_principal)
+    taken = _taken(person.id)
+    raises = credit_on()
     out: list[tuple[int, str]] = []
     for alert in store.list_alerts(limit=limit):
         if alert.id is None or alert.source != "erpnext" or alert.status not in ("unread", "read") or alert.id in taken:
             continue
         suggestion = suggestion_for(alert)
-        if suggestion is not None:
-            out.append((alert.id, LABELS[suggestion["doctype"]]))
+        if suggestion is None:
+            continue
+        if suggestion["doctype"] == "Customer":
+            if not raises or not (principal or named_for(alert, person.id)):
+                continue
+        elif not principal:
+            continue
+        out.append((alert.id, LABELS[suggestion["doctype"]]))
     return out

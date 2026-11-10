@@ -137,6 +137,8 @@ CSV_COLUMNS = (
     "private",
     "operation",
     "target",
+    "asked_by_person_id",
+    "approver",
 )
 
 
@@ -220,6 +222,10 @@ def records(
             "target": payload.get("name"),
             "proposed_at": card.created_at,
             "asked_by": payload.get("asked_by"),
+            # A credit raise's preparer, by People id, and the person it went
+            # to for approval (erpnext_credit); for other cards, its person.
+            "asked_by_person_id": payload.get("asked_by_person_id"),
+            "approver": _who(card.approver_person_id),
             "asked_in": asked_in,
             "conversation": card.originating_session_id,
             "from_alert": payload.get("from_alert"),
@@ -469,5 +475,6 @@ def to_csv(rows: list[dict[str, Any]]) -> str:
             _yes(r.get("seal_in_log")), _yes(erp.get("unchanged")),
             r.get("last_error"), "yes" if r.get("private") else "",
             r.get("operation") or "create", r.get("target"),
+            r.get("asked_by_person_id"), r.get("approver"),
         ]])
     return buffer.getvalue()
