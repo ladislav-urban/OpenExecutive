@@ -916,7 +916,6 @@ def propose(
             ):
                 break
             return int(card.id), False, shown if isinstance(shown, dict) else view
-            return int(card.id), False, shown if isinstance(shown, dict) else view
     card_key = f"oe:{DECISION_CLASS}:{uuid.uuid4().hex}"
     payload = {
         # A card is its person's alone (approver_only hides the class); this

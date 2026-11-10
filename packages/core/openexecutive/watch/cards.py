@@ -205,7 +205,7 @@ async def _check(
         return ("check_permission" if _permission(drafts._refusal_text(raw)) else "check_refused"), {}
     summary = checked.get("summary")
     if (
-        checked.get("doctype") != spec.doctype or checked.get("operation", spec.operation) != spec.operation
+        checked.get("doctype") != spec.doctype or checked.get("operation", "create") != spec.operation
         or not isinstance(summary, dict) or any(summary.get(k) != v for k, v in spec.expect.items())
     ):
         return "check_mismatch", {}
