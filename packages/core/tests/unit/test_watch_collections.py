@@ -830,11 +830,18 @@ def test_the_marker_is_for_the_jobs_current_reviewer_only(job_on: WatchJob, team
     assert _job_refused() == "job-check-job-off"
 
 
-def test_the_marker_is_capped_per_run(job_on: WatchJob) -> None:
+def test_the_marker_is_capped_per_day(job_on: WatchJob) -> None:
     erpnext_caller.begin_job_checks("collections", DAY)
     for _n in range(JOB.card_cap_day + erpnext_caller.JOB_CHECK_RETRIES):
         with _marker():
             pass
+    # A second run the same day (a slot, or a stale retry) shares the count.
+    erpnext_caller.begin_job_checks("collections", DAY)
+    for _n in range(JOB.card_cap_day + erpnext_caller.JOB_CHECK_RETRIES):
+        with _marker():
+            pass
+    assert _job_refused() == "job-check-cap"
+    erpnext_caller.begin_job_checks("collections", DAY)
     assert _job_refused() == "job-check-cap"
     erpnext_caller.begin_job_checks("collections", "2026-11-11")
     with _marker(day="2026-11-11"):

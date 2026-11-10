@@ -74,6 +74,10 @@ from openexecutive.watch.registry import (
     WatchRead,
 )
 
+# Joins a finding key's parts: a character no document name holds, so two
+# different pairs never make one key.
+_SEP = ""
+
 JOB_ID = "payment-checks"
 DOCTYPE = "Purchase Invoice"
 FIELDS = [
@@ -404,7 +408,7 @@ def _values(dup: Duplicate) -> tuple[tuple[str, str], ...]:
 def _notice(dup: Duplicate, line: str) -> CardSpec:
     what = "draft invoice" if dup.copy.docstatus == 0 else "submitted invoice"
     return CardSpec(
-        key=f"duplicate:{dup.copy.name}:{dup.original.name}",
+        key=f"duplicate{_SEP}{dup.copy.name}{_SEP}{dup.original.name}",
         summary=f"Possible duplicate {what}: {dup.copy.name}",
         values=_values(dup),
         notes=(line,),
@@ -426,7 +430,7 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
             out.append(_notice(dup, LOW_LINE))
         elif copy.docstatus == 0:
             out.append(DraftSpec(
-                key=f"duplicate:{copy.name}:{original.name}",
+                key=f"duplicate{_SEP}{copy.name}{_SEP}{original.name}",
                 operation="update",
                 doctype=DOCTYPE,
                 name=copy.name,
@@ -438,7 +442,7 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
             ))
         elif settings["block_submitted"] is True:
             out.append(DraftSpec(
-                key=f"duplicate:{copy.name}:{original.name}",
+                key=f"duplicate{_SEP}{copy.name}{_SEP}{original.name}",
                 operation="block",
                 doctype=DOCTYPE,
                 name=copy.name,
@@ -456,7 +460,7 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
     for change in bank_changes(bank_result, today):
         names = owing.get(change.supplier, [])
         out.append(CardSpec(
-            key=f"bank:{change.supplier}:{change.changed_on}",
+            key=f"bank{_SEP}{change.supplier}{_SEP}{change.changed_on}",
             summary=f"Bank details changed: {change.supplier}",
             values=(
                 ("Supplier", change.supplier),

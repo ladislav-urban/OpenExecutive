@@ -11750,7 +11750,9 @@ watch:
     fails the run (acting_job_mismatch). watch_runs.detail (added by
     settings.connect's column migration) keeps codes and counts: routed,
     routed_principal, draft_cards, draft_repeats, draft_capped, checks,
-    check_refused. Each run starts erpnext_caller.begin_job_checks(job, day).
+    check_refused. Each run joins its day's count with
+    erpnext_caller.begin_job_checks(job, day): checks are capped per job and
+    day (two runs' worth), so an hourly job's slots share one bound.
   routing: |
     watch.cards.route(job, row, reads): the reviewer only when every made
     read (at least one; skipped reads count neither way) was as_job_user,

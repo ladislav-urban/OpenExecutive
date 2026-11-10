@@ -329,10 +329,13 @@ DRAFT_CHECK_KEYS = frozenset({"operation", "doctype", "name", "fields"})
 
 
 def begin_job_checks(job_id: str, day: str) -> None:
-    """A run starts its count of checks (``watch.runner``, at each run)."""
-    for key in [k for k in _JOB_CHECKS if k[0] == job_id]:
+    """A run joins its day's count of checks (``watch.runner``, at each run).
+
+    The count is per job and day, never per run, so an hourly job's slots
+    share one bound; an earlier day's count is dropped."""
+    for key in [k for k in _JOB_CHECKS if k[0] == job_id and k[1] != day]:
         del _JOB_CHECKS[key]
-    _JOB_CHECKS[(job_id, day)] = 0
+    _JOB_CHECKS.setdefault((job_id, day), 0)
 
 
 def _reviewer_refusal(job_id: str, person_id: int | None, email: str) -> str | None:
@@ -411,7 +414,8 @@ def draft_check_for_job(
     if refused is not None:
         raise JobCheckRefused(refused)
     made = _JOB_CHECKS.get((job.id, day), 0)
-    if made >= job.card_cap_day + JOB_CHECK_RETRIES:
+    # A day's checks: two runs' worth (a run and its one stale retry).
+    if made >= 2 * (job.card_cap_day + JOB_CHECK_RETRIES):
         raise JobCheckRefused("job-check-cap")
     _JOB_CHECKS[(job.id, day)] = made + 1
     token = _draft_call.set(DraftCall(
