@@ -1234,10 +1234,88 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
     for fig in figures:
         _classify(fig, sources)
         _check_currency(fig, sources)
-    if not any(f.flagged for f in figures):
-        return figures
-    # What the reply worked out from figures it already gave ("together
-    # $3,000", "up 12%"), from those figures' values.
+    if any(f.flagged for f in figures):
+        _from_the_reply(text, figures, sources, fmt)
+    _own_differences(text, figures)
+    return figures
+
+
+# "$3.76 a board under the BOM": a difference the reply states between the two
+# figures before it. Never "over the next quarter", nor "under $X", whose
+# second figure follows.
+_DIFFERENCE_AFTER = re.compile(
+    r"[ \t]*(?:(?:a|an|per|each)[ \t]+[A-Za-z]+[ \t]+)?"
+    r"(?:under|over|below|above|less[ \t]+than|more[ \t]+than|cheaper[ \t]+than|short[ \t]+of)\b"
+    r"(?![ \t]+(?:the[ \t]+)?(?:next|last|past|previous|coming|period|time|year|month|week|quarter)\b)"
+    r"(?![ \t]*[\d" + _CURRENCY_SYMBOLS + r"])"
+)
+_TOTAL_CELL = re.compile(r"(?i)(?:grand[ \t]+)?totals?\b")
+
+
+def _written(fig: Figure) -> float:
+    return fig.readings[0][0] * fig.scale
+
+
+def _in_table_line(text: str, pos: int) -> bool:
+    return text[text.rfind("\n", 0, pos) + 1:pos].lstrip().startswith("|")
+
+
+def _total_row_figures(text: str, figures: list[Figure]) -> list[Figure]:
+    """The passed figures of the reply's own tables' total rows."""
+    out: list[Figure] = []
+    for fig in figures:
+        line = text[text.rfind("\n", 0, fig.start) + 1:fig.start]
+        if not line.lstrip().startswith("|") or fig.status not in ("confirmed", "given") or fig.percent:
+            continue
+        first = _cells(line + "|")[0].strip(" *_~")
+        if _TOTAL_CELL.match(first):
+            out.append(fig)
+    return out
+
+
+def _own_differences(text: str, figures: list[Figure]) -> None:
+    """An opening figure the reply's own table and stated difference both
+    contradict: "costs $174.90 against a BOM of $188.40 … $3.76 a board under
+    the BOM" beside a table whose Total is $192.16. The difference matches
+    neither the two figures before it, but does when the table's total takes
+    one of their places: that one is written from the total (``arithmetic``),
+    as a product the reply works out wrong is. Only then: any other mismatch
+    may compare with something the sentence doesn't show (a demo reshoot)."""
+    totals = _total_row_figures(text, figures)
+    if not totals:
+        return
+    for i, diff in enumerate(figures):
+        if not diff.currency_text or diff.percent or not _DIFFERENCE_AFTER.match(text, diff.end):
+            continue
+        if _in_table_line(text, diff.start):
+            continue
+        paragraph = text.rfind("\n\n", 0, diff.start)
+        before = [
+            f for f in figures[:i]
+            if f.start > paragraph and not f.percent and f.currency_text == diff.currency_text
+            and not _in_table_line(text, f.start)
+        ]
+        if len(before) < 2:
+            continue
+        a, b = before[-2], before[-1]
+        if a.status not in ("confirmed", "given") or b.status not in ("confirmed", "given"):
+            continue
+        if diff.matches(abs(_written(a) - _written(b))):
+            continue
+        fixes = {
+            (id(x), round(_written(t), 6)): (x, _written(t))
+            for t in totals if t.currency_text == diff.currency_text
+            for x, other in ((a, b), (b, a))
+            if not x.matches(_written(t)) and diff.matches(abs(_written(t) - _written(other)))
+        }
+        if len(fixes) == 1:
+            ((x, value),) = fixes.values()
+            x.status, x.matched, x.how, x.arithmetic = "unconfirmed", None, "", value
+
+
+def _from_the_reply(text: str, figures: list[Figure], sources: Sources, fmt: NumberFormat) -> None:
+    """Flagged figures the reply worked out from figures it already gave
+    ("together $3,000", "up 12%"), held to those figures' values."""
     confirmed = sorted({abs(f.matched) for f in figures if f.status == "confirmed" and f.matched})
     pool = sorted({*confirmed, *sources.headline})
     for i, fig in enumerate(figures):
@@ -1265,7 +1343,6 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
         pair = _pair(pool, fig) if confirmed else None
         if pair is not None:
             fig.status, fig.matched, fig.how = "confirmed", pair[0], pair[1]
-    return figures
 
 
 # What may stand in an expression the reply works out: numbers, operators,
