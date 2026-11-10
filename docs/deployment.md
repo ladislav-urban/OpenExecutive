@@ -265,7 +265,10 @@ admin API is `http://keycloak:8180`; the API container reads the same
 repo-root `.env` as everything else, which is also how it checks
 `DIRECTORY_SYNC_ISSUER` against `AUTH_OIDC_ISSUER`. Turn it on after a dry
 run (`docker compose exec api openexecutive directory-sync --dry-run`) lists
-what you expect: on a fresh install, only you, as "linked".
+what you expect: on a fresh install, only you, as "linked". Give the UI
+`DIRECTORY_SYNC_ENABLED` too (the compose file passes it through), so someone
+just added to the group is let in when they first sign in rather than after
+the next run.
 
 ## Health checks
 
