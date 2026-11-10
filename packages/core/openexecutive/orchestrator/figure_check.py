@@ -793,7 +793,9 @@ class _Reader:
                     self._note_kind(got, key)
                     if not truncated:
                         self._note_count(got, key)
-                    if _is_rating(key) and 0 <= got <= 1:
+                    # Only a JSON number is a Rating fraction: a string ("1")
+                    # is a rating already out of five.
+                    if _is_rating(key) and not isinstance(value, str) and 0 <= got <= 1:
                         # ERPNext keeps a Rating as a fraction (0.8); people
                         # and replies give it out of five (4).
                         stars = round(got * RATING_STARS, 6)

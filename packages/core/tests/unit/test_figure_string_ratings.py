@@ -62,3 +62,19 @@ def test_a_reviewer_may_name_a_rating_as_erpnext_wrote_it() -> None:
     (fig,) = find_figures("Schedule averaged 4.5 overall.")
     got = answer_review.read_verdict({"verdict": "wrong", "op": "average", "operands": ["4", "5", "4", "6"]}, fig, src)
     assert got == Review("wrong", 4.75)
+
+
+
+def test_a_string_rating_is_never_read_as_a_fraction_of_five_stars() -> None:
+    result = ErpnextResult(
+        "erpnext__list_records",
+        {"doctype": "Quality Feedback", "fields": ["name", "parameters.rating"]},
+        {"doctype": "Quality Feedback", "rows": [{"name": "FB-1", "rating": "1"}, {"name": "FB-2", "rating": "3"}]},
+    )
+    assert sorted(sources_for([result], fmt=FMT).values) == [1.0, 3.0]
+    # A JSON number in a Rating field is still a fraction: 0.8 is 4 stars.
+    fraction = ErpnextResult(
+        "erpnext__list_records", {"doctype": "Quality Feedback"},
+        {"doctype": "Quality Feedback", "rows": [{"name": "FB-1", "rating": 0.8}]},
+    )
+    assert 4.0 in sources_for([fraction], fmt=FMT).values
