@@ -943,6 +943,34 @@ follow-up ToDo is worded from the invoice's figures and assigned to the
 owner. The DocType must be listed in `ERPNEXT_DRAFT_DOCTYPES` (both are by
 default); nothing else needs setting.
 
+A credit-hold alert (a draft Sales Order over its customer's credit limit)
+can suggest raising that customer's credit limit at its company, so the
+order fits. Off by default: it is the one card whose approval changes
+ERPNext at once, and the order itself is never submitted (its owner submits
+it in ERPNext). To turn it on:
+
+```bash
+ERPNEXT_DRAFTS_ENABLED=true
+ERPNEXT_CREDIT_RAISE=true
+# Set as the site's oe_connector_draft_sod: "agent" there means "agent" here.
+ERPNEXT_DRAFT_SOD=off
+```
+
+and on the site list Customer in `oe_connector_update_doctypes` and set
+`oe_connector_credit_raise_max` (the most one raise may add, in company
+currency; unset refuses every raise). **Prepare the raise** shows to the
+owner and to the people the alert names (each needs
+`ERPNEXT_DRAFTS_TEAMMATES` and signed sign-ins). ERPNext checks the raise as
+whoever taps; someone it won't let prepare one gets no card, and is told who
+can (the people given customer credit authority in People, else "your credit
+controller"). The card is approved by whoever tapped when they have customer
+credit authority in People and separation of duties is off, otherwise by the
+owner; with it on and the owner tapping, no card is left. Approval needs the
+credit authority role in ERPNext as well, within the site's cap. Keep
+`ERPNEXT_DRAFT_SOD` the same as the site's `oe_connector_draft_sod`: on there
+and off here, ERPNext refuses the approval and the card closes; on here and
+off there, only the owner approves raises. Demo people never approve one.
+
 **Suppliers' agents over A2A.** A supplier's own AI agent can ask, over A2A
 (Agent2Agent, JSON-RPC `message/send`), about that supplier's own submitted
 purchase orders and invoices: status, dates, quantities and amounts. A narrow

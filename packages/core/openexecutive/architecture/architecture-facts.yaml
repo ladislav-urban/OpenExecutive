@@ -10647,7 +10647,8 @@ integrations:
     tag per match (alerts.models.named_people, private erpnext alerts only).
     It stays routed to the principal, whose card it is to act on: the named
     people see it on their own Home (today._board_alerts), look-only
-    (card_actions as for a demo caller; the alert routes refuse them), and
+    (card_actions as for a demo caller; the alert routes refuse them, but
+    for its Prepare the raise, under "Credit-raise cards" below), and
     dispatcher.push_to_named sends it to each one's own private chat only
     (deliver_to_person chat_only, marked as ERPNext's figures). A different
     set of readers keys a card of its own, and a demo person is never named. It never reaches a broadcast, a live
@@ -10730,8 +10731,12 @@ integrations:
       the SHA-256 of exactly those arguments: draft_check_run (the proposal
       path, erpnext__draft_check only, asked as the turn's own caller via
       caller_for), draft_check_as (an alert's "Prepare" tap,
-      erpnext__draft_check only, signed as the principal the API verified
-      as the tapper; an API request with no session) or draft_executor_run
+      erpnext__draft_check only, signed as the person the API verified
+      as the tapper; an API request with no session), draft_recheck_as
+      (GET /erpnext/drafts reading a waiting credit-raise card again,
+      erpnext__draft_check only, signed as that card's approver, set only
+      after verified.caller_refusal proved the viewer is them; an API
+      request with no session) or draft_executor_run
       (the card executor, any draft tool but draft_check, signed as the
       approver it names; an API request with no session). Markers are ContextVars set only by code around its own
       gateway call, so a concurrent tool use, a script (run_script) or a
@@ -10990,6 +10995,96 @@ integrations:
     that card (already_waiting). UI: components/ErpnextAlertDraftButton.tsx
     on each ProposalCard, one GET for all, reloads the draft cards after a
     tap. With the panel (below), every 4b part is built.
+
+    Credit-raise cards (the credit hold's card half;
+    integrations/erpnext_credit.py; oe_connector's Customer UpdateType on
+    draft_update). Off unless ERPNEXT_CREDIT_RAISE (default false) and
+    drafts_on(): the first card whose approval changes a live master at
+    once. SUGGESTING["credit_hold"] = "Customer", label "Prepare the raise".
+    The suggest is oe_connector's 8 keys {doctype: Customer, operation:
+    update, name, company, sales_order, current_limit, credit_limit,
+    currency}; parse_suggestion validates the six approval needs (names by
+    erpnext_changes._DOC_RE; credit_limit finite, not a bool, 0 < x <
+    CREDIT_HIGH 1e12), shape-checks current_limit and currency for display
+    and keeps only the six; no other key. The event key must equal
+    f"{company}:{sales_order}"[:140], compared whole, never split on ":".
+    _ref_of strips exactly one :named:[0-9,]+ suffix from the alert's
+    dedup_key (tries it unstripped too); external_id <ref>:<YYYY-MM> stays
+    the arbiter. Who may prepare: the alert's named people (named_for) and
+    the principal; anyone else 404. A teammate needs ERPNEXT_DRAFTS_TEAMMATES
+    (else 403 principal_only) and signed sign-ins, and GET
+    /erpnext/alert-drafts gives non-principals the same signing_on() gate as
+    GET /erpnext/drafts. prepare(): verified.caller_refusal against the
+    tapper's email, then draft_check as the tapper (draft_check_as) with
+    code-built {doctype: Customer, operation: update, name, fields: {credit:
+    {company, credit_limit, sales_order}}}. summary_refusal: echo of update,
+    Customer and the name; credit.company and sales_order.name the card's;
+    limit_before/limit_after/outstanding/with_order/increase and
+    base_grand_total finite; currency [A-Z]{3}; order_fits a bool and true;
+    sales_order.docstatus 0 (not a bool); limit_after within 0.005 of the
+    stored credit_limit; sales_order.owner optional (oe_connector #535), a
+    string of at most 254, never shown; a sound fingerprint. Otherwise no
+    card. Who can prepare per oe_connector: until #535 only credit-role
+    holders pass draft_check ("raising a credit limit needs customer credit
+    authority"); with #535 the order's owner or a role holder, else "a
+    credit-limit raise is prepared by the held order's owner or someone with
+    customer credit authority". Both leave no card and are no failure: 200
+    with decision_id null and a message naming the active team members with
+    customer_credit in People (at most five), else "your credit controller".
+    The fingerprint binds what was shown across asker and approver (the
+    summary is per customer and company, not per user). Approver
+    (choose_approver): the tapper when they hold customer_credit (or are the
+    principal), aren't demo, teammates are on and ERPNEXT_DRAFT_SOD is off;
+    otherwise the principal; SoD agent with the principal tapping leaves no
+    card (409 no_approver, saying who should be given the authority).
+    The card: erpnext_draft, operation "credit" (erpnext_changes.OPERATIONS;
+    OPERATION_TOOLS["credit"] = erpnext__draft_update; enabled("credit") is
+    () and check_change refuses it, and Customer is in no update allowlist,
+    so handle_propose refuses both), fields {credit: {...}}, asked_by the
+    tapper's email, from_alert, payload extras approver_person_id,
+    approver_email, asked_by_person_id and currency. View in our words:
+    "Raise <customer>'s credit limit at <company> from X to Y <currency>
+    (+Z), so order <SO> (W) fits; it owes V." with Y the stored limit and
+    X, V, W and the currency ERPNext's; "Prepared by <name>" when the
+    approver isn't the asker; a note when the row is added (the limit came
+    from the group or company) and "You'd still submit the order in
+    ERPNext." Names through _one_line(.., NAME_MAX); the view and why never
+    reach a model. Once per alert across every approver: _taken scans
+    from_alert over all approvers' cards (tidying each approver with one
+    waiting), so a second named person's tap returns the existing card; and
+    at most PER_ASKER_MAX 3 raises a person left waiting on someone else.
+    approve(): erpnext_credit.approval_refusal before the claim:
+    credit_on() still (else drafts_off), not demo (403 demo), customer_credit
+    or principal (403 no_authority), payload approver_person_id == the
+    approver == instance.approver_person_id (403 not_yours), the approver's
+    current email == approver_email and the asker's row active with email ==
+    asked_by (409 changed; replaces the asked_by == approver check for this
+    operation only), SoD agent and asker == approver (409
+    separation_of_duties), a drifted fresh read (closed, 409
+    changed_since_proposed); then the stored {credit} shape (credit_fields)
+    and the fingerprint re-check. _carry_out sends {doctype: Customer, name,
+    credit, idempotency_key, asked_by, expected_fingerprint} as the approver
+    (draft_executor_run); success is erpnext_changes.made("update", ..),
+    created gains operation credit and credit {company, limit};
+    CHANGED_SINCE_PROPOSED and "Separation of duties" (SOD_REFUSED) close the
+    card. oe_connector checks the role, raise-only, the cap, the held draft
+    order and the fingerprint as the approver. Audit and oversight rows carry
+    asked_by_person_id and the approver (oversight CSV columns
+    asked_by_person_id, approver). Fresh check on open: only in GET
+    /erpnext/drafts (async), never in cards(), which Home's count calls;
+    recheck() runs when caller_refusal(caller, approver email) is None,
+    rechecks the viewer's own credit cards least recently read first, at
+    most RECHECK_PER_REQUEST 3 a request, each at most once per
+    RECHECK_TTL_S 60 s, cached in-process by decision id with the approver's
+    id (served only when it matches); a new fingerprint or
+    sales_order.docstatus != 0 sets DraftCard.changed; errors change
+    nothing; the GET never mutates. ERPNEXT_DRAFT_SOD (off | agent) must
+    match the site's oe_connector_draft_sod: site on and OE off refuses the
+    approval there (closing the card); OE on and the site off only sends
+    more cards to the principal. UI: cardKind "Raise a credit limit",
+    creditMadeLine "<customer>'s credit limit at <company> is now Y. The
+    order is still a draft for its owner to submit.", CREDIT_CHANGED_NOTE on
+    a changed card, and the tap's message shown as is.
 
     Ask the Dynocortex panel (phase 2b; "Ask the Executive" before
     oe_connector #8): oe_connector docks a chat panel, always open, on the
