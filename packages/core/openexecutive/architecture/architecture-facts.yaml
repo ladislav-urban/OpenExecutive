@@ -11736,9 +11736,11 @@ watch:
     migrates a (job, day)-keyed watch_runs once (_migrate_runs, under BEGIN
     IMMEDIATE, re-checked inside): every row kept with slot "", a noticed
     failure carried to watch_days. watch_days (job, day, cards,
-    failure_noticed): take_day_cards(job, day, n, cap) reads and adds in one
-    BEGIN IMMEDIATE (negative n gives back, never below 0), so the day's
-    card cap holds across slots and workers; take_failure_notice is true once
+    failure_noticed, checks; checks added by settings.connect's column
+    migration): take_day_cards(job, day, n, cap), and take_day for any
+    DAY_COUNTS column, reads and adds in one BEGIN IMMEDIATE (negative n
+    gives back, never below 0), so the day's card cap holds across slots,
+    workers and restarts; take_failure_notice is true once
     per job and calendar day. One asyncio task per run (unscoped audit
     rows), not a scheduled_actions row. run_job(job, day, slot=) runs under
     set_turn(turn_id=watch:<id>:<day>[:<slot>]) and
@@ -11759,9 +11761,9 @@ watch:
     fails the run (acting_job_mismatch). watch_runs.detail (added by
     settings.connect's column migration) keeps codes and counts: routed,
     routed_principal, draft_cards, draft_repeats, draft_capped, checks,
-    check_refused. Each run joins its day's count with
-    erpnext_caller.begin_job_checks(job, day): checks are capped per job and
-    day (two runs' worth), so an hourly job's slots share one bound.
+    check_refused. Checks are capped per job and day in watch_days.checks
+    (erpnext_caller.job_check_cap, two runs' worth), so an hourly job's
+    slots share one bound and a restart never resets it.
   routing: |
     watch.cards.route(job, row, reads): the reviewer only when every made
     read (at least one; skipped reads count neither way) was as_job_user,
@@ -11784,8 +11786,11 @@ watch:
     exactly {operation, doctype, [name,] fields} with fields equal to
     job.check_fields' output (job-check-arguments; so never asked_by or
     configured_by), a person who isn't the job's current reviewer under that
-    email (active, team, not demo, not principal), and past card_cap_day +
-    JOB_CHECK_RETRIES (2) per (job, day). _marked refuses any draft marker
+    email (active, team, not demo, not principal), and past job_check_cap,
+    2 x (card_cap_day + JOB_CHECK_RETRIES (2)) per (job, day), taken from
+    watch_days.checks (settings.take_day) in one transaction before the
+    check and never given back, so a refused check still counts; a count
+    that can't be taken refuses (job-check-cap). _marked refuses any draft marker
     inside it. The gateway: any other tool under it is outside-job-check;
     _check_erpnext_draft refuses it under a session, a watch read, the
     brief, oversight, answer check or supplier markers, for any tool but

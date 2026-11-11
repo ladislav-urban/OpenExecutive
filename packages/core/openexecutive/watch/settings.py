@@ -1,7 +1,8 @@
 """Each watch job's settings (table ``watch_jobs``), its runs (``watch_runs``,
 one row per job, day and slot, written by ``watch.runner``) and its days
-(``watch_days``: the draft cards its runs left, counted in a transaction
-across slots, and its one failure notice a day).
+(``watch_days``: the draft cards its runs left and the checks they had
+ERPNext make, each counted in a transaction across slots and restarts, and
+its one failure notice a day).
 
 One row per job: ``enabled`` (off until the principal turns it on), who
 configured it last and when, ``settings`` (JSON, exactly the job's
@@ -67,19 +68,24 @@ _DDL = (
     # read, whether oe_connector ran it as the job's own user
     # (`acting.as_job_user`), never that user's name.
     _RUNS_DDL.format(table=RUNS_TABLE),
-    # One row per job and day: the draft cards its runs left that day (the
-    # cap counts across slots, taken in a transaction), and whether its one
+    # One row per job and day: the draft cards its runs left that day and
+    # the checks they had ERPNext make as the reviewer (each cap counts across
+    # slots and restarts, taken in a transaction), and whether its one
     # failure notice for the day was left.
     f"""CREATE TABLE IF NOT EXISTS {DAYS_TABLE} (
         job TEXT NOT NULL,
         day TEXT NOT NULL,
         cards INTEGER NOT NULL DEFAULT 0,
         failure_noticed INTEGER NOT NULL DEFAULT 0,
+        checks INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (job, day)
     )""",
 )
 # Columns added after the table first shipped: name -> its definition.
 _RUN_COLUMNS = {"detail": "TEXT NOT NULL DEFAULT '{}'"}
+_DAY_COLUMNS = {"checks": "INTEGER NOT NULL DEFAULT 0"}
+# What a day's row counts against a cap (``take_day``).
+DAY_COUNTS = frozenset({"cards", "checks"})
 # The columns a run row had before slots, copied as they are by the migration.
 _PRE_SLOT_COLUMNS = (
     "job", "day", "status", "started_at", "finished_at", "attempts", "cards", "error", "reads",
@@ -144,6 +150,13 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
             except sqlite3.OperationalError:
                 # Another connection added it meanwhile.
                 logger.debug("watch: column %s already added", column)
+    have_days = {row[1] for row in conn.execute(f"PRAGMA table_info({DAYS_TABLE})")}
+    for column, definition in _DAY_COLUMNS.items():
+        if column not in have_days:
+            try:
+                conn.execute(f"ALTER TABLE {DAYS_TABLE} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                logger.debug("watch: column %s already added", column)
     return conn
 
 
@@ -153,6 +166,15 @@ def take_day_cards(job_id: str, day: str, n: int, cap: int, *, path: Path | None
     the day's slots) never pass the cap between them. Returns how many were
     taken. A negative ``n`` gives that many back (a card that wasn't left
     after all), never below 0."""
+    return take_day(job_id, day, "cards", n, cap, path=path)
+
+
+def take_day(job_id: str, day: str, what: str, n: int, cap: int, *, path: Path | None = None) -> int:
+    """``take_day_cards`` for any of the day's counts (``DAY_COUNTS``): the
+    job's checks too, which nothing gives back. In the database, so a
+    restart or a second worker sees the same count."""
+    if what not in DAY_COUNTS:
+        raise ValueError(f"not a day's count: {what}")
     conn = connect(path)
     try:
         conn.execute("BEGIN IMMEDIATE")
@@ -160,13 +182,13 @@ def take_day_cards(job_id: str, day: str, n: int, cap: int, *, path: Path | None
             f"INSERT OR IGNORE INTO {DAYS_TABLE} (job, day) VALUES (?, ?)", (job_id, day)  # noqa: S608
         )
         row = conn.execute(
-            f"SELECT cards FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
+            f"SELECT {what} FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
         ).fetchone()
         used = int(row[0] or 0) if row else 0
         taken = max(-used, n) if n < 0 else max(0, min(n, cap - used))
         if taken:
             conn.execute(
-                f"UPDATE {DAYS_TABLE} SET cards = cards + ? WHERE job = ? AND day = ?",  # noqa: S608
+                f"UPDATE {DAYS_TABLE} SET {what} = {what} + ? WHERE job = ? AND day = ?",  # noqa: S608
                 (taken, job_id, day),
             )
         conn.execute("COMMIT")
@@ -181,10 +203,17 @@ def take_day_cards(job_id: str, day: str, n: int, cap: int, *, path: Path | None
 
 def day_cards(job_id: str, day: str, *, path: Path | None = None) -> int:
     """The draft cards the job's runs took for ``day`` so far."""
+    return day_count(job_id, day, "cards", path=path)
+
+
+def day_count(job_id: str, day: str, what: str, *, path: Path | None = None) -> int:
+    """One of the day's counts (``DAY_COUNTS``) for the job so far."""
+    if what not in DAY_COUNTS:
+        raise ValueError(f"not a day's count: {what}")
     conn = connect(path)
     try:
         row = conn.execute(
-            f"SELECT cards FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
+            f"SELECT {what} FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
         ).fetchone()
     finally:
         conn.close()

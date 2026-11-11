@@ -511,7 +511,6 @@ def _refusal_reason(said: object) -> str:
 
 
 async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) -> RunOutcome:
-    from openexecutive.orchestrator import erpnext_caller
     from openexecutive.watch import cards
 
     today = date.fromisoformat(day)
@@ -519,7 +518,6 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     if not master_on() or not row.enabled:
         raise _Stop("watch-job-off")
     settings = effective_settings(job, row)
-    erpnext_caller.begin_job_checks(job.id, day)
     results: list[Mapping[str, Any]] = []
     users: set[str] = set()
     for read in job.reads:
