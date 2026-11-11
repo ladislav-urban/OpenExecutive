@@ -237,9 +237,12 @@ def take_day_amount(job_id: str, day: str, amount: float, cap: float, *, path: P
 def take_approved_amount(
     job_id: str, day: str, person_id: int, decision_id: int, amount: float, cap: float, *, path: Path | None = None,
 ) -> bool:
-    """Count one card's ``amount`` against what ``person_id`` approved of the
-    job's cards on ``day``, read and written in one ``BEGIN IMMEDIATE``
-    transaction: whether it fits ``cap`` with what they approved already.
+    """Count one card's ``amount`` against what was approved of the job's
+    cards on ``day``, by anyone, read and written in one ``BEGIN IMMEDIATE``
+    transaction: whether it fits ``cap`` with what was approved already. The
+    cap is the job's day, never one approver's: a reviewer changed mid-day
+    starts from what the day already took. ``person_id`` is kept with the
+    row, for the audit.
     A card counted that day is counted once, however often it is approved
     again (a timeout, a refusal), and never given back: it counts from its
     claim. Fails closed: an error raises."""
@@ -254,8 +257,8 @@ def take_approved_amount(
             conn.execute("COMMIT")
             return True
         row = conn.execute(
-            f"SELECT COALESCE(SUM(amount), 0) FROM {APPROVED_TABLE} WHERE job = ? AND day = ? AND person_id = ?",  # noqa: S608
-            (job_id, day, person_id),
+            f"SELECT COALESCE(SUM(amount), 0) FROM {APPROVED_TABLE} WHERE job = ? AND day = ?",  # noqa: S608
+            (job_id, day),
         ).fetchone()
         used = float(row[0] or 0) if row else 0.0
         if used + amount > cap:

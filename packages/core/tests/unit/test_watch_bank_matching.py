@@ -919,11 +919,27 @@ def test_the_month_lists_a_match_tried_but_never_confirmed(
     # The call failed (or timed out): ERPNext may have made it, so it's listed to check.
     erp.replies.append(json.dumps({"error": "ERPNext is busy"}))
     assert _refusal(cards["BT-1"]).code == "draft_failed"
-    month_later = date.fromisoformat(DAY).replace(day=1) + timedelta(days=40)
+    left = get_decision_instance(cards["BT-1"].id)
+    assert left is not None and left.created_at
+    month_later = date.fromisoformat(left.created_at[:10]).replace(day=1) + timedelta(days=40)
     [notice] = bank_matching.month_notices(SETTINGS, month_later)
     assert [i.summary for i in notice.items] == ["Bank line BT-1"]
     assert dict(notice.items[0].values)["Outcome"] == bank_matching.UNKNOWN_OUTCOME
     assert notice.to_principal
+    # Listed in the month it was left only, never again.
+    assert bank_matching.month_notices(SETTINGS, month_later + timedelta(days=31)) == []
+
+
+def test_the_day_cap_is_the_jobs_not_one_approvers(cards: dict[str, Any], team: SimpleNamespace, approvals: None) -> None:
+    # A reviewer changed mid-day starts from what the day already took.
+    from openexecutive.watch.settings import take_approved_amount
+
+    day = TODAY.isoformat()
+    assert take_approved_amount(JOB.id, day, team.cara, 9001, 1000.0, 1500.0)
+    assert not take_approved_amount(JOB.id, day, team.principal, 9002, 600.0, 1500.0)
+    assert take_approved_amount(JOB.id, day, team.principal, 9002, 500.0, 1500.0)
+    # The same card counts once, whoever approves it again.
+    assert take_approved_amount(JOB.id, day, team.principal, 9001, 1000.0, 1500.0)
 
 
 def test_only_the_match_branch_sends_draft_match_bank_line() -> None:

@@ -32,8 +32,9 @@ Its rules are code, unit-tested on fixed data:
     a missing key means "can't tell", never "none"), and the voucher's
     reference (6 characters or more, on word boundaries) in the bank's
     reference or description;
-  - **low:** the same amount or the same party only. Shown on a card's
-    "also possible" lines, never proposed, never named in a notice.
+  - **low:** the same amount or the same party only. Never proposed, never
+    shown on a card (it holds only what ERPNext checked as the reviewer),
+    never named in a notice.
 - **One voucher a card,** and only when exactly one fits at the best
   confidence. Never a match for a payment covering several invoices, a
   partial one, or two vouchers that fit equally: those get a notice to
@@ -657,9 +658,11 @@ def month_notices(settings: Settings, today: date) -> list[CardSpec]:
             continue
         made = card.status == STATUS_APPROVED_UNCHANGED
         # An approval tried and never confirmed: ERPNext may have made it.
+        # Listed once, in the month the card was left (a card waits three
+        # days at most, so the month of its first attempt), never again.
         tried = not made and int(payload.get("attempts") or 0) > 0
-        when = card.resolved_at or ""
-        if not (made or tried) or (made and not when.startswith(month)) or (tried and when and not when.startswith(month)):
+        when = (card.resolved_at or "") if made else (card.created_at or "")
+        if not (made or tried) or not when.startswith(month):
             continue
         kept = erpnext_match.slice_of_stored(payload.get("slice"))
         if kept is None:

@@ -11916,8 +11916,9 @@ watch:
     unchanged, name and vouchers the card's, slice_refusal none; the
     approver's current email named in it closes the card sod_refused),
     match_fields and the fingerprint again; after claim_for_execution,
-    take_approved counts total_company_currency against what this approver
-    approved of the job's cards on the company's day
+    take_approved counts total_company_currency against what was approved
+    of the job's cards on the company's day, by anyone (a reviewer changed
+    mid-day starts from what the day took)
     (settings.take_approved_amount, table watch_approved, one row per
     card, never given back, fails closed); over amount_cap_day the claim
     is released and the card waits (409 match_limit, LIMIT_TEXT).

@@ -37,7 +37,7 @@ approval re-checks, stored on the card.
 slice: the switches, the line still Reconciled after and fully taken, the
 vouchers the card's own, the approver not its importer or a voucher's
 creator by their current email. Then, holding the claim, the day's cap:
-what this approver approved of the job's cards today plus this one stays
+what was approved of the job's cards today, by anyone, plus this one stays
 within the job's ``amount_cap_day`` in the company's currency
 (``take_approved``, one transaction, failing closed). Over it, the claim
 is released and the card waits: "today's matching limit is reached".
@@ -547,8 +547,8 @@ def slice_of_stored(stored: Any) -> dict[str, Any] | None:
 
 
 def take_approved(payload: dict[str, Any], decision_id: int, person_id: int) -> bool:
-    """Count this card against what ``person_id`` approved of the job's
-    cards today (the company's day), within the job's ``amount_cap_day``, in
+    """Count this card against what was approved of the job's cards today
+    (the company's day), by anyone, within the job's ``amount_cap_day``, in
     one transaction. Whether it fits. Fails closed: anything unreadable is
     over the cap."""
     from openexecutive.watch import registry
