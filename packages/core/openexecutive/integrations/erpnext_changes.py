@@ -24,6 +24,7 @@ same person. This module holds what is particular to them:
 """
 from __future__ import annotations
 
+import html
 import re
 from typing import Any
 
@@ -278,11 +279,48 @@ def _too_long(value: Any) -> bool:
     return isinstance(value, str) and len(_text_whole(value)) > TEXT_SHOWN
 
 
+def _date_of(value: Any) -> str | None:
+    """A date as YYYY-MM-DD, from ERPNext's date or midnight datetime text."""
+    if not isinstance(value, str):
+        return None
+    found = re.fullmatch(r"(\d{4}-\d{2}-\d{2})(?:[ T]00:00:00(?:\.0+)?)?", value.strip())
+    return found.group(1) if found else None
+
+
+def _same(field: str, reported: Any, stored: Any) -> bool:
+    """Whether ERPNext's after-value is the value stored to send, once dates
+    and numbers are put in one form (12 is 12.0; a date is its day). A line's
+    description comes back HTML-escaped, as oe_connector stores it."""
+    if field in _FLAG_FIELDS or field in _NUMBER_FIELDS:
+        if isinstance(reported, bool) or not isinstance(reported, int | float):
+            return False
+        return float(reported) == float(stored)
+    if field in _DATE_FIELDS:
+        return _date_of(reported) is not None and _date_of(reported) == _date_of(stored)
+    if not isinstance(reported, str):
+        return False
+    if field == "description":
+        reported = html.unescape(reported)
+    return reported.strip() == stored
+
+
+def _exact_changes(reported: Any, asked: dict[str, Any]) -> bool:
+    """Every asked field reported once, each with the stored value after."""
+    if not isinstance(reported, list) or not all(isinstance(c, dict) for c in reported):
+        return False
+    fields = [c.get("field") for c in reported]
+    if len(fields) != len(set(fields)) or set(fields) != set(asked):
+        return False
+    return all(_same(str(c["field"]), c.get("after"), asked[str(c["field"])]) for c in reported)
+
+
 def summary_refusal(operation: str, doctype: str, name: str, fields: dict[str, Any], checked: dict[str, Any]) -> str | None:
     """Why ERPNext's check can't become a card, or None: it must read back
     the same operation and document, a known owner, no more changes than
-    allowed, for a comment exactly the stored text, and for an update every
-    text value short enough to show whole."""
+    allowed, and for a comment exactly the stored text. An update's reading
+    must match what was asked exactly: every asked change reported, each
+    after-value the one stored to send, removed rows only ones asked to be
+    removed, and every text value short enough to show whole."""
     summary = checked.get("summary")
     if not isinstance(summary, dict):
         return "ERPNext didn't say what it would change, so no card was left."
@@ -297,19 +335,29 @@ def summary_refusal(operation: str, doctype: str, name: str, fields: dict[str, A
     changes, lines, removed = summary.get("changes"), summary.get("lines"), summary.get("removed")
     if not (isinstance(changes, list) and isinstance(lines, list) and isinstance(removed, list)):
         return "ERPNext's reading of the change was incomplete, so no card was left."
-    sent = set(fields.get("set") or {})
+    sent = fields.get("set") or {}
     if any(not isinstance(c, dict) or c.get("field") not in sent for c in changes):
         return "ERPNext's reading names a change that wasn't asked for, so no card was left."
     sent_lines = {
-        (table, row): set(row_fields)
+        (table, row): row_fields
         for table, rows in (fields.get("lines") or {}).items() for row, row_fields in rows.items()
     }
+    seen: set[tuple[Any, Any]] = set()
     for line in lines:
-        if not isinstance(line, dict):
+        if not isinstance(line, dict) or not isinstance(line.get("changes") or [], list):
             return "ERPNext's reading of the change was incomplete, so no card was left."
-        asked = sent_lines.get((line.get("table"), line.get("row")), set())
+        key = (line.get("table"), line.get("row"))
+        asked = sent_lines.get(key, {})
         if any(not isinstance(c, dict) or c.get("field") not in asked for c in line.get("changes") or []):
             return "ERPNext's reading names a change that wasn't asked for, so no card was left."
+        if key in seen or not _exact_changes(line.get("changes") or [], asked):
+            return _DIFFERENT
+        seen.add(key)
+    if not _exact_changes(changes, sent) or seen != set(sent_lines):
+        return _DIFFERENT
+    may_remove = {(table, row) for table, rows in (fields.get("remove_lines") or {}).items() for row in rows}
+    if any(not isinstance(r, dict) or (r.get("table"), r.get("row")) not in may_remove for r in removed):
+        return "ERPNext's reading removes a row that wasn't asked to be removed, so no card was left."
     line_changes = sum(len(x.get("changes") or []) for x in lines)
     total = len(changes) + line_changes + len(removed)
     if total == 0 or total > MAX_CHANGES:
@@ -320,6 +368,11 @@ def summary_refusal(operation: str, doctype: str, name: str, fields: dict[str, A
         return (f"A value in this change is longer than {TEXT_SHOWN} characters, so it can't be shown "
                 "whole on a card and none was left.")
     return None
+
+
+_DIFFERENT = ("ERPNext read the change differently from what was asked (a value left out, perhaps because "
+              "it is already so, or read as another value), so no card was left. Ask again with only the "
+              "values that change.")
 
 
 def card_view(operation: str, doctype: str, name: str, summary: dict[str, Any]) -> dict[str, Any]:

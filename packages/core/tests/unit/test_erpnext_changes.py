@@ -282,3 +282,53 @@ def test_a_value_too_long_to_show_whole_leaves_no_card() -> None:
     summary = {**UPDATE_SUMMARY, "changes": [{"field": "remarks", "before": "r" * 1001, "after": "New"}], "lines": []}
     out = _refusal({"set": {"remarks": "New"}}, summary)
     assert out is not None and "whole" in out
+
+
+def test_a_reading_that_matches_the_ask_once_normalised_leaves_a_card() -> None:
+    fields = {"set": {"due_date": "2026-12-01", "on_hold": 1},
+              "lines": {"items": {"row-a1": {"qty": 12, "description": "Cable <10m> & plugs"}}},
+              "remove_lines": {"items": ["row-b2"]}}
+    summary = {**UPDATE_SUMMARY,
+               "changes": [{"field": "due_date", "before": "2026-11-30", "after": "2026-12-01 00:00:00"},
+                           {"field": "on_hold", "before": 0, "after": 1.0}],
+               "lines": [{"table": "items", "row": "row-a1", "idx": 1,
+                          "changes": [{"field": "qty", "before": 10.0, "after": 12.0},
+                                      {"field": "description", "before": "Cable",
+                                       "after": "Cable &lt;10m&gt; &amp; plugs"}]}],
+               "removed": [{"table": "items", "row": "row-b2", "idx": 2, "qty": 1.0, "amount": 5.0}]}
+    assert _refusal(fields, summary) is None
+
+
+@pytest.mark.parametrize("summary", [
+    # An asked change left out.
+    {**UPDATE_SUMMARY, "changes": UPDATE_SUMMARY["changes"][:1]},
+    # A header after-value other than the stored one.
+    {**UPDATE_SUMMARY, "changes": [UPDATE_SUMMARY["changes"][0],
+                                   {"field": "due_date", "before": "2026-11-30", "after": "2026-12-02"}]},
+    # The same change reported twice.
+    {**UPDATE_SUMMARY, "changes": [*UPDATE_SUMMARY["changes"], UPDATE_SUMMARY["changes"][0]]},
+    # An asked line left out.
+    {**UPDATE_SUMMARY, "lines": []},
+    # A line after-value other than the stored one.
+    {**UPDATE_SUMMARY, "lines": [{**UPDATE_SUMMARY["lines"][0], "changes": [{"field": "qty", "before": 10, "after": 11}]}]},
+    # The same line twice.
+    {**UPDATE_SUMMARY, "lines": [UPDATE_SUMMARY["lines"][0], UPDATE_SUMMARY["lines"][0]]},
+    # A number where text was asked, a date that isn't one.
+    {**UPDATE_SUMMARY, "changes": [{"field": "bill_no", "before": "", "after": 778},
+                                   UPDATE_SUMMARY["changes"][1]]},
+    {**UPDATE_SUMMARY, "changes": [UPDATE_SUMMARY["changes"][0],
+                                   {"field": "due_date", "before": "2026-11-30", "after": "2026-12-01 09:00:00"}]},
+])
+def test_a_reading_that_differs_from_the_ask_leaves_no_card(summary: dict[str, Any]) -> None:
+    out = _refusal(UPDATE, summary)
+    assert out is not None and "differently" in out
+
+
+def test_a_removed_row_not_asked_to_be_removed_leaves_no_card() -> None:
+    gone = {"table": "items", "row": "row-c3", "idx": 3, "qty": 1.0, "amount": 5.0}
+    summary = {**UPDATE_SUMMARY, "removed": [gone]}
+    out = _refusal(UPDATE, summary)
+    assert out is not None and "removes a row" in out
+    asked = {**UPDATE, "remove_lines": {"items": ["row-b2"]}}
+    assert _refusal(asked, summary) is not None
+    assert _refusal({**UPDATE, "remove_lines": {"items": ["row-c3"]}}, summary) is None
