@@ -1132,6 +1132,21 @@ curl -s -H "x-api-key: $BACKEND_SHARED_SECRET" \
   "http://127.0.0.1:8000/audit/usage?erpnext=1&since=2026-11-01T00:00:00"
 ```
 
+### Checking the drafts log against the cards
+
+oe_connector seals each draft OpenExecutive makes in a hash chain, and each
+approval card keeps its row's seal. To check that no newest row was removed and
+the log wasn't rewritten, export the cards' seals and let oe_connector compare:
+
+```bash
+docker compose exec -T api openexecutive draft-seals > seals.json
+bench --site <site> oe-connector-verify-drafts --expect seals.json
+```
+
+`draft-seals` reads the API's ledger only and prints row hashes and their places
+in the chain. It exits 1 when the ledger holds no seals, so a wrong or empty
+ledger never passes.
+
 ### Stopping ERPNext access
 
 OpenExecutive's half of the stop runbook. ERPNext's half, its own switches
