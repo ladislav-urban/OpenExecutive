@@ -11736,8 +11736,8 @@ watch:
     migrates a (job, day)-keyed watch_runs once (_migrate_runs, under BEGIN
     IMMEDIATE, re-checked inside): every row kept with slot "", a noticed
     failure carried to watch_days. watch_days (job, day, cards,
-    failure_noticed, checks; checks added by settings.connect's column
-    migration): take_day_cards(job, day, n, cap), and take_day for any
+    failure_noticed, checks, notices; checks and notices added by
+    settings.connect's column migration): take_day_cards(job, day, n, cap), and take_day for any
     DAY_COUNTS column, reads and adds in one BEGIN IMMEDIATE (negative n
     gives back, never below 0), so the day's card cap holds across slots,
     workers and restarts; take_failure_notice is true once
@@ -11953,8 +11953,9 @@ watch:
     runner.notice_body, a code preamble and wrap_untrusted(source erpnext,
     author watch:<id>) of the stripped, capped summary, values and the
     labelled reason. A run takes at most MAX_FINDINGS (200) findings from
-    build; card_cap_day counts attempts, not stored notices, so a notice
-    that fails to store never lets another through; a finding whose notice
+    build; card_cap_day counts attempts a day across the job's slots and
+    restarts (settings.take_day "notices" before each), not stored notices,
+    so a notice that fails to store never lets another through; a finding whose notice
     is still unread or read is skipped (repeats). Audit: one
     private watch_run row per run (status, reason code, counts, as_job_user
     list; never figures or text).

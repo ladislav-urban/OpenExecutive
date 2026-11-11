@@ -1,8 +1,8 @@
 """Each watch job's settings (table ``watch_jobs``), its runs (``watch_runs``,
 one row per job, day and slot, written by ``watch.runner``) and its days
-(``watch_days``: the draft cards its runs left and the checks they had
-ERPNext make, each counted in a transaction across slots and restarts, and
-its one failure notice a day).
+(``watch_days``: the draft cards its runs left, the checks they had ERPNext
+make and the notices they tried to leave, each counted in a transaction
+across slots and restarts, and its one failure notice a day).
 
 One row per job: ``enabled`` (off until the principal turns it on), who
 configured it last and when, ``settings`` (JSON, exactly the job's
@@ -68,24 +68,25 @@ _DDL = (
     # read, whether oe_connector ran it as the job's own user
     # (`acting.as_job_user`), never that user's name.
     _RUNS_DDL.format(table=RUNS_TABLE),
-    # One row per job and day: the draft cards its runs left that day and
-    # the checks they had ERPNext make as the reviewer (each cap counts across
-    # slots and restarts, taken in a transaction), and whether its one
-    # failure notice for the day was left.
+    # One row per job and day: the draft cards its runs left that day, the
+    # checks they had ERPNext make as the reviewer and the notices they tried
+    # to leave (each cap counts across slots and restarts, taken in a
+    # transaction), and whether its one failure notice for the day was left.
     f"""CREATE TABLE IF NOT EXISTS {DAYS_TABLE} (
         job TEXT NOT NULL,
         day TEXT NOT NULL,
         cards INTEGER NOT NULL DEFAULT 0,
         failure_noticed INTEGER NOT NULL DEFAULT 0,
         checks INTEGER NOT NULL DEFAULT 0,
+        notices INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (job, day)
     )""",
 )
 # Columns added after the table first shipped: name -> its definition.
 _RUN_COLUMNS = {"detail": "TEXT NOT NULL DEFAULT '{}'"}
-_DAY_COLUMNS = {"checks": "INTEGER NOT NULL DEFAULT 0"}
+_DAY_COLUMNS = {"checks": "INTEGER NOT NULL DEFAULT 0", "notices": "INTEGER NOT NULL DEFAULT 0"}
 # What a day's row counts against a cap (``take_day``).
-DAY_COUNTS = frozenset({"cards", "checks"})
+DAY_COUNTS = frozenset({"cards", "checks", "notices"})
 # The columns a run row had before slots, copied as they are by the migration.
 _PRE_SLOT_COLUMNS = (
     "job", "day", "status", "started_at", "finished_at", "attempts", "cards", "error", "reads",
@@ -171,7 +172,7 @@ def take_day_cards(job_id: str, day: str, n: int, cap: int, *, path: Path | None
 
 def take_day(job_id: str, day: str, what: str, n: int, cap: int, *, path: Path | None = None) -> int:
     """``take_day_cards`` for any of the day's counts (``DAY_COUNTS``): the
-    job's checks too, which nothing gives back. In the database, so a
+    job's checks and notices too, which nothing gives back. In the database, so a
     restart or a second worker sees the same count."""
     if what not in DAY_COUNTS:
         raise ValueError(f"not a day's count: {what}")
