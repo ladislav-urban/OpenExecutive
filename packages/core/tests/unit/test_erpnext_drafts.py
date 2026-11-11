@@ -268,9 +268,9 @@ def test_it_is_registered_to_be_asked_in_the_panel_and_kept_private() -> None:
     (tool,) = [t for t in extensions._tools.values() if t.name == drafts.PROPOSE]
     assert tool.known_caller is False and tool.offered is drafts.offered
     assert extensions.private_row(drafts.PROPOSE)
-    assert extensions.activity_label(drafts.PROPOSE) == "Checking the draft with ERPNext…"
+    assert extensions.activity_label(drafts.PROPOSE) == "Checking the draft with the ERP…"
     activity = summarize_activity([{"name": drafts.PROPOSE, "input": {}}])
-    assert "Checking the draft with ERPNext" in str(activity)
+    assert "Checking the draft with the ERP" in str(activity)
 
 
 def test_the_handler_refuses_on_its_own_after_a_mail_read() -> None:
