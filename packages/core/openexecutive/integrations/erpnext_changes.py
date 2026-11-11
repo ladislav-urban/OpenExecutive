@@ -256,10 +256,33 @@ def _shown(value: Any) -> str:
     return shown(value)
 
 
+def _text_whole(value: Any) -> str:
+    """A text value as the card shows it: whole, newlines kept, made plain
+    (nothing hidden), never cut. ``summary_refusal`` leaves no card with a
+    value longer than TEXT_SHOWN, so nothing here needs cutting."""
+    from openexecutive.utils.prompt_blocks import plain
+
+    return _CONTROL.sub("", plain(str(value if value is not None else ""))).strip()
+
+
+def _change_shown(field: str, before: Any, after: Any) -> str:
+    """One change's before → after. A text field's values are whole; one
+    over several lines puts the arrow on its own line."""
+    if field not in _TEXT_CAPS:
+        return f"{_shown(before)} → {_shown(after)}"
+    old, new = _text_whole(before), _text_whole(after)
+    return f"{old}\n→\n{new}" if "\n" in old or "\n" in new else f"{old} → {new}"
+
+
+def _too_long(value: Any) -> bool:
+    return isinstance(value, str) and len(_text_whole(value)) > TEXT_SHOWN
+
+
 def summary_refusal(operation: str, doctype: str, name: str, fields: dict[str, Any], checked: dict[str, Any]) -> str | None:
     """Why ERPNext's check can't become a card, or None: it must read back
     the same operation and document, a known owner, no more changes than
-    allowed, and for a comment exactly the stored text."""
+    allowed, for a comment exactly the stored text, and for an update every
+    text value short enough to show whole."""
     summary = checked.get("summary")
     if not isinstance(summary, dict):
         return "ERPNext didn't say what it would change, so no card was left."
@@ -287,16 +310,23 @@ def summary_refusal(operation: str, doctype: str, name: str, fields: dict[str, A
         asked = sent_lines.get((line.get("table"), line.get("row")), set())
         if any(not isinstance(c, dict) or c.get("field") not in asked for c in line.get("changes") or []):
             return "ERPNext's reading names a change that wasn't asked for, so no card was left."
-    line_changes = sum(len(x.get("changes") or []) for x in lines if isinstance(x, dict))
+    line_changes = sum(len(x.get("changes") or []) for x in lines)
     total = len(changes) + line_changes + len(removed)
     if total == 0 or total > MAX_CHANGES:
         return "ERPNext's reading of the change can't be shown on one card, so none was left."
+    values = [v for c in [*changes, *(c for x in lines for c in x.get("changes") or [])]
+              for v in (c.get("before"), c.get("after"))]
+    if any(_too_long(v) for v in values):
+        return (f"A value in this change is longer than {TEXT_SHOWN} characters, so it can't be shown "
+                "whole on a card and none was left.")
     return None
 
 
 def card_view(operation: str, doctype: str, name: str, summary: dict[str, Any]) -> dict[str, Any]:
     """Everything approval sends, as ERPNext reads it: every change, line
-    change and removed row, the totals, or the comment's whole text."""
+    change and removed row, the totals, or the comment's whole text. A text
+    field's before and after are whole, newlines kept, never cut: approval
+    writes all of it (``summary_refusal`` leaves no card it can't show)."""
     shown: list[dict[str, str]] = [{"label": "Document", "value": f"{doctype} {name}"}]
     notes: list[str] = []
     if operation == "comment":
@@ -310,7 +340,8 @@ def card_view(operation: str, doctype: str, name: str, summary: dict[str, Any]) 
     for change in summary.get("changes") or []:
         if isinstance(change, dict):
             label = labels.get(str(change.get("field")), str(change.get("field")))
-            shown.append({"label": label, "value": f"{_shown(change.get('before'))} → {_shown(change.get('after'))}"})
+            shown.append({"label": label,
+                          "value": _change_shown(str(change.get("field")), change.get("before"), change.get("after"))})
     line_labels = UPDATE_LINE_FIELDS.get(doctype, {})
     for line in summary.get("lines") or []:
         if not isinstance(line, dict):
@@ -321,7 +352,7 @@ def card_view(operation: str, doctype: str, name: str, summary: dict[str, Any]) 
             if isinstance(change, dict):
                 label = table_labels.get(str(change.get("field")), str(change.get("field")))
                 shown.append({"label": f"{where}: {label}",
-                              "value": f"{_shown(change.get('before'))} → {_shown(change.get('after'))}"})
+                              "value": _change_shown(str(change.get("field")), change.get("before"), change.get("after"))})
     for row in summary.get("removed") or []:
         if isinstance(row, dict):
             what = f"Row {_shown(row.get('idx'))}" + (f" ({_shown(row.get('item_code'))})" if row.get("item_code") else "")

@@ -10657,10 +10657,12 @@ integrations:
     operation, fields} under its marker; a card needs a sound fingerprint,
     and summary_refusal leaves none unless ERPNext read back the same
     operation and document, a known owner ("yours" or "assigned to you"), at
-    most 40 changes, and a comment's exact text. card_view shows every
-    change, line change, removed row and total (both currencies) before and
-    after with this app's own labels, never ERPNext's, or the comment whole
-    with its newlines. The card stores operation and name, and its tool is
+    most 40 changes, a comment's exact text, and for an update no value over
+    TEXT_SHOWN (1,000 characters). card_view shows every change, line
+    change, removed row and total (both currencies) before and after with
+    this app's own labels, never ERPNext's, a text field's values whole with
+    their newlines, never cut, or the comment whole with its newlines. The
+    card stores operation and name, and its tool is
     OPERATION_TOOLS[operation]. Approval re-checks the operation, its own
     switch, the shape and the name, and that the stored tool is that one;
     it sends {doctype, name, the stored fields, idempotency key, asked_by,

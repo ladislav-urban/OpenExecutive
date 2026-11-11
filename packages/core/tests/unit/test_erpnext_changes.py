@@ -249,3 +249,36 @@ def test_a_two_thousand_character_comment_is_shown_whole() -> None:
     summary = {"operation": "comment", "doctype": "Purchase Invoice", "name": "X-1", "text": text}
     view = changes.card_view("comment", "Purchase Invoice", "X-1", summary)
     assert {"label": "Comment", "value": text} in view["fields"]
+
+
+def _checked(summary: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "summary": summary, "fingerprint": FP}
+
+
+def _refusal(fields: dict[str, Any], summary: dict[str, Any]) -> str | None:
+    return changes.summary_refusal("update", "Purchase Invoice", UPDATE_SUMMARY["name"], fields, _checked(summary))
+
+
+def test_a_thousand_character_remarks_is_shown_whole(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    # Approval writes all of it, so the card shows all of it: past the old
+    # 300-character cut, newlines kept, and nothing added.
+    text = ("First line of the remarks.\n" + "x" * 400 + " the part after character 300\n").ljust(999, "y") + "Z"
+    assert len(text) == 1000 and text.index("the part after") > 300
+    fields = {"set": {"remarks": text}}
+    _, stored = changes.check_change("update", "Purchase Invoice", UPDATE_SUMMARY["name"], fields)  # type: ignore[misc]
+    assert stored == fields
+    summary = {**UPDATE_SUMMARY, "changes": [{"field": "remarks", "before": "Old note", "after": text}],
+               "lines": []}
+    _card(erp, roster, "update", fields, summary)
+    shown = {f["label"]: f["value"] for f in drafts.cards(people_store.get_person(roster.principal))[0].fields}
+    assert shown["Remarks"] == f"Old note\n→\n{text}"
+    assert shown["Remarks"].endswith(text[300:]) and "the part after character 300\n" in shown["Remarks"]
+    assert "…" not in shown["Remarks"]
+
+
+def test_a_value_too_long_to_show_whole_leaves_no_card() -> None:
+    # ERPNext's current remarks can be longer than a card shows: rather than
+    # cut it, no card.
+    summary = {**UPDATE_SUMMARY, "changes": [{"field": "remarks", "before": "r" * 1001, "after": "New"}], "lines": []}
+    out = _refusal({"set": {"remarks": "New"}}, summary)
+    assert out is not None and "whole" in out
