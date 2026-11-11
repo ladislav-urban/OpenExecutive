@@ -54,7 +54,16 @@ UPDATE_FIELDS: dict[str, dict[str, str]] = {
         "on_hold": "On hold",
         "release_date": "Release date",
         "hold_comment": "Hold comment",
-        "supplier": "Supplier",
+    },
+}
+# Fields oe_connector's UpdateType lists that a card here never changes, and
+# what the person is told. A Purchase Invoice's supplier says who is owed:
+# oe_connector sets it only on an empty intake draft, and no card here moves
+# an invoice to another supplier.
+NEVER_CHANGED: dict[str, dict[str, str]] = {
+    "Purchase Invoice": {
+        "supplier": ("A Purchase Invoice's supplier can't be changed on a card. "
+                     "If it is wrong, change it in the ERP itself."),
     },
 }
 UPDATE_LINE_FIELDS: dict[str, dict[str, dict[str, str]]] = {
@@ -191,8 +200,11 @@ def _update_fields(doctype: str, fields: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(header, dict):
             raise ValueError("`set` is {field: value}.")
         shown = UPDATE_FIELDS[doctype]
+        never = NEVER_CHANGED.get(doctype, {})
         clean: dict[str, Any] = {}
         for field, value in header.items():
+            if field in never:
+                raise ValueError(never[field])
             if field not in shown:
                 raise ValueError(f"`{field}` can't be changed on a {doctype}.")
             clean[field] = _value(field, value, field)

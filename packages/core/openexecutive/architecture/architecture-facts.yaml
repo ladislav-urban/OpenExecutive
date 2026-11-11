@@ -10648,7 +10648,10 @@ integrations:
     takes operation (create, update, comment) and name, offered only with
     the operations an install has on (ERPNEXT_DRAFT_UPDATE_DOCTYPES,
     ERPNEXT_DRAFT_COMMENT_DOCTYPES, each intersected with this app's own
-    allowlist: UPDATE_FIELDS' Purchase Invoice for updates, never Customer,
+    allowlist: UPDATE_FIELDS' Purchase Invoice for updates, never its
+    supplier (NEVER_CHANGED: check_change refuses it and says to change it in
+    the ERP itself, though oe_connector lists it set-once for intake
+    drafts), never Customer,
     whose credit raise is its own card; COMMENT_ALLOWED minus a mirrored
     SENSITIVE_DOCTYPES for comments). check_change mirrors oe_connector's
     field rules (header and line allowlists, kinds, at most 40 changes; a

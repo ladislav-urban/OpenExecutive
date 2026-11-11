@@ -332,3 +332,10 @@ def test_a_removed_row_not_asked_to_be_removed_leaves_no_card() -> None:
     asked = {**UPDATE, "remove_lines": {"items": ["row-b2"]}}
     assert _refusal(asked, summary) is not None
     assert _refusal({**UPDATE, "remove_lines": {"items": ["row-c3"]}}, summary) is None
+
+
+def test_a_purchase_invoices_supplier_is_never_changed_on_a_card() -> None:
+    assert "supplier" not in changes.UPDATE_FIELDS["Purchase Invoice"]
+    out = changes.check_change("update", "Purchase Invoice", "ACC-PINV-2026-00031",
+                               {"set": {"supplier": "Northwind Cables Ltd", "bill_no": "INV-1"}})
+    assert isinstance(out, str) and "supplier" in out and "the ERP" in out and "ERPNext" not in out
