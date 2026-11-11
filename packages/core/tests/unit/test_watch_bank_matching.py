@@ -956,3 +956,33 @@ def test_only_the_match_branch_sends_draft_match_bank_line() -> None:
                                        "already_done": True}) == {
         "doctype": BT, "name": "BT-1", "operation": "match", "already_created": True}
     assert TEAM  # the roster's teammate stays unused here
+
+
+
+# oe_connector's own refusals, as its bank_match.py and drafts.py word them at
+# ladislav-urban/oe_connector#540's head (0408e2e), filled with sample values.
+# The markers below are matched against these words, so rewording what the
+# person is told must never touch a marker.
+CONNECTOR_REFUSALS = (
+    "Matching limit: 50,000.00 matched a day in Acme. Nothing was matched.",
+    "Matching limit: 20 matches a day per approver.",
+    "Bank Transaction BT-1 is no longer unreconciled.",
+    "a match comes only from the bank-matching job's card, which names who set it up.",
+    "ERPNext records no one as having set up the job 'bank-matching', so it can't tell who may approve "
+    'its cards: an ERPNext operator adds "configured_by": "<their email>" to the job in '
+    "oe_connector_watch_jobs. Nothing was made.",
+    "The card says the job 'bank-matching' was set up by a@x.example, but ERPNext records b@x.example in "
+    "oe_connector_watch_jobs. Nothing was made.",
+)
+
+
+def test_every_final_marker_still_matches_the_connectors_words() -> None:
+    from openexecutive.integrations import erpnext_drafts, erpnext_match
+
+    for marker, _code, _shown in erpnext_match.FINAL:
+        assert any(marker in said for said in CONNECTOR_REFUSALS), marker
+    for marker in erpnext_drafts.CONFIGURER_MARKERS:
+        assert any(marker in said for said in CONNECTOR_REFUSALS), marker
+    # What the person is told is ours, in the product's words.
+    for _marker, _code, shown in erpnext_match.FINAL:
+        assert "ERPNext" not in shown

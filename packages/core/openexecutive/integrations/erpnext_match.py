@@ -87,26 +87,26 @@ _VOUCHER_KEYS = frozenset({"doctype", "name"})
 FINAL: tuple[tuple[str, str, str], ...] = (
     (
         "Matching limit", "erpnext_match_limit",
-        "ERPNext's limit on bank matches from this app is reached for today, so nothing was matched and the "
+        "The ERP's limit on bank matches from this app is reached for today, so nothing was matched and the "
         "card is closed. The next run proposes it again if the line is still open.",
     ),
     (
         "is no longer unreconciled", "already_matched",
-        "This bank line is already reconciled in ERPNext, so nothing was matched and the card is closed.",
+        "This bank line is already reconciled in the ERP, so nothing was matched and the card is closed.",
     ),
     (
         "a match comes only from the bank-matching job's card", "not_from_job",
-        "ERPNext takes a match only from the bank-matching job's card. Nothing was matched and the card is "
+        "The ERP takes a match only from the bank-matching job's card. Nothing was matched and the card is "
         "closed.",
     ),
 )
 CHANGED_TEXT = (
-    "The bank line or a voucher changed in ERPNext since the card was left, so nothing was matched and the "
+    "The bank line or a voucher changed in the ERP since the card was left, so nothing was matched and the "
     "card is closed. The next run reads it as it is now."
 )
 LIMIT_TEXT = (
     "Today's matching limit is reached, so nothing was matched. The card waits: approve it again tomorrow, or "
-    "match the line in ERPNext's Banking app."
+    "match the line in the ERP's Banking app."
 )
 
 
@@ -459,7 +459,7 @@ def card_view(summary: Any) -> dict[str, Any]:
         {"label": "Statement imported by", "value": _shown(got.get("importer"))},
     ])
     notes = [
-        "Approving matches this bank line in ERPNext with the vouchers listed, through ERPNext's own bank "
+        "Approving matches this bank line in the ERP with the vouchers listed, through the ERP's own bank "
         "reconciliation, as you: each is allocated in full and cleared on the date shown. Nothing is created, "
         "submitted or cancelled.",
         "The reference and description are the bank's text, shown as data. Check the match against the bank "
@@ -517,7 +517,7 @@ async def approval_refusal(instance: Any, payload: dict[str, Any], person: Any) 
         raise ApproveRefused(
             409, "match_off",
             "Matching bank lines from here is turned off now, so nothing was matched. Match the line in "
-            "ERPNext's Banking app if it should still be matched.",
+            "the ERP's Banking app if it should still be matched.",
         )
     stored = payload.get("slice")
     kept = slice_of_stored(stored)

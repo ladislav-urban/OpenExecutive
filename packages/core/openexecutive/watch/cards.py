@@ -61,8 +61,8 @@ CHECK_TRIES = 2
 ROUTE_LINES: dict[str, str] = {
     "no_reads": "No read was made, so no {noun} were prepared.",
     "not_job_user": (
-        "ERPNext didn't run every read as the job's own user, so no {noun} were prepared. They go only "
-        "to a named reviewer of a job ERPNext runs as its own user."
+        "The ERP didn't run every read as the job's own user, so no {noun} were prepared. They go only "
+        "to a named reviewer of a job the ERP runs as its own user."
     ),
     "no_reviewer": "Name a reviewer in Settings → Watch jobs to get the {noun}.",
     "reviewer_unavailable": (
@@ -90,9 +90,9 @@ CHECK_CODES = frozenset({
 # many, ``{noun}`` the job's card noun).
 CHECK_LINES: dict[str, str] = {
     "check_currency": "{n} {noun} weren't prepared: not matched, the account is in another currency than the company's.",
-    "check_not_whole": "{n} {noun} weren't prepared: the voucher wouldn't match the whole bank line in ERPNext.",
+    "check_not_whole": "{n} {noun} weren't prepared: the voucher wouldn't match the whole bank line in the ERP.",
     "check_reviewer_sod": (
-        "{n} {noun} weren't prepared: they need a different reviewer, since ERPNext names the reviewer as the "
+        "{n} {noun} weren't prepared: they need a different reviewer, since the ERP names the reviewer as the "
         "statement's importer or a voucher's creator."
     ),
     "check_amount_cap": "{n} {noun} weren't prepared: today's matching limit is reached.",
@@ -387,10 +387,10 @@ async def leave_drafts(
         out.lines.append(f"{out.left} {noun} are waiting for {name} to approve.")
     if out.permission_refused:
         out.lines.append(
-            f"{out.permission_refused} {noun} couldn't be prepared as {name}: their ERPNext access doesn't allow it."
+            f"{out.permission_refused} {noun} couldn't be prepared as {name}: their ERP access doesn't allow it."
         )
     if out.check_refused > out.permission_refused:
-        out.lines.append(f"{out.check_refused - out.permission_refused} {noun} couldn't be prepared: ERPNext didn't accept them.")
+        out.lines.append(f"{out.check_refused - out.permission_refused} {noun} couldn't be prepared: the ERP didn't accept them.")
     for code, count in sorted(out.codes.items()):
         if code in CHECK_LINES:
             out.lines.append(CHECK_LINES[code].format(n=count, noun=noun))
