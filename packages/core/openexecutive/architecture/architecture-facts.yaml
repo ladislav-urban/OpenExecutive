@@ -10412,7 +10412,10 @@ integrations:
     a cached system block, so the cached prefix and tools are unchanged).
     Whose cards: on ERPNext's panel the team member its signed email names
     (erpnext_panel._person_for; never on a from_web_chat turn, whatever
-    email it carries), anywhere else the turn's person_id (no
+    email it carries), on ERPNext's desk (host_turn) the person the ERP is
+    asked as there (erpnext_caller._host_caller must pass: signed in, a
+    team member, a private conversation; caller_person_id, never the
+    page's word), anywhere else the turn's person_id (no
     caller_person_id fallback; a teammate only when
     people_tools.teammate_on_verified_surface is that same person, and on
     the web only under signed sign-ins, as GET /erpnext/drafts), filtered
@@ -10425,8 +10428,10 @@ integrations:
     never calls open_cards or _tidy. Each line is code-written: the doctype
     when it is in DRAFT_TOOLS (else "A draft"), the time, and a fixed
     sentence per outcome (approved: an unsubmitted draft was made;
-    dismissed; expired; a dismissed or expired card with attempts > 0 or
-    left executing says an approval was tried and to check in the ERP,
+    dismissed; expired; a dismissed or expired card with attempts > 0,
+    marked tried (approve writes tried: true into the payload right after
+    the claim, before the call, so a call cut off by a restart still
+    counts) or left executing says an approval was tried and to check in the ERP,
     never that nothing was made; closed per closed_code, a closed_externally card
     with reversal_reason changed as replaced by a newer card, and any other
     or missing code as "the reason wasn't recorded; don't guess one"). An

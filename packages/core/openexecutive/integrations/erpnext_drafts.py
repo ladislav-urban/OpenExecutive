@@ -949,6 +949,7 @@ def _decided(card: Any) -> DecidedCard | None:
     attempts = _payload(card).get("attempts")
     tried = outcome in ("dismissed", "expired") and (
         card.status == STATUS_EXECUTING
+        or _payload(card).get("tried") is True
         or (isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 0)
     )
     return DecidedCard(
@@ -1053,6 +1054,20 @@ def _note_person(session: Any, person_id: int | None) -> int | None:
 
         person = _person_for(str(session.erpnext_panel_email).strip().lower())
         return int(person.id) if person is not None else None
+    from openexecutive.orchestrator.schedule_tools import host_turn
+
+    if host_turn(session):
+        # ERPNext's desk: whoever the ERP is asked as on such a turn
+        # (erpnext_caller._host_caller: signed in, a team member, a private
+        # conversation), and only them. The page names no one.
+        from openexecutive.orchestrator import erpnext_caller
+
+        try:
+            erpnext_caller._host_caller(session)
+        except erpnext_caller.CallerRefused:
+            return None
+        pid = getattr(session, "caller_person_id", None)
+        return pid if isinstance(pid, int) and not isinstance(pid, bool) else None
     if getattr(session, "shared_chat", False) is not False or not private_chat(session):
         return None
     if not isinstance(person_id, int) or isinstance(person_id, bool):
@@ -1439,7 +1454,7 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     stored. Returns what was made. Raises ``ApproveRefused``."""
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.delegation.verified import NOT_YOURS, caller_refusal
-    from openexecutive.memory.decision_ledger import claim_for_execution
+    from openexecutive.memory.decision_ledger import claim_for_execution, update_open_payload
     from openexecutive.people.store import get_person
 
     payload = _payload(instance)
@@ -1484,16 +1499,26 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         raise ApproveRefused(409, "changed", "Your email changed since this card was left. Dismiss it and ask again.")
     if not claim_for_execution(instance.id, resolver_person_id=resolver):
         raise ApproveRefused(409, "already_handled", "This card was already handled.")
+    # Marked before the call, while the claim is held: if the call never
+    # comes back (a restart releases the claim), the card still says an
+    # approval was tried, so the note never says nothing was made.
+    stored = instance.proposed_payload_json
+    if payload.get("tried") is not True:
+        marked = {**payload, "tried": True}
+        if update_open_payload(instance.id, marked, expected_json=stored, while_executing=True):
+            payload, stored = marked, json.dumps(marked)
+        else:
+            logger.warning("erpnext_drafts: couldn't mark card %d as tried", instance.id)
     _APPROVING.add(instance.id)
     try:
-        return await _carry_out(instance, payload, person, email, tool, rechecked, key)
+        return await _carry_out(instance, payload, person, email, tool, rechecked, key, stored)
     finally:
         _APPROVING.discard(instance.id)
 
 
 async def _carry_out(
     instance: Any, payload: dict[str, Any], person: Any, email: str,
-    tool: str, fields: dict[str, Any], key: str,
+    tool: str, fields: dict[str, Any], key: str, stored: str,
 ) -> dict[str, Any]:
     """``approve`` once it holds the claim: the one ERPNext call, then the
     card finished, or back to waiting with why. Raises ``ApproveRefused``."""
@@ -1591,7 +1616,7 @@ async def _carry_out(
     # a second tap can't claim it in between and the count is never lost.
     if not update_open_payload(
         instance.id, {**payload, "attempts": attempts, "last_error": reason},
-        expected_json=instance.proposed_payload_json, while_executing=True,
+        expected_json=stored, while_executing=True,
     ):
         logger.warning("erpnext_drafts: couldn't note card %d's failed attempt", instance.id)
     release_claim(instance.id)

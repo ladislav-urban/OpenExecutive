@@ -32,6 +32,7 @@ from openexecutive.memory.decision_ledger import (
     STATUS_REJECTED,
     create_decision_instance,
     get_decision_instance,
+    mark_resolved,
 )
 from openexecutive.orchestrator.session import Session
 
@@ -152,6 +153,7 @@ def test_a_call_with_no_erp_connected_closes_as_no_answer(
     monkeypatch.setattr(mcp_gateway, "_active_gateway", None)
     with pytest.raises(drafts.ApproveRefused):
         _approve(card)
+    assert "isn't connected" in _final(card.id)["last_error"]
     _assert_no_answer(card, roster)
 
 
@@ -459,6 +461,71 @@ def test_a_teammate_on_the_web_gets_the_note_only_signed_in(
     assert "so nothing was made" in _note(_web(roster.teammate), roster.teammate)
     # Only as themselves: a turn whose verified caller is someone else.
     assert _note(_web(roster.principal), roster.teammate) == ""
+
+
+def test_a_claimed_card_is_marked_tried_before_the_call(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    card = _restock_card(erp, roster)
+    seen: list[dict[str, Any]] = []
+
+    async def stops(tool: str, arguments: dict[str, Any]) -> str:
+        stored = get_decision_instance(card.id)
+        assert stored is not None
+        seen.append(json.loads(stored.proposed_payload_json))
+        # The API stopping mid-call: the claim goes back, nothing else is written.
+        raise asyncio.CancelledError
+
+    monkeypatch.setattr(drafts, "_call", stops)
+    with pytest.raises(asyncio.CancelledError):
+        _approve(card)
+    assert seen and seen[0]["tried"] is True
+    waiting = get_decision_instance(card.id)
+    assert waiting is not None and waiting.status == STATUS_PROPOSED
+    assert json.loads(waiting.proposed_payload_json)["tried"] is True
+    # Dismissed afterwards, it never says nothing was made.
+    mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=roster.principal)
+    note = _note(_web(roster.principal, str(card.originating_session_id)), roster.principal)
+    assert "dismissed" in note and "nothing was made" not in note
+
+
+def test_a_retry_after_a_failure_keeps_its_count_with_the_tried_mark(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
+) -> None:
+    card = _restock_card(erp, roster)
+    erp.replies.append(json.dumps({"ok": False, "error": "Try later."}))
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(card)
+    first = get_decision_instance(card.id)
+    assert first is not None
+    assert json.loads(first.proposed_payload_json)["attempts"] == 1
+    erp.replies.append(json.dumps({"ok": False, "error": "Try later."}))
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(first)
+    second = get_decision_instance(card.id)
+    assert second is not None
+    stored = json.loads(second.proposed_payload_json)
+    assert stored["attempts"] == 2 and stored["tried"] is True
+
+
+def test_a_host_turn_goes_by_the_host_callers_rule(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import erpnext_caller
+
+    _closed(roster.teammate, "web-1")
+    session = _web(roster.teammate, from_host=True)
+    refused = erpnext_caller.CallerRefused("no", "host_unsigned")
+
+    def refuse(_session: Any) -> Any:
+        raise refused
+
+    monkeypatch.setattr(erpnext_caller, "_host_caller", refuse)
+    assert _note(session, roster.teammate) == ""
+    monkeypatch.setattr(erpnext_caller, "_host_caller", lambda _s: erpnext_caller.ErpnextCaller("user", TEAM))
+    assert "so nothing was made" in _note(session, roster.teammate)
+    # The page's own person id is never used: only the signed caller's.
+    assert "so nothing was made" in _note(session, None)
 
 
 def test_a_web_chat_turn_ignores_the_panel_email(roster: SimpleNamespace) -> None:
