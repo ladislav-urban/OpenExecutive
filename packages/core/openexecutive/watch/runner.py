@@ -619,21 +619,30 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # The cap counts attempts a day across the job's slots (watch_days), not
     # successes, so a notice that fails to store never lets another finding
     # through in its place, and an hourly job's slots share one bound.
-    for n, spec in enumerate(notices):
+    # The principal's notices take their places first, so a morning's
+    # findings never use up the day before a check kept from the reviewer.
+    ordered = principal_first(notices)
+    for n, spec in enumerate(ordered):
         key = dedup_key(job.id, spec.key)
         if _still_open(key) or _raised_today(key, day):
             outcome.repeats += 1
             continue
         if take_day(job.id, day, "notices", 1, job.card_cap_day) == 0:
-            outcome.capped = len(notices) - n
+            outcome.capped = len(ordered) - n
             break
         if _leave_notice(
             job, day, spec, reason=reasons.get(spec.key, ""), key=key, found=_found(notices),
-            reasons=reasons, notes=tuple(made.lines) if n == 0 else (),
+            reasons=reasons, notes=tuple(made.lines) if spec is notices[0] else (),
             to=_principal_id() if spec.to_principal else to,
         ) is not None:
             outcome.cards += 1
     return outcome
+
+
+def principal_first(notices: list[registry.CardSpec]) -> list[registry.CardSpec]:
+    """``notices`` with those bound for the principal first, each group in
+    its own order: they take the day's notice places before the rest."""
+    return sorted(notices, key=lambda spec: not spec.to_principal)
 
 
 async def _one_read(

@@ -985,3 +985,13 @@ def test_every_final_marker_still_matches_the_connectors_words() -> None:
     # What the person is told is ours, in the product's words.
     for _marker, _code, shown in erpnext_match.FINAL:
         assert "ERPNext" not in shown
+
+
+def test_the_principals_notices_take_the_days_places_first() -> None:
+    # A busy morning's findings never use up the day's notices before a
+    # check the principal must see.
+    def spec(key: str, to_principal: bool = False) -> registry.CardSpec:
+        return registry.CardSpec(key=key, summary=key, values=(), to_principal=to_principal)
+
+    notices = [spec("a"), spec("b"), spec("kept", True), spec("c"), spec("month", True)]
+    assert [s.key for s in runner.principal_first(notices)] == ["kept", "month", "a", "b", "c"]
