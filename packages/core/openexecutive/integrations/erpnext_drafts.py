@@ -98,13 +98,13 @@ QTY_MAX = 1_000_000
 RATE_MAX = 1_000_000_000
 # On a card asked for in ERPNext's panel, whose word named the person.
 PANEL_NOTE = (
-    "Asked for in ERPNext's panel. Approve it only if you asked for it there; "
+    "Asked for in the ERP's panel. Approve it only if you asked for it there; "
     "otherwise dismiss it."
 )
 # On a card asked for from ERPNext's desk (114.a): signed in, but the turn's
 # words came through another app's page, which a script there may have written.
 DESK_NOTE = (
-    "Asked for from ERPNext's desk. Approve it only if you asked for it there; "
+    "Asked for from the ERP's desk. Approve it only if you asked for it there; "
     "otherwise dismiss it."
 )
 # Where a card was asked for, when not in this app's own chat.
@@ -617,7 +617,7 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
         unpriced = got.get("unpriced_items")
         if isinstance(unpriced, list) and unpriced:
             names = ", ".join(_one_line(u, NAME_MAX) for u in unpriced[:MAX_LINES])
-            notes.append(f"No valuation or last purchase rate in ERPNext, so not in the estimate: {names}")
+            notes.append(f"No valuation or last purchase rate in the ERP, so not in the estimate: {names}")
     return {"fields": shown, "lines": lines, "notes": notes}
 
 
@@ -678,7 +678,7 @@ def _priced_view(
             "again."
         )
         if len(checked) > MAX_LINES:
-            notes.append(f"And {len(checked) - MAX_LINES} more lines, as ERPNext lists them.")
+            notes.append(f"And {len(checked) - MAX_LINES} more lines, as the ERP lists them.")
     else:
         priced_by_erpnext: list[str] = []
         unmatched: list[str] = []
@@ -699,16 +699,16 @@ def _priced_view(
             elif "rate" not in row and _number(match.get("rate")) is not None:
                 priced_by_erpnext.append(name)
             elif "rate" in row and _number(match.get("rate")) not in (None, _number(row["rate"])):
-                notes.append(f"ERPNext's pricing rules made {name}'s rate {_money(match.get('rate'))}.")
+                notes.append(f"The ERP's pricing rules made {name}'s rate {_money(match.get('rate'))}.")
         if priced_by_erpnext:
             notes.append(
-                f"Rates from ERPNext's price list at the check, for {', '.join(priced_by_erpnext)}; "
+                f"Rates from the ERP's price list at the check, for {', '.join(priced_by_erpnext)}; "
                 "if they change before you approve, nothing is made and you're asked to look again."
             )
         if unmatched:
             notes.append(
-                f"ERPNext's check didn't give figures for {', '.join(unmatched)}; its rate is "
-                "ERPNext's to set (a pricing rule can change a stated one), so check it in ERPNext."
+                f"The ERP's check didn't give figures for {', '.join(unmatched)}; its rate is "
+                "the ERP's to set (a pricing rule can change a stated one), so check it in the ERP."
             )
     currency = _currency(got.get("currency"))
     company_currency = _currency(got.get("company_currency"))
@@ -1187,11 +1187,11 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     # A teammate's card waits on teammates still being let in: turned off,
     # their cards stay but can't be carried out.
     if not person.is_principal and not (teammates_on() and person.kind == "team"):
-        raise ApproveRefused(409, "principal_only", "For now only the account owner can approve ERPNext drafts.")
+        raise ApproveRefused(409, "principal_only", "For now only the account owner can approve ERP drafts.")
     if not drafts_on():
-        raise ApproveRefused(409, "drafts_off", "ERPNext drafts are turned off here, or ERPNext isn't connected.")
+        raise ApproveRefused(409, "drafts_off", "ERP drafts are turned off here, or the ERP isn't connected.")
     if payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
-        raise ApproveRefused(409, "drafts_off", f"ERPNext {payload['doctype']} drafts are turned off here.")
+        raise ApproveRefused(409, "drafts_off", f"ERP {payload['doctype']} drafts are turned off here.")
     if not _live(instance, datetime.now(UTC)):
         raise ApproveRefused(409, "expired", "This card is more than three days old. Ask again if it's still needed.")
     doctype, fields, key = payload.get("doctype"), payload.get("fields"), payload.get("card_key")
@@ -1204,7 +1204,7 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     ):
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it and ask again.")
     if "@" not in email:
-        raise ApproveRefused(409, "no_email", "Your People entry has no email, so ERPNext can't tell who you are.")
+        raise ApproveRefused(409, "no_email", "Your People entry has no email, so the ERP can't tell who you are.")
     # The card was checked as the person who asked: if their People email
     # changed since, it may now name someone else, so it isn't theirs to make.
     asked_by = payload.get("asked_by")
@@ -1294,7 +1294,7 @@ async def _carry_out(
         })
         raise ApproveRefused(
             409, "changed_since_proposed",
-            "This draft changed in ERPNext since the card was left (a source document, a price or a "
+            "This draft changed in the ERP since the card was left (a source document, a price or a "
             "rate), so nothing was made and the card is closed. Ask for it again to see it as it is now.",
         )
     attempts = int(payload.get("attempts") or 0) + 1
@@ -1303,7 +1303,7 @@ async def _carry_out(
     })
     if attempts >= ATTEMPTS_MAX:
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "attempts": attempts, "last_error": reason})
-        raise ApproveRefused(502, "draft_failed", f"ERPNext didn't make the draft: {reason} This card has been tried {attempts} times, so it is closed.")
+        raise ApproveRefused(502, "draft_failed", f"The ERP didn't make the draft: {reason} This card has been tried {attempts} times, so it is closed.")
     # Back to waiting, with the reason: approving again sends the same card
     # key, so ERPNext returns the draft if it was made after all. The reason
     # and count are written while the claim is still held, then released, so

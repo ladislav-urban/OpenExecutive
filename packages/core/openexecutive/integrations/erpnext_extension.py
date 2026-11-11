@@ -34,7 +34,7 @@ def register() -> None:
             chip=erpnext_drafts.chip,
             known_caller=False,
             private_row=True,
-            activity_label="Checking the draft with ERPNext…",
+            activity_label="Checking the draft with the ERP…",
         )
     )
     for definition in erp_metrics.METRIC_TOOLS:

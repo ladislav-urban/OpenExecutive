@@ -215,10 +215,10 @@ def draft_for(suggestion: dict[str, Any], principal_email: str) -> tuple[str, di
             "reference_type": "Sales Invoice",
             "reference_name": invoice,
         }
-        return "ToDo", fields, f"Follow up overdue invoice {invoice} (ERPNext alert)"
+        return "ToDo", fields, f"Follow up overdue invoice {invoice} (ERP alert)"
     fields = suggestion["fields"]
     line = fields["items"][0]
-    return "Material Request", fields, f"Restock {line['item_code']} in {line['warehouse']} (ERPNext alert)"
+    return "Material Request", fields, f"Restock {line['item_code']} in {line['warehouse']} (ERP alert)"
 
 
 async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
@@ -230,14 +230,14 @@ async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
 
     refused = drafts.ApproveRefused
     if not drafts.drafts_on():
-        raise refused(409, "drafts_off", "ERPNext drafts are turned off here, or ERPNext isn't connected.")
+        raise refused(409, "drafts_off", "ERP drafts are turned off here, or the ERP isn't connected.")
     person = find_principal_person()
     email = (getattr(person, "email", None) or "").strip().lower()
     if person is None or person.id is None or "@" not in email:
-        raise refused(409, "no_email", "Your People entry has no email, so ERPNext can't tell who you are.")
+        raise refused(409, "no_email", "Your People entry has no email, so the ERP can't tell who you are.")
     why_not = caller_refusal(caller, email)
     if why_not == NOT_YOURS:
-        raise refused(403, "not_yours", "Only the account owner can prepare the drafts ERPNext alerts suggest.")
+        raise refused(403, "not_yours", "Only the account owner can prepare the drafts ERP alerts suggest.")
     if why_not is not None:
         raise refused(
             409, "caller_signing_required",
@@ -253,7 +253,7 @@ async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
     doctype, raw_fields, why = draft_for(suggestion, email)
     fields = drafts.check_fields(doctype, raw_fields)
     if isinstance(fields, str):
-        raise refused(409, "not_offered", f"ERPNext {doctype} drafts aren't offered here: {fields}")
+        raise refused(409, "not_offered", f"ERP {doctype} drafts aren't offered here: {fields}")
     _room_for(person.id, doctype, fields)
     check_args = {"doctype": doctype, "fields": fields}
     try:
@@ -261,10 +261,10 @@ async def prepare(alert: Any, *, caller: Any) -> tuple[int, bool]:
             raw = await drafts._call(erpnext_caller.DRAFT_CHECK_TOOL, check_args)
     except Exception:
         logger.warning("erpnext_alert_drafts: draft_check failed", exc_info=True)
-        raise refused(502, "check_failed", "ERPNext didn't answer the check. Try again in a moment.") from None
+        raise refused(502, "check_failed", "The ERP didn't answer the check. Try again in a moment.") from None
     checked = drafts._result(raw)
     if checked.get("ok") is not True:
-        raise refused(502, "not_accepted", f"ERPNext did not accept this draft: {drafts._refusal_text(raw)}")
+        raise refused(502, "not_accepted", f"The ERP did not accept this draft: {drafts._refusal_text(raw)}")
     view = drafts.card_view(doctype, checked.get("summary"), fields)
     # Read again after the check, with no await before the card is stored,
     # so two taps at once leave one card, never pass OPEN_CARDS_MAX, and the
@@ -354,7 +354,7 @@ def _already(person_id: int, alert: Any) -> None:
     name = made.get("name") if isinstance(made, dict) else None
     raise drafts.ApproveRefused(
         409, "already_prepared",
-        f"This alert's draft is already in ERPNext{f' ({name})' if isinstance(name, str) else ''}. "
+        f"This alert's draft is already in the ERP{f' ({name})' if isinstance(name, str) else ''}. "
         "Review it there.",
     )
 
