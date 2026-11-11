@@ -954,6 +954,12 @@ def admit_one(
             # A suspended one stays so; an archived one doesn't count.
             return AdmitResult("exists", linked.id)
         if store.address_holder(norm) is not None:
+            # Read again: a sign-in of the same person at the same moment may
+            # have admitted them between the two reads (the run's _add writes
+            # the Person and its subject together), and they then exist.
+            again = store.find_person_by_directory_subject(subject)
+            if again is not None:
+                return AdmitResult("exists", again.id)
             return AdmitResult("address_held")
     except Exception as error:
         logger.error("directory admit: the store check failed (%s)", type(error).__name__)
