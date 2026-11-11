@@ -554,8 +554,9 @@ async def approval_refusal(instance: Any, payload: dict[str, Any], person: Any) 
     if not is_assignee(kept, email):
         raise ApproveRefused(
             409, "not_assignee",
-            "Only the person the draft is assigned to approves its fill. Assign it to yourself in ERPNext and "
-            "wait for the next run's card.",
+            "Only the person the mail pull assigned this draft to approves its fill; assigning it to yourself "
+            "doesn't count. An ERPNext operator points the Purchase Invoice assignment rule at the job's "
+            "reviewer, or the draft is filled by hand.",
         )
     if names_person(kept, email):
         raise _sod_refused(instance, payload, person, "erp_data")

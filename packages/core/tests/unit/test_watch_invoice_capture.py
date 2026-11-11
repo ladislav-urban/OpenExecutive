@@ -526,7 +526,7 @@ def team_person(person_id: int) -> Any:
 @pytest.mark.parametrize(("reply", "code", "said"), [
     (lambda: _pi1(currency="USD"), "check_fill_currency", "another currency"),
     (lambda: _pi1(totals={"net_total": 1100.0, "grand_total": 1100.0}), "check_fill_total", "total"),
-    (lambda: _pi1(assigned_to=["someone@co.example"]), "check_fill_assignee", "Assign it to yourself"),
+    (lambda: _pi1(assigned_to=["someone@co.example"]), "check_fill_assignee", "points the Purchase Invoice assignment rule"),
     (lambda: _pi1(bill_no_collides="PI-0"), "check_fill_collides", "already has an invoice"),
     (lambda: _pi1(creators=[REVIEWER]), "check_fill_sod", "different reviewer"),
     (lambda: _pi1(sender_policy="quarantine"), "check_fill_sender", "can't trust"),

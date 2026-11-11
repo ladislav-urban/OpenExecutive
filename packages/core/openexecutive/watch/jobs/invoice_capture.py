@@ -52,8 +52,10 @@ What it leaves:
 
 - **A fill card** (``integrations.erpnext_fill``, operation ``fill``):
   ERPNext's ``draft_check`` as the job's reviewer, only when the reviewer
-  is the draft's assignee (otherwise a line asks them to assign it to
-  themselves), only while ``ERPNEXT_INVOICE_FILL`` and the pin hold, within
+  is the person the mail pull assigned the draft to (oe_connector counts
+  only that assignment, never a self-assignment; otherwise a line says an
+  ERPNext operator points the Purchase Invoice assignment rule at the
+  reviewer, or the draft is filled by hand), only while ``ERPNEXT_INVOICE_FILL`` and the pin hold, within
   ``card_cap_day`` cards and ``amount_cap_day`` of their total a day.
 - **"Can't be filled from here"** and **"A person fills these"**: one
   notice each a run, listing the drafts and why.
