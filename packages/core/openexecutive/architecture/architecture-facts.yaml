@@ -10320,7 +10320,8 @@ integrations:
     the erpnext_draft_created audit row. The chain alone cannot show its
     newest rows removed or a consistent rewrite (no secret key), so
     recorded_seals() exports {card key - row_hash, chain_index}
-    (scripts/erpnext-draft-seals.py) for oe-connector-verify-drafts --expect
+    (`openexecutive draft-seals`, or scripts/erpnext-draft-seals.py from a
+    checkout; both exit 1 on an empty ledger) for oe-connector-verify-drafts --expect
     to compare with the log. One oversight record per card, for an auditor
     (oe_connector plan item 6): integrations/erpnext_oversight.records(since,
     until) turns each erpnext_draft card into {who asked (asked_by), where
