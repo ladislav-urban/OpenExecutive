@@ -207,8 +207,13 @@ def restore_research(
         existing = {int(r[0]) for r in conn.execute("SELECT id FROM people")} if "people" in tables else set()
         alert_cols = set(_columns(conn, "alerts"))
         live_landed = 0
+        carried_ids = {int(row["id"]) for row in carry.alerts}
         for row in carry.alerts:
             values = {k: v for k, v in row.items() if k in alert_cols}
+            # Never point at an alert the reset replaced and didn't carry.
+            superseded = values.get("superseded_by_alert_id")
+            if superseded is not None and int(superseded) not in carried_ids:
+                values["superseded_by_alert_id"] = None
             for col in _PERSON_COLUMNS_ALERT:
                 if col in values:
                     values[col] = _resolve_person(values[col], carry, existing, names)
