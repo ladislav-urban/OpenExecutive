@@ -1362,8 +1362,8 @@ def _change_help(updates: tuple[str, ...], comments: tuple[str, ...]) -> str:
             "`update` with its `name` and fields {set: {field: value}, lines: {items: {row name: "
             "{field: value}}}, remove_lines: {items: [row name]}}; read the document first for its row "
             "names. A Purchase Invoice's header fields: bill_no, bill_date, due_date, posting_date, "
-            "set_posting_time, remarks, cost_center, project, on_hold, release_date, hold_comment, and "
-            "supplier only while empty; its line fields: qty, rate, uom, expense_account, cost_center, "
+            "set_posting_time, remarks, cost_center, project, on_hold, release_date, hold_comment (never "
+            "its supplier); its line fields: qty, rate, uom, expense_account, cost_center, "
             "project, description. Only the values they asked for; nothing is submitted. "
         )
     if comments:
