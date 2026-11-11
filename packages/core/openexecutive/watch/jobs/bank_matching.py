@@ -129,6 +129,9 @@ MONTH_LINE = (
     "Check each of these matches against the bank statement for the month. To undo one, unreconcile the bank "
     "line in ERPNext."
 )
+# For a match approved whose result ERPNext never confirmed (the call failed
+# or timed out, and the card wasn't approved again): it may have been made.
+UNKNOWN_OUTCOME = "Not confirmed: check in ERPNext whether it was made"
 NO_ACCOUNTS_LINE = "Name the bank accounts to match in Settings → Watch jobs; an ERPNext operator lists the same ones."
 CUT_LINE = "Not every bank line could be read this run, so some aren't shown."
 # Why a line needs a person, by code: code's words.
@@ -528,15 +531,6 @@ def _line_values(line: Line) -> tuple[tuple[str, str], ...]:
     )
 
 
-def _also(outcome: Outcome) -> tuple[tuple[str, str], ...]:
-    """The weaker candidates the card shows, never proposed."""
-    return tuple(
-        ("Also possible, not proposed", f"{c.doctype} {c.name}, {_money(c.amount, c.currency)}"
-                                        f"{f', {c.party[1]}' if c.party and c.party != _UNKNOWN else ''}")
-        for c in outcome.weaker[:5]
-    )
-
-
 def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -> list[CardSpec | DraftSpec]:
     """The run's findings: a match card for each line one voucher fits (with
     its notice for when no card can be left), one notice of the lines a
@@ -581,7 +575,6 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
                             ("Confidence", outcome.level)),
                     notes=(MATCH_LINE,),
                 ),
-                shown=_also(outcome),
             ))
         elif outcome.person:
             person.append((line, outcome.person))
@@ -659,10 +652,14 @@ def month_notices(settings: Settings, today: date) -> list[CardSpec]:
         return []
     items: list[CardSpec] = []
     for card in sorted(drafts.job_cards(JOB_ID, open_only=False), key=lambda c: (c.resolved_at or "", c.id)):
-        if card.status != STATUS_APPROVED_UNCHANGED or not (card.resolved_at or "").startswith(month):
-            continue
         payload = drafts._payload(card)
         if payload.get("operation") != erpnext_match.OPERATION:
+            continue
+        made = card.status == STATUS_APPROVED_UNCHANGED
+        # An approval tried and never confirmed: ERPNext may have made it.
+        tried = not made and int(payload.get("attempts") or 0) > 0
+        when = card.resolved_at or ""
+        if not (made or tried) or (made and not when.startswith(month)) or (tried and when and not when.startswith(month)):
             continue
         kept = erpnext_match.slice_of_stored(payload.get("slice"))
         if kept is None:
@@ -678,7 +675,7 @@ def month_notices(settings: Settings, today: date) -> list[CardSpec]:
                 ("Amount", _money(kept["total"], line["currency"])),
                 ("Vouchers", ", ".join(f"{v['doctype']} {v['name']}" for v in kept["vouchers"])),
                 ("Approved by", approver.full_name if approver is not None else "unknown"),
-                ("Approved on", (card.resolved_at or "")[:10]),
+                ("Approved on", (card.resolved_at or "")[:10]) if made else ("Outcome", UNKNOWN_OUTCOME),
             ),
         ))
     if not items:
@@ -688,6 +685,9 @@ def month_notices(settings: Settings, today: date) -> list[CardSpec]:
     return [CardSpec(
         key=key, summary=f"Bank matches made in {month}", items=tuple(items[:MONTH_ITEMS_MAX]), notes=notes,
         count=len(items),
+        # The check on the reviewer's approvals goes to the principal, never
+        # back to the reviewer who made them.
+        to_principal=True,
     )]
 
 

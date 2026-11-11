@@ -171,6 +171,9 @@ class DraftOutcome:
     unproposed: list[registry.DraftSpec] = field(default_factory=list)
     # How many findings each ``CHECK_LINES`` code left without a card.
     codes: dict[str, int] = field(default_factory=dict)
+    # The findings ERPNext kept from the reviewer (their permissions, or
+    # separation of duties): their notices go to the principal instead.
+    kept_from_reviewer: set[str] = field(default_factory=set)
 
     @property
     def all_refused_for_permissions(self) -> bool:
@@ -428,6 +431,8 @@ async def _leave_one(
             out.check_refused += 1
         if code in ("check_permission", "check_not_theirs"):
             out.permission_refused += 1
+        if code in ("check_permission", "check_not_theirs", "check_reviewer_sod"):
+            out.kept_from_reviewer.add(spec.key)
         out.unproposed.append(spec)
         return False
     if not isinstance(pinned, dict):

@@ -176,6 +176,10 @@ class CardSpec:
     # What the notice's subject counts, when more than its rows (0: its rows,
     # or one).
     count: int = 0
+    # Left for the principal whatever the run's route: a check on what the
+    # reviewer approved, or a finding ERPNext kept from the reviewer (their
+    # permissions, or separation of duties), never told back to them.
+    to_principal: bool = False
 
 
 @dataclass(frozen=True)

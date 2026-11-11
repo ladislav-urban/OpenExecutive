@@ -11274,7 +11274,7 @@ integrations:
     erpnext__customer_payment_record (phase 1's collections job; many
     customers' payment behaviour in one call, so never offered to chat),
     and erpnext__bank_lines_to_match and erpnext__bank_line_candidates
-    (phase 2's bank-matching job). The phase 2 pin is fe432f87, 30 tools:
+    (phase 2's bank-matching job). The phase 2 pin is aa01ad95, 30 tools:
     draft_check takes fill and match, and draft_match_bank_line and
     draft_fill_purchase_invoice are pinned (no card uses the fill yet).
     call_tool refuses them first in its ERPNext block, under every marker and
@@ -11884,7 +11884,7 @@ watch:
   match_card: |
     integrations.erpnext_match: the bank-matching job's match card,
     oe_connector's draft_match_bank_line (ladislav-urban/oe_connector#540;
-    pinned with the phase 2 tools, TOOLS_DIGEST fe432f87, 30 tools, until
+    pinned with the phase 2 tools, TOOLS_DIGEST aa01ad95, 30 tools, until
     the final combined pin replaces it). Operation "match" is in
     erpnext_changes.OPERATIONS with OPERATION_TOOLS["match"] =
     erpnext__draft_match_bank_line; enabled("match") is (), so neither chat

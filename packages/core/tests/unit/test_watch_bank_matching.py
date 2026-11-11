@@ -427,8 +427,8 @@ def test_build_leaves_two_matches_a_person_notice_and_a_nothing_notice() -> None
         ("BT-2", {"vouchers": [{"doctype": JE, "name": "JE-2"}]}),
     ]
     assert drafts_[0].expect == {"company": "Acme", "bank_account": ACCOUNT}
-    # The weaker candidate shows on the card only, never in its notice.
-    assert any("PE-9" in v for _l, v in drafts_[0].shown)
+    # The weaker candidate shows nowhere: the card holds only what ERPNext checked as the reviewer.
+    assert drafts_[0].shown == ()
     assert drafts_[0].notice is not None and "PE-9" not in json.dumps([drafts_[0].notice.values, drafts_[0].notice.summary])
     person = next(n for n in notices if n.summary.startswith("Bank lines to match"))
     assert [i.summary for i in person.items] == ["Bank line BT-3: One payment that may cover several unpaid invoices"]
@@ -555,7 +555,8 @@ def test_a_run_leaves_the_reviewer_two_match_cards_and_the_notices(
     labels = {f["label"]: f["value"] for f in shown.fields}
     assert shown.operation == "match" and shown.job_title == "Bank matching"
     assert labels["Not yet matched"] == "1,200.00 EUR" and labels["The line after"] == "Reconciled"
-    assert "PE-9" in labels["Also possible, not proposed"]
+    # Only the voucher ERPNext checked as the reviewer: never the job user's other candidates.
+    assert not any("PE-9" in str(v) for v in labels.values())
     assert shown.lines[0]["voucher"] == "Payment Entry PE-1" and shown.lines[0]["clears_on"] == DAY
     notices = _alerts()
     assert len(notices) == 2 and {a.routed_to_person_id for a in notices} == {team.cara}
@@ -622,6 +623,9 @@ def test_a_reviewer_erpnext_names_as_a_creator_gets_no_card(
     assert outcome.draft_cards == 0
     assert any("need a different reviewer" in a.body for a in _alerts())
     assert {r.details["result"] for r in _audit_rows("watch_job_check")} == {"check_reviewer_sod"}
+    # The finding kept from the reviewer goes to the principal, never back to the reviewer it was kept from.
+    kept = next(a for a in _alerts() if "Likely match for bank line BT-1" in a.body)
+    assert kept.routed_to_person_id == team.principal
 
 
 @pytest.mark.parametrize("off", ["env", "pin"])
@@ -899,12 +903,27 @@ def test_the_month_after_a_notice_lists_the_matches_made_once(
     assert (values["Vouchers"], values["Amount"], values["Approved by"]) == ("Payment Entry PE-1", "1,200.00 EUR",
                                                                              "Cara Credit")
     assert bank_matching.MONTH_LINE in notice.notes
+    # The check on the reviewer's approvals is the principal's.
+    assert notice.to_principal
     # Left once: after its notice exists, the month says nothing more.
     key = runner.dedup_key(JOB.id, notice.key)
     assert runner._leave_notice(JOB, month_later.isoformat(), notice, "", key, found=1) is not None
     assert bank_matching.month_notices(SETTINGS, month_later) == []
     # The same month has nothing to list yet.
     assert bank_matching.month_notices(SETTINGS, date.fromisoformat(done.resolved_at[:10])) == []
+
+
+def test_the_month_lists_a_match_tried_but_never_confirmed(
+    cards: dict[str, Any], erp: FakeErpnext, approvals: None,
+) -> None:
+    # The call failed (or timed out): ERPNext may have made it, so it's listed to check.
+    erp.replies.append(json.dumps({"error": "ERPNext is busy"}))
+    assert _refusal(cards["BT-1"]).code == "draft_failed"
+    month_later = date.fromisoformat(DAY).replace(day=1) + timedelta(days=40)
+    [notice] = bank_matching.month_notices(SETTINGS, month_later)
+    assert [i.summary for i in notice.items] == ["Bank line BT-1"]
+    assert dict(notice.items[0].values)["Outcome"] == bank_matching.UNKNOWN_OUTCOME
+    assert notice.to_principal
 
 
 def test_only_the_match_branch_sends_draft_match_bank_line() -> None:

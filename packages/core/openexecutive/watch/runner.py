@@ -62,6 +62,7 @@ A run (``run_job``, its own task):
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import importlib
 import json
@@ -594,7 +595,12 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         outcome.routed_principal = "checks_refused"
     # A finding whose card couldn't be left (the run went to the principal,
     # ERPNext refused the reviewer's check, the cap) is told as its notice.
-    notices = notices + [s.notice for s in made.unproposed if s.notice is not None]
+    # One ERPNext kept from the reviewer is told to the principal, never back
+    # to the reviewer it was kept from.
+    notices = notices + [
+        dataclasses.replace(s.notice, to_principal=True) if s.key in made.kept_from_reviewer else s.notice
+        for s in made.unproposed if s.notice is not None
+    ]
     # The cap counts attempts, not successes, so a notice that fails to
     # store never lets another finding through in its place.
     attempts = 0
@@ -609,7 +615,8 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         attempts += 1
         if _leave_notice(
             job, day, spec, reason=reasons.get(spec.key, ""), key=key, found=_found(notices),
-            reasons=reasons, notes=tuple(made.lines) if n == 0 else (), to=to,
+            reasons=reasons, notes=tuple(made.lines) if n == 0 else (),
+            to=_principal_id() if spec.to_principal else to,
         ) is not None:
             outcome.cards += 1
     return outcome
