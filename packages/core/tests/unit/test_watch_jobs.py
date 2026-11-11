@@ -663,6 +663,28 @@ def test_the_cap_counts_attempts_and_the_findings_are_bounded(
     assert (bounded.findings, bounded.cards, bounded.capped) == (runner.MAX_FINDINGS, 1, runner.MAX_FINDINGS - 1)
 
 
+def test_the_notice_cap_is_per_day_across_the_jobs_slots(
+    erp: FakeErpnext, roster: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    # card_cap_day is a day's notices, not each run's: a later slot the same
+    # day (or a run after a restart) finds the day's attempts used.
+    job = _job("slotted", specs=3, cap=2)
+    monkeypatch.setitem(registry._JOBS, job.id, job)
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    _enable(job, roster.principal)
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    first = _run(job)
+    assert (first.cards, first.capped, first.repeats) == (2, 1, 0)
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    later = asyncio.run(runner.run_job(job, DAY, slot="13:00"))
+    assert (later.cards, later.capped, later.repeats) == (0, 1, 2)
+    assert watch_settings.day_count(job.id, DAY, "notices") == 2
+    assert len(_alerts()) == 2
+    # The next day has its own.
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    assert _run(job, "2026-11-11").cards == 1
+
+
 def test_an_injected_customer_name_changes_no_figure_and_no_count(
     example: WatchJob, erp: FakeErpnext, triage: list[Any], model: SimpleNamespace,  # noqa: F811
 ) -> None:

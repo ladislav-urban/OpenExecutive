@@ -10642,8 +10642,9 @@ integrations:
     company:<sales order>) may name who it is for: for_users, at most five
     ERPNext users oe_connector checked can read everything the text says.
     erpnext_events.named_person_ids matches each to an active team member on
-    People by email or alias (the principal and anyone not on People left
-    out). The alert stays private (PRIVATE_ALERT_TAG) and gains a named:<id>
+    People by email or alias (never a mail contact, kind "contact"; the
+    principal and anyone not on People left out). The alert stays private
+    (PRIVATE_ALERT_TAG) and gains a named:<id>
     tag per match (alerts.models.named_people, private erpnext alerts only).
     It stays routed to the principal, whose card it is to act on: the named
     people see it on their own Home (today._board_alerts), look-only
@@ -10665,7 +10666,10 @@ integrations:
     takes operation (create, update, comment) and name, offered only with
     the operations an install has on (ERPNEXT_DRAFT_UPDATE_DOCTYPES,
     ERPNEXT_DRAFT_COMMENT_DOCTYPES, each intersected with this app's own
-    allowlist: UPDATE_FIELDS' Purchase Invoice for updates, never Customer,
+    allowlist: UPDATE_FIELDS' Purchase Invoice for updates, never its
+    supplier (NEVER_CHANGED: check_change refuses it and says to change it in
+    the ERP itself, though oe_connector lists it set-once for intake
+    drafts), never Customer,
     whose credit raise is its own card; COMMENT_ALLOWED minus a mirrored
     SENSITIVE_DOCTYPES for comments). check_change mirrors oe_connector's
     field rules (header and line allowlists, kinds, at most 40 changes; a
@@ -10674,10 +10678,15 @@ integrations:
     operation, fields} under its marker; a card needs a sound fingerprint,
     and summary_refusal leaves none unless ERPNext read back the same
     operation and document, a known owner ("yours" or "assigned to you"), at
-    most 40 changes, and a comment's exact text. card_view shows every
-    change, line change, removed row and total (both currencies) before and
-    after with this app's own labels, never ERPNext's, or the comment whole
-    with its newlines. The card stores operation and name, and its tool is
+    most 40 changes, and a comment's exact text; for an update, exactly the
+    change asked (every asked field and line reported once, each after-value
+    the stored one with dates compared by day, numbers by value and a line's
+    description unescaped, removed rows only from remove_lines) and no value
+    over TEXT_SHOWN (1,000 characters). card_view shows every change, line
+    change, removed row and total (both currencies) before and after with
+    this app's own labels, never ERPNext's, a text field's values whole with
+    their newlines, never cut, or the comment whole with its newlines. The
+    card stores operation and name, and its tool is
     OPERATION_TOOLS[operation]. Approval re-checks the operation, its own
     switch, the shape and the name, and that the stored tool is that one;
     it sends {doctype, name, the stored fields, idempotency key, asked_by,
@@ -11749,9 +11758,11 @@ watch:
     migrates a (job, day)-keyed watch_runs once (_migrate_runs, under BEGIN
     IMMEDIATE, re-checked inside): every row kept with slot "", a noticed
     failure carried to watch_days. watch_days (job, day, cards,
-    failure_noticed): take_day_cards(job, day, n, cap) reads and adds in one
-    BEGIN IMMEDIATE (negative n gives back, never below 0), so the day's
-    card cap holds across slots and workers; take_failure_notice is true once
+    failure_noticed, checks, notices; checks and notices added by
+    settings.connect's column migration): take_day_cards(job, day, n, cap), and take_day for any
+    DAY_COUNTS column, reads and adds in one BEGIN IMMEDIATE (negative n
+    gives back, never below 0), so the day's card cap holds across slots,
+    workers and restarts; take_failure_notice is true once
     per job and calendar day. One asyncio task per run (unscoped audit
     rows), not a scheduled_actions row. run_job(job, day, slot=) runs under
     set_turn(turn_id=watch:<id>:<day>[:<slot>]) and
@@ -11772,9 +11783,9 @@ watch:
     fails the run (acting_job_mismatch). watch_runs.detail (added by
     settings.connect's column migration) keeps codes and counts: routed,
     routed_principal, draft_cards, draft_repeats, draft_capped, checks,
-    check_refused. Each run joins its day's count with
-    erpnext_caller.begin_job_checks(job, day): checks are capped per job and
-    day (two runs' worth), so an hourly job's slots share one bound.
+    check_refused. Checks are capped per job and day in watch_days.checks
+    (erpnext_caller.job_check_cap, two runs' worth), so an hourly job's
+    slots share one bound and a restart never resets it.
   routing: |
     watch.cards.route(job, row, reads): the reviewer only when every made
     read (at least one; skipped reads count neither way) was as_job_user,
@@ -11797,8 +11808,11 @@ watch:
     exactly {operation, doctype, [name,] fields} with fields equal to
     job.check_fields' output (job-check-arguments; so never asked_by or
     configured_by), a person who isn't the job's current reviewer under that
-    email (active, team, not demo, not principal), and past card_cap_day +
-    JOB_CHECK_RETRIES (2) per (job, day). _marked refuses any draft marker
+    email (active, team, not demo, not principal), and past job_check_cap,
+    2 x (card_cap_day + JOB_CHECK_RETRIES (2)) per (job, day), taken from
+    watch_days.checks (settings.take_day) in one transaction before the
+    check and never given back, so a refused check still counts; a count
+    that can't be taken refuses (job-check-cap). _marked refuses any draft marker
     inside it. The gateway: any other tool under it is outside-job-check;
     _check_erpnext_draft refuses it under a session, a watch read, the
     brief, oversight, answer check or supplier markers, for any tool but
@@ -12048,8 +12062,9 @@ watch:
     runner.notice_body, a code preamble and wrap_untrusted(source erpnext,
     author watch:<id>) of the stripped, capped summary, values and the
     labelled reason. A run takes at most MAX_FINDINGS (200) findings from
-    build; card_cap_day counts attempts, not stored notices, so a notice
-    that fails to store never lets another through; a finding whose notice
+    build; card_cap_day counts attempts a day across the job's slots and
+    restarts (settings.take_day "notices" before each), not stored notices,
+    so a notice that fails to store never lets another through; a finding whose notice
     is still unread or read is skipped (repeats). Audit: one
     private watch_run row per run (status, reason code, counts, as_job_user
     list; never figures or text).

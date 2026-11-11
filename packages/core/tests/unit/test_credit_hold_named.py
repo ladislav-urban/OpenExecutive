@@ -221,6 +221,18 @@ def test_a_demo_person_is_never_named(roster: SimpleNamespace, monkeypatch: pyte
     assert erpnext_events.named_person_ids(["sara@co.com", "ben@co.com"]) == [roster.sara]
 
 
+def test_a_mail_contact_is_never_named(roster: SimpleNamespace) -> None:
+    # A customer's buyer on People for mail is outside the team: the private
+    # credit hold never reaches them, even with their address in for_users.
+    from openexecutive.people import registry as people_registry
+    from openexecutive.people import store as people_store
+
+    buyer = people_store.upsert_person(full_name="Bea Buyer", email="bea@customer.com", kind="contact")
+    people_registry.invalidate()
+    assert people_store.get_person(buyer).kind == "contact"  # type: ignore[union-attr]
+    assert erpnext_events.named_person_ids(["bea@customer.com", "sara@co.com"]) == [roster.sara]
+
+
 def test_the_push_goes_to_each_named_persons_own_chat_only(
     roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
