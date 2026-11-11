@@ -11922,6 +11922,10 @@ watch:
     (settings.take_approved_amount, table watch_approved, one row per
     card, never given back, fails closed); over amount_cap_day the claim
     is released and the card waits (409 match_limit, LIMIT_TEXT).
+    ERPNext checks every job card's configured_by against the configurer
+    the site records (oe_connector_watch_jobs[job].configured_by,
+    ladislav-urban/oe_connector#552): another person, or none recorded, is
+    final (configurer_not_recorded, CONFIGURER_MARKERS, the card closed).
     _carry_out sends exactly {name, vouchers, idempotency_key, asked_by
     job:bank-matching, configured_by, expected_fingerprint}, and
     refuses any match not the bank-matching job's. Success:

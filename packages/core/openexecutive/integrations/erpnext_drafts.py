@@ -1047,6 +1047,17 @@ JOB_OPEN_MAX = 10
 # Headroom a job's cards leave in a reviewer's OPEN_CARDS_MAX for their own.
 JOB_HEADROOM = 5
 SOD_JOB_TEXT = "You set up this job, so someone else approves its cards. Nothing was made."
+# ERPNext checks a job card's signed configured_by against the configurer the
+# site records for the job (oe_connector_watch_jobs[job].configured_by,
+# ladislav-urban/oe_connector#552), and refuses a card naming someone else,
+# or a job with no configurer recorded. Final: approving again would refuse
+# again until an ERPNext operator records the job's configurer.
+CONFIGURER_MARKERS = ("ERPNext records no one as having set up the job", "in oe_connector_watch_jobs. Nothing was made")
+CONFIGURER_TEXT = (
+    "ERPNext doesn't record the person who set up this job as the one this card names, so nothing was made and "
+    "the card is closed. An ERPNext operator records the job's configurer (oe_connector_watch_jobs); the next "
+    "run proposes it again."
+)
 
 
 def _job_title(payload: dict[str, Any]) -> str:
@@ -1973,6 +1984,14 @@ async def _carry_out(
                 "reason": found[0], **_identities(payload),
             })
             raise ApproveRefused(409, found[0], found[1])
+    if wire is not None and any(marker in reason for marker in CONFIGURER_MARKERS):
+        # The site records another configurer for the job, or none: final.
+        finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})
+        audit("erpnext_draft_configurer_refused", f"ERPNext refused watch job {payload.get('job')}'s card over its configurer", {
+            "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "job": payload.get("job"),
+            "configured_by_person_id": payload.get("configured_by_person_id"),
+        })
+        raise ApproveRefused(409, "configurer_not_recorded", CONFIGURER_TEXT)
     if wire is not None and SOD_REFUSED in reason:
         # oe_connector's own separation of duties: final, as ours is.
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})

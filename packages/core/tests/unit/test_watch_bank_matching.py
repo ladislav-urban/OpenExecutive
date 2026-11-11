@@ -878,6 +878,11 @@ def test_a_timed_out_match_still_counts_once(
     ("Matching limit: 50,000.00 matched a day in Acme. Nothing was matched.", "erpnext_match_limit"),
     ("Bank Transaction BT-1 is no longer unreconciled.", "already_matched"),
     ("a match comes only from the bank-matching job's card, which names who set it up.", "not_from_job"),
+    # ERPNext's record of who set the job up (ladislav-urban/oe_connector#552): another person, or no one.
+    ("The card says the job 'bank-matching' was set up by a@x.example, but ERPNext records b@x.example in "
+     "oe_connector_watch_jobs. Nothing was made.", "configurer_not_recorded"),
+    ("ERPNext records no one as having set up the job 'bank-matching': an ERPNext operator adds "
+     "\"configured_by\" to its entry.", "configurer_not_recorded"),
 ])
 def test_a_matchs_final_refusals_close_the_card(
     cards: dict[str, Any], erp: FakeErpnext, approvals: None, said: str, code: str,
