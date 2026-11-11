@@ -775,6 +775,35 @@ def test_concurrent_admits_of_the_same_person_make_one_person(kc: Keycloak) -> N
     assert len(everyone()) == 1
 
 
+def test_admitted_between_the_two_reads_is_exists_never_address_held(
+    kc: Keycloak, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Another sign-in of the same person admits them after this one read no
+    # link and before it read the address: they exist, and sign-in lets them in.
+    subject = kc.user(58)
+    first = admit(kc, subject, "user58@example.com")
+    assert first.admitted
+    real = people_store.find_person_by_directory_subject
+    calls: list[str] = []
+
+    def not_yet_then_linked(sub: str, *args: Any, **kwargs: Any) -> Any:
+        calls.append(sub)
+        return None if len(calls) == 1 else real(sub, *args, **kwargs)
+
+    monkeypatch.setattr(people_store, "find_person_by_directory_subject", not_yet_then_linked)
+    again = admit(kc, subject, "user58@example.com")
+    assert (again.code, again.person_id) == ("exists", first.person_id)
+    assert len(everyone()) == 1
+
+
+def test_an_address_another_person_holds_stays_address_held(kc: Keycloak) -> None:
+    first = admit(kc, kc.user(59), "user59@example.com")
+    assert first.admitted
+    # Another directory subject signing in with that same address.
+    other = admit(kc, kc.user(159), "user59@example.com")
+    assert other.code == "address_held" and len(everyone()) == 1
+
+
 def test_concurrent_admits_of_different_people_never_interleave(kc: Keycloak) -> None:
     subjects = [kc.user(60 + n) for n in range(6)]
     out: list[directory_sync.AdmitResult] = []
