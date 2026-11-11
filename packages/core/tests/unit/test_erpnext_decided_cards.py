@@ -508,6 +508,48 @@ def test_a_retry_after_a_failure_keeps_its_count_with_the_tried_mark(
     assert stored["attempts"] == 2 and stored["tried"] is True
 
 
+def test_a_card_that_cant_be_marked_tried_isnt_sent(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.memory import decision_ledger
+
+    card = _restock_card(erp, roster)
+    called: list[str] = []
+
+    async def call(tool: str, arguments: dict[str, Any]) -> str:
+        called.append(tool)
+        return "{}"
+
+    monkeypatch.setattr(drafts, "_call", call)
+    monkeypatch.setattr(decision_ledger, "update_open_payload", lambda *a, **k: False)
+    with pytest.raises(drafts.ApproveRefused) as refused:
+        _approve(card)
+    assert refused.value.code == "busy" and called == []
+    waiting = get_decision_instance(card.id)
+    assert waiting is not None and waiting.status == STATUS_PROPOSED
+
+    def locked(*a: Any, **k: Any) -> bool:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(decision_ledger, "update_open_payload", locked)
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(card)
+    waiting = get_decision_instance(card.id)
+    assert waiting is not None and waiting.status == STATUS_PROPOSED and called == []
+
+
+def test_the_principals_note_needs_a_surface_that_proved_it(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import content_trust
+
+    _closed(roster.principal, "web-1")
+    monkeypatch.setattr(content_trust, "principal_speaking", lambda _s: False)
+    assert _note(_web(roster.principal), roster.principal) == ""
+    monkeypatch.setattr(content_trust, "principal_speaking", lambda _s: True)
+    assert "so nothing was made" in _note(_web(roster.principal), roster.principal)
+
+
 def test_a_host_turn_goes_by_the_host_callers_rule(
     roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

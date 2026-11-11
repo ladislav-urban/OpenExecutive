@@ -1078,7 +1078,11 @@ def _note_person(session: Any, person_id: int | None) -> int | None:
     if person is None or not person.active:
         return None
     if person.is_principal:
-        return person_id
+        # The principal's cards only on a surface that proved it is them, as
+        # leaving one needs (principal_speaking): a chat id alone isn't proof.
+        from openexecutive.orchestrator.content_trust import principal_speaking
+
+        return person_id if principal_speaking(session) else None
     # A teammate's cards hold what the ERP read as them: only when this
     # surface verified it is them, as GET /erpnext/drafts holds them.
     from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
@@ -1454,7 +1458,11 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     stored. Returns what was made. Raises ``ApproveRefused``."""
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.delegation.verified import NOT_YOURS, caller_refusal
-    from openexecutive.memory.decision_ledger import claim_for_execution, update_open_payload
+    from openexecutive.memory.decision_ledger import (
+        claim_for_execution,
+        release_claim,
+        update_open_payload,
+    )
     from openexecutive.people.store import get_person
 
     payload = _payload(instance)
@@ -1499,18 +1507,24 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         raise ApproveRefused(409, "changed", "Your email changed since this card was left. Dismiss it and ask again.")
     if not claim_for_execution(instance.id, resolver_person_id=resolver):
         raise ApproveRefused(409, "already_handled", "This card was already handled.")
-    # Marked before the call, while the claim is held: if the call never
-    # comes back (a restart releases the claim), the card still says an
-    # approval was tried, so the note never says nothing was made.
-    stored = instance.proposed_payload_json
-    if payload.get("tried") is not True:
-        marked = {**payload, "tried": True}
-        if update_open_payload(instance.id, marked, expected_json=stored, while_executing=True):
-            payload, stored = marked, json.dumps(marked)
-        else:
-            logger.warning("erpnext_drafts: couldn't mark card %d as tried", instance.id)
     _APPROVING.add(instance.id)
     try:
+        # Marked before the call, while the claim is held: if the call never
+        # comes back (a restart releases the claim), the card still says an
+        # approval was tried, so the note never says nothing was made. No
+        # mark, no call: the card waits again and the person approves anew.
+        stored = instance.proposed_payload_json
+        if payload.get("tried") is not True:
+            marked = {**payload, "tried": True}
+            try:
+                ok = update_open_payload(instance.id, marked, expected_json=stored, while_executing=True)
+            except Exception:
+                logger.warning("erpnext_drafts: marking card %d as tried failed", instance.id, exc_info=True)
+                ok = False
+            if not ok:
+                release_claim(instance.id)
+                raise ApproveRefused(409, "busy", "This card changed a moment ago. Approve it again.")
+            payload, stored = marked, json.dumps(marked)
         return await _carry_out(instance, payload, person, email, tool, rechecked, key, stored)
     finally:
         _APPROVING.discard(instance.id)

@@ -10416,7 +10416,8 @@ integrations:
     asked as there (erpnext_caller._host_caller must pass: signed in, a
     team member, a private conversation; caller_person_id, never the
     page's word), anywhere else the turn's person_id (no
-    caller_person_id fallback; a teammate only when
+    caller_person_id fallback; the principal only when principal_speaking,
+    as leaving a card needs; a teammate only when
     people_tools.teammate_on_verified_surface is that same person, and on
     the web only under signed sign-ins, as GET /erpnext/drafts), filtered
     on approver_person_id and the
@@ -10431,7 +10432,8 @@ integrations:
     dismissed; expired; a dismissed or expired card with attempts > 0,
     marked tried (approve writes tried: true into the payload right after
     the claim, before the call, so a call cut off by a restart still
-    counts) or left executing says an approval was tried and to check in the ERP,
+    counts; a mark that can't be written releases the claim and refuses
+    busy, with no call) or left executing says an approval was tried and to check in the ERP,
     never that nothing was made; closed per closed_code, a closed_externally card
     with reversal_reason changed as replaced by a newer card, and any other
     or missing code as "the reason wasn't recorded; don't guess one"). An
