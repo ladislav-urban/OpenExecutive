@@ -130,18 +130,18 @@ MONTH_ITEMS_MAX = 100
 # What a notice says, in code's own words.
 GATE_LINE = (
     "These mailed invoices can't be filled from here: the sender isn't confirmed enough to trust the invoice. "
-    "Check each with the supplier before entering it in ERPNext."
+    "Check each with the supplier before entering it in the ERP."
 )
 PERSON_LINE = (
-    "A person fills these mailed invoices in ERPNext: the job fills one only from the single order or receipt "
+    "A person fills these mailed invoices in the ERP: the job fills one only from the single order or receipt "
     "the supplier's PDF clearly bills, for its whole total."
 )
-FILL_LINE = "A fill no card was left for. Fill the draft in ERPNext from the order or receipt shown if it's right."
+FILL_LINE = "A fill no card was left for. Fill the draft in the ERP from the order or receipt shown if it's right."
 MONTH_LINE = (
     "Check each of these fills against the supplier's invoice before it is submitted. Each is still a draft."
 )
-UNKNOWN_OUTCOME = "Not confirmed: check in ERPNext whether it was filled"
-NO_COMPANY_LINE = "Name the company in Settings → Watch jobs; an ERPNext operator lists the job for it."
+UNKNOWN_OUTCOME = "Not confirmed: check in the ERP whether it was filled"
+NO_COMPANY_LINE = "Name the company in Settings → Watch jobs; an ERP operator lists the job for it."
 CUT_LINE = "Not every mailed invoice could be read this run, so some aren't shown."
 # Why a draft needs a person, by code: code's words.
 WHY: dict[str, str] = {

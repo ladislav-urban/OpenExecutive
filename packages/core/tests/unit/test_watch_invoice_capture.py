@@ -712,3 +712,29 @@ def test_the_month_after_lists_the_fills_to_the_principal(
     values = {i.summary: dict(i.values) for i in notice.items}
     assert values["Invoice PI-1"]["Bills"] == "Purchase Order PO-1"
     assert values["Invoice PI-2"]["Outcome"] == invoice_capture.UNKNOWN_OUTCOME
+
+
+
+# oe_connector's own fill refusals, as its draft_fill.py words them at
+# ladislav-urban/oe_connector#545's head (a0b1ff34), filled with sample values.
+# The markers are matched against these words, so rewording what the person
+# is told must never touch a marker.
+CONNECTOR_REFUSALS = (
+    "PI-0 already carries bill number INV-2026-77 for this supplier. Nothing was filled.",
+    "the draft is assigned to someone else: only its assignee approves its fill.",
+    "The mail's sender can't be trusted to fill an invoice: its domain asks no DMARC enforcement"
+    " (its domain's DMARC policy: none).",
+    "a fill comes only from the invoice-capture job's card, which names who set it up.",
+    "Purchase Invoice ACC-PINV-2026-00001 isn't empty: only an empty mailed draft is filled.",
+    "Purchase Invoice ACC-PINV-2026-00001 isn't a draft.",
+)
+
+
+def test_every_fill_marker_still_matches_the_connectors_words() -> None:
+    from openexecutive.integrations import erpnext_fill
+
+    for marker, _code, _shown in erpnext_fill.FINAL:
+        assert any(marker in said for said in CONNECTOR_REFUSALS), marker
+    # What the person is told is ours, in the product's words.
+    for _marker, _code, shown in erpnext_fill.FINAL:
+        assert "ERPNext" not in shown

@@ -81,7 +81,7 @@ _SOURCE_KEYS = frozenset({"doctype", "name"})
 FINAL: tuple[tuple[str, str, str], ...] = (
     (
         "already carries bill number", "bill_no_in_use",
-        "Another of the supplier's invoices already carries this bill number in ERPNext, so nothing was filled "
+        "Another of the supplier's invoices already carries this bill number in the ERP, so nothing was filled "
         "and the card is closed.",
     ),
     (
@@ -91,30 +91,30 @@ FINAL: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "The mail's sender can't be trusted to fill an invoice", "sender_untrusted",
-        "ERPNext can't trust the mail's sender to fill an invoice now, so nothing was filled and the card is "
+        "The ERP can't trust the mail's sender to fill an invoice now, so nothing was filled and the card is "
         "closed. Fill the draft by hand if the invoice is genuine.",
     ),
     (
         "a fill comes only from the invoice-capture job's card", "not_from_job",
-        "ERPNext takes a fill only from the invoice-capture job's card. Nothing was filled and the card is "
+        "The ERP takes a fill only from the invoice-capture job's card. Nothing was filled and the card is "
         "closed.",
     ),
     (
         "only an empty mailed draft is filled", "already_filled",
-        "The draft isn't empty any more in ERPNext, so nothing was filled and the card is closed.",
+        "The draft isn't empty any more in the ERP, so nothing was filled and the card is closed.",
     ),
     (
         "isn't a draft", "not_a_draft",
-        "The invoice isn't a draft any more in ERPNext, so nothing was filled and the card is closed.",
+        "The invoice isn't a draft any more in the ERP, so nothing was filled and the card is closed.",
     ),
 )
 CHANGED_TEXT = (
-    "The draft, its mail, the supplier or the order or receipt changed in ERPNext since the card was left, so "
+    "The draft, its mail, the supplier or the order or receipt changed in the ERP since the card was left, so "
     "nothing was filled and the card is closed. The next run reads it as it is now."
 )
 LIMIT_TEXT = (
     "Today's limit on invoices filled from here is reached, so nothing was filled. The card waits: approve it "
-    "again tomorrow, or fill the draft in ERPNext."
+    "again tomorrow, or fill the draft in the ERP."
 )
 
 
@@ -489,7 +489,7 @@ def card_view(summary: Any) -> dict[str, Any]:
             "amount": money(row.get("amount")),
         })
     notes = [
-        "Approving fills this draft invoice in ERPNext from the order or receipt shown, through ERPNext's own "
+        "Approving fills this draft invoice in the ERP from the order or receipt shown, through the ERP's own "
         "mapper, as you. It stays a draft: nothing is submitted, paid or posted.",
         "The supplier's invoice is outsiders' text. Check the PDF against the rows and totals before approving.",
     ]
@@ -545,7 +545,7 @@ async def approval_refusal(instance: Any, payload: dict[str, Any], person: Any) 
         raise ApproveRefused(
             409, "fill_off",
             "Filling mailed invoices from here is turned off now, so nothing was filled. Fill the draft in "
-            "ERPNext if it should still be filled.",
+            "the ERP if it should still be filled.",
         )
     kept = slice_of_stored(payload.get("slice"))
     if kept is None or slice_refusal(kept, payload.get("fields")) is not None:
@@ -555,7 +555,7 @@ async def approval_refusal(instance: Any, payload: dict[str, Any], person: Any) 
         raise ApproveRefused(
             409, "not_assignee",
             "Only the person the mail pull assigned this draft to approves its fill; assigning it to yourself "
-            "doesn't count. An ERPNext operator points the Purchase Invoice assignment rule at the job's "
+            "doesn't count. An ERP operator points the Purchase Invoice assignment rule at the job's "
             "reviewer, or the draft is filled by hand.",
         )
     if names_person(kept, email):

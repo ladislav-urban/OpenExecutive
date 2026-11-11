@@ -103,16 +103,16 @@ CHECK_LINES: dict[str, str] = {
         "{n} {noun} weren't prepared: the order or receipt wouldn't bill the total on the supplier's invoice."
     ),
     "check_fill_sod": (
-        "{n} {noun} weren't prepared: they need a different reviewer, since ERPNext names the reviewer as a "
+        "{n} {noun} weren't prepared: they need a different reviewer, since the ERP names the reviewer as a "
         "creator of the order or receipt they bill."
     ),
     "check_fill_assignee": (
         "{n} {noun} weren't prepared: only the person the mail pull assigned a draft to approves its fill, "
-        "and that isn't the reviewer. An ERPNext operator points the Purchase Invoice assignment rule at the "
+        "and that isn't the reviewer. An ERP operator points the Purchase Invoice assignment rule at the "
         "job's reviewer, or the drafts are filled by hand."
     ),
     "check_fill_collides": "{n} {noun} weren't prepared: the supplier already has an invoice with that number.",
-    "check_fill_sender": "{n} {noun} weren't prepared: ERPNext can't trust the mail's sender to fill an invoice.",
+    "check_fill_sender": "{n} {noun} weren't prepared: the ERP can't trust the mail's sender to fill an invoice.",
 }
 
 
