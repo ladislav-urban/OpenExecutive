@@ -334,6 +334,24 @@ def test_a_removed_row_not_asked_to_be_removed_leaves_no_card() -> None:
     assert _refusal({**UPDATE, "remove_lines": {"items": ["row-c3"]}}, summary) is None
 
 
+def test_every_asked_removal_must_be_read_back_once() -> None:
+    gone = {"table": "items", "row": "row-c3", "idx": 3, "qty": 1.0, "amount": 5.0}
+    asked = {**UPDATE, "remove_lines": {"items": ["row-c3", "row-d4"]}}
+    # One of the two asked removals not read back: the card would show less
+    # than approval sends.
+    out = _refusal(asked, {**UPDATE_SUMMARY, "removed": [gone]})
+    assert out is not None and "differently" in out
+    # The same removal twice.
+    out = _refusal({**UPDATE, "remove_lines": {"items": ["row-c3"]}}, {**UPDATE_SUMMARY, "removed": [gone, gone]})
+    assert out is not None and "differently" in out
+
+
+def test_a_long_value_that_isnt_text_leaves_no_card() -> None:
+    summary = {**UPDATE_SUMMARY, "changes": [{"field": "remarks", "before": ["r" * 1001], "after": "New"}], "lines": []}
+    out = _refusal({"set": {"remarks": "New"}}, summary)
+    assert out is not None and "whole" in out
+
+
 def test_a_purchase_invoices_supplier_is_never_changed_on_a_card() -> None:
     assert "supplier" not in changes.UPDATE_FIELDS["Purchase Invoice"]
     out = changes.check_change("update", "Purchase Invoice", "ACC-PINV-2026-00031",

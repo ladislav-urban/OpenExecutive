@@ -293,7 +293,8 @@ def _change_shown(field: str, before: Any, after: Any) -> str:
 
 
 def _too_long(value: Any) -> bool:
-    return isinstance(value, str) and len(_text_whole(value)) > TEXT_SHOWN
+    # Any value, not only text: a card shows str() of whatever came back.
+    return value is not None and len(_text_whole(value)) > TEXT_SHOWN
 
 
 def _date_of(value: Any) -> str | None:
@@ -375,6 +376,10 @@ def summary_refusal(operation: str, doctype: str, name: str, fields: dict[str, A
     may_remove = {(table, row) for table, rows in (fields.get("remove_lines") or {}).items() for row in rows}
     if any(not isinstance(r, dict) or (r.get("table"), r.get("row")) not in may_remove for r in removed):
         return "ERPNext's reading removes a row that wasn't asked to be removed, so no card was left."
+    # Every asked removal read back, once: the card shows what approval sends.
+    removed_keys = [(r.get("table"), r.get("row")) for r in removed]
+    if len(set(removed_keys)) != len(removed_keys) or set(removed_keys) != may_remove:
+        return _DIFFERENT
     line_changes = sum(len(x.get("changes") or []) for x in lines)
     total = len(changes) + line_changes + len(removed)
     if total == 0 or total > MAX_CHANGES:
