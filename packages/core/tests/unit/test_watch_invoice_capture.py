@@ -38,7 +38,6 @@ from .test_erpnext_drafts import FakeErpnext, erp, roster  # noqa: F401
 from .test_watch_collections import (  # noqa: F401
     REVIEWER,
     approvals,
-    fresh_checks,
     signing,
     team,
 )

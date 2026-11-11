@@ -56,8 +56,9 @@ A run (``run_job``, its own task):
    subject is the job's title and counts only; every ERPNext string in the
    body is stripped and capped, and the body is wrapped as untrusted, with
    code's own lines (how many cards wait, why none were prepared) after it.
-   At most ``card_cap_day`` attempts a day, and a finding whose notice is
-   still open isn't raised again.
+   At most ``card_cap_day`` attempts a day across the job's slots and
+   restarts (``watch_days.notices``), and a finding whose notice is still
+   open isn't raised again.
 """
 from __future__ import annotations
 
@@ -84,6 +85,7 @@ from openexecutive.watch.settings import (
     get_row,
     job_enabled,
     master_on,
+    take_day,
     take_failure_notice,
 )
 
@@ -522,7 +524,6 @@ def _refusal_reason(said: object) -> str:
 
 
 async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) -> RunOutcome:
-    from openexecutive.orchestrator import erpnext_caller
     from openexecutive.watch import cards
 
     today = date.fromisoformat(day)
@@ -530,7 +531,6 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     if not master_on() or not row.enabled:
         raise _Stop("watch-job-off")
     settings = effective_settings(job, row)
-    erpnext_caller.begin_job_checks(job.id, day)
     results: list[Mapping[str, Any]] = []
     users: set[str] = set()
     # Items of a may-fail read ERPNext refused, kept with the run's record.
@@ -616,18 +616,17 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         dataclasses.replace(s.notice, to_principal=True) if s.key in made.kept_from_reviewer else s.notice
         for s in made.unproposed if s.notice is not None
     ]
-    # The cap counts attempts, not successes, so a notice that fails to
-    # store never lets another finding through in its place.
-    attempts = 0
+    # The cap counts attempts a day across the job's slots (watch_days), not
+    # successes, so a notice that fails to store never lets another finding
+    # through in its place, and an hourly job's slots share one bound.
     for n, spec in enumerate(notices):
         key = dedup_key(job.id, spec.key)
         if _still_open(key) or _raised_today(key, day):
             outcome.repeats += 1
             continue
-        if attempts >= job.card_cap_day:
+        if take_day(job.id, day, "notices", 1, job.card_cap_day) == 0:
             outcome.capped = len(notices) - n
             break
-        attempts += 1
         if _leave_notice(
             job, day, spec, reason=reasons.get(spec.key, ""), key=key, found=_found(notices),
             reasons=reasons, notes=tuple(made.lines) if n == 0 else (),

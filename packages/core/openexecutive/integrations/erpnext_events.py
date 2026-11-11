@@ -199,8 +199,10 @@ def _for_users(value: Any) -> list[str]:
 def named_person_ids(users: list[str]) -> list[int]:
     """The active team members on People whose email or an alias is one of
     ``users``, in the event's order, the principal left out (a private alert
-    is theirs anyway). Someone not on People gets nothing; a roster that
-    can't be read names no one. Never raises."""
+    is theirs anyway). Someone not on People gets nothing, and neither does a
+    contact (someone outside the team, such as a customer's buyer whose
+    address is on People for mail); a roster that can't be read names no
+    one. Never raises."""
     if not users:
         return []
     from openexecutive.people.store import list_people
@@ -209,7 +211,7 @@ def named_person_ids(users: list[str]) -> list[int]:
         # A demo person looks only, and is never told a real hold.
         roster = [
             p for p in list_people()
-            if p.active and not p.is_principal and p.id is not None and not p.demo
+            if p.active and p.kind == "team" and not p.is_principal and p.id is not None and not p.demo
         ]
     except Exception:
         logger.exception("erpnext events: couldn't read People to name an alert's readers")
