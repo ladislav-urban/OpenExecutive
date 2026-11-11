@@ -10642,8 +10642,9 @@ integrations:
     company:<sales order>) may name who it is for: for_users, at most five
     ERPNext users oe_connector checked can read everything the text says.
     erpnext_events.named_person_ids matches each to an active team member on
-    People by email or alias (the principal and anyone not on People left
-    out). The alert stays private (PRIVATE_ALERT_TAG) and gains a named:<id>
+    People by email or alias (never a mail contact, kind "contact"; the
+    principal and anyone not on People left out). The alert stays private
+    (PRIVATE_ALERT_TAG) and gains a named:<id>
     tag per match (alerts.models.named_people, private erpnext alerts only).
     It stays routed to the principal, whose card it is to act on: the named
     people see it on their own Home (today._board_alerts), look-only
