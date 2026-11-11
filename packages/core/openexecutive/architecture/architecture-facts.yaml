@@ -11762,7 +11762,8 @@ watch:
     settings.connect's column migration): take_day_cards(job, day, n, cap), and take_day for any
     DAY_COUNTS column, reads and adds in one BEGIN IMMEDIATE (negative n
     gives back, never below 0), so the day's card cap holds across slots,
-    workers and restarts; take_failure_notice is true once
+    workers and restarts (notices for the principal, to_principal, take
+    their places first: runner.principal_first); take_failure_notice is true once
     per job and calendar day. One asyncio task per run (unscoped audit
     rows), not a scheduled_actions row. run_job(job, day, slot=) runs under
     set_turn(turn_id=watch:<id>:<day>[:<slot>]) and
