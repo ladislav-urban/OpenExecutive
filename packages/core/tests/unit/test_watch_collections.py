@@ -605,8 +605,8 @@ def test_a_refused_check_leaves_no_card_and_a_line_in_codes_words(
     assert (outcome.draft_cards, outcome.check_refused) == (1, 2)
     [notice] = _alerts()
     assert notice.routed_to_person_id == team.cara
-    assert "1 reminder drafts couldn't be prepared as Cara Credit: their ERPNext access doesn't allow it." in notice.body
-    assert "1 reminder drafts couldn't be prepared: ERPNext didn't accept them." in notice.body
+    assert "1 reminder drafts couldn't be prepared as Cara Credit: their ERP access doesn't allow it." in notice.body
+    assert "1 reminder drafts couldn't be prepared: the ERP didn't accept them." in notice.body
     # Newest first.
     assert [r.details["result"] for r in _audit_rows("watch_job_check")] == ["check_refused", "ok", "check_permission"]
     everything = json.dumps([[r.summary, r.details] for r in _audit_rows("watch_job_check")]) + notice.body
