@@ -60,19 +60,21 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     # A follow-up: the turns it follows, in the session's history.
     seed_prior_turns(session, scenario)
     # The draft cards its conversation left, as the turn's note is told them
-    # (never written to the ledger).
+    # (never written to the ledger, and forgotten after the turn).
     from openexecutive.integrations.erpnext_drafts import decided_cards_override
 
-    decided_cards_override.set(scenario_decided_cards(scenario))
-
-    response = await executive.chat(
-        user_message=scenario_query(scenario),
-        session=session,
-        channel_context_block=channel_block,
-        # chat() sets the turn's speaker from this, as the chat route passes
-        # the signed-in person: a `speaker` scenario's caller, else None.
-        person_id=surface.get("caller_person_id"),
-    )
+    cards_token = decided_cards_override.set(scenario_decided_cards(scenario))
+    try:
+        response = await executive.chat(
+            user_message=scenario_query(scenario),
+            session=session,
+            channel_context_block=channel_block,
+            # chat() sets the turn's speaker from this, as the chat route
+            # passes the signed-in person: a `speaker` scenario's caller, else None.
+            person_id=surface.get("caller_person_id"),
+        )
+    finally:
+        decided_cards_override.reset(cards_token)
 
     return {
         "id": scenario["id"],

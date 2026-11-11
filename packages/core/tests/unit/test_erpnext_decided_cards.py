@@ -26,6 +26,7 @@ from openexecutive.memory import episodic
 from openexecutive.memory.decision_ledger import (
     STATUS_APPROVED_UNCHANGED,
     STATUS_CLOSED_EXTERNALLY,
+    STATUS_EXECUTING,
     STATUS_FAILED,
     STATUS_PROPOSED,
     STATUS_REJECTED,
@@ -72,52 +73,102 @@ def test_a_card_closed_because_the_draft_changed_keeps_that_code(
     assert _final(card.id)["closed_code"] == "changed_since_proposed"
 
 
-def test_a_last_try_the_erp_refused_keeps_draft_failed(
-    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
-) -> None:
+NO_ANSWER_SAYS = (
+    "the approval didn't go through after several tries, and whether a draft was made "
+    "isn't recorded: check in the ERP before asking again"
+)
+
+
+def _last_try_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(drafts, "ATTEMPTS_MAX", 1)
-    card = _restock_card(erp, roster)
-    erp.replies.append(json.dumps({"ok": False, "error": "Item ITEM-1 is disabled."}))
-    with pytest.raises(drafts.ApproveRefused):
-        _approve(card)
+
+
+def _assert_no_answer(card: Any, roster: SimpleNamespace) -> None:
     closed = get_decision_instance(card.id)
     assert closed is not None and closed.status == STATUS_FAILED
-    assert _final(card.id)["closed_code"] == "draft_failed"
+    assert _final(card.id)["closed_code"] == "no_answer"
+    note = drafts.decided_cards_note(_web(roster.principal, str(card.originating_session_id)), roster.principal)
+    assert NO_ANSWER_SAYS in note
+    assert "nothing was made" not in note
+
+
+def test_a_refusal_as_the_connector_sends_it_closes_as_no_answer(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # oe_connector refuses with a ToolError: plain text flagged isError,
+    # which a timeout's text can look like, so it can't promise nothing was made.
+    _last_try_closes(monkeypatch)
+    card = _restock_card(erp, roster)
+    refused = MagicMock()
+    refused.content = [MagicMock(text="Error executing tool draft_material_request: Item ITEM-1 is disabled.")]
+    refused.isError = True
+    erp.session.call_tool = AsyncMock(return_value=refused)
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(card)
+    _assert_no_answer(card, roster)
+
+
+def test_a_call_the_gateway_timed_out_closes_as_no_answer(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import mcp_gateway
+
+    _last_try_closes(monkeypatch)
+    card = _restock_card(erp, roster)
+
+    async def hangs(*_a: Any, **_k: Any) -> Any:
+        await asyncio.sleep(5)
+
+    erp.session.call_tool = AsyncMock(side_effect=hangs)
+    gateway = mcp_gateway.get_active_gateway()
+    assert gateway is not None
+    gateway._tool_timeout_s = 0.05
+    # The gateway's own answer to it: an error payload marked timed_out.
+    seen: list[str] = []
+    real = drafts._call
+
+    async def recorded(tool: str, arguments: dict[str, Any]) -> str:
+        out = await real(tool, arguments)
+        seen.append(out)
+        return out
+
+    monkeypatch.setattr(drafts, "_call", recorded)
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(card)
+    assert json.loads(seen[0])["timed_out"] is True
+    _assert_no_answer(card, roster)
+
+
+def test_a_call_with_no_erp_connected_closes_as_no_answer(
+    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import mcp_gateway
+
+    _last_try_closes(monkeypatch)
+    card = _restock_card(erp, roster)
+    # The gateway gone between the approval's checks and its call (a restart):
+    # _call answers that the ERP isn't connected.
+    monkeypatch.setattr(drafts, "drafts_on", lambda: True)
+    monkeypatch.setattr(mcp_gateway, "_active_gateway", None)
+    with pytest.raises(drafts.ApproveRefused):
+        _approve(card)
+    _assert_no_answer(card, roster)
 
 
 @pytest.mark.parametrize("reply", [
-    "Tool error: boom",  # not an answer anyone can read
+    json.dumps({"ok": False, "error": "Item ITEM-1 is disabled."}),
     json.dumps({"ok": True, "docstatus": 0, "name": "<b>not a name</b>"}),  # ok, but no draft to show
-    json.dumps({"ok": False}),  # no error given
 ])
-def test_a_last_try_with_no_clear_refusal_keeps_no_answer(
+def test_every_other_last_try_closes_as_no_answer(
     erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
     reply: str,
 ) -> None:
-    monkeypatch.setattr(drafts, "ATTEMPTS_MAX", 1)
+    _last_try_closes(monkeypatch)
     card = _restock_card(erp, roster)
     erp.replies.append(reply)
     with pytest.raises(drafts.ApproveRefused):
         _approve(card)
-    assert _final(card.id)["closed_code"] == "no_answer"
-
-
-def test_a_last_try_that_timed_out_keeps_no_answer_and_the_note_says_so(
-    erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(drafts, "ATTEMPTS_MAX", 1)
-    card = _restock_card(erp, roster)
-
-    async def times_out(_tool: str, _arguments: dict[str, Any]) -> str:
-        raise TimeoutError
-
-    monkeypatch.setattr(drafts, "_call", times_out)
-    with pytest.raises(drafts.ApproveRefused):
-        _approve(card)
-    assert _final(card.id)["closed_code"] == "no_answer"
-    note = drafts.decided_cards_note(_web(roster.principal, card.originating_session_id), roster.principal)
-    assert "the ERP didn't answer; check there whether the draft was made before asking again" in note
-    assert "nothing was made" not in note
+    _assert_no_answer(card, roster)
 
 
 def test_a_failure_that_leaves_the_card_waiting_stores_no_code(
@@ -142,8 +193,9 @@ def _card(
     person_id: int, session_id: str, *, doctype: str = "Material Request", status: str = STATUS_PROPOSED,
     created_ago: timedelta = timedelta(hours=2), resolved_ago: timedelta | None = timedelta(hours=1),
     final: dict[str, Any] | None = None, reason: str | None = None, last_error: str = "",
+    attempts: int = 0,
 ) -> int:
-    payload: dict[str, Any] = {"person_id": person_id, "doctype": doctype}
+    payload: dict[str, Any] = {"person_id": person_id, "doctype": doctype, "attempts": attempts}
     if last_error:
         payload["last_error"] = last_error
     card_id = create_decision_instance(
@@ -226,9 +278,10 @@ def test_cards_are_listed_oldest_first(roster: SimpleNamespace) -> None:
 
 
 @pytest.mark.parametrize(("code", "reason", "status", "says"), [
-    ("draft_failed", None, STATUS_FAILED, "the ERP refused to make it, so nothing was made"),
-    ("no_answer", None, STATUS_FAILED, "the ERP didn't answer; check there whether the draft was made"),
-    # Left before codes were stored, or a code the table doesn't know.
+    ("no_answer", None, STATUS_FAILED, NO_ANSWER_SAYS),
+    # Left before codes were stored, or a code the table doesn't know (a
+    # stored draft_failed among them: no longer one of ours).
+    ("draft_failed", None, STATUS_FAILED, "closed; the reason wasn't recorded; don't guess one"),
     (None, None, STATUS_FAILED, "closed; the reason wasn't recorded; don't guess one"),
     ("<script>", None, STATUS_FAILED, "closed; the reason wasn't recorded; don't guess one"),
     # Closed by a later proposal that read the draft differently.
@@ -376,6 +429,46 @@ def test_the_note_rides_in_the_user_turn(roster: SimpleNamespace) -> None:
     assert not any(p.get("cache_control") for p in messages[-1]["content"])
 
 
+@pytest.mark.parametrize(("attempts", "status", "created_ago", "says"), [
+    (2, STATUS_REJECTED, timedelta(hours=2),
+     "dismissed: an approval of it was tried; check in the ERP whether a draft was made."),
+    (0, STATUS_EXECUTING, timedelta(days=4),
+     "expired: an approval of it was tried; check in the ERP whether a draft was made."),
+    (1, STATUS_PROPOSED, timedelta(days=4),
+     "expired: an approval of it was tried; check in the ERP whether a draft was made."),
+    (0, STATUS_REJECTED, timedelta(hours=2), "dismissed: nothing was made."),
+    (0, STATUS_PROPOSED, timedelta(days=4), "expired before it was approved: nothing was made."),
+])
+def test_a_card_someone_tried_to_approve_never_says_nothing_was_made(
+    roster: SimpleNamespace, attempts: int, status: str, created_ago: timedelta, says: str,
+) -> None:
+    _card(roster.principal, "web-1", status=status, attempts=attempts, created_ago=created_ago)
+    note = _note(_web(roster.principal), roster.principal)
+    assert says in note
+    if attempts or status == STATUS_EXECUTING:
+        assert "nothing was made" not in note
+
+
+def test_a_teammate_on_the_web_gets_the_note_only_signed_in(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _closed(roster.teammate, "web-1")
+    monkeypatch.delenv("CALLER_ASSERTION_PUBLIC_KEYS", raising=False)
+    assert _note(_web(roster.teammate), roster.teammate) == ""
+    monkeypatch.setenv("CALLER_ASSERTION_PUBLIC_KEYS", "signed-sign-ins-on")
+    assert "so nothing was made" in _note(_web(roster.teammate), roster.teammate)
+    # Only as themselves: a turn whose verified caller is someone else.
+    assert _note(_web(roster.principal), roster.teammate) == ""
+
+
+def test_a_web_chat_turn_ignores_the_panel_email(roster: SimpleNamespace) -> None:
+    _closed(roster.principal, "web-1", doctype="Purchase Order")
+    _closed(roster.teammate, "web-1", doctype="Quotation")
+    session = _web(roster.principal, erpnext_panel_email=TEAM)
+    note = _note(session, roster.principal)
+    assert "Purchase Order draft" in note and "Quotation" not in note
+
+
 # --------------------------------------------------------------------------- #
 # A whole turn: the cached prefix, history and memory
 # --------------------------------------------------------------------------- #
@@ -459,7 +552,8 @@ def test_a_rebuilt_conversation_that_left_a_card_stays_out_of_shared_memory(rost
     assert seen["person"] == [] and seen["dept"] == [] and seen["loops"] == []
     # The same turn in a conversation that left nothing is mirrored.
     other = Session(session_id="slack:C1:172", origin_channel="slack", caller_person_id=roster.principal)
-    assert _turn(other, roster.principal)["seen"]["person"] != []
+    mirrored = _turn(other, roster.principal)["seen"]
+    assert mirrored["person"] != [] and mirrored["dept"] != [] and mirrored["loops"] != []
 
 
 def test_conversation_read_erpnext_counts_a_card(roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> None:

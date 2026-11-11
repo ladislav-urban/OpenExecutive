@@ -331,14 +331,14 @@ def prior_turns_section(scenario: dict[str, Any]) -> str:
 
 
 _DECIDED_OUTCOMES = frozenset({"approved", "dismissed", "closed", "expired"})
-_DECIDED_KEYS = frozenset({"doctype", "outcome", "closed_code", "replaced", "name", "hours_ago"})
+_DECIDED_KEYS = frozenset({"doctype", "outcome", "closed_code", "replaced", "name", "hours_ago", "tried"})
 
 
 def scenario_decided_cards(scenario: dict[str, Any]) -> tuple[Any, ...] | None:
     """The ERPNext draft cards this conversation left that are no longer
     waiting (``decided_cards``), as the turn's ``<decided_cards>`` note is
     told them, or None when the scenario has none. Each is
-    ``{doctype, outcome, hours_ago, closed_code?, replaced?, name?}``; the
+    ``{doctype, outcome, hours_ago, closed_code?, replaced?, name?, tried?}``; the
     runners hand them to ``erpnext_drafts.decided_cards_override``, so no
     card is ever written to the install's ledger. Raises ValueError on a
     malformed block."""
@@ -367,11 +367,15 @@ def scenario_decided_cards(scenario: dict[str, Any]) -> tuple[Any, ...] | None:
         ):
             raise ValueError("`decided_cards`: hours_ago is a number of hours within the note's window")
         code, replaced, name = card.get("closed_code", ""), card.get("replaced", False), card.get("name", "")
-        if not isinstance(code, str) or not isinstance(replaced, bool) or not isinstance(name, str):
-            raise ValueError("`decided_cards`: closed_code and name are text, replaced is true or false")
+        tried = card.get("tried", False)
+        if (
+            not isinstance(code, str) or not isinstance(replaced, bool) or not isinstance(name, str)
+            or not isinstance(tried, bool)
+        ):
+            raise ValueError("`decided_cards`: closed_code and name are text, replaced and tried are true or false")
         found.append(DecidedCard(
             doctype=doctype.strip(), outcome=str(outcome), decided_at=now - timedelta(hours=float(hours)),
-            closed_code=code, replaced=replaced, name=name,
+            closed_code=code, replaced=replaced, name=name, tried=tried,
         ))
     return tuple(sorted(found, key=lambda c: c.decided_at))
 
