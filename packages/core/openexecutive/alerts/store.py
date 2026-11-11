@@ -392,6 +392,7 @@ def coalesce_alert(
     dedup_key: str,
     severity: str,
     body: str,
+    add_tags: list[str] | None = None,
     db_path: Path | None = None,
 ) -> tuple[int, bool] | None:
     """Fold a repeat of an open alert into the existing row.
@@ -405,6 +406,9 @@ def coalesce_alert(
 
     Uses the ``idx_alerts_dedup`` index; the newest open match wins if a key
     was somehow reused.
+
+    ``add_tags`` are appended to the row's topic tags when missing (a research
+    run stamps the alerts it raised or raised again, ``research/carry.py``).
     """
     from openexecutive.alerts.models import SEVERITY_RANK
 
@@ -415,7 +419,7 @@ def coalesce_alert(
         # miss the row (read-then-update race) or overwrite each other's body.
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute(
-            "SELECT id, severity FROM alerts "
+            "SELECT id, severity, topic_tags FROM alerts "
             "WHERE source = ? AND dedup_key = ? AND status = 'unread' "
             "ORDER BY created_at DESC LIMIT 1",
             (source, dedup_key),
@@ -426,6 +430,17 @@ def coalesce_alert(
         new_rank = SEVERITY_RANK.get(severity, 0)
         raised = new_rank > current_rank
         effective = severity if raised else str(row["severity"])
+        if add_tags:
+            try:
+                tags = list(json.loads(row["topic_tags"] or "[]"))
+            except (TypeError, ValueError):
+                tags = []
+            missing = [t for t in add_tags if t not in tags]
+            if missing:
+                conn.execute(
+                    "UPDATE alerts SET topic_tags = ? WHERE id = ?",
+                    (json.dumps([*tags, *missing]), int(row["id"])),
+                )
         conn.execute(
             "UPDATE alerts SET last_seen_at = ?, "
             "occurrence_count = COALESCE(occurrence_count, 1) + 1, "

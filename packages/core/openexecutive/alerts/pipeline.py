@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from openexecutive.alerts import dispatcher, preferences, store
+from openexecutive.alerts.lifecycle import TTL_EXEMPT_SOURCES
 from openexecutive.alerts.models import (
     AlertChannel,
     AlertEvent,
     TriageDecision,
     is_private_alert,
+    is_run_tag,
+    run_tag,
 )
+from openexecutive.audit.usage import get_research_run_id
 
 if TYPE_CHECKING:
     from openexecutive.people.models import Person
@@ -184,7 +188,8 @@ async def evaluate_and_dispatch(
             "headline": a.headline,
             "severity": a.severity,
             "dedup_key": a.dedup_key,
-            "topic_tags": a.topic_tags,
+            # A research run's id is bookkeeping, not a topic.
+            "topic_tags": [t for t in a.topic_tags if not is_run_tag(t)],
         }
         # Never anyone's drafted documents: they are their owners' alone.
         for a in store.recent_alerts(limit=20, db_path=path, exclude_source="artifact")
@@ -254,6 +259,15 @@ async def evaluate_and_dispatch(
         topic_tags, routed_to, dedup_key, effective_channels = _make_private(
             topic_tags, dedup_key
         )
+    # Raised inside a research run: stamped with its id, so a demo reset can
+    # keep this run's alerts (``monitoring/research/carry.py``).
+    research_run = get_research_run_id()
+    run_tags = (
+        [run_tag(research_run)]
+        if research_run and event.source not in TTL_EXEMPT_SOURCES
+        else []
+    )
+    topic_tags = [t for t in topic_tags if not is_run_tag(t)] + run_tags
 
     # A replay of the SAME upstream event (webhook retry, re-poll) is a
     # no-op, exactly as before: the (source, external_id) row already exists.
@@ -274,6 +288,7 @@ async def evaluate_and_dispatch(
         dedup_key=dedup_key,
         severity=decision.severity.value,
         body=decision.body,
+        add_tags=run_tags,
         db_path=path,
     )
     if coalesced is not None:
