@@ -668,6 +668,11 @@ def test_a_tampered_fill_or_slice_is_refused(
      "sender_untrusted"),
     ("a fill comes only from the invoice-capture job's card, which names who set it up.", "not_from_job"),
     ("Separation of duties: you made the Purchase Order this fill bills.", "separation_of_duties"),
+    # ERPNext's record of who set the job up (ladislav-urban/oe_connector#552).
+    ("The card says the job 'invoice-capture' was set up by a@x.example, but ERPNext records b@x.example in "
+     "oe_connector_watch_jobs. Nothing was made.", "configurer_not_recorded"),
+    ("ERPNext records no one as having set up the job 'invoice-capture': an ERPNext operator adds "
+     "\"configured_by\" to its entry.", "configurer_not_recorded"),
 ])
 def test_a_fills_final_refusals_close_the_card(
     cards: dict[str, Any], erp: FakeErpnext, approvals: None, said: str, code: str,
