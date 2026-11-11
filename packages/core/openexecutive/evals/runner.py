@@ -80,6 +80,7 @@ from openexecutive.evals.scenarios import (
     forbidden_words_in,
     load_scenarios,
     routing_check,
+    scenario_decided_cards,
     scenario_delegation,
     scenario_inbox,
     scenario_principal_role,
@@ -642,6 +643,11 @@ def _make_chat_runner(
                     from openexecutive.prompts.advice_policy import advice_policy_override
 
                     advice_policy_override.set(scenario.get("advice_policy"))
+                    # The draft cards its conversation left, as the turn's
+                    # note is told them: never written to the ledger.
+                    from openexecutive.integrations.erpnext_drafts import decided_cards_override
+
+                    decided_cards_override.set(scenario_decided_cards(scenario))
                     # Act as me: a fresh in-memory mailbox for the asker,
                     # whose drafts the judge reads (nothing reaches Google).
                     delegation = scenario_delegation(scenario)

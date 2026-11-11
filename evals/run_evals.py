@@ -39,6 +39,7 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
         profile.financials.runway_months = ctx["runway_months"]
 
     from openexecutive.evals.scenarios import (
+        scenario_decided_cards,
         scenario_principal_role,
         scenario_query,
         scenario_turn_surface,
@@ -58,6 +59,11 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     )
     # A follow-up: the turns it follows, in the session's history.
     seed_prior_turns(session, scenario)
+    # The draft cards its conversation left, as the turn's note is told them
+    # (never written to the ledger).
+    from openexecutive.integrations.erpnext_drafts import decided_cards_override
+
+    decided_cards_override.set(scenario_decided_cards(scenario))
 
     response = await executive.chat(
         user_message=scenario_query(scenario),

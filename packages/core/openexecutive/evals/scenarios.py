@@ -330,6 +330,69 @@ def prior_turns_section(scenario: dict[str, Any]) -> str:
     )
 
 
+_DECIDED_OUTCOMES = frozenset({"approved", "dismissed", "closed", "expired"})
+_DECIDED_KEYS = frozenset({"doctype", "outcome", "closed_code", "replaced", "name", "hours_ago"})
+
+
+def scenario_decided_cards(scenario: dict[str, Any]) -> tuple[Any, ...] | None:
+    """The ERPNext draft cards this conversation left that are no longer
+    waiting (``decided_cards``), as the turn's ``<decided_cards>`` note is
+    told them, or None when the scenario has none. Each is
+    ``{doctype, outcome, hours_ago, closed_code?, replaced?, name?}``; the
+    runners hand them to ``erpnext_drafts.decided_cards_override``, so no
+    card is ever written to the install's ledger. Raises ValueError on a
+    malformed block."""
+    from datetime import UTC, datetime, timedelta
+
+    from openexecutive.integrations.erpnext_drafts import DECIDED_WINDOW, DecidedCard
+
+    raw = scenario.get("decided_cards")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("`decided_cards`: a list of {doctype, outcome, hours_ago, closed_code?, replaced?, name?}")
+    now = datetime.now(UTC)
+    found: list[DecidedCard] = []
+    for card in raw:
+        if not isinstance(card, dict) or set(card) - _DECIDED_KEYS:
+            raise ValueError("`decided_cards`: each card is {doctype, outcome, hours_ago, closed_code?, replaced?, name?}")
+        doctype, outcome, hours = card.get("doctype"), card.get("outcome"), card.get("hours_ago")
+        if not isinstance(doctype, str) or not doctype.strip():
+            raise ValueError("`decided_cards`: each card needs a doctype")
+        if outcome not in _DECIDED_OUTCOMES:
+            raise ValueError(f"`decided_cards`: outcome is one of {sorted(_DECIDED_OUTCOMES)}")
+        if (
+            not isinstance(hours, (int, float)) or isinstance(hours, bool)
+            or not 0 <= hours <= DECIDED_WINDOW.total_seconds() / 3600
+        ):
+            raise ValueError("`decided_cards`: hours_ago is a number of hours within the note's window")
+        code, replaced, name = card.get("closed_code", ""), card.get("replaced", False), card.get("name", "")
+        if not isinstance(code, str) or not isinstance(replaced, bool) or not isinstance(name, str):
+            raise ValueError("`decided_cards`: closed_code and name are text, replaced is true or false")
+        found.append(DecidedCard(
+            doctype=doctype.strip(), outcome=str(outcome), decided_at=now - timedelta(hours=float(hours)),
+            closed_code=code, replaced=replaced, name=name,
+        ))
+    return tuple(sorted(found, key=lambda c: c.decided_at))
+
+
+def decided_cards_section(scenario: dict[str, Any]) -> str:
+    """For a judge: what the assistant was told became of the conversation's
+    draft cards, or "" when the scenario has none (every other judge prompt
+    stays byte-identical)."""
+    from openexecutive.integrations.erpnext_drafts import decided_says
+
+    found = scenario_decided_cards(scenario)
+    if not found:
+        return ""
+    lines = "\n".join(f"- {c.doctype} draft card: {decided_says(c)}." for c in found)
+    return (
+        "\nDRAFT CARDS THE ASSISTANT WAS TOLD ABOUT (left earlier in this conversation; "
+        "this is all the record says about them, so any other reason it gives is invented):\n"
+        f"{lines}\n"
+    )
+
+
 def scenario_voice_persona(scenario: dict[str, Any]) -> str | None:
     """The scenario's ``voice_persona`` slug, or None to use the install's
     voice. An unknown slug raises ValueError, so a typo fails the scenario
@@ -600,6 +663,8 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             raise ValueError(f"`surface`: {e}") from e
     if s.get("prior_turns") is not None:
         scenario_prior_turns(s)
+    if s.get("decided_cards") is not None:
+        scenario_decided_cards(s)
     for key in ("expected_view_kinds", "forbidden_view_kinds"):
         if s.get(key) is None:
             continue

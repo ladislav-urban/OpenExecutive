@@ -10391,14 +10391,51 @@ integrations:
     containing CHANGED_SINCE_PROPOSED (oe_connector built the draft again
     and it no longer matches the card's fingerprint: a source document, a
     price or a rate changed) closes the card (finish_execution failed, with
-    last_error, attempts unchanged), audits erpnext_draft_changed and
-    answers 409 changed_since_proposed; asking again leaves a fresh card.
+    last_error, attempts unchanged, closed_code changed_since_proposed),
+    audits erpnext_draft_changed and answers 409 changed_since_proposed;
+    asking again leaves a fresh card.
     Any other failure:
     update_open_payload(while_executing=True) with last_error and attempts
     while the claim is still held, then release_claim, so a second tap
     can't claim it in between and lose the count; so
     approving again re-sends the same key (oe_connector's "OE Draft" log
-    returns the draft it already made); ATTEMPTS_MAX 5, then failed.
+    returns the draft it already made); ATTEMPTS_MAX 5, then failed, with
+    closed_code draft_failed only when the answer parsed as a stated refusal
+    (ok not true, with an error), else no_answer (the call raised or timed
+    out, the answer was unreadable, or ok true failed the name or docstatus
+    check), since only a stated refusal shows nothing was made. A failure
+    that leaves the card waiting stores no code. closed_code is our own
+    word from a fixed set, never the ERP's text.
+    What became of a conversation's cards reaches its later turns as a
+    <decided_cards> block in the user turn (erpnext_drafts.decided_cards_note,
+    called from Executive._build_messages after <pending_followups>; never
+    a cached system block, so the cached prefix and tools are unchanged).
+    Whose cards: on ERPNext's panel the team member its signed email names
+    (erpnext_panel._person_for), anywhere else the turn's person_id (no
+    caller_person_id fallback), filtered on approver_person_id and the
+    card's originating_session_id. Only a panel turn or a conversation
+    nobody else reads (history_chat.private_chat and not shared_chat); never
+    unattended, email or private-to-principal turns. Cards decided in the
+    last 72 hours (CARD_TTL), newest 5, oldest first; an expired card counts
+    from created_at + CARD_TTL, so one tidied late is not news, and the note
+    never calls open_cards or _tidy. Each line is code-written: the doctype
+    when it is in DRAFT_TOOLS (else "A draft"), the time, and a fixed
+    sentence per outcome (approved: an unsubmitted draft was made;
+    dismissed; expired; closed per closed_code, a closed_externally card
+    with reversal_reason changed as replaced by a newer card, and any other
+    or missing code as "the reason wasn't recorded; don't guess one"). An
+    approved draft's name shows only when it matches
+    [A-Za-z0-9][A-Za-z0-9._/-]{0,59}, inside an untrusted block (source
+    erpnext). last_error and the ERP's words never reach it. Its instruction
+    line says to mention a card only when asked or relevant and that a card
+    closed because the records changed is not the model's error (the
+    persona's "Correct yourself plainly, once" is for its own errors only).
+    Any failure leaves the note out. A note sets Session.read_erpnext, and
+    _conversation_read_erpnext also answers yes for a session that left any
+    erpnext_draft card (decision_ledger.list_session_instances), so a
+    rebuilt channel session keeps such replies out of peer and department
+    memory. Evals give a scenario's decided_cards through
+    erpnext_drafts.decided_cards_override, never the ledger.
     Dismiss is reject (audit only). Audit rows, private to the person:
     erpnext_draft_proposed / created / failed / dismissed. GET
     /erpnext/drafts lists the caller's own waiting cards (api/routes/
