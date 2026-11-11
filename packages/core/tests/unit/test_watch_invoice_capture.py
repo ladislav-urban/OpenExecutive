@@ -334,6 +334,63 @@ def test_a_pdf_in_another_currency_needs_a_person() -> None:
     assert invoice_capture.choose_source(_d(), _p(currencies=["USD"]), [OPEN_PO], [], "EUR") == (None, "other_currency")
 
 
+def test_a_pdf_naming_several_currencies_needs_a_person() -> None:
+    # A EUR invoice that mentions USD in its bank details is never taken as USD.
+    pdf = _p(currencies=["EUR", "USD"])
+    assert invoice_capture.choose_source(_d(), pdf, [OPEN_PO], [OPEN_PR], "EUR") == (None, "several_currencies")
+    assert invoice_capture.choose_source(_d(), _p(currencies=[]), [], [OPEN_PR], "EUR") == (OPEN_PR, "")
+
+
+def test_an_order_reference_the_job_cant_read_never_falls_to_a_receipt() -> None:
+    pdf = _p(orders=[("", True)])
+    assert pdf.reason == "unread_order_ref" and pdf.orders == ()
+    bad = json.loads(_pdf("PI-1"))
+    bad["fields"]["purchase_order_references"] = "PO-1"
+    assert invoice_capture.read_pdf(bad).reason == "unread_order_ref"
+
+
+def test_a_cut_receipts_read_never_tells_exactly_one() -> None:
+    assert invoice_capture.choose_source(_d(), _p(), [], [OPEN_PR], "EUR", receipts_cut=True) == (None, "receipts_cut")
+    assert invoice_capture.documents_cut({"rows": [], "truncated": True})
+    assert not invoice_capture.documents_cut({"rows": [], "truncated": False})
+
+
+def test_an_invoice_date_is_within_a_year_back_and_a_month_ahead() -> None:
+    today = date(2026, 11, 11)
+    assert invoice_capture._date_in_range("2026-11-02", today)
+    assert invoice_capture._date_in_range("2025-11-11", today)
+    assert not invoice_capture._date_in_range("2025-11-09", today)
+    assert invoice_capture._date_in_range("2026-12-12", today)
+    assert not invoice_capture._date_in_range("2099-01-01", today)
+    assert not invoice_capture._date_in_range("1990-01-01", today)
+
+
+def _build(rows: list[dict[str, Any]]) -> list[Any]:
+    reads = (
+        json.loads(_mail(rows)), {}, {}, {},
+        {"rows": [{"name": "Acme", "default_currency": "EUR"}], "truncated": False},
+    )
+    settings = {**invoice_capture.JOB.default_settings, "company": "Acme"}
+    return invoice_capture.build(reads, settings, date.fromisoformat(DAY))
+
+
+def test_a_mail_the_gate_keeps_is_never_told_as_one_a_person_fills() -> None:
+    # A spoofed supplier from a p=none domain, with no Supplier matched: the gate's notice, never "a person fills".
+    found = _build([_draft("PI-9", None, sender_policy="none", sender_from=None)])
+    summaries = [c.summary for c in found]
+    assert "Mailed invoices that can't be filled from here" in summaries
+    assert "Mailed invoices a person fills" not in summaries
+    gate = next(c for c in found if c.summary == "Mailed invoices that can't be filled from here")
+    values = dict(gate.items[0].values)
+    # An unconfirmed sender is said to be unconfirmed, never shown as who sent it.
+    assert "Sent from" not in values and values["Sender (not confirmed)"] == "billing@orion.example"
+
+
+def test_a_run_counts_the_pdfs_it_couldnt_read() -> None:
+    assert runner.RunOutcome("done", unread=2).detail()["unread"] == 2
+    assert "unread" not in runner.RunOutcome("done").detail()
+
+
 def test_what_a_pdf_lacks_needs_a_person() -> None:
     assert _p(no_text=True).reason == "no_text"
     assert _p(totals=[]).reason == "no_total"

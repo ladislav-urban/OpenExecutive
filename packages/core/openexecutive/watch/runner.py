@@ -187,6 +187,9 @@ class RunOutcome:
     draft_capped: int = 0
     checks: int = 0
     check_refused: int = 0
+    # Items of a may-fail read ERPNext refused this run (a file it couldn't
+    # read): never a card, counted so the run says so.
+    unread: int = 0
 
     def detail(self) -> dict[str, Any]:
         """What ``watch_runs.detail`` keeps: codes and counts only."""
@@ -196,6 +199,8 @@ class RunOutcome:
         }
         if self.routed_principal:
             out["routed_principal"] = self.routed_principal
+        if self.unread:
+            out["unread"] = self.unread
         return out
 
 
@@ -528,6 +533,8 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     erpnext_caller.begin_job_checks(job.id, day)
     results: list[Mapping[str, Any]] = []
     users: set[str] = set()
+    # Items of a may-fail read ERPNext refused, kept with the run's record.
+    unread = 0
     for read in job.reads:
         try:
             built = read.arguments(settings, today, tuple(results))
@@ -553,6 +560,7 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
                     # item only, which the rules never make a card of.
                     if not (read.may_fail and stopped.reason == "read_refused"):
                         raise
+                    unread += 1
                     each.append({"unread": True})
             results.append({"each": each, "truncated": cut})
             continue
@@ -587,7 +595,7 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # Who it goes to, from the database and oe_connector's own word, before
     # anything is checked as the reviewer.
     run_route = cards.route(job, row, reads)
-    outcome = RunOutcome("done", findings=len(specs))
+    outcome = RunOutcome("done", findings=len(specs), unread=unread)
     outcome.routed = "reviewer" if run_route.reviewer is not None else "principal"
     outcome.routed_principal = run_route.reason
     shown = _reasoned(notices)

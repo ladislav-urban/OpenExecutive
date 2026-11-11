@@ -156,6 +156,10 @@ WHY: dict[str, str] = {
     "several_orders": "The PDF names more than one order",
     "order_not_open": "The order the PDF names isn't an open order of this supplier",
     "no_receipt": "No open receipt of this supplier is for the PDF's total",
+    "receipts_cut": "Not every open receipt could be read, so which one it bills can't be told",
+    "several_currencies": "The PDF names more than one currency",
+    "unread_order_ref": "The PDF names an order the job can't read",
+    "date_out_of_range": "The PDF's date is more than a year back or more than a month ahead",
     "several_receipts": "More than one open receipt of this supplier is for the PDF's total",
 }
 
@@ -286,6 +290,19 @@ def normalize_date(text: object) -> tuple[str, str]:
         return "", "no_date"
 
 
+# How far an invoice date may be from the run's day: a year back, a month on.
+DATE_BACK_DAYS = 366
+DATE_AHEAD_DAYS = 31
+
+
+def _date_in_range(day: str, today: date) -> bool:
+    try:
+        found = date.fromisoformat(day)
+    except ValueError:
+        return False
+    return today - timedelta(days=DATE_BACK_DAYS) <= found <= today + timedelta(days=DATE_AHEAD_DAYS)
+
+
 def parse_amount(text: object) -> float | None:
     """A total as the PDF wrote it ("1,234.56", "1.234,56", "1234.5",
     "$ 1,200"), or None when it can't be told."""
@@ -359,13 +376,21 @@ def read_pdf(result: object) -> Pdf:
         c for c in (fields.get("currencies") or []) if isinstance(c, str) and re.fullmatch(r"[A-Z]{3}", c)
     )[:10]
     orders: list[tuple[str, bool]] = []
-    for ref in fields.get("purchase_order_references") or []:
+    refs = fields.get("purchase_order_references")
+    # A reference the job can't read counts against the receipt path: the
+    # PDF named an order, so no receipt is ever chosen for it.
+    unread_ref = refs is not None and not isinstance(refs, list)
+    for ref in refs if isinstance(refs, list) else []:
         if isinstance(ref, Mapping) and _name(ref.get("value")):
             entry = (str(ref["value"]), ref.get("purchase_order_you_can_open") is True)
             if entry[0] not in {o[0] for o in orders}:
                 orders.append(entry)
+        else:
+            unread_ref = True
     reason = ""
-    if not number:
+    if unread_ref:
+        reason = "unread_order_ref"
+    elif not number:
         reason = "no_number"
     elif not day:
         reason = day_reason or "no_date"
@@ -383,6 +408,11 @@ class Open:
     supplier: str
     currency: str
     total: float
+
+
+def documents_cut(result: Mapping[str, Any]) -> bool:
+    """Whether a documents read was cut (its rows aren't all there)."""
+    return isinstance(result, Mapping) and result.get("truncated") is True
 
 
 def open_documents(result: Mapping[str, Any], doctype: str) -> list[Open]:
@@ -413,9 +443,16 @@ def company_currency(result: Mapping[str, Any], company: str) -> str:
     return ""
 
 
-def choose_source(draft: Draft, pdf: Pdf, orders: Sequence[Open], receipts: Sequence[Open], currency: str) -> tuple[Open | None, str]:
+def choose_source(
+    draft: Draft, pdf: Pdf, orders: Sequence[Open], receipts: Sequence[Open], currency: str,
+    receipts_cut: bool = False,
+) -> tuple[Open | None, str]:
     """What the draft bills, by the plan's rules, or None with why."""
-    if pdf.currencies and currency not in pdf.currencies:
+    # The same currency: one named, the company's (none named: the total's
+    # own check bounds it). Several named: a person tells which it is in.
+    if len(set(pdf.currencies)) > 1:
+        return None, "several_currencies"
+    if pdf.currencies and pdf.currencies[0] != currency:
         return None, "other_currency"
     if len(pdf.orders) > 1:
         return None, "several_orders"
@@ -430,6 +467,9 @@ def choose_source(draft: Draft, pdf: Pdf, orders: Sequence[Open], receipts: Sequ
         r for r in receipts
         if r.supplier == draft.supplier and r.currency == currency and _cents(r.total) == _cents(pdf.total)
     ]
+    if receipts_cut:
+        # "Exactly one" can't be told from a cut list.
+        return None, "receipts_cut"
     if not fit:
         return None, "no_receipt"
     if len(fit) > 1:
@@ -504,7 +544,11 @@ def _draft_values(draft: Draft) -> tuple[tuple[str, str], ...]:
     return (
         ("Draft invoice", draft.name),
         ("Supplier", draft.supplier_name or draft.supplier or "not named"),
-        ("Sent from", str(facts.get("sender_from") or facts.get("sender") or "")[:140]),
+        # The mail's own From only when its headers confirmed it; otherwise
+        # the sender ERPNext recorded, said to be unconfirmed.
+        ("Sent from", str(facts["sender_from"])[:140])
+        if isinstance(facts.get("sender_from"), str) and facts["sender_from"]
+        else ("Sender (not confirmed)", str(facts.get("sender") or "")[:140]),
     )
 
 
@@ -540,10 +584,8 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
     for draft in found:
         if not draft.empty:
             continue
-        if draft.reason:
-            person.append(CardSpec(key=f"person{_SEP}{draft.name}", summary=f"{draft.name}: {WHY[draft.reason]}",
-                                   values=_draft_values(draft)))
-            continue
+        # The sender's gate first: a mail it keeps is never told as one a
+        # person fills, whatever else is wrong with it.
         if not erpnext_fill.fill_allowed(draft.facts):
             gated.append(CardSpec(
                 key=f"gate{_SEP}{draft.name}",
@@ -551,14 +593,20 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
                 values=_draft_values(draft),
             ))
             continue
+        if draft.reason:
+            person.append(CardSpec(key=f"person{_SEP}{draft.name}", summary=f"{draft.name}: {WHY[draft.reason]}",
+                                   values=_draft_values(draft)))
+            continue
         pdf = pdfs.get(draft.name)
         if pdf is None:
             # Not read this run (past the run's PDFs): said by the cut line.
             continue
         why = pdf.reason
         source: Open | None = None
+        if not why and not _date_in_range(pdf.day, today):
+            why = "date_out_of_range"
         if not why:
-            source, why = choose_source(draft, pdf, orders, receipts, currency)
+            source, why = choose_source(draft, pdf, orders, receipts, currency, receipts_cut=documents_cut(pr_result))
         if source is None or why:
             person.append(CardSpec(key=f"person{_SEP}{draft.name}", summary=f"{draft.name}: {WHY[why]}",
                                    values=_draft_values(draft)))
