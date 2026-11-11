@@ -897,7 +897,7 @@ async def _call(tool: str, arguments: dict[str, Any]) -> str:
 
     gateway = get_active_gateway()
     if gateway is None:
-        return _error("ERPNext isn't connected right now.")
+        return _error("The ERP isn't connected right now.")
     return await asyncio.wait_for(
         gateway.call_tool({"name": tool, "arguments": arguments}), timeout=CALL_TIMEOUT_S
     )
@@ -1248,7 +1248,7 @@ async def _carry_out(
             raw = await _call(tool, arguments)
     except Exception as exc:
         logger.warning("erpnext_drafts: the draft call for card %d failed (%s)", instance.id, type(exc).__name__)
-        raw = _error("ERPNext didn't answer in time; it may or may not have made the draft.")
+        raw = _error("The ERP didn't answer in time; it may or may not have made the draft.")
     except BaseException:
         # Cancelled mid-call (the request went away, the API is stopping):
         # the card waits again rather than staying claimed. Approving again
@@ -1316,7 +1316,7 @@ async def _carry_out(
     release_claim(instance.id)
     raise ApproveRefused(
         502, "draft_failed",
-        f"ERPNext didn't make the draft: {reason} You can approve it again; it won't make a second one.",
+        f"The ERP didn't make the draft: {reason} You can approve it again; it won't make a second one.",
     )
 
 
