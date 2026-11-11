@@ -1073,6 +1073,30 @@ A watch job runs unattended on a schedule and leaves cards a person approves. Ea
   - its reviewer.
 - The configurer may not approve the job's cards. ERPNext also refuses a card to whoever imported the statement or made a voucher on it.
 
+### Watch jobs with cards: invoice capture
+
+The fill card for a supplier's mailed invoice. It needs everything bank matching needs on both sides (the job listing with `as_job_user` and `configured_by`, and the caller key), and:
+
+**On the ERPNext site:**
+
+- **`oe_connector_watch_jobs["invoice-capture"]`:** `watch/jobs/invoice_capture.py`'s `listing()`, including the per-draft read exactly as `{"tool": "read_attachment", "doctype": "Purchase Invoice", "name": "$mail_draft", "file": "$mail_file"}`, with `"as_job_user": true` and `"configured_by"`.
+- **The job's ERP user,** `oe-watch-invoice-capture@<site>`, limited to **exactly one Company** by User Permission. Otherwise every mailed-draft read is refused.
+- **`oe_connector_read_attachment: 1`.**
+- **An Email Account** with incoming mail on, appending to Purchase Invoice from **INBOX only**.
+- **On that Email Account,** set by a System Manager:
+  - **`oe_dmarc_enforced`:** its receiving mail server enforces DMARC (reject or quarantine).
+  - **`oe_dmarc_authserv_id`:** that server's authserv-id. Optional, but without it a `quarantine` domain gets no card. Leave it empty for a server that writes no authserv-id (Microsoft 365); then only `reject` domains get cards.
+- **An Assignment Rule on Purchase Invoice** that assigns each mailed draft to the job's reviewer. Only the person the mail pull assigned a draft to approves its fill, never someone who assigned it to themselves. Otherwise the draft is filled by hand.
+
+**On OpenExecutive:**
+
+- `ERPNEXT_INVOICE_FILL=true`, the pin as released, and the job on in Settings → Watch jobs, with:
+  - its company;
+  - `days_back` (14);
+  - `amount_cap_day`;
+  - its reviewer.
+- **What gets a card:** only mail whose own From was checked (`sender_checked` "dmarc-enforced", `sender_from` set) from a domain asking `reject`, or `quarantine` when the authserv-id check passed. Every other mail gets a "can't be filled from here" notice.
+
 ### Inside ERPNext's desk (the single UI)
 
 With oe_connector's single UI, ERPNext's desk shows Open Executive's pages in a
