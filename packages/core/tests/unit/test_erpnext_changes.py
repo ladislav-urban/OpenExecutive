@@ -249,3 +249,93 @@ def test_a_two_thousand_character_comment_is_shown_whole() -> None:
     summary = {"operation": "comment", "doctype": "Purchase Invoice", "name": "X-1", "text": text}
     view = changes.card_view("comment", "Purchase Invoice", "X-1", summary)
     assert {"label": "Comment", "value": text} in view["fields"]
+
+
+def _checked(summary: dict[str, Any]) -> dict[str, Any]:
+    return {"ok": True, "summary": summary, "fingerprint": FP}
+
+
+def _refusal(fields: dict[str, Any], summary: dict[str, Any]) -> str | None:
+    return changes.summary_refusal("update", "Purchase Invoice", UPDATE_SUMMARY["name"], fields, _checked(summary))
+
+
+def test_a_thousand_character_remarks_is_shown_whole(erp: FakeErpnext, roster: SimpleNamespace) -> None:
+    # Approval writes all of it, so the card shows all of it: past the old
+    # 300-character cut, newlines kept, and nothing added.
+    text = ("First line of the remarks.\n" + "x" * 400 + " the part after character 300\n").ljust(999, "y") + "Z"
+    assert len(text) == 1000 and text.index("the part after") > 300
+    fields = {"set": {"remarks": text}}
+    _, stored = changes.check_change("update", "Purchase Invoice", UPDATE_SUMMARY["name"], fields)  # type: ignore[misc]
+    assert stored == fields
+    summary = {**UPDATE_SUMMARY, "changes": [{"field": "remarks", "before": "Old note", "after": text}],
+               "lines": []}
+    _card(erp, roster, "update", fields, summary)
+    shown = {f["label"]: f["value"] for f in drafts.cards(people_store.get_person(roster.principal))[0].fields}
+    assert shown["Remarks"] == f"Old note\n→\n{text}"
+    assert shown["Remarks"].endswith(text[300:]) and "the part after character 300\n" in shown["Remarks"]
+    assert "…" not in shown["Remarks"]
+
+
+def test_a_value_too_long_to_show_whole_leaves_no_card() -> None:
+    # ERPNext's current remarks can be longer than a card shows: rather than
+    # cut it, no card.
+    summary = {**UPDATE_SUMMARY, "changes": [{"field": "remarks", "before": "r" * 1001, "after": "New"}], "lines": []}
+    out = _refusal({"set": {"remarks": "New"}}, summary)
+    assert out is not None and "whole" in out
+
+
+def test_a_reading_that_matches_the_ask_once_normalised_leaves_a_card() -> None:
+    fields = {"set": {"due_date": "2026-12-01", "on_hold": 1},
+              "lines": {"items": {"row-a1": {"qty": 12, "description": "Cable <10m> & plugs"}}},
+              "remove_lines": {"items": ["row-b2"]}}
+    summary = {**UPDATE_SUMMARY,
+               "changes": [{"field": "due_date", "before": "2026-11-30", "after": "2026-12-01 00:00:00"},
+                           {"field": "on_hold", "before": 0, "after": 1.0}],
+               "lines": [{"table": "items", "row": "row-a1", "idx": 1,
+                          "changes": [{"field": "qty", "before": 10.0, "after": 12.0},
+                                      {"field": "description", "before": "Cable",
+                                       "after": "Cable &lt;10m&gt; &amp; plugs"}]}],
+               "removed": [{"table": "items", "row": "row-b2", "idx": 2, "qty": 1.0, "amount": 5.0}]}
+    assert _refusal(fields, summary) is None
+
+
+@pytest.mark.parametrize("summary", [
+    # An asked change left out.
+    {**UPDATE_SUMMARY, "changes": UPDATE_SUMMARY["changes"][:1]},
+    # A header after-value other than the stored one.
+    {**UPDATE_SUMMARY, "changes": [UPDATE_SUMMARY["changes"][0],
+                                   {"field": "due_date", "before": "2026-11-30", "after": "2026-12-02"}]},
+    # The same change reported twice.
+    {**UPDATE_SUMMARY, "changes": [*UPDATE_SUMMARY["changes"], UPDATE_SUMMARY["changes"][0]]},
+    # An asked line left out.
+    {**UPDATE_SUMMARY, "lines": []},
+    # A line after-value other than the stored one.
+    {**UPDATE_SUMMARY, "lines": [{**UPDATE_SUMMARY["lines"][0], "changes": [{"field": "qty", "before": 10, "after": 11}]}]},
+    # The same line twice.
+    {**UPDATE_SUMMARY, "lines": [UPDATE_SUMMARY["lines"][0], UPDATE_SUMMARY["lines"][0]]},
+    # A number where text was asked, a date that isn't one.
+    {**UPDATE_SUMMARY, "changes": [{"field": "bill_no", "before": "", "after": 778},
+                                   UPDATE_SUMMARY["changes"][1]]},
+    {**UPDATE_SUMMARY, "changes": [UPDATE_SUMMARY["changes"][0],
+                                   {"field": "due_date", "before": "2026-11-30", "after": "2026-12-01 09:00:00"}]},
+])
+def test_a_reading_that_differs_from_the_ask_leaves_no_card(summary: dict[str, Any]) -> None:
+    out = _refusal(UPDATE, summary)
+    assert out is not None and "differently" in out
+
+
+def test_a_removed_row_not_asked_to_be_removed_leaves_no_card() -> None:
+    gone = {"table": "items", "row": "row-c3", "idx": 3, "qty": 1.0, "amount": 5.0}
+    summary = {**UPDATE_SUMMARY, "removed": [gone]}
+    out = _refusal(UPDATE, summary)
+    assert out is not None and "removes a row" in out
+    asked = {**UPDATE, "remove_lines": {"items": ["row-b2"]}}
+    assert _refusal(asked, summary) is not None
+    assert _refusal({**UPDATE, "remove_lines": {"items": ["row-c3"]}}, summary) is None
+
+
+def test_a_purchase_invoices_supplier_is_never_changed_on_a_card() -> None:
+    assert "supplier" not in changes.UPDATE_FIELDS["Purchase Invoice"]
+    out = changes.check_change("update", "Purchase Invoice", "ACC-PINV-2026-00031",
+                               {"set": {"supplier": "Northwind Cables Ltd", "bill_no": "INV-1"}})
+    assert isinstance(out, str) and "supplier" in out and "the ERP" in out and "ERPNext" not in out
