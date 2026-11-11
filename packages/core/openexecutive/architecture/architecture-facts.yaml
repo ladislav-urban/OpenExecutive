@@ -10663,7 +10663,7 @@ integrations:
     most 40 changes, and a comment's exact text; for an update, exactly the
     change asked (every asked field and line reported once, each after-value
     the stored one with dates compared by day, numbers by value and a line's
-    description unescaped, removed rows only from remove_lines) and no value
+    description unescaped, each asked removal read back exactly once, no other row removed) and no value
     over TEXT_SHOWN (1,000 characters). card_view shows every change, line
     change, removed row and total (both currencies) before and after with
     this app's own labels, never ERPNext's, a text field's values whole with
