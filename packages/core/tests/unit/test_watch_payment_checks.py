@@ -236,6 +236,9 @@ def test_the_slot_oracle_names_exactly_our_slots() -> None:
 @pytest.mark.parametrize("case", SHAPES["shapes"], ids=lambda c: c["note"])
 def test_a_reads_soundness_matches_oe_connectors(case: dict[str, Any]) -> None:
     why = registry.shape_problem(case["read"])
+    if "tool" in case:
+        # A case that names its read's tool: the mail slots are read_attachment's alone.
+        why = why or registry.mail_tool_problem(case["tool"], case["read"])
     assert (why == "") is case["valid"], why
 
 
@@ -304,6 +307,7 @@ def test_the_bank_tool_opens_to_payment_checks_alone() -> None:
         "collections": frozenset({"erpnext__customer_payment_record"}),
         "payment-checks": frozenset({"erpnext__supplier_bank_changed"}),
         "bank-matching": frozenset({"erpnext__bank_lines_to_match", "erpnext__bank_line_candidates"}),
+        "invoice-capture": frozenset({"erpnext__mail_invoices_to_fill", "erpnext__read_attachment"}),
     }
     assert "erpnext__supplier_bank_changed" in ERPNEXT_WITHHELD_TOOLS
     bank = WatchRead("supplier_bank_changed", payment_checks.BANK_SHAPE, payment_checks._bank, "b")

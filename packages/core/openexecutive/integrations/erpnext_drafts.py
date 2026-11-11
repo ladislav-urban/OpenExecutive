@@ -72,7 +72,11 @@ a submitted one (``integrations.erpnext_block``, checked again at approval:
 the job's setting, ``ERPNEXT_BLOCK_INVOICE`` and the pin), or, only from the
 bank-matching job, reconcile a bank line with its vouchers
 (``integrations.erpnext_match``: ``ERPNEXT_BANK_MATCH``, the pin, the slice
-of ERPNext's check stored with the card, and the approver's day cap).
+of ERPNext's check stored with the card, and the approver's day cap), or,
+only from the invoice-capture job, fill a supplier's mailed draft Purchase
+Invoice from the order or receipt it bills (``integrations.erpnext_fill``:
+``ERPNEXT_INVOICE_FILL``, the pin, the owner's sender gate on the stored
+slice, the assignee, and the approver's day cap).
 """
 from __future__ import annotations
 
@@ -213,7 +217,8 @@ class DraftCard:
     # changes or comments on an existing document (erpnext_changes); "credit"
     # for a credit-limit raise (erpnext_credit); "block" for a hold on a
     # submitted supplier invoice (erpnext_block); "match" for a bank line
-    # matched with its vouchers (erpnext_match).
+    # matched with its vouchers (erpnext_match); "fill" for a supplier's
+    # mailed draft invoice filled from its order or receipt (erpnext_fill).
     operation: str = "create"
     # A credit-limit raise ERPNext reads differently now than when the card
     # was left (erpnext_credit.recheck, GET /erpnext/drafts only): approving
@@ -1026,7 +1031,7 @@ def cards(person: Any) -> list[DraftCard]:
             asked_in=str(payload.get("asked_in")) if payload.get("asked_in") in (ASKED_IN_PANEL, ASKED_IN_DESK) else "",
             operation=(
                 str(payload.get("operation"))
-                if payload.get("operation") in ("update", "comment", "credit", "block", "match")
+                if payload.get("operation") in ("update", "comment", "credit", "block", "match", "fill")
                 else "create"
             ),
             job_title=_job_title(payload),
@@ -1128,6 +1133,10 @@ def job_card_view(operation: str, doctype: str, name: str | None, fields: dict[s
         from openexecutive.integrations.erpnext_match import card_view as match_view
 
         return match_view(check.get("summary"))
+    if operation == "fill":
+        from openexecutive.integrations.erpnext_fill import card_view as fill_view
+
+        return fill_view(check.get("summary"))
     if operation in ("update", "comment"):
         from openexecutive.integrations.erpnext_changes import card_view as change_view
 
@@ -1150,7 +1159,8 @@ def leave_job_card(
     model's), shown as "Why now" and never in the title, key or fields.
     ``name``: the document a change or a block is on. ``kept``: a slice of
     the check's summary, built and cleaned by code, that approval re-checks
-    (a bank match's, ``erpnext_match.slice_of``), stored as ``slice``.
+    (a bank match's, ``erpnext_match.slice_of``; a fill's,
+    ``erpnext_fill.slice_of``), stored as ``slice``.
     ``also``: code's own (label, value) lines the card shows after ERPNext's
     reading (``DraftSpec.shown``), cleaned here. Returns the decision id and
     whether it is new."""
@@ -1472,7 +1482,7 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
 def _noun(operation: str) -> str:
     return {
         "update": "change", "comment": "comment", "credit": "credit-limit raise", "block": "hold",
-        "match": "bank match",
+        "match": "bank match", "fill": "invoice fill",
     }.get(operation, "draft")
 
 
@@ -1738,6 +1748,16 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         if wire is None:
             raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it.")
         await erpnext_match.approval_refusal(instance, payload, person)
+    elif operation == "fill":
+        # A mailed invoice filled from its order or receipt (erpnext_fill):
+        # only the invoice-capture job's card, only while
+        # ERPNEXT_INVOICE_FILL and the pin hold, and only as its stored slice
+        # still passes the owner's sender gate, checked again now.
+        from openexecutive.integrations import erpnext_fill
+
+        if wire is None:
+            raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it.")
+        await erpnext_fill.approval_refusal(instance, payload, person)
     elif operation == "create" and payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
         raise ApproveRefused(409, "drafts_off", f"ERPNext {payload['doctype']} drafts are turned off here.")
     elif operation != "create" and payload.get("doctype") not in erpnext_changes.enabled(operation):
@@ -1776,6 +1796,13 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         rechecked = erpnext_match.match_fields(fields, target) if doctype == erpnext_match.DOCTYPE else "malformed"
         if fingerprint_of(payload) is None:
             rechecked = "no fingerprint"
+    elif operation == "fill":
+        from openexecutive.integrations import erpnext_fill
+
+        tool = erpnext_changes.OPERATION_TOOLS[operation]
+        rechecked = erpnext_fill.fill_fields(fields, target) if doctype == erpnext_fill.DOCTYPE else "malformed"
+        if fingerprint_of(payload) is None:
+            rechecked = "no fingerprint"
     else:
         tool = erpnext_changes.OPERATION_TOOLS[operation]
         again = erpnext_changes.check_change(operation, doctype, target, fields)
@@ -1809,6 +1836,14 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         if not erpnext_match.take_approved(payload, int(instance.id), int(person.id)):
             release_claim(instance.id)
             raise ApproveRefused(409, "match_limit", erpnext_match.LIMIT_TEXT)
+    if operation == "fill":
+        # Likewise the day's cap on what this approver has filled.
+        from openexecutive.integrations import erpnext_fill
+        from openexecutive.memory.decision_ledger import release_claim
+
+        if not erpnext_fill.take_approved(payload, int(instance.id), int(person.id)):
+            release_claim(instance.id)
+            raise ApproveRefused(409, "fill_limit", erpnext_fill.LIMIT_TEXT)
     _APPROVING.add(instance.id)
     try:
         return await _carry_out(instance, payload, person, email, tool, rechecked, key, wire=wire)
@@ -1848,6 +1883,12 @@ async def _carry_out(
         # Likewise a match is only ever the bank-matching job's card.
         release_claim(instance.id)
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it.")
+    if operation == "fill" and (
+        wire is None or payload.get("source") != JOB_SOURCE or payload.get("job") != "invoice-capture"
+    ):
+        # And a fill only ever the invoice-capture job's card.
+        release_claim(instance.id)
+        raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it.")
     asked_by = payload.get("asked_by") if isinstance(payload.get("asked_by"), str) else email
     arguments = {**fields, "idempotency_key": key, "asked_by": asked_by}
     if wire is not None:
@@ -1862,6 +1903,16 @@ async def _carry_out(
         assert wire is not None
         arguments = {
             "name": payload["name"], "vouchers": fields["vouchers"], "idempotency_key": key,
+            "asked_by": wire["asked_by"], "configured_by": wire["configured_by"],
+        }
+    elif operation == "fill":
+        # draft_fill_purchase_invoice's own fixed set: the draft, the card's
+        # source, lowerings, bill number and date, its key and the job's
+        # identities; never a doctype.
+        assert wire is not None
+        arguments = {
+            "name": payload["name"], "source": fields["source"], "lower": fields["lower"],
+            "bill_no": fields["bill_no"], "bill_date": fields["bill_date"], "idempotency_key": key,
             "asked_by": wire["asked_by"], "configured_by": wire["configured_by"],
         }
     elif operation != "create":
@@ -1896,6 +1947,10 @@ async def _carry_out(
         from openexecutive.integrations.erpnext_match import made as match_made
 
         changed = match_made(payload["name"], result)
+    elif operation == "fill":
+        from openexecutive.integrations.erpnext_fill import made as fill_made
+
+        changed = fill_made(payload["name"], result)
     elif operation != "create":
         from openexecutive.integrations.erpnext_changes import made
 
@@ -1984,6 +2039,22 @@ async def _carry_out(
                 "reason": found[0], **_identities(payload),
             })
             raise ApproveRefused(409, found[0], found[1])
+    if operation == "fill":
+        from openexecutive.integrations import erpnext_fill
+
+        # A fill's own final refusals (a bill number in use, not the
+        # assignee, the sender gate, not from the job's card), and a changed
+        # draft, mail, supplier or source.
+        filled = erpnext_fill.final_refusal(reason)
+        if filled is None and CHANGED_SINCE_PROPOSED in reason:
+            filled = ("changed_since_proposed", erpnext_fill.CHANGED_TEXT)
+        if filled is not None:
+            finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})
+            audit("erpnext_draft_changed", f"Person {person.id}'s ERPNext invoice fill wasn't made and its card closed", {
+                "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "operation": operation,
+                "reason": filled[0], **_identities(payload),
+            })
+            raise ApproveRefused(409, filled[0], filled[1])
     if wire is not None and any(marker in reason for marker in CONFIGURER_MARKERS):
         # The site records another configurer for the job, or none: final.
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})

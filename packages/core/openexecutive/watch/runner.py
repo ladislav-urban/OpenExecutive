@@ -546,7 +546,14 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             cut = built.truncated or len(built.arguments) > read.repeat
             each = []
             for arguments in calls:
-                each.append(await _one_read(job, read, arguments, today, cut, reads, users))
+                try:
+                    each.append(await _one_read(job, read, arguments, today, cut, reads, users))
+                except _Stop as stopped:
+                    # One item ERPNext refused (an unreadable file): that
+                    # item only, which the rules never make a card of.
+                    if not (read.may_fail and stopped.reason == "read_refused"):
+                        raise
+                    each.append({"unread": True})
             results.append({"each": each, "truncated": cut})
             continue
         truncated = isinstance(built, registry.Derived) and built.truncated

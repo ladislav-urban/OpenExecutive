@@ -694,7 +694,10 @@ ERPNEXT_BLOCK_TOOL = "erpnext__draft_block_invoice"
 # Likewise its bank-line match (integrations.erpnext_match), called only by
 # the bank-matching job's card executor.
 ERPNEXT_MATCH_TOOL = "erpnext__draft_match_bank_line"
-ERPNEXT_JOB_WRITE_TOOLS = frozenset({ERPNEXT_BLOCK_TOOL, ERPNEXT_MATCH_TOOL})
+# And its mailed-invoice fill (integrations.erpnext_fill), called only by the
+# invoice-capture job's card executor.
+ERPNEXT_FILL_TOOL = "erpnext__draft_fill_purchase_invoice"
+ERPNEXT_JOB_WRITE_TOOLS = frozenset({ERPNEXT_BLOCK_TOOL, ERPNEXT_MATCH_TOOL, ERPNEXT_FILL_TOOL})
 
 # Server names `load_mcp_server` never registers. extensible-mcp hands a URL
 # server the line of the `tokens` file named after it, and indexes its tools as
