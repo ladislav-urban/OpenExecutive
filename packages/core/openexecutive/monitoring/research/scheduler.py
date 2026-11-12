@@ -218,7 +218,9 @@ def _last_successful_research_run() -> tuple[str | None, str | None]:
         # crash us — AuditLogger has already validated it.
         details = rows[0].details or {}
         h = details.get("state_hash")
-        ts = getattr(rows[0], "ts", None)
+        # A run carried over a demo reset (``research/carry.py``) records
+        # when the real run happened, so the floor counts from that run.
+        ts = details.get("run_ts") or getattr(rows[0], "ts", None)
         return (str(h) if h else None), (str(ts) if ts else None)
     except Exception:
         logger.exception("research.scheduler: audit row parse failed")

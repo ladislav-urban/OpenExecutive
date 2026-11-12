@@ -178,6 +178,10 @@ approval scope other rows hold (they could have been put there by anyone while
 nobody was the principal), the demo roster's included, so a roster loaded
 before the claim keeps its scopes only from the next reset on.
 
+A reset keeps the last watch-list research run when the install already holds
+the bundle's company and one of that run's alerts is still open, so the research
+scan runs about once a week on a demo instead of after every reset.
+
 ---
 
 ## Required configuration
@@ -265,7 +269,10 @@ admin API is `http://keycloak:8180`; the API container reads the same
 repo-root `.env` as everything else, which is also how it checks
 `DIRECTORY_SYNC_ISSUER` against `AUTH_OIDC_ISSUER`. Turn it on after a dry
 run (`docker compose exec api openexecutive directory-sync --dry-run`) lists
-what you expect: on a fresh install, only you, as "linked".
+what you expect: on a fresh install, only you, as "linked". Give the UI
+`DIRECTORY_SYNC_ENABLED` too (the compose file passes it through), so someone
+just added to the group is let in when they first sign in rather than after
+the next run.
 
 ## Health checks
 
@@ -1178,6 +1185,21 @@ it leaves out is unpriced. If the file is missing or malformed, the API logs
 curl -s -H "x-api-key: $BACKEND_SHARED_SECRET" \
   "http://127.0.0.1:8000/audit/usage?erpnext=1&since=2026-11-01T00:00:00"
 ```
+
+### Checking the drafts log against the cards
+
+oe_connector seals each draft OpenExecutive makes in a hash chain, and each
+approval card keeps its row's seal. To check that no newest row was removed and
+the log wasn't rewritten, export the cards' seals and let oe_connector compare:
+
+```bash
+docker compose exec -T api openexecutive draft-seals > seals.json
+bench --site <site> oe-connector-verify-drafts --expect seals.json
+```
+
+`draft-seals` reads the API's ledger only and prints row hashes and their places
+in the chain. It exits 1 when the ledger holds no seals, so a wrong or empty
+ledger never passes.
 
 ### Stopping ERPNext access
 

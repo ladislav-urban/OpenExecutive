@@ -1,0 +1,22 @@
+id: erpnext_091
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Invoice
+description: 'Margin drop, asked whether it was worth it, in ERPNext''s panel as a demo person (oe_connector''s help/try-margin-drop.md). Where the clearance explains only part of the drop, the reply says how much as a share its own figures give ("about two thirds of the drop"), never that it was all, the whole or almost all of the drop. Found in a demo reshoot (Nov 10, 2026): answers said "the whole dip" for a cause that made up about two thirds of it, though the guide says one cause explains all of a change only when its figures add up to all of it.'
+query: Was last week's margin drop worth it?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  says_how_much_of_the_drop_the_clearance_explains_as_a_share_like_about_two_thirds: true
+  the_share_it_gives_adds_up_with_the_figures_it_gives: true
+  never_says_one_cause_was_all_the_whole_or_almost_all_of_the_drop_or_dip: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

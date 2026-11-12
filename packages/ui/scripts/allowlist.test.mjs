@@ -8,6 +8,7 @@ import {
   normalizeEmail,
   parseAllowedEmails,
   resolveAllowed,
+  resolveSessionAllowed,
 } from "../src/lib/allowlist.ts";
 
 const set = (...emails) => new Set(emails);
@@ -488,4 +489,325 @@ test("a backwards clock step does not make an expired roster look fresh", async 
   assert.deepEqual([...(await load())], ["p1@corp.com"]);
   clock = 0; // NTP steps the clock backwards past the entry's fetchedAt
   assert.deepEqual([...(await load())], ["p2@corp.com"], "refetched rather than served stale");
+});
+
+// --- refresh() ------------------------------------------------------------------
+
+/** A loader over fetches the test settles by hand, counting them. */
+function manualLoader({ ttlMs = 1000, clock = { now: 0 } } = {}) {
+  const pending = [];
+  let fetches = 0;
+  let open = 0;
+  let peak = 0;
+  const load = createRosterLoader({
+    baseUrl: "http://api:8000",
+    sharedSecret: "",
+    ttlMs,
+    timeoutMs: 1000,
+    now: () => clock.now,
+    fetchImpl: () => {
+      fetches += 1;
+      open += 1;
+      peak = Math.max(peak, open);
+      return new Promise((resolve) => {
+        pending.push((body, status = 200) => {
+          open -= 1;
+          resolve({ ok: status === 200, status, json: async () => body });
+        });
+      });
+    },
+  });
+  const tick = () => new Promise((r) => setImmediate(r));
+  return {
+    load,
+    get fetches() {
+      return fetches;
+    },
+    get peak() {
+      return peak;
+    },
+    tick,
+    /** Settle the oldest open fetch, then let anything chained on it start. */
+    async settle(body, status) {
+      await tick();
+      pending.shift()(body, status);
+      await tick();
+      await tick();
+    },
+  };
+}
+
+const rosterRows = (...emails) => emails.map((email, i) => ({ email, person_id: i + 1 }));
+
+test("refresh() fetches anew, replaces a fresh cache and returns the rows", async () => {
+  const h = manualLoader();
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  assert.deepEqual([...(await first)], ["old@example.com"]);
+  const fresh = h.load.refresh();
+  const body = [{ email: "New@Example.com", person_id: 2, directory_subject: "kc-new" }];
+  await h.settle(body);
+  const read = await fresh;
+  assert.deepEqual([...read.emails], ["new@example.com"]);
+  assert.deepEqual(read.rows, body);
+  assert.equal(h.fetches, 2);
+  // `authorized`, inside the TTL, is served the refreshed roster.
+  assert.deepEqual([...(await h.load())], ["new@example.com"]);
+  assert.equal(h.fetches, 2);
+});
+
+test("refresh() waits for a TTL fetch in flight, then fetches: one at a time", async () => {
+  const h = manualLoader();
+  const ttlFetch = h.load();
+  const fresh = h.load.refresh();
+  await h.tick();
+  assert.equal(h.fetches, 1, "the refresh hasn't started while the TTL fetch is open");
+  await h.settle(rosterRows("stale@example.com"));
+  assert.deepEqual([...(await ttlFetch)], ["stale@example.com"]);
+  assert.equal(h.fetches, 2, "the refresh started once the first settled");
+  await h.settle(rosterRows("stale@example.com", "new@example.com"));
+  assert.deepEqual([...(await fresh).emails].sort(), ["new@example.com", "stale@example.com"]);
+  assert.equal(h.peak, 1, "never two fetches at once");
+  assert.ok((await h.load()).has("new@example.com"), "the fresher read landed last");
+  assert.equal(h.fetches, 2);
+});
+
+test("a load joining a refresh gets the refreshed roster, with no fetch of its own", async () => {
+  const h = manualLoader();
+  const fresh = h.load.refresh();
+  const joiner = h.load();
+  await h.settle(rosterRows("a@example.com"));
+  await fresh;
+  assert.deepEqual([...(await joiner)], ["a@example.com"]);
+  assert.equal(h.fetches, 1);
+});
+
+test("two concurrent refreshes run one after the other, the second landing last", async () => {
+  const h = manualLoader();
+  const one = h.load.refresh();
+  const two = h.load.refresh();
+  await h.settle(rosterRows("first@example.com"));
+  assert.deepEqual([...(await one).emails], ["first@example.com"]);
+  await h.settle(rosterRows("second@example.com"));
+  assert.deepEqual([...(await two).emails], ["second@example.com"]);
+  assert.equal(h.fetches, 2);
+  assert.equal(h.peak, 1);
+  assert.deepEqual([...(await h.load())], ["second@example.com"]);
+  assert.equal(h.fetches, 2);
+});
+
+test("once a refresh settles nothing is left in flight: a TTL-expired load fetches anew", async () => {
+  const clock = { now: 0 };
+  const h = manualLoader({ clock });
+  const fresh = h.load.refresh();
+  await h.settle(rosterRows("a@example.com"));
+  await fresh;
+  clock.now = 999;
+  await h.load();
+  assert.equal(h.fetches, 1, "inside the TTL: the cache");
+  clock.now = 1000;
+  const expired = h.load();
+  await h.tick();
+  assert.equal(h.fetches, 2, "past the TTL: a new fetch, not a settled refresh's promise");
+  await h.settle(rosterRows("b@example.com"));
+  assert.deepEqual([...(await expired)], ["b@example.com"]);
+});
+
+test("the refresh's time is taken when its fetch starts, not when it was asked for", async () => {
+  const clock = { now: 0 };
+  const h = manualLoader({ clock });
+  const ttlFetch = h.load();
+  const fresh = h.load.refresh();
+  clock.now = 500; // the TTL fetch takes a while
+  await h.settle(rosterRows("a@example.com"));
+  await ttlFetch;
+  await h.settle(rosterRows("b@example.com"));
+  await fresh;
+  clock.now = 1499;
+  assert.deepEqual([...(await h.load())], ["b@example.com"], "fresh until 500 + TTL");
+  assert.equal(h.fetches, 2);
+  clock.now = 1500;
+  const after = h.load();
+  await h.tick();
+  assert.equal(h.fetches, 3);
+  await h.settle(rosterRows("c@example.com"));
+  await after;
+});
+
+test("a failed refresh returns null and keeps the old cache, never past its TTL", async () => {
+  const clock = { now: 0 };
+  const h = manualLoader({ clock });
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  await first;
+  clock.now = 100;
+  const fresh = h.load.refresh();
+  await h.settle(null, 500);
+  assert.equal(await fresh, null);
+  assert.deepEqual([...(await h.load())], ["old@example.com"], "still the old roster within its TTL");
+  assert.equal(h.fetches, 2);
+  clock.now = 1000; // the old roster's TTL, from its own fetch
+  const expired = h.load();
+  await h.tick();
+  assert.equal(h.fetches, 3, "not served past its TTL");
+  await h.settle(null, 500);
+  assert.equal(await expired, null);
+});
+
+test("a refresh whose fetch throws is null, and the next load retries", async () => {
+  let n = 0;
+  const load = createRosterLoader({
+    baseUrl: "http://api:8000",
+    sharedSecret: "",
+    ttlMs: 1000,
+    timeoutMs: 1000,
+    now: () => 0,
+    fetchImpl: async () => {
+      n += 1;
+      if (n === 1) throw new TypeError("fetch failed");
+      return { ok: true, status: 200, json: async () => rosterRows("a@example.com") };
+    },
+  });
+  assert.equal(await load.refresh(), null);
+  assert.deepEqual([...(await load())], ["a@example.com"]);
+  assert.equal(n, 2);
+});
+
+// --- resolveSessionAllowed: the middleware's own roster -----------------------
+
+/** A loader that answers at once with `state.rows`, on a clock the test sets. */
+function liveLoader(state) {
+  return createRosterLoader({
+    baseUrl: "http://api:8000",
+    sharedSecret: "",
+    ttlMs: 5 * 60 * 1000,
+    timeoutMs: 1000,
+    now: () => state.now,
+    fetchImpl: async () => {
+      state.fetches += 1;
+      if (state.fail) return { ok: false, status: 503, json: async () => null };
+      return { ok: true, status: 200, json: async () => state.rows };
+    },
+  });
+}
+
+test("a session signed in after the roster was read is judged on a fresh read", async () => {
+  // The middleware read the roster at t=10 s; someone admitted at sign-in
+  // (t=20 s) isn't on it, and must not be revoked for that.
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  assert.deepEqual([...(await load())], ["old@example.com"]);
+  state.now = 21_000;
+  state.rows = rosterRows("old@example.com", "new@example.com");
+  const decision = await resolveSessionAllowed("New@Example.com", NONE, load, 20);
+  assert.equal(decision.allowed, true);
+  assert.equal(state.fetches, 2);
+  assert.equal(load.fetchedAt(), 21_000);
+  // The next request is served from the cache, now newer than the sign-in.
+  assert.equal((await resolveSessionAllowed("new@example.com", NONE, load, 20)).allowed, true);
+  assert.equal(state.fetches, 2);
+});
+
+test("a session older than the roster is revoked without another read", async () => {
+  const state = { now: 30_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  const decision = await resolveSessionAllowed("gone@example.com", NONE, load, 20);
+  assert.equal(decideSessionAction(decision), "revoke");
+  assert.equal(state.fetches, 1);
+});
+
+test("a removed person is still revoked: one fresh read, then no more", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  for (let i = 0; i < 3; i++) {
+    const decision = await resolveSessionAllowed("gone@example.com", NONE, load, 20);
+    assert.equal(decideSessionAction(decision), "revoke");
+  }
+  assert.equal(state.fetches, 2, "only the first refusal read again");
+});
+
+test("no sign-in time (not an SSO session), no re-read", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  assert.equal(decideSessionAction(await resolveSessionAllowed("x@example.com", NONE, load, null)), "revoke");
+  assert.equal(state.fetches, 1);
+});
+
+test("a failed re-read keeps the old contract: roster unknown, not revoked", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  state.fail = true;
+  const decision = await resolveSessionAllowed("new@example.com", NONE, load, 20);
+  assert.equal(decideSessionAction(decision), "allow_roster_unknown");
+  assert.equal(load.fetchedAt(), 10_000);
+});
+
+test("allowed sessions and ALLOWED_EMAILS never cause a re-read", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  state.now = 25_000;
+  assert.equal((await resolveSessionAllowed("old@example.com", NONE, load, 20)).allowed, true);
+  assert.equal((await resolveSessionAllowed("op@example.com", set("op@example.com"), load, 20)).allowed, true);
+  assert.equal(state.fetches, 1);
+});
+
+test("requests that arrive together share one re-read", async () => {
+  const clock = { now: 10_000 };
+  const h = manualLoader({ ttlMs: 5 * 60 * 1000, clock });
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  await first;
+  clock.now = 21_000;
+  const together = [1, 2, 3, 4].map(() => resolveSessionAllowed("new@example.com", NONE, h.load, 20, 21_000));
+  await h.settle(rosterRows("old@example.com", "new@example.com"));
+  for (const decision of await Promise.all(together)) assert.equal(decision.allowed, true);
+  assert.equal(h.fetches, 2, "one re-read for all four");
+  assert.equal(h.peak, 1);
+});
+
+test("a refresh asked for before the sign-in isn't joined", async () => {
+  const clock = { now: 10_000 };
+  const h = manualLoader({ ttlMs: 5 * 60 * 1000, clock });
+  const first = h.load();
+  await h.settle(rosterRows("old@example.com"));
+  await first;
+  clock.now = 15_000;
+  const early = h.load.refresh(); // e.g. another sign-in's, before this one
+  clock.now = 21_000;
+  const decision = resolveSessionAllowed("new@example.com", NONE, h.load, 20, 21_000);
+  await h.settle(rosterRows("old@example.com"));
+  await early;
+  await h.settle(rosterRows("old@example.com", "new@example.com"));
+  assert.equal((await decision).allowed, true);
+  assert.equal(h.fetches, 3);
+});
+
+test("a sign-in time ahead of this server's clock counts as now", async () => {
+  const state = { now: 10_000, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load();
+  // Signed in "at 500 s" by a server whose clock runs ahead; here it's 30 s.
+  state.now = 30_000;
+  for (let i = 0; i < 3; i++) {
+    assert.equal(decideSessionAction(await resolveSessionAllowed("gone@example.com", NONE, load, 500, 30_000)), "revoke");
+  }
+  assert.equal(state.fetches, 2, "one re-read, not one per request until 500 s");
+});
+
+test("a roster read earlier in the sign-in's own second still counts as older", async () => {
+  const state = { now: 20_100, fetches: 0, rows: rosterRows("old@example.com") };
+  const load = liveLoader(state);
+  await load(); // read at 20.1 s; the sign-in was at 20.5 s, stamped 20
+  state.now = 20_600;
+  state.rows = rosterRows("old@example.com", "new@example.com");
+  assert.equal((await resolveSessionAllowed("new@example.com", NONE, load, 20, 20_600)).allowed, true);
+  assert.equal(state.fetches, 2);
 });

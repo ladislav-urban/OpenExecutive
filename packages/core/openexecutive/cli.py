@@ -522,6 +522,24 @@ def principal_command(email: str, name: str | None, role: str | None) -> None:
         raise SystemExit(1) from None
 
 
+@cli.command("draft-seals")
+def draft_seals_command() -> None:
+    """Print the seals OpenExecutive recorded for the ERPNext drafts it made,
+    as JSON for oe_connector's `oe-connector-verify-drafts --expect`. Reads
+    this install's decision ledger only. Exits 1 when it holds none, so an
+    empty or wrong ledger is never a pass."""
+    import json
+    import sys
+
+    from openexecutive.integrations.erpnext_drafts import recorded_seals
+
+    seals = recorded_seals()
+    sys.stdout.write(json.dumps(seals, indent=2, sort_keys=True) + "\n")
+    click.echo(f"{len(seals)} recorded seals", err=True)
+    if not seals:
+        raise SystemExit(1)
+
+
 @cli.command("directory-unlink")
 @click.option("--email", required=True, help="The address of the Person the directory manages.")
 def directory_unlink_command(email: str) -> None:
