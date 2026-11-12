@@ -72,6 +72,17 @@ def _refused(text: str) -> str:
     return json.dumps({"error": f"Tool error: {text}"})
 
 
+def _args(candidate: dict[str, Any], by: str = OWNER) -> dict[str, Any]:
+    """A proposal's arguments for ``candidate``, configured by the principal."""
+    return {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(candidate), "configured_by": by}
+
+
+@pytest.fixture
+def configured(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The job's row names the principal as its configurer (without a database row)."""
+    monkeypatch.setattr(bank_rules, "configurer", lambda: OWNER)
+
+
 def _plain(sent: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in sent.items() if k != ASSERTION_ARG}
 
@@ -189,7 +200,7 @@ def test_every_pinned_tool_is_a_read_or_a_write_never_both() -> None:
 
 
 def test_a_watch_read_marker_bound_to_propose_rule_is_refused(job_on: WatchJob) -> None:
-    args = {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)}
+    args = _args(FEE)
     # The runner's own marker never names it: it isn't one of the job's reads.
     with pytest.raises(erpnext_caller.WatchRefused, match="watch-tool-not-listed"), \
             erpnext_caller.watch_run("bank-rules", PROPOSE_RULE_TOOL, args, today=TODAY):
@@ -207,7 +218,7 @@ def test_a_watch_read_marker_bound_to_propose_rule_is_refused(job_on: WatchJob) 
 
 
 def test_no_card_executor_and_no_watch_caller_signs_propose_rule_unmarked(job_on: WatchJob) -> None:
-    args = {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)}
+    args = _args(FEE)
     with pytest.raises(ValueError):
         erpnext_caller.draft_executor_run(PROPOSE_RULE_TOOL, args, OWNER)
     setting = erpnext_caller.signing_setting()
@@ -224,7 +235,7 @@ def test_a_turn_never_reaches_the_bank_rules_tools(erp: FakeErpnext, roster: Any
 
     gateway = mcp_gateway.get_active_gateway()
     assert gateway is not None
-    args = {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)}
+    args = _args(FEE)
 
     async def go(marker: Any) -> str:
         with set_session(_owner_turn(roster)), marker():
@@ -252,14 +263,14 @@ def test_tool_search_never_shows_the_bank_rules_tools(monkeypatch: pytest.Monkey
 # --------------------------------------------------------------------------- #
 
 
-def test_proposals_are_the_reads_candidates_exactly() -> None:
+def test_proposals_are_the_reads_candidates_exactly(configured: None) -> None:
     read = json.loads(_evidence(FEE, INTEREST, FEE))
     specs = bank_rules.proposals((read,), SETTINGS, TODAY)
     assert [dict(s.arguments) for s in specs] == [
         {"company": "Acme", "kind": "Bank Transaction Rule",
-         "rule": {"account": "Bank Charges - AC", "word": "servicefee", "direction": "out"}},
+         "rule": {"account": "Bank Charges - AC", "word": "servicefee", "direction": "out"}, "configured_by": OWNER},
         {"company": "Acme", "kind": "Bank Transaction Rule",
-         "rule": {"account": "Interest Income - AC", "word": "interest", "direction": "in"}},
+         "rule": {"account": "Interest Income - AC", "word": "interest", "direction": "in"}, "configured_by": OWNER},
     ]
     assert all(bank_rules.proposal_check(SETTINGS, s.arguments) for s in specs)
     # Anything not oe_connector's own shape is dropped, never mended.
@@ -273,8 +284,15 @@ def test_proposals_are_the_reads_candidates_exactly() -> None:
     assert len(bank_rules.proposals((json.loads(_evidence(*many)),), SETTINGS, TODAY)) == bank_rules.MAX_PROPOSALS
 
 
-def test_the_proposal_check_holds_the_job_to_its_company_and_shape() -> None:
-    good = {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)}
+def test_nothing_is_proposed_without_a_configurer_to_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bank_rules, "configurer", lambda: "")
+    assert bank_rules.proposals((json.loads(_evidence(FEE)),), SETTINGS, TODAY) == ()
+    assert not bank_rules.proposal_check(SETTINGS, _args(FEE))
+    assert not bank_rules.proposal_check(SETTINGS, _args(FEE, by=""))
+
+
+def test_the_proposal_check_holds_the_job_to_its_company_and_shape(configured: None) -> None:
+    good = _args(FEE)
     assert bank_rules.proposal_check(SETTINGS, good)
     for bad in (
         {**good, "company": "Other"},
@@ -283,6 +301,7 @@ def test_the_proposal_check_holds_the_job_to_its_company_and_shape() -> None:
         {**good, "rule": {**good["rule"], "word": "fee"}},
         {**good, "configured_by": "x@co.example"},
         {"company": "Acme", "kind": bank_rules.KIND},
+        {k: v for k, v in good.items() if k != "configured_by"},
     ):
         assert not bank_rules.proposal_check(SETTINGS, bad), bad
     assert not bank_rules.proposal_check({"company": ""}, good)
@@ -297,12 +316,14 @@ def test_a_run_reads_once_then_proposes_each_candidate_as_the_job(
     assert [name for name, _sent in erp.calls] == [EVIDENCE, PROPOSE_RULE_TOOL, PROPOSE_RULE_TOOL]
     assert _plain(erp.calls[0][1]) == {"company": "Acme"}
     assert _plain(erp.calls[1][1]) == {"company": "Acme", "kind": "Bank Transaction Rule",
-                                       "rule": {"account": "Bank Charges - AC", "word": "servicefee", "direction": "out"}}
+                                       "rule": {"account": "Bank Charges - AC", "word": "servicefee", "direction": "out"},
+                                       "configured_by": OWNER}
     for index in range(3):
         claims = erp.claims(index)
         assert (claims["kind"], claims["sub"], claims.get("purpose")) == ("watch", "bank-rules", None)
-    # No configurer is sent: oe_connector reads it from its own record of the job.
-    assert all("configured_by" not in json.dumps(_plain(sent)) for _name, sent in erp.calls)
+    # The configurer is this install's record of the job (its row's configurer), which
+    # oe_connector checks against its own; never in the read.
+    assert [_plain(sent).get("configured_by") for _name, sent in erp.calls] == [None, OWNER, OWNER]
     # Each proposal's seal is kept on its audit row, as a card's is.
     rows = _audit_rows("watch_proposal")
     assert {r.details["name"] for r in rows} == {"OE-RULE-0001", "OE-RULE-0002"}
@@ -358,7 +379,7 @@ def test_the_marker_refuses_a_turn_another_company_and_a_job_off(
 ) -> None:
     from openexecutive.orchestrator.schedule_tools import set_session
 
-    good = {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)}
+    good = _args(FEE)
     with pytest.raises(erpnext_caller.WatchRefused, match="proposal-in-turn"), set_session(_owner_turn(roster)), \
             erpnext_caller.proposal_for_job("bank-rules", PROPOSE_RULE_TOOL, good, day=DAY):
         pass
@@ -384,7 +405,7 @@ def test_the_marker_refuses_a_turn_another_company_and_a_job_off(
 def test_under_its_marker_only_that_exact_call_goes_through(job_on: WatchJob, erp: FakeErpnext) -> None:
     gateway = mcp_gateway.get_active_gateway()
     assert gateway is not None
-    good = {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)}
+    good = _args(FEE)
     other = {**good, "rule": bank_rules._candidate(INTEREST)}
 
     async def go(tool: str, args: dict[str, Any]) -> str:
@@ -546,7 +567,7 @@ def test_under_homes_marker_only_its_one_read_goes_through(erp: FakeErpnext, hom
             return await gateway.call_tool({"name": tool, "arguments": args})
 
     for tool, args in ((PROPOSED, {"company": "Acme"}), ("erpnext__run_report", {"report_name": "x"}),
-                       (PROPOSE_RULE_TOOL, {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)})):
+                       (PROPOSE_RULE_TOOL, _args(FEE))):
         assert "error" in json.loads(asyncio.run(go(tool, args))), tool
     assert erp.calls == []
 

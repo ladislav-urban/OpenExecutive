@@ -12141,10 +12141,13 @@ watch:
     registry.PROPOSAL_CAP_DAY 5, counted before the call, across runs and
     restarts). The gateway signs propose_rule as the job's watch caller only
     under that marker (_check_erpnext_proposal); mint refuses a watch
-    caller's write without it; a job may never list a write as a read. No
-    configured_by is sent: oe_connector reads the job's configurer from its
-    own record, and holds them back from deciding (separation of duties,
-    always on, oe_connector's). An oe_connector refusal becomes a code
+    caller's write without it; a job may never list a write as a read.
+    Each proposal names configured_by, the email (erpnext_caller._email_of)
+    of the job row's configured_by_person_id (bank_rules.configurer), as a
+    job card does; proposal_check re-reads it under the marker, and with
+    none nothing is proposed. oe_connector refuses one that differs from
+    its own record of the job and holds that person back from deciding
+    (separation of duties, always on). An oe_connector refusal becomes a code
     (refusal_code: not_a_candidate, duplicate, cap_open, cap_day,
     proposals_off, no_listed_account, company_unreadable, not_this_job, else
     refused) and the run goes on; proposal-cap, the job off or ERPNext not

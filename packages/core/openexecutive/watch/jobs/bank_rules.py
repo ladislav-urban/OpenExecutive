@@ -16,9 +16,11 @@ several jobs, as oe_connector lists them). No model and no tool loop:
   proposal is inert: oe_connector writes an "OE Proposed Rule" a System
   Manager enables or dismisses in the desk, rebuilds the rule from the account,
   word and direction itself, and refuses anything that isn't one of today's
-  candidates. Whoever set the job up is held back from deciding on its
-  proposals by oe_connector, from its own record of the job (never from here).
-  A refusal is recorded as a code and never stops the run.
+  candidates. Each proposal names who set the job up here (``configured_by``,
+  the email of the job row's configurer, as a job card does); oe_connector
+  refuses one that differs from its own record of the job, and holds that
+  person back from deciding on its proposals. A refusal is recorded as a code
+  and never stops the run.
 - **The chain's head**: the read returns the OE Draft chain's newest row
   (``chain_head``); this install keeps it per company, and a head shorter
   than last seen tells the principal, since a proposal's Enable and Withdraw
@@ -78,6 +80,8 @@ _REFUSALS: tuple[tuple[str, str], ...] = (
     ("is listed for bank matching", "no_listed_account"),
     ("you cannot read the company", "company_unreadable"),
     ("job's alone", "not_this_job"),
+    ("was set up by", "configurer_mismatch"),
+    ("configured_by", "configurer_mismatch"),
 )
 REFUSAL_CODES = frozenset(code for _said, code in _REFUSALS) | {"refused", "timeout", "unanswered"}
 
@@ -163,8 +167,24 @@ def candidates(result: Mapping[str, Any], company: str) -> list[dict[str, str]]:
     return found
 
 
-def proposal_arguments(company: str, rule: Mapping[str, str]) -> dict[str, Any]:
-    return {"company": company, "kind": KIND, "rule": dict(rule)}
+def proposal_arguments(company: str, rule: Mapping[str, str], configured_by: str) -> dict[str, Any]:
+    return {"company": company, "kind": KIND, "rule": dict(rule), "configured_by": configured_by}
+
+
+def configurer() -> str:
+    """The email of whoever configured the job here (its row's
+    configured_by_person_id, as ERPNext knows them), or "" when there is none
+    to name: then nothing is proposed."""
+    from openexecutive.orchestrator.erpnext_caller import _email_of
+    from openexecutive.people.store import get_person
+    from openexecutive.watch.settings import get_row
+
+    try:
+        person_id = get_row(JOB_ID).configured_by_person_id
+        person = get_person(person_id) if isinstance(person_id, int) else None
+    except Exception:
+        return ""
+    return _email_of(person) if person is not None else ""
 
 
 def _key(rule: Mapping[str, str]) -> str:
@@ -177,21 +197,27 @@ def proposals(reads: Sequence[Mapping[str, Any]], settings: Settings, today: dat
     company = settings["company"]
     if not reads or not isinstance(company, str) or not company:
         return ()
+    by = configurer()
+    if not by:
+        return ()
     return tuple(
-        ProposalSpec(key=_key(rule), arguments=proposal_arguments(company, rule))
+        ProposalSpec(key=_key(rule), arguments=proposal_arguments(company, rule, by))
         for rule in candidates(evidence(reads), company)[:MAX_PROPOSALS]
     )
 
 
 def proposal_check(settings: Settings, arguments: Mapping[str, Any]) -> bool:
     """Whether ``arguments`` are exactly a proposal this job may leave now:
-    its own company, its kind, and a rule of oe_connector's candidate shape."""
+    its own company, its kind, a rule of oe_connector's candidate shape, and
+    its configurer as the job's row names them now."""
     company = settings.get("company")
-    if not isinstance(company, str) or not company or set(arguments) != {"company", "kind", "rule"}:
+    if not isinstance(company, str) or not company or set(arguments) != {"company", "kind", "rule", "configured_by"}:
         return False
     rule = arguments.get("rule")
+    by = configurer()
     return (
-        arguments.get("company") == company
+        bool(by) and arguments.get("configured_by") == by
+        and arguments.get("company") == company
         and arguments.get("kind") == KIND
         and isinstance(rule, Mapping)
         and set(rule) == {"account", "word", "direction"}
