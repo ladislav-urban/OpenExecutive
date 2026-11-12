@@ -16,6 +16,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -392,7 +393,7 @@ def _assemble_report(ctx: _ChurnCtx) -> str:
         _ensure_heading(ctx.program, "## 90-Day Retention Program"),
         "",
         "---",
-        "*Drafted by Open Executive. Validate every percentage in the cohort "
+        f"*Drafted by {product_name()}. Validate every percentage in the cohort "
         "section against the source data before circulating.*",
     ]
     return "\n".join(parts).strip() + "\n"

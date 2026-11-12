@@ -10,6 +10,7 @@ from typing import Any
 
 from openexecutive.audit.redaction import ERROR_DETAIL_LEN
 from openexecutive.orchestrator.people_tools import audit_rows_on_senders_turn
+from openexecutive.utils.product_name import product_name
 
 logger = logging.getLogger(__name__)
 
@@ -1071,7 +1072,7 @@ async def create_slack_app():
                     user_text=cleaned,
                     author_display_name=speaker_label,
                     history=gate_history,
-                    bot_display_name="Open Executive",
+                    bot_display_name=product_name(),
                     channel="slack",
                 )
                 if not decision.allow:
