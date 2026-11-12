@@ -1,0 +1,107 @@
+{
+ "about": "plain() cases, oe_connector's plain_text.plain against OpenExecutive's utils/prompt_blocks.plain (ladislav-urban/OpenExecutive#228, main adbcb295): each input and what plain() makes of it. A draft's text is accepted only when plain(text) == text.",
+ "cases": [
+  {
+   "note": "already plain, with a newline and a tab",
+   "input": "Chase Lumen on PO-0001:\n\t3 lines due",
+   "plain": "Chase Lumen on PO-0001:\n\t3 lines due"
+  },
+  {
+   "note": "an emoji without a variation selector",
+   "input": "Done \u2705",
+   "plain": "Done \u2705"
+  },
+  {
+   "note": "a zero-width space",
+   "input": "Pay\u200bnow",
+   "plain": "Paynow"
+  },
+  {
+   "note": "a right-to-left override",
+   "input": "invoice \u202egnp.exe",
+   "plain": "invoice gnp.exe"
+  },
+  {
+   "note": "a tag character",
+   "input": "note\udb40\udc41",
+   "plain": "note"
+  },
+  {
+   "note": "a variation selector after an emoji",
+   "input": "Thanks \u2764\ufe0f",
+   "plain": "Thanks \u2764"
+  },
+  {
+   "note": "a full-width less-than",
+   "input": "\uff1cscript\uff1e",
+   "plain": "<script>"
+  },
+  {
+   "note": "a ligature",
+   "input": "\ufb01le",
+   "plain": "file"
+  },
+  {
+   "note": "a line separator",
+   "input": "one\u2028two",
+   "plain": "one\ntwo"
+  },
+  {
+   "note": "a paragraph separator",
+   "input": "one\u2029two",
+   "plain": "one\ntwo"
+  },
+  {
+   "note": "a carriage return",
+   "input": "one\r\ntwo",
+   "plain": "one\ntwo"
+  },
+  {
+   "note": "a decomposed accent",
+   "input": "Cafe\u0301",
+   "plain": "Caf\u00e9"
+  },
+  {
+   "note": "a Hangul filler",
+   "input": "a\u3164b",
+   "plain": "ab"
+  },
+  {
+   "note": "a combining grapheme joiner",
+   "input": "a\u034fb",
+   "plain": "ab"
+  },
+  {
+   "note": "a soft hyphen",
+   "input": "co\u00adoperate",
+   "plain": "cooperate"
+  },
+  {
+   "note": "a zero-width space before a combining mark",
+   "input": "e\u200b\u0301",
+   "plain": "\u00e9"
+  },
+  {
+   "note": "a zero-width space before a combining accent",
+   "input": "Cafe\u200b\u0301",
+   "plain": "Caf\u00e9"
+  },
+  {
+   "note": "a line separator between letters",
+   "input": "a\u2028b",
+   "plain": "a\nb"
+  },
+  {
+   "note": "U+2065, an ignorable",
+   "input": "ok\u2065x",
+   "plain": "okx"
+  }
+ ],
+ "as_shown": [
+  {
+   "note": "a tab before a combining accent, through erpnext_changes._as_shown",
+   "input": "Cafe\t\u0301",
+   "shown": "Caf\u00e9"
+  }
+ ]
+}
