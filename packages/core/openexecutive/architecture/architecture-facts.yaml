@@ -11633,6 +11633,114 @@ integrations:
     `mark_outbound_context_consumed`); `_VALID_OUTBOUND_CHANNELS` is
     `{discord_dm, telegram, slack_dm, email}`.
 
+watch:
+  purpose: |
+    Watch jobs (openexecutive.watch, prebuilt/watch.json): unattended
+    ERPNext runs defined in code. A job reads a fixed set of ERPNext data,
+    applies rules in code and leaves the principal notices; it never runs
+    the Executive's tool loop, no model picks a read, and no model writes a
+    figure. Job draft cards come with the jobs themselves (collections and
+    payment checks); until then a job leaves notices only.
+  registry: |
+    watch.registry: WatchJob(id, title, reads, build, schedule,
+    card_cap_day, default_settings, reason_schema=None). id is oe_connector's
+    watch.JOB_ID ([a-z0-9-]{1,40}), the key of oe_connector_watch_jobs and of
+    the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
+    arguments, label), oe_connector's tool and argument shape with the same
+    slot names ($company, $date within 400 days, $party, $parties and
+    $customers up to 50, $int 1-500; `fields` a most; objects exact keys);
+    READ_TOOLS is run_report and list_records only (the withheld
+    customer_payment_record and supplier_bank_changed join with their jobs
+    and pin round). build(results, settings, today) is pure code returning
+    CardSpec(key, summary, values, facts). JOBS is a read-only mapping of
+    _LISTED, which is empty; the test job watch.jobs._example is put in by
+    tests only. tests/unit/watch_job_vectors.json pins the id pattern, the
+    slots, shapes and one signed watch assertion against oe_connector.
+  settings: |
+    watch.settings, table watch_jobs (job, enabled, settings JSON,
+    configured_by_person_id, configured_at, reviewer_person_id). Settings
+    must be exactly default_settings' keys and types within bounds
+    (registry.check_settings; 400 otherwise). reviewer_person_id is stored
+    for the later separation of duties and never read by the runner.
+    GET /watch/jobs and PUT /watch/jobs/{id} (api.routes.watch_jobs) need
+    delegation.verified.caller_refusal(caller, principal email) is None
+    (409 caller_signing_required, 403 not_yours); PUT records the configurer
+    and a private watch_job_configured audit row (enabled before/after,
+    setting keys changed, reviewer changed, person id). No app_control
+    action targets /watch/jobs (a test checks), so a turn can't turn a job
+    on. ERPNEXT_WATCH_JOBS_ENABLED (off) is the operator's master switch.
+  caller: |
+    erpnext_caller.watch_run(job, tool, arguments, today=): a ContextVar
+    marker (WatchCall: job, gateway tool, arguments digest) bound to a
+    registered, enabled job, one of its tools and arguments that fit the
+    read's shape. Refused (WatchRefused reason codes) when current_session
+    is bound (watch-in-turn), any other marker is set: brief, oversight,
+    answer check, supplier, draft, another watch read
+    (watch-with-other-marker), without ERPNEXT_CALLER_PRIVATE_KEY
+    (watch-needs-keys; never the brief's unsigned path), a malformed key,
+    an unknown or disabled job, an unlisted tool or misfit arguments. It
+    saves the marker it found and restores it on exit. caller_for checks it
+    first, before any session logic: ErpnextCaller("watch", job=id), only
+    when no session and no other marker (else watch-not-alone). mint: kind
+    watch, sub the job id, no email, supplier or purpose, never a draft*
+    tool. The gateway (mcp_gateway._check_watch_read, plus an early tool
+    check in call_tool) refuses any other call inside the marker, ERPNext's
+    or any server's (outside-watch-read), compares the digest after
+    _erpnext_arguments' coercion, re-checks no session and no other marker
+    at call time, and _check_erpnext_caller refuses watch-needs-keys.
+    oe_connector answers a watch call only for a listed job and a listed
+    read, as oe-watch-<id>@<site> when as_job_user is set, else the OE
+    Reader service view, and puts {kind, job, as_job_user, user} in the
+    result's top-level `acting` (a refused call has none).
+  runner: |
+    watch.runner.maybe_run, from scheduler.runner._maybe_run_watch_jobs each
+    tick: for each job on (master switch and row), past its hour in the
+    company's zone (get_user_timezone), claim(job, day) under BEGIN
+    IMMEDIATE in watch_runs (job, day, status running/done/failed,
+    started_at, attempts, cards, error, reads, failure_noticed); a running
+    row 30 minutes stale is taken again once (attempts 2), then failed
+    run_stalled. A DST-skipped hour still runs (past the hour, no row). One
+    asyncio task per run (unscoped audit rows), not a scheduled_actions row.
+    run_job runs under set_turn(turn_id=watch:<id>:<day>) and
+    _cost_budget(id) (HOOK: imports audit.cost_caps.bind_job by name, a
+    no-op until S7's cost caps land). Reads: arguments from the job's code,
+    shape-checked, then gateway.call_tool inside watch_run, 60 s each; an
+    error result, non-JSON text, a timeout or a WatchRefused ends the run
+    with one failure notice a day (failure_noticed; a direct private alert
+    naming the read and REASONS[code], never ERPNext's text); quiet when the
+    job was turned off. acting is read from the top-level key only:
+    as_job_user per read (kind watch, as_job_user is True, job equal, user
+    exactly oe-watch-<id>@host, the same user across the run) stored in
+    watch_runs.reads without the user's name; acting.job naming another job
+    fails the run (acting_job_mismatch). Nothing routes on it yet.
+  reasons: |
+    Only for a job with a reason_schema: one tool-less call to
+    get_fast_model() with the constant REASON_SYSTEM; the user turn holds
+    the job's instruction and the findings' facts (at most 20 findings, 8
+    facts, values cleaned to 120 chars) as JSON in wrap_untrusted, keyed f1,
+    f2... never by a finding's key. parse_reasons keeps only {"reasons":
+    {id: str}} for ids shown, each cleaned (no control chars, line breaks,
+    markdown or links) and at most 200 chars; the rest is dropped. Usage:
+    log_model_usage actor watch:<id>. A reason is shown as "Reason (a
+    model's words, not a figure)" and never reaches a key, title or routing.
+  notices: |
+    Private alerts stored directly with alerts.store.insert_alert
+    (runner._leave_notice), never through alerts.pipeline or triage, whose
+    model would store its own headline, body and suggested action, or drop
+    the finding: source watch, topic tag PRIVATE_ALERT_TAG,
+    routed_to_person_id the principal (whatever reviewer is stored),
+    dedup_key private:watch:<id>:<sha256 of the finding key>, external_id
+    <key>:<day>, needs fyi, severity NOTICE_SEVERITY (code's). Headline:
+    runner.notice_subject, the job's title and counts only. Body:
+    runner.notice_body, a code preamble and wrap_untrusted(source erpnext,
+    author watch:<id>) of the stripped, capped summary, values and the
+    labelled reason. A run takes at most MAX_FINDINGS (200) findings from
+    build; card_cap_day counts attempts, not stored notices, so a notice
+    that fails to store never lets another through; a finding whose notice
+    is still unread or read is skipped (repeats). Audit: one
+    private watch_run row per run (status, reason code, counts, as_job_user
+    list; never figures or text).
+
 evals:
   module: openexecutive.evals
   runner: openexecutive.evals.runner — parallel scenario execution with cancellable runs.

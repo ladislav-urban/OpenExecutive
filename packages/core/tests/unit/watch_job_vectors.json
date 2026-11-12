@@ -1,0 +1,72 @@
+{
+  "about": "Watch-job vectors shared with oe_connector (its watch.py and caller.py): the job id pattern, the slot names, phase 1's job ids and their ERP users, argument shapes with calls that fit or don't, and one signed watch assertion. Checked by packages/core/tests/unit/test_watch_jobs.py. The assertion is signed with the phase 2 vector key (VECTOR_PRIVATE_KEY in test_erpnext_caller.py), which is public: never use it for anything real.",
+  "job_id_pattern": "[a-z0-9-]{1,40}",
+  "slots": ["$company", "$date", "$party", "$parties", "$customers", "$int"],
+  "limits": {"date_range_days": 400, "max_list": 50, "max_int": 500},
+  "phase1_jobs": ["collections", "payment-checks"],
+  "job_user": "oe-watch-{job}@{site}",
+  "bad_job_ids": ["", "Collections", "collections_job", "a b", "x/y", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
+  "shape_cases": [
+    {
+      "today": "2026-11-10",
+      "shape": {"report_name": "Accounts Receivable", "filters": {"company": "$company", "report_date": "$date", "ageing_based_on": "Due Date"}},
+      "fits": [
+        {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "2026-11-10", "ageing_based_on": "Due Date"}}
+      ],
+      "misfits": [
+        {"report_name": "General Ledger", "filters": {"company": "Acme", "report_date": "2026-11-10", "ageing_based_on": "Due Date"}},
+        {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "2026-11-10", "ageing_based_on": "Posting Date"}},
+        {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "2028-01-01", "ageing_based_on": "Due Date"}},
+        {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "10.11.2026", "ageing_based_on": "Due Date"}},
+        {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "2026-11-10"}},
+        {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "2026-11-10", "ageing_based_on": "Due Date", "customer": "X"}},
+        {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "2026-11-10", "ageing_based_on": "Due Date"}, "limit": 5}
+      ]
+    },
+    {
+      "today": "2026-11-10",
+      "shape": {"doctype": "Dunning", "fields": ["name", "customer", "posting_date", "overdue_payments.sales_invoice"], "filters": {"company": "$company", "docstatus": 1}, "limit": "$int"},
+      "fits": [
+        {"doctype": "Dunning", "fields": ["name", "customer"], "filters": {"company": "Acme", "docstatus": 1}, "limit": 500},
+        {"doctype": "Dunning", "fields": ["name", "customer", "posting_date", "overdue_payments.sales_invoice"], "filters": {"company": "Acme", "docstatus": 1}, "limit": 1}
+      ],
+      "misfits": [
+        {"doctype": "Dunning", "fields": ["name", "letter_body"], "filters": {"company": "Acme", "docstatus": 1}, "limit": 5},
+        {"doctype": "Dunning", "fields": [], "filters": {"company": "Acme", "docstatus": 1}, "limit": 5},
+        {"doctype": "Dunning", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 0}, "limit": 5},
+        {"doctype": "Dunning", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1}, "limit": 501},
+        {"doctype": "Dunning", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1}, "limit": 0},
+        {"doctype": "Dunning", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1}, "limit": true},
+        {"doctype": "Dunning", "fields": ["name"], "filters": {"company": "", "docstatus": 1}, "limit": 5}
+      ]
+    },
+    {
+      "today": "2026-11-10",
+      "shape": {"customers": "$customers", "suppliers": "$parties", "party": "$party"},
+      "fits": [
+        {"customers": ["Acme Retail"], "suppliers": ["Northwind", "Contoso"], "party": "Acme Retail"}
+      ],
+      "misfits": [
+        {"customers": [], "suppliers": ["Northwind"], "party": "Acme Retail"},
+        {"customers": ["Acme Retail"], "suppliers": "Northwind", "party": "Acme Retail"},
+        {"customers": ["Acme Retail"], "suppliers": ["Northwind"], "party": " Acme Retail"},
+        {"customers": ["Acme\nRetail"], "suppliers": ["Northwind"], "party": "Acme Retail"}
+      ]
+    }
+  ],
+  "assertion": {
+    "job": "collections",
+    "tool": "run_report",
+    "arguments": {"report_name": "Accounts Receivable", "filters": {"company": "Acme", "report_date": "2026-11-10", "ageing_based_on": "Due Date"}, "limit": 200},
+    "now": 1800000000,
+    "jti": "watch-vector-000001",
+    "args_digest": "fe11f301a77957b38baf95cf4508502c76793c49535062304ce47e417e595da5",
+    "token": "v1.eyJhcmdzIjoiZmUxMWYzMDFhNzc5NTdiMzhiYWY5NWNmNDUwODUwMmM3Njc5M2M0OTUzNTA2MjMwNGNlNDdlNDE3ZTU5NWRhNSIsImF1ZCI6Im9lX2Nvbm5lY3RvciIsImV4cCI6MTgwMDAwMDA2MCwiaWF0IjoxODAwMDAwMDAwLCJqdGkiOiJ3YXRjaC12ZWN0b3ItMDAwMDAxIiwia2lkIjoidmVjIiwia2luZCI6IndhdGNoIiwic3ViIjoiY29sbGVjdGlvbnMiLCJ0b29sIjoicnVuX3JlcG9ydCJ9.g_pGt2aaPDe53IRvWihcajYvvB2zEOtwaknohiCvHsDu2oaTgjBCR3J_V3NXufkpdqt_sy-wwCmSrqS9wTquCQ"
+  },
+  "example_job": {
+    "id": "example",
+    "reads": [
+      {"tool": "run_report", "report_name": "Accounts Receivable", "filters": {"company": "$company", "report_date": "$date", "ageing_based_on": "Due Date"}, "limit": "$int"}
+    ]
+  }
+}

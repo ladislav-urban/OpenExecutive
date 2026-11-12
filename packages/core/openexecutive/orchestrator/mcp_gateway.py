@@ -815,6 +815,13 @@ def _check_erpnext_caller(tool_name: str) -> tuple[str | None, ErpnextCaller | N
             "A supplier's agent is answered only with per-person access "
             "(ERPNEXT_CALLER_PRIVATE_KEY).",
         ), None
+    if not setting and erpnext_caller.watch_call() is not None:
+        # A watch job reads only as a signed `watch` caller, never as the
+        # brief's unsigned service view.
+        return _refuse_erpnext_call(
+            tool_name, "watch-needs-keys",
+            "A watch job reads ERPNext only with per-person access (ERPNEXT_CALLER_PRIVATE_KEY).",
+        ), None
     if not setting:
         # The morning brief's own report runs are for the principal alone.
         if erpnext_caller.in_brief_run() or principal_speaking(current_session.get()):
@@ -888,6 +895,29 @@ def _check_erpnext_draft(
     if caller is None or caller.kind != "user":
         return _refuse_erpnext_call(tool_name, "draft-not-a-person", _DRAFT_OUTSIDE_CARD), None
     return None, caller
+
+
+def _check_watch_read(tool_name: str, normalized: str, arguments: Any) -> str | None:
+    """Inside a watch job's read (``erpnext_caller.watch_run``), the refusal
+    for anything but that marker's own call, else None (and None outside
+    one). Checked at call time: still no turn bound and no other marker,
+    and the arguments' digest, taken after the gateway's argument coercion,
+    the one the marker was set for."""
+    watch = erpnext_caller.watch_call()
+    if watch is None:
+        return None
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    refusal = "a watch job makes only the one read its runner set up. Do not retry."
+    if current_session.get() is not None:
+        return _refuse_erpnext_call(str(tool_name)[:200], "watch-in-turn", refusal)
+    if erpnext_caller.other_marker_bound():
+        return _refuse_erpnext_call(str(tool_name)[:200], "watch-with-other-marker", refusal)
+    if normalized != watch.tool or normalized.startswith(erpnext_caller.DRAFT_TOOL_PREFIX):
+        return _refuse_erpnext_call(str(tool_name)[:200], "outside-watch-read", refusal)
+    if not isinstance(arguments, dict) or erpnext_caller.arguments_digest(arguments) != watch.digest:
+        return _refuse_erpnext_call(str(tool_name)[:200], "outside-watch-read", refusal)
+    return None
 
 
 def _erpnext_downstream(
@@ -4370,6 +4400,15 @@ class MCPGateway:
                 str(tool_name)[:200], "outside-supplier-tools",
                 "a supplier's agent is answered only from its own orders and invoices.",
             )
+        # A watch job's read reaches its one tool and nothing else, ERPNext's
+        # or any other server's (its arguments are checked below, once the
+        # gateway's coercion has run).
+        watch_read = erpnext_caller.watch_call()
+        if watch_read is not None and normalized != watch_read.tool:
+            return _refuse_erpnext_call(
+                str(tool_name)[:200], "outside-watch-read",
+                "a watch job makes only the one read its runner set up. Do not retry.",
+            )
         # Files saved from someone's own mail are theirs alone, and their
         # folder is no model's to name (see `_saved_files_hidden`). The save's
         # own code-built calls are the one exception.
@@ -4393,6 +4432,12 @@ class MCPGateway:
             # Before every gate and the caller's signature, so both see the
             # call as it will run.
             arguments = _erpnext_arguments(arguments, self._erpnext_schemas.get(normalized))
+            watch_refused = _check_watch_read(
+                tool_name, normalized,
+                {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG},
+            )
+            if watch_refused is not None:
+                return watch_refused
             from openexecutive.prompts.connected_systems import (
                 ERPNEXT_AUDIT_TOOL,
                 ERPNEXT_CODE_ONLY_TOOLS,

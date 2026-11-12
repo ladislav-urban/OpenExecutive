@@ -989,6 +989,10 @@ class Settings(BaseSettings):
     # user (who may read ERPNext as themselves; erpnext_caller.caller_for).
     # Off by default, so an install's drafts stay the principal's until set.
     erpnext_drafts_teammates: bool = Field(False, alias="ERPNEXT_DRAFTS_TEAMMATES")
+    # Watch jobs (watch/): the operator's master switch for the unattended
+    # ERPNext jobs defined in code. Off, no job runs whatever its row in
+    # `watch_jobs` says. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
+    erpnext_watch_jobs_enabled: bool = Field(False, alias="ERPNEXT_WATCH_JOBS_ENABLED")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
