@@ -58,6 +58,7 @@ def file_card(
     sender_name: str,
     from_principal: bool,
     verified: bool = True,
+    principal_address: bool = False,
     subject: str = "",
     answer: str = "",
 ) -> int | None:
@@ -91,6 +92,14 @@ def file_card(
             f"Reply to {name} yourself, or ask the Executive about it."
         )
         action = f"Reply to {name}."
+    elif principal_address:
+        headline = "An email from your address got no reply"
+        body = (
+            "An email from your address reached the Executive and no reply went out. "
+            "The mailbox could not prove you sent it. If you did not, someone may be "
+            "using your address."
+        )
+        action = "Check that you sent it."
     else:
         name = _one_line(sender_name, 80) or "someone on the team"
         headline = f"An email from {name}'s address got no reply"
@@ -116,6 +125,8 @@ def file_card(
             topic_tags=["email", PRIVATE_ALERT_TAG],
             dedup_key=dedup_key,
             routed_to_person_id=_principal_id(),
+            # Nothing to approve, it's for them to know (Got it).
+            needs="fyi",
         )
     except Exception:
         logger.exception("unanswered_mail: could not file the card for thread %s", thread_key)

@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  cardGist,
+  toDecideLabel,
   highlightPieces,
   questionsLeft,
   isMailboxLink,
   mailboxName,
   relationLabel,
   replyFlagLines,
+  replyToChoice,
   safeGmailLink,
   sendLeftNothing,
   sendQuestion,
@@ -26,7 +29,7 @@ test("replyFlagLines puts the pressing warnings first, once each, and drops unkn
   const lines = replyFlagLines(["others_on_thread", "sender_unverified", "made_up", "others_on_thread"]);
   assert.equal(lines.length, 2);
   assert.match(lines[0], /couldn't confirm/);
-  assert.match(lines[1], /sender only/);
+  assert.match(lines[1], /Others were on this email/);
   // The open questions already carry this one.
   assert.deepEqual(replyFlagLines(["asks_if_ai"]), []);
   assert.deepEqual(replyFlagLines([]), []);
@@ -114,4 +117,31 @@ test("highlightPieces marks the new sentences and keeps every character in order
   assert.equal(pieces.map((p) => p.text).join(""), body);
   assert.deepEqual(pieces.filter((p) => p.changed).map((p) => p.text), ["Friday at 10 works for me."]);
   assert.deepEqual(highlightPieces(body, []), [{ text: body, changed: false }]);
+});
+
+test("replyToChoice offers the sender alone or everyone, and nothing without others", () => {
+  const card = { from_name: "Dana Park", from_email: "dana@x.example", draft_to: ["dana@x.example"] };
+  assert.equal(replyToChoice(card), null);
+  assert.equal(replyToChoice({ ...card, reply_others: ["sam@x.example"], source: "follow_up" }), null);
+  const choice = replyToChoice({ ...card, reply_others: ["sam@x.example", "lee@x.example"] });
+  assert.deepEqual(choice, { sender: "Dana only", everyone: "Everyone (3)", toEveryone: false });
+  const all = replyToChoice({
+    ...card, from_name: "", reply_others: ["sam@x.example"], draft_to: ["dana@x.example", "sam@x.example"],
+  });
+  assert.equal(all.sender, "dana@x.example only");
+  assert.equal(all.toEveryone, true);
+});
+
+test("cardGist shows the summary, or the start of what they wrote on an older card", () => {
+  assert.equal(cardGist({ gist: " Dana asks when to talk. ", they_wrote: "Hi" }), "Dana asks when to talk.");
+  assert.equal(cardGist({ they_wrote: "Hi Olivia,\n\n  Can we talk Thursday?" }), "Hi Olivia, Can we talk Thursday?");
+  const long = cardGist({ gist: "", they_wrote: "word ".repeat(60) });
+  assert.ok(long.endsWith("word…") && long.length <= 161);
+  assert.equal(cardGist({ they_wrote: "" }), "");
+});
+
+test("toDecideLabel counts what's left, and is empty when nothing is", () => {
+  assert.equal(toDecideLabel(1), "1 to decide");
+  assert.equal(toDecideLabel(3), "3 to decide");
+  assert.equal(toDecideLabel(0), "");
 });

@@ -299,6 +299,19 @@ def _attribution_end(body: list[str], i: int) -> tuple[int, bool] | None:
     return None
 
 
+def _retrieval_query(raw_email: str) -> str:
+    """What to search Knowledge for on an email turn: its subject and what
+    the sender wrote, not the raw mail (whose first lines are headers), cut
+    to 500 characters. The raw start when the mail has no text of its own."""
+    header, body_lines, _attachments = _split_gmail_content(raw_email)
+    subject = next(
+        (line.split(":", 1)[1] for line in header if line.strip().lower().startswith("subject:")), "",
+    )
+    new_lines, _forwarded = _new_text_lines(body_lines)
+    words = "\n".join(line for line in (subject.strip(), *new_lines) if line.strip()).strip()
+    return (words or raw_email)[:500]
+
+
 def _new_text_lines(body: list[str]) -> tuple[list[str], bool]:
     """The sender's own lines, without quoted replies, stopping where an
     older message is appended below. Returns (lines, whether a forwarded
@@ -648,8 +661,8 @@ async def _handle_mail(
     # where the principal reads it, so a forged From can't hide a turn.
     teammate_authenticated: bool | None = None
     teammate_id: int | None = None
-    # Of the mailboxes, only Gmail authenticates a sender (`fact_confirmation.read_raw`).
-    if not private and sender_in_roster and (mailbox is None or mailbox.name == "google"):
+    # Gmail and Outlook authenticate a sender (`fact_confirmation.sender_authenticated`).
+    if not private and sender_in_roster and (mailbox is None or mailbox.name in ("google", "microsoft")):
         from openexecutive.orchestrator.people_tools import team_member_id
 
         try:
@@ -895,6 +908,11 @@ async def _hold_for_roster(
     preview = f"{subject} — {' '.join(new_lines)}" if subject else " ".join(new_lines)
 
     async def _ack(_text: str) -> None:
+        from openexecutive.integrations.workspace.registry import get_mail_provider
+
+        if get_mail_provider().name != "google":
+            # The one-shot acknowledgement grant admits only Gmail's send tool.
+            raise roster_intake.AckWithheld("acknowledgements go out from Gmail only")
         if not await sender_authenticated(gateway, message_id, from_addr):
             raise roster_intake.AckWithheld("Gmail did not authenticate the sender")
         await roster_intake.send_email_ack(gateway, from_addr)
@@ -1066,7 +1084,7 @@ def _principal_email_text(raw_email: str, from_addr: str) -> str:
     if "\n".join(ln for ln in own.splitlines() if ln.strip()) == whole:
         return raw_email
     return (
-        "Gmail authenticated this email as the principal's own. Their new text "
+        "The mailbox authenticated this email as the principal's own. Their new text "
         "in it:\n"
         f"{own or '(none)'}\n\n"
         "The message as received, including what it quotes or forwards — "
@@ -1359,6 +1377,14 @@ async def _run_executive(
         )
     if attachment_text:
         base_message += f"\n\n--- ATTACHMENT TEXT ---\n{attachment_text}"
+    # What this turn's answers already mailed the sender on this thread
+    # (integrations.email_replies), since the quoted chain may be trimmed.
+    if source is not None and answer_to == from_addr.strip().lower():
+        from openexecutive.integrations import email_replies
+
+        earlier = email_replies.block(session_id or session.session_id, answer_to)
+        if earlier:
+            base_message += f"\n\n{earlier}"
     if reply_block:
         base_message += f"\n\n{reply_block}"
     if source is not None:
@@ -1398,7 +1424,7 @@ async def _run_executive(
             response = await executive.chat(
                 user_message=base_message,
                 session=session,
-                retrieved_context=retrieve(query=raw_email[:500]),
+                retrieved_context=retrieve(query=_retrieval_query(raw_email)),
                 episodic_context=format_for_prompt(),
                 person_id=person_id,
                 co_present_person_ids=co_present_person_ids or None,
@@ -1461,6 +1487,7 @@ def _note_reply_outcome(
             sender_name=str(getattr(person, "full_name", "") or from_addr),
             from_principal=from_principal,
             verified=verified,
+            principal_address=getattr(person, "is_principal", False) is True,
             subject=subject,
             answer=response if from_principal and isinstance(response, str) else "",
         )
@@ -1489,6 +1516,12 @@ async def _send_answer(source: InboundMail, response: Any, to: str, session_id: 
         session_id=session_id,
         details={"channel": "email", "provider": source.source, "to": to, "error": error},
     )
+    # Only an answer in the thread to the sender is the thread's; one
+    # redirected to the principal belongs to their own conversation.
+    if error is None and session_id and in_thread:
+        from openexecutive.integrations import email_replies
+
+        email_replies.record(session_id, to, answer)
     return "answered" if error is None else f"answer not sent: {error}"
 
 

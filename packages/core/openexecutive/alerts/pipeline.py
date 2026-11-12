@@ -251,14 +251,27 @@ async def evaluate_and_dispatch(
     if event.raised_by:
         # One team member's alert never folds into another's card.
         dedup_key = f"raised_by:{(event.from_ or event.raised_by).lower()}:{dedup_key}"
-    topic_tags = _with_department_tag(
-        decision.topic_tags, event.department or event.channel,
-    )
+    from openexecutive.alerts.models import NAMED_TAG_PREFIX
+
+    # Only the event's own list names people (models.named_people): a tag
+    # the triage model wrote is never one.
+    topic_tags = [
+        t for t in _with_department_tag(decision.topic_tags, event.department or event.channel)
+        if not str(t).lower().startswith(NAMED_TAG_PREFIX)
+    ]
     routed_to = _person_id_from_event(event)
+    named = [i for i in dict.fromkeys(event.named_person_ids) if isinstance(i, int) and not isinstance(i, bool)]
     if event.private:
         topic_tags, routed_to, dedup_key, effective_channels = _make_private(
             topic_tags, dedup_key
         )
+        if named:
+            topic_tags = [*topic_tags, *(f"{NAMED_TAG_PREFIX}{i}" for i in named)]
+            # Still the principal's card (routed to them, theirs to act on);
+            # the named people only see it. A different set of readers is a
+            # card of its own: folding it into the open one would keep the
+            # old readers on the new figures.
+            dedup_key = f"{dedup_key}:named:{','.join(str(i) for i in sorted(named))}"
     # Raised inside a research run: stamped with its id, so a demo reset can
     # keep this run's alerts (``monitoring/research/carry.py``).
     research_run = get_research_run_id()
@@ -288,6 +301,10 @@ async def evaluate_and_dispatch(
         dedup_key=dedup_key,
         severity=decision.severity.value,
         body=decision.body,
+        append=event.follow_up,
+        needs=event.needs,
+        question=event.question,
+        choices=event.choices,
         add_tags=run_tags,
         db_path=path,
     )
@@ -323,6 +340,9 @@ async def evaluate_and_dispatch(
         topic_tags=[t for t in topic_tags if not t.startswith("collection:")],
         dedup_key=dedup_key,
         routed_to_person_id=routed_to,
+        needs=event.needs,
+        question=event.question,
+        choices=event.choices,
         db_path=path,
     )
     if alert_id is None:
@@ -349,6 +369,8 @@ async def evaluate_and_dispatch(
         department_slug=decision.department_slug,
         broadcast_integration=decision.broadcast_integration,
     )
+    if event.private and named:
+        await dispatcher.push_to_named(alert, named)
     return decision, alert_id
 
 

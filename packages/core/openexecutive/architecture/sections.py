@@ -262,6 +262,17 @@ SECTIONS: list[SectionSpec] = [
         wants_mermaid=True,
         diagram_kind="flowchart",
     ),
+    # `watch` — unattended ERPNext jobs defined in code, signed as the
+    # `watch` caller. New top-level module; see `watch:` in
+    # architecture-facts.yaml.
+    SectionSpec(
+        id="watch",
+        title="Watch Jobs",
+        sub="Unattended ERPNext runs defined in code: once a day each, a fixed set of reads signed as the job, rules in code, and private notices for the principal.",
+        kb_query="watch jobs unattended erpnext reads watch caller marker runner notices principal once a day",
+        wants_mermaid=True,
+        diagram_kind="flowchart",
+    ),
 ]
 
 

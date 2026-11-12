@@ -289,6 +289,21 @@ def _with_owner(defn: DynamicWorkflowDef) -> dict[str, Any]:
     return {**defn.model_dump(), "owner_person_id": get_owner(defn.name)}
 
 
+def _refuse_unless_creator(
+    defn: DynamicWorkflowDef, request: Request, owner_id: int | None, *, stored: bool = False,
+) -> None:
+    """403 when ``defn`` sends email as its creator or reads their mail and
+    the caller isn't that creator, verified, or it reads and does what a run
+    may not after reading mail (``workflow_email.save_refusal``)."""
+    from openexecutive.delegation.workflow_email import save_refusal
+
+    # The copy being replaced: only who may change it (an edit may be what
+    # takes out a tool it may no longer list).
+    refused = save_refusal(defn, api_caller.caller(request), owner_id, check_tools=not stored)
+    if refused is not None:
+        raise HTTPException(status_code=403, detail=refused)
+
+
 @router.get("/workflows/custom")
 async def list_custom_workflows() -> dict[str, Any]:
     """All dynamic definitions (active and inactive) for the builder UI."""
@@ -311,11 +326,11 @@ async def create_custom_workflow(request: Request) -> dict[str, Any]:
     errors = await validate_definition_and_tools(defn)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
+    owner_person_id = _resolve_caller_person_id(request)
+    _refuse_unless_creator(defn, request, owner_person_id)
     # Insert-only: a create racing another save of the same name is a 409,
     # never a silent overwrite of someone else's workflow (or its owner).
-    stored = save_if_unchanged(
-        defn, None, owner_person_id=_resolve_caller_person_id(request)
-    )
+    stored = save_if_unchanged(defn, None, owner_person_id=owner_person_id)
     if stored is None:
         raise HTTPException(status_code=409, detail=exists)
     _sync_cadence(stored)
@@ -342,6 +357,12 @@ async def update_custom_workflow(name: str, request: Request) -> dict[str, Any]:
     errors = await validate_definition_and_tools(defn)
     if errors:
         raise HTTPException(status_code=422, detail=errors)
+    # Sending as its creator: only they may change it, keeping it or adding it.
+    owner = get_owner(name)
+    _refuse_unless_creator(defn, request, owner)
+    current = get_definition(name)
+    if current is not None:
+        _refuse_unless_creator(current, request, owner, stored=True)
     stored = upsert_definition(defn)
     _sync_cadence(stored)
     return stored.model_dump()
@@ -434,6 +455,9 @@ async def save_designer_edit(name: str, request: Request) -> dict[str, Any]:
         errors = await validate_definition_and_tools(defn)
         if errors:
             raise HTTPException(status_code=422, detail=errors)
+        owner = get_owner(name)
+        _refuse_unless_creator(defn, request, owner)
+        _refuse_unless_creator(original, request, owner, stored=True)
         stored = save_if_unchanged(defn, original)
         if stored is None:
             raise HTTPException(
@@ -447,6 +471,70 @@ async def save_designer_edit(name: str, request: Request) -> dict[str, Any]:
         session.original = stored
     _sync_cadence(stored)
     return _with_owner(stored)
+
+
+def _tapper_person_id(who: Any) -> int | None:
+    """The People entry of a card's tapper: a request's caller, or a chat
+    app's proven tap (``ChatTap``)."""
+    if isinstance(who, api_caller.Caller):
+        return api_caller.person_id_for(who)
+    from openexecutive.people.store import find_person_by_email
+
+    email = str(getattr(who, "email", "") or "")
+    person = find_person_by_email(email) if email else None
+    return person.id if person is not None else None
+
+
+async def apply_chat_change(
+    name: str, definition: dict[str, Any], base: Any, who: Any
+) -> DynamicWorkflowDef:
+    """Save a change chat staged on a card (``orchestrator.workflow_change``),
+    on its person's tap. ``base`` is the version the card was made from: a
+    workflow changed since is a 409, so the tap saves only what the card
+    showed. ``who`` is the tapper (a request's caller, or a chat app's proven
+    tap), checked as a save from the Workflows page is. The on/off state is
+    kept."""
+    from openexecutive.delegation.workflow_email import save_refusal
+    from openexecutive.people.store import is_principal_or_self
+
+    current = get_definition(name)
+    if current is None:
+        raise HTTPException(status_code=404, detail="That workflow isn't there any more.")
+    if not _reviewed_matches(current, base):
+        raise HTTPException(
+            status_code=409,
+            detail="This workflow changed since the card was made, so nothing was changed. Ask again in chat.",
+        )
+    try:
+        defn = DynamicWorkflowDef.model_validate(definition)
+    except ValidationError:
+        raise HTTPException(status_code=422, detail="This change can't be read any more. Ask again in chat.") from None
+    if defn.name != name:
+        raise HTTPException(status_code=422, detail="This change is for a different workflow.")
+    defn = defn.model_copy(update={"is_active": current.is_active})
+    errors = await validate_definition_and_tools(defn)
+    if errors:
+        raise HTTPException(status_code=422, detail="; ".join(errors)[:300])
+    owner = get_owner(name)
+    # The card may be a day old: whoever taps must still be the account owner
+    # or the workflow's creator, as when it was staged.
+    if not is_principal_or_self(_tapper_person_id(who), owner):
+        raise HTTPException(
+            status_code=403,
+            detail="Only the account owner or the person who created this workflow can change it.",
+        )
+    for checked, stored in ((defn, False), (current, True)):
+        refused = save_refusal(checked, who, owner, check_tools=not stored)
+        if refused is not None:
+            raise HTTPException(status_code=403, detail=refused)
+    saved = save_if_unchanged(defn, current)
+    if saved is None:
+        raise HTTPException(
+            status_code=409,
+            detail="This workflow changed while saving, so nothing was changed. Ask again in chat.",
+        )
+    _sync_cadence(saved)
+    return saved
 
 
 @router.post("/workflows/custom/{name}/activate")
@@ -478,6 +566,7 @@ async def activate_custom_workflow(name: str, request: Request) -> dict[str, Any
         errors = await validate_definition_and_tools(current)
         if errors:
             raise HTTPException(status_code=422, detail=errors)
+        _refuse_unless_creator(current, request, get_owner(name))
         # The check above may await the gateway, and chat may run in another
         # process: switch on only if the row is still the revision validated.
         switched = activate_if_unchanged(current)
@@ -563,6 +652,15 @@ async def start_workflow_run(name: str, request: Request) -> StreamingResponse:
         raise HTTPException(
             status_code=403, detail="Runs are kept for people on the People list."
         )
+    from openexecutive.delegation.workflow_reads import owns_runs, run_refusal
+
+    reader = owns_runs(workflow.name)
+    if reader is not None:
+        # Its creator, verified as a save of it is: the stream carries what
+        # their mail said.
+        refused = run_refusal(reader, owner_person_id, api_caller.caller(request))
+        if refused is not None:
+            raise HTTPException(status_code=403, detail=refused)
     from openexecutive.orchestrator.artifact_records import (
         NOBODY,
         pinned_viewer,
@@ -680,7 +778,9 @@ async def start_workflow_run(name: str, request: Request) -> StreamingResponse:
     async def owned_stream():
         # The run's steps read and draft as its owner (nobody for a team
         # run), so no one else's documents reach its output.
-        with pinned_viewer(run_viewer):
+        from openexecutive.delegation.workflow_reads import private_run
+
+        with pinned_viewer(run_viewer), private_run(workflow.name):
             async for chunk in event_stream():
                 yield chunk
 

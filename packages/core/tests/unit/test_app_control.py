@@ -328,7 +328,7 @@ def test_the_catalog_is_whole() -> None:
         if action.needs_tap("x", "on"):
             assert action.card, action.name
     schema = app_control.DO_IN_APP_TOOL["input_schema"]["properties"]["action"]["enum"]
-    assert schema == sorted(catalog.actions)
+    assert schema == sorted(name for name, action in catalog.actions.items() if not action.hidden)
     for name in ("pin_chat", "rename_chat", "delete_chat"):
         assert name in app_control.DO_IN_APP_TOOL["description"]
     for name, action in catalog.actions.items():
@@ -367,6 +367,10 @@ def test_memory_edit_and_delete(roster: dict[str, Any], client: TestClient) -> N
     out = _run(app_control.handle_do_in_app,
                {"action": "edit_memory", "id": f"decision:{decision_id}", "value": "Raise prices 7%"}, session)
     assert out["status"] == "done", out
+    # An edit of a decision is a new standing fact that replaces it.
+    [edited] = episodic.list_decisions()
+    assert edited.summary == "Raise prices 7%"
+    decision_id = edited.id
     out = _run(app_control.handle_do_in_app, {"action": "delete_memory", "id": f"decision:{decision_id}"}, session)
     assert out["status"] == "waiting_for_approval"
     assert client.post(f"/decisions/{out['decision_id']}/approve", json={}, headers=OWNER).status_code == 200

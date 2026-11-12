@@ -200,8 +200,9 @@ def test_memory_extractor_retry_records_its_own_usage(
     ep.initialize_db(db)
     bad_quote = SimpleNamespace(
         type="tool_use", name="store_memories",
-        input={"decisions": [{
-            "summary": "Cut burn", "user_commitment_quote": "we will cut the burn",
+        input={"initiatives": [{
+            "title": "Cut burn", "status": "active", "summary": "Down to 400k",
+            "user_commitment_quote": "we will cut the burn",
         }]},
     )
     first = _response(input_tokens=12, output_tokens=2)
@@ -237,9 +238,14 @@ def fast_provider(monkeypatch: pytest.MonkeyPatch) -> AsyncMock:
     return create
 
 
-def test_briefing_narrative_records_usage(audit: AuditLogger, fast_provider: AsyncMock) -> None:
-    """The morning brief and the /today header both synthesize through here."""
+def test_briefing_narrative_records_usage(
+    audit: AuditLogger, fast_provider: AsyncMock, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The morning brief and the /today header both synthesize through here,
+    on the Executive's model."""
     from openexecutive.briefing.narrative import synthesize_briefing_narrative
+
+    monkeypatch.setattr("openexecutive.briefing.narrative.brief_model", lambda: "claude-exec")
 
     text = asyncio.run(synthesize_briefing_narrative(
         today_data={}, activity=[], period_label="Monday", rendered_context="ctx",
@@ -248,7 +254,7 @@ def test_briefing_narrative_records_usage(audit: AuditLogger, fast_provider: Asy
     assert text == "brief"
     rows = audit.query(event_type="cache_event")
     assert [r.actor for r in rows] == ["briefing_narrative"]
-    assert rows[0].details["model"] == "claude-fast"
+    assert rows[0].details["model"] == "claude-exec"
     assert rows[0].details["input_tokens"] == 50
 
 
