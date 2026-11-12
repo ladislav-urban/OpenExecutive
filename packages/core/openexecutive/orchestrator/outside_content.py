@@ -1455,10 +1455,15 @@ def _is_erpnext_tool(tool_name: object) -> bool:
 
 def _is_erpnext_read(tool_name: object) -> bool:
     """One of ERPNext's pinned read tools (``PINNED_ERPNEXT_TOOLS``); never a
-    draft tool, which the gateway keeps to the approval-card path anyway."""
+    write (``erpnext_caller.is_erpnext_write``: a draft tool, which the gateway
+    keeps to the approval-card path, or a job's proposal, kept to its job)."""
+    from openexecutive.orchestrator.erpnext_caller import is_erpnext_write
     from openexecutive.prompts.connected_systems import PINNED_ERPNEXT_TOOLS
 
-    return isinstance(tool_name, str) and tool_name.strip().lower().replace("-", "_") in PINNED_ERPNEXT_TOOLS
+    if not isinstance(tool_name, str):
+        return False
+    normalized = tool_name.strip().lower().replace("-", "_")
+    return normalized in PINNED_ERPNEXT_TOOLS and not is_erpnext_write(normalized)
 
 
 def _is_erpnext_show(tool_name: object) -> bool:
@@ -1480,7 +1485,9 @@ def _is_marked_erpnext_draft_call(call_input: Any) -> bool:
     if not isinstance(named, str) or not isinstance(arguments, dict):
         return False
     normalized = named.strip().lower().replace("-", "_")
-    if not normalized.startswith(erpnext_caller.DRAFT_TOOL_PREFIX):
+    # A write the draft path marked; never a job's proposal, which no turn
+    # makes (the gateway holds it to proposal_for_job, with no turn bound).
+    if not erpnext_caller.is_erpnext_write(normalized) or normalized in erpnext_caller.ERPNEXT_PROPOSAL_TOOLS:
         return False
     plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
     return erpnext_caller.draft_call_for(normalized, plain) is not None

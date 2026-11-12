@@ -11413,7 +11413,14 @@ integrations:
     erpnext__customer_payment_record (phase 1's collections job; many
     customers' payment behaviour in one call, so never offered to chat),
     and erpnext__bank_lines_to_match and erpnext__bank_line_candidates
-    (phase 2's bank-matching job). The phase 2 pin is aa01ad95, 30 tools:
+    (phase 2's bank-matching job), and erpnext__bank_rule_evidence,
+    erpnext__propose_rule (phase 3's bank-rules job; propose_rule only under
+    its proposal marker) and erpnext__proposed_rules (Home's own read, no
+    job's). Phase 3 pins those three (ladislav-urban/oe_connector#562,
+    TOOLS_DIGEST abbbe630, 33 tools; re-pinned to main's value at merge,
+    1e3c00b2 with #564). POST /audit/log refuses the watch_* rows
+    (CODE_ONLY_EVENT_TYPES): only the app writes them.
+    The phase 2 pin is aa01ad95, 30 tools:
     draft_check takes fill and match, and draft_match_bank_line and
     draft_fill_purchase_invoice are pinned (no card uses the fill yet).
     call_tool refuses them first in its ERPNext block, under every marker and
@@ -12113,6 +12120,86 @@ watch:
     match" when none is set, and month_notices (extra_notices): the
     previous month's approved match cards from the job's own cards, left
     once (runner.raised_ever).
+  bank_rules: |
+    watch.jobs.bank_rules (phase 3, oe_connector's private
+    phase3-lean-rules-plan): weekly, Mondays 10:30 company time
+    (weekdays {0}), one company per job (settings {company}), card_cap_day 3
+    (its notices), no reason step, no model, no tool loop. Its one read is
+    bank_rule_evidence {company $company} (withheld, JOB_WITHHELD_EXCEPTIONS
+    bank-rules): oe_connector's candidates, each {account, direction in/out,
+    word [a-z]{5,30}, lines, months}, counts only, and chain_head {index,
+    row_hash}. listing() is {as_job_user true, reads [bank_rule_evidence]};
+    oe_connector admits its propose_rule for a company that read allows,
+    never listed. build returns nothing. proposals() takes each candidate
+    exactly as the read returned it (anything not that shape dropped, never
+    mended), at most MAX_PROPOSALS 5, as ProposalSpec {company, kind "Bank
+    Transaction Rule", rule {account, word, direction}}; proposal_check holds
+    a proposal to the job's current company and that shape. The runner
+    (_propose_all, after the cards) makes each through
+    erpnext_caller.proposal_for_job: no turn, no other marker, per-person
+    access, the job registered, on and proposing with that tool, its
+    proposal_check, and a place in the day's bound (watch_days.proposals,
+    registry.PROPOSAL_CAP_DAY 5, counted before the call, across runs and
+    restarts). The gateway signs propose_rule as the job's watch caller only
+    under that marker (_check_erpnext_proposal); mint refuses a watch
+    caller's write without it; a job may never list a write as a read.
+    Each proposal names configured_by, the email (erpnext_caller._email_of)
+    of the job row's configured_by_person_id (bank_rules.configurer), as a
+    job card does; proposal_check re-reads it under the marker, and with
+    none nothing is proposed. oe_connector refuses one that differs from
+    its own record of the job and holds that person back from deciding
+    (separation of duties, always on). An oe_connector refusal becomes a code
+    (refusal_code: not_a_candidate, duplicate, cap_open, cap_day,
+    proposals_off, no_listed_account, company_unreadable, not_this_job, else
+    refused) and the run goes on; proposal-cap, the job off or ERPNext not
+    connected stop the rest. RunOutcome.proposed and proposal_refused are in
+    watch_runs.detail. Each proposal's audit row (watch_proposal) keeps its
+    name and its OE Draft seal (row_hash, chain_index), never the word or
+    account. The run's notice to the principal (_proposal_notice) is counts
+    and codes only. read_notices (chain_notices): the head is kept per job
+    and company in watch_chain_heads (settings.get_chain_state,
+    set_chain_head, set_chain_pending). Once a head is kept the read sends
+    seen_index (a second WatchRead, SEEN_SHAPE, local slot $chain_index
+    1..10^9; oe_connector's listing holds the read without it) and
+    oe_connector returns chain_at, the row there or null. Said to the
+    principal: a head behind the baseline (CHAIN_LINE), a longer one whose
+    baseline row is gone or changed (CHAIN_REWRITTEN_LINE), or none fit to
+    keep (no head, index outside 0..10^9, bad hash: CHAIN_GONE_LINE). A head
+    that is fine is kept at once; one that isn't is held as pending with its
+    notice's key and line, said again until that notice was left
+    (runner.raised_ever), and then becomes the baseline the next run and its
+    seen_index compare with, so a chain that keeps growing after an alert is
+    still checked. A proposal call that times out (the runner's or the
+    gateway's timed_out) leaves a
+    watch_proposal row with outcome "unknown" (it may have been written).
+  proposed_rules_home: |
+    integrations.erpnext_rule_proposals: Home's "Needs you" list of the
+    proposed rules still waiting for a System Manager, from oe_connector's
+    proposed_rules (withheld; a person's own caller; oe_connector answers a
+    System Manager only). Read from code only, under
+    erpnext_caller.proposed_rules_as (the active principal, with an email,
+    no turn, no other marker), arguments {}; the gateway signs it as that
+    person only under the marker (_check_home_read) and lets nothing else
+    through it. Each item is kept to oe_connector's shape: status Proposed,
+    kind Bank Transaction Rule, one description word [a-z]{5,30} (bank-line
+    text, shown as text only), transaction_type Withdrawal, Deposit or Any,
+    lines and misses, url only when http(s) /app/ or /desk/
+    (erpnext_drafts._desk_link), proposed to the second; at most 50. Cached
+    per person FRESH_S 300 s. GET /erpnext/proposed-rules reads it for the
+    principal ([] for anyone else); the Needs you count (home_rules
+    "erpnext_rules") uses the last read and never calls ERPNext. The UI
+    (components/ProposedRules.tsx) shows one card each, "To decide", linking
+    to the proposal in the desk; nothing is decided in this app.
+  is_erpnext_write: |
+    erpnext_caller.is_erpnext_write: every erpnext__draft* tool (by prefix)
+    and ERPNEXT_PROPOSAL_TOOLS (erpnext__propose_rule); erpnext_write_tools()
+    is ERPNEXT_WRITE_TOOLS from the pin. It replaces the draft-prefix test
+    where a read is told from a write: _check_watch_read (a watch read never
+    makes a write), _drop_blocked_tools (a write no card uses is hidden),
+    call_tool's marked-call bypass (_marked_write) and caller choice
+    (proposal, then draft, then read), and outside_content (a write is never
+    an ERPNext read; a proposal is never a turn's marked call).
+    draft_executor_run stays draft-only: no approval card runs propose_rule.
   fill_card: |
     integrations.erpnext_fill: the invoice-capture job's fill card,
     oe_connector's draft_fill_purchase_invoice

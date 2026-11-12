@@ -54,6 +54,7 @@ _RUNS_DDL = """CREATE TABLE IF NOT EXISTS {table} (
 RUNS_TABLE = "watch_runs"
 DAYS_TABLE = "watch_days"
 APPROVED_TABLE = "watch_approved"
+HEADS_TABLE = "watch_chain_heads"
 
 _DDL = (
     f"""CREATE TABLE IF NOT EXISTS {JOBS_TABLE} (
@@ -83,6 +84,7 @@ _DDL = (
         amount REAL NOT NULL DEFAULT 0,
         checks INTEGER NOT NULL DEFAULT 0,
         notices INTEGER NOT NULL DEFAULT 0,
+        proposals INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (job, day)
     )""",
     # One row per amount-capped card approved (or claimed for approval: a
@@ -95,6 +97,23 @@ _DDL = (
         amount REAL NOT NULL,
         PRIMARY KEY (job, day, decision_id)
     )""",
+    # The OE Draft chain's head a job keeps per company (its place and hash
+    # only, ``chain_head``), and, while a notice about the chain is being
+    # told, the head seen then (pending_*): it becomes the kept head once
+    # that notice was left (pending_key, the notice's own key; pending_note,
+    # its code-written line, to say again if it wasn't).
+    f"""CREATE TABLE IF NOT EXISTS {HEADS_TABLE} (
+        job TEXT NOT NULL,
+        company TEXT NOT NULL,
+        chain_index INTEGER NOT NULL,
+        row_hash TEXT NOT NULL,
+        seen_on TEXT NOT NULL,
+        pending_index INTEGER,
+        pending_hash TEXT,
+        pending_key TEXT NOT NULL DEFAULT '',
+        pending_note TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (job, company)
+    )""",
 )
 # Columns added after the table first shipped: name -> its definition.
 _RUN_COLUMNS = {"detail": "TEXT NOT NULL DEFAULT '{}'"}
@@ -102,9 +121,17 @@ _DAY_COLUMNS = {
     "amount": "REAL NOT NULL DEFAULT 0",
     "checks": "INTEGER NOT NULL DEFAULT 0",
     "notices": "INTEGER NOT NULL DEFAULT 0",
+    "proposals": "INTEGER NOT NULL DEFAULT 0",
+}
+# watch_chain_heads' columns added after it was first made.
+_HEAD_COLUMNS = {
+    "pending_index": "INTEGER",
+    "pending_hash": "TEXT",
+    "pending_key": "TEXT NOT NULL DEFAULT ''",
+    "pending_note": "TEXT NOT NULL DEFAULT ''",
 }
 # What a day's row counts against a cap (``take_day``).
-DAY_COUNTS = frozenset({"cards", "checks", "notices"})
+DAY_COUNTS = frozenset({"cards", "checks", "notices", "proposals"})
 # The columns a run row had before slots, copied as they are by the migration.
 _PRE_SLOT_COLUMNS = (
     "job", "day", "status", "started_at", "finished_at", "attempts", "cards", "error", "reads",
@@ -168,6 +195,13 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
                 conn.execute(f"ALTER TABLE {RUNS_TABLE} ADD COLUMN {column} {definition}")
             except sqlite3.OperationalError:
                 # Another connection added it meanwhile.
+                logger.debug("watch: column %s already added", column)
+    heads = {row[1] for row in conn.execute(f"PRAGMA table_info({HEADS_TABLE})")}
+    for column, definition in _HEAD_COLUMNS.items():
+        if column not in heads:
+            try:
+                conn.execute(f"ALTER TABLE {HEADS_TABLE} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
                 logger.debug("watch: column %s already added", column)
     days = {row[1] for row in conn.execute(f"PRAGMA table_info({DAYS_TABLE})")}
     for column, definition in _DAY_COLUMNS.items():
@@ -314,6 +348,79 @@ def day_count(job_id: str, day: str, what: str, *, path: Path | None = None) -> 
     finally:
         conn.close()
     return int(row[0] or 0) if row else 0
+
+
+@dataclass(frozen=True)
+class ChainState:
+    """The chain head a job keeps for a company, and the one pending while a
+    notice about it is told (``pending_key`` "" when none is)."""
+
+    index: int
+    row_hash: str
+    pending_index: int | None
+    pending_hash: str | None
+    pending_key: str
+    pending_note: str
+
+
+def get_chain_state(job_id: str, company: str, *, path: Path | None = None) -> ChainState | None:
+    """What the job keeps about the chain for ``company``, or None."""
+    conn = connect(path)
+    try:
+        row = conn.execute(
+            f"SELECT chain_index, row_hash, pending_index, pending_hash, pending_key, pending_note "  # noqa: S608
+            f"FROM {HEADS_TABLE} WHERE job = ? AND company = ?",
+            (job_id, company),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return ChainState(
+        int(row[0]), str(row[1]), int(row[2]) if row[2] is not None else None,
+        str(row[3]) if row[3] is not None else None, str(row[4] or ""), str(row[5] or ""),
+    )
+
+
+def get_chain_head(job_id: str, company: str, *, path: Path | None = None) -> tuple[int, str] | None:
+    """The chain head the job keeps for ``company``, or None."""
+    state = get_chain_state(job_id, company, path=path)
+    return (state.index, state.row_hash) if state is not None else None
+
+
+def set_chain_head(
+    job_id: str, company: str, index: int, row_hash: str, day: str, *, path: Path | None = None,
+) -> None:
+    """Keep ``(index, row_hash)`` as the job's chain head for ``company``,
+    with nothing pending."""
+    conn = connect(path)
+    try:
+        conn.execute(
+            f"INSERT INTO {HEADS_TABLE} (job, company, chain_index, row_hash, seen_on) "  # noqa: S608
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (job, company) DO UPDATE SET "
+            "chain_index = excluded.chain_index, row_hash = excluded.row_hash, seen_on = excluded.seen_on, "
+            "pending_index = NULL, pending_hash = NULL, pending_key = '', pending_note = ''",
+            (job_id, company, index, row_hash, day),
+        )
+    finally:
+        conn.close()
+
+
+def set_chain_pending(
+    job_id: str, company: str, index: int | None, row_hash: str | None, key: str, note: str,
+    *, path: Path | None = None,
+) -> None:
+    """Hold the head seen now (None: none was) as pending while the notice
+    keyed ``key`` is told; the kept head stays until it is left."""
+    conn = connect(path)
+    try:
+        conn.execute(
+            f"UPDATE {HEADS_TABLE} SET pending_index = ?, pending_hash = ?, pending_key = ?, "  # noqa: S608
+            "pending_note = ? WHERE job = ? AND company = ?",
+            (index, row_hash, key, note, job_id, company),
+        )
+    finally:
+        conn.close()
 
 
 def take_failure_notice(job_id: str, day: str, *, path: Path | None = None) -> bool:

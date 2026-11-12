@@ -48,6 +48,7 @@ import { reviewRanLabel } from "@/lib/rhythmCards";
 import InfoTip from "./InfoTip";
 import { ACTION_CARDS_TIP, ActionCardItem, useActionCards } from "./ActionCards";
 import { ErpnextDraftCardItem, useErpnextDraftCards, useErpnextDraftsTip } from "./ErpnextDraftCards";
+import { ProposedRuleItem, useProposedRules } from "./ProposedRules";
 import { INVITE_CARDS_TIP, InviteCardItem, useInviteCards } from "./InviteCards";
 import { REPLIES_WAITING_TIP, ReplyCardItem, useReplyCards } from "./RepliesWaiting";
 import Icon from "./Icon";
@@ -444,6 +445,9 @@ export default function Briefing({ onContinue, onOpenChat, showHeader = false, f
   // ERPNext drafts it prepared at the caller's request, to approve.
   const draftCards = useErpnextDraftCards();
   const draftsTip = useErpnextDraftsTip();
+  // Bank rules the bank-rules job proposed, waiting for a System Manager in
+  // the desk (the principal's own, read as them). Empty for everyone else.
+  const proposedRules = useProposedRules();
   // Meeting invites from people the caller knows, to accept or decline (Act as me).
   const inviteCards = useInviteCards();
   // Solo's own sections load on their own, so their tiles can count them.
@@ -651,6 +655,14 @@ export default function Briefing({ onContinue, onOpenChat, showHeader = false, f
       render: (emphasized: boolean) => (
         <ErpnextDraftCardItem card={card} onGone={draftCards.gone} emphasized={emphasized} />
       ),
+    })),
+    ...proposedRules.map((rule) => ({
+      key: `proposed-rule-${rule.name}`,
+      at: rule.proposed,
+      // Decided in the desk, by a System Manager: never folded or cleared here.
+      keep: true,
+      clear: async () => {},
+      render: (emphasized: boolean) => <ProposedRuleItem rule={rule} emphasized={emphasized} />,
     })),
     ...groupByRequest(mineProposals).map((group): QueueItem => {
       if (group.length > 1) {

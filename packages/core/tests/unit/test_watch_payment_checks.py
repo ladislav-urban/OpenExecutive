@@ -307,6 +307,7 @@ def test_the_bank_tool_opens_to_payment_checks_alone() -> None:
         "payment-checks": frozenset({"erpnext__supplier_bank_changed"}),
         "bank-matching": frozenset({"erpnext__bank_lines_to_match", "erpnext__bank_line_candidates"}),
         "invoice-capture": frozenset({"erpnext__mail_invoices_to_fill", "erpnext__read_attachment"}),
+        "bank-rules": frozenset({"erpnext__bank_rule_evidence", "erpnext__propose_rule"}),
     }
     assert "erpnext__supplier_bank_changed" in ERPNEXT_WITHHELD_TOOLS
     bank = WatchRead("supplier_bank_changed", payment_checks.BANK_SHAPE, payment_checks._bank, "b")

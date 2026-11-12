@@ -177,16 +177,23 @@ ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, 
 # payment-checks job, customers' payment records (phase 1) to the
 # collections job, which reads many customers' payment behaviour at once,
 # and bank lines and their candidate vouchers (phase 2) to the bank-matching
-# job. The gateway refuses
+# job, and the bank rules reconciled lines support, with the one write that
+# proposes one (phase 3), to the bank-rules job. The gateway refuses
 # them on every path but one: a watch job's own read of a tool
 # JOB_WITHHELD_EXCEPTIONS gives that job, under its watch_run marker with
-# exactly that tool bound. Tool search never shows them, and the model is
-# never offered one.
+# exactly that tool bound, or, for propose_rule, its proposal marker
+# (erpnext_caller.proposal_for_job). The proposed rules waiting for a System
+# Manager (proposed_rules) belong to Home's "Needs you", read by code as the
+# principal's own caller, never by a turn. Tool search never shows them, and
+# the model is never offered one.
 ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({
     "erpnext__bank_line_candidates",
     "erpnext__bank_lines_to_match",
+    "erpnext__bank_rule_evidence",
     "erpnext__customer_payment_record",
     "erpnext__mail_invoices_to_fill",
+    "erpnext__propose_rule",
+    "erpnext__proposed_rules",
     "erpnext__read_attachment",
     "erpnext__supplier_bank_changed",
 })
@@ -204,6 +211,10 @@ JOB_WITHHELD_EXCEPTIONS: Mapping[str, frozenset[str]] = MappingProxyType({
     # The drafts a supplier's mail made, and each one's PDF: the
     # invoice-capture job's alone (oe_connector refuses both to anyone else).
     "invoice-capture": frozenset({"erpnext__mail_invoices_to_fill", "erpnext__read_attachment"}),
+    # The bank rules a company's reconciled lines support (counts only), and
+    # the one write a watch job makes, an inert proposal of one: the
+    # bank-rules job's alone (propose_rule only under its proposal marker).
+    "bank-rules": frozenset({"erpnext__bank_rule_evidence", "erpnext__propose_rule"}),
 })
 
 # The tool ERPNext's panel uses to open what an answer talks about beside it
@@ -364,7 +375,7 @@ _ERPNEXT_GUIDE = (
 # it searched; on the pilot it guessed shapes and names, Oct 29, 2026).
 # Written for the pin below: a test fails when the pin moves, so a changed
 # definition gets these lines checked too. Process-constant.
-ERPNEXT_ARGS_WRITTEN_FOR = "aa01ad95cc509014f95649aa1b3f7e433705666c4e02c95957469d0c555ef4e6"
+ERPNEXT_ARGS_WRITTEN_FOR = "abbbe63072ec1c1906832d6a0b2455d3ba3f9ad29057a0fd82e3f56c41862d2a"
 _ERPNEXT_ARGS = (
     "  Their arguments, exactly these names, with objects and lists passed as JSON "
     "values, never as quoted strings: "

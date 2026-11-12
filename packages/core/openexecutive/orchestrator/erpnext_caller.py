@@ -124,11 +124,33 @@ LIFETIME_S = 60
 ASSERTION_ARG = "_oe_caller"
 # The claim oe_connector requires on every draft tool (its caller.py).
 PURPOSE_DRAFT = "draft"
-# Every oe_connector tool that can write starts with this (normalized gateway
-# names). Matched as a prefix, so a draft tool oe_connector adds later is
-# gated here with no list to keep in step.
+# Every oe_connector draft tool starts with this (normalized gateway names).
+# Matched as a prefix, so a draft tool oe_connector adds later is gated here
+# with no list to keep in step. Whether a tool writes is ``is_erpnext_write``.
 DRAFT_TOOL_PREFIX = "erpnext__draft"
 DRAFT_CHECK_TOOL = "erpnext__draft_check"
+# The one oe_connector write whose name isn't a draft's: an inert proposed
+# Bank Transaction Rule the bank-rules job leaves for a System Manager
+# (watch.jobs.bank_rules). Never an approval card's, never a turn's: only its
+# own marker (``proposal_for_job``) lets it through.
+PROPOSE_RULE_TOOL = "erpnext__propose_rule"
+ERPNEXT_PROPOSAL_TOOLS = frozenset({PROPOSE_RULE_TOOL})
+
+
+def is_erpnext_write(normalized: str) -> bool:
+    """Whether a normalized gateway name is one of oe_connector's writes:
+    every ``erpnext__draft*`` tool (by prefix, so one added later is a write
+    too) and the proposal tools. Every place that tells a read from a write
+    asks this, never the prefix alone."""
+    return normalized.startswith(DRAFT_TOOL_PREFIX) or normalized in ERPNEXT_PROPOSAL_TOOLS
+
+
+def erpnext_write_tools() -> frozenset[str]:
+    """``ERPNEXT_WRITE_TOOLS``: the pinned tools that write, as gateway names
+    (every pinned ``draft*`` tool, and ``propose_rule``)."""
+    from openexecutive.orchestrator.erpnext_tool_pin import TOOL_DIGESTS
+
+    return frozenset(name for name in (f"erpnext__{bare}" for bare in TOOL_DIGESTS) if is_erpnext_write(name))
 
 ErpnextCallerKind = Literal["user", "service", "supplier", "watch"]
 # oe_connector's watch.JOB_ID (watch.registry.JOB_ID is the same pattern).
@@ -308,7 +330,12 @@ def draft_executor_run(tool: str, arguments: dict[str, Any], approver_email: str
     """Mark the one draft call (``tool`` with exactly ``arguments``) the card
     executor makes for an approved card, run as ``approver_email``. Code only."""
     email = approver_email.strip().lower()
-    if "@" not in email or not tool.startswith(DRAFT_TOOL_PREFIX + "_") or tool == DRAFT_CHECK_TOOL:
+    # A draft tool only: of oe_connector's writes (is_erpnext_write), a
+    # proposal is a watch job's alone (proposal_for_job), never a card's.
+    if (
+        "@" not in email or not is_erpnext_write(tool) or tool in ERPNEXT_PROPOSAL_TOOLS
+        or not tool.startswith(DRAFT_TOOL_PREFIX + "_") or tool == DRAFT_CHECK_TOOL
+    ):
         raise ValueError("a draft is created by a draft tool, as the person who approved it")
     return _marked(DraftCall(tool, arguments_digest(arguments), ErpnextCaller("user", email)))
 
@@ -442,6 +469,11 @@ def job_check_call() -> DraftCall | None:
     return call if call is not None and call.unattended else None
 
 
+def draft_marker_set() -> bool:
+    """Whether any draft marker is set (a card's, a tap's, a job's check)."""
+    return _draft_call.get() is not None
+
+
 def job_check_refusal(call: DraftCall) -> str | None:
     """At call time, why a job's check may not be signed, or None: the
     reviewer read again from People (an email changed, or someone else
@@ -484,13 +516,16 @@ class WatchRefused(Exception):
 
 def other_marker_bound() -> bool:
     """Whether any marker but a watch read's is set: the brief's, the
-    oversight export's, the answer check's, a supplier's or a draft's."""
+    oversight export's, the answer check's, a supplier's, a draft's, a
+    job's proposal or Home's read."""
     return bool(
         _brief_run.get()
         or _oversight_run.get()
         or _answer_check_run.get()
         or _supplier_run.get()
         or _draft_call.get() is not None
+        or _proposal_call.get() is not None
+        or _home_read.get() is not None
     )
 
 
@@ -548,6 +583,151 @@ def watch_run(job_id: str, tool: str, arguments: dict[str, Any], *, today: date 
 def watch_call() -> WatchCall | None:
     """The watch read being made, or None outside one."""
     return _watch_call.get()
+
+
+@dataclass(frozen=True)
+class ProposalCall:
+    """The one proposal a watch job's runner is about to leave: the job, the
+    gateway tool and the digest of its exact arguments."""
+
+    job: str
+    tool: str
+    digest: str
+
+
+_proposal_call: ContextVar[ProposalCall | None] = ContextVar("erpnext_proposal_call", default=None)
+
+
+@contextmanager
+def proposal_for_job(job_id: str, tool: str, arguments: dict[str, Any], *, day: str) -> Iterator[None]:
+    """Mark the one proposal (gateway ``tool`` with exactly ``arguments``) a
+    watch job's runner leaves for a person to decide on in ERPNext, signed as
+    that job's ``watch`` caller. Code only: no tool sets it.
+
+    Raises ``WatchRefused`` under a turn's session or any other marker (a
+    watch read's included: it never nests), without per-person access,
+    unless ``job_id`` is registered, on and proposes with ``tool``, unless
+    the job's own ``proposal_check`` accepts ``arguments`` under its current
+    settings, and past the day's bound (``registry.PROPOSAL_CAP_DAY``,
+    counted in ``watch_days``, so a restart never resets it)."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.watch import registry
+    from openexecutive.watch.settings import effective_settings, get_row, job_enabled, take_day
+
+    if current_session.get() is not None:
+        raise WatchRefused("proposal-in-turn")
+    if other_marker_bound() or _watch_call.get() is not None:
+        raise WatchRefused("proposal-with-other-marker")
+    setting = signing_setting()
+    if not setting:
+        raise WatchRefused("watch-needs-keys")
+    try:
+        load_private_key(setting)
+    except ValueError:
+        raise WatchRefused("key-malformed") from None
+    job = registry.get(job_id)
+    if job is None or job.proposals is None or job.proposal_check is None:
+        raise WatchRefused("watch-unknown-job")
+    if tool != job.proposal_gateway_tool or tool not in ERPNEXT_PROPOSAL_TOOLS:
+        raise WatchRefused("proposal-tool")
+    if not job_enabled(job.id):
+        raise WatchRefused("watch-job-off")
+    plain = {k: v for k, v in arguments.items() if k != ASSERTION_ARG}
+    try:
+        fits = job.proposal_check(effective_settings(job, get_row(job.id)), plain) is True
+    except Exception:
+        fits = False
+    if not fits:
+        raise WatchRefused("proposal-arguments")
+    try:
+        taken = take_day(job.id, day, "proposals", 1, registry.PROPOSAL_CAP_DAY) == 1
+    except Exception:
+        logger.warning("erpnext_caller: couldn't count job %s's proposal — refusing", job.id, exc_info=True)
+        taken = False
+    if not taken:
+        raise WatchRefused("proposal-cap")
+    token = _proposal_call.set(ProposalCall(job.id, tool, arguments_digest(plain)))
+    try:
+        yield
+    finally:
+        _proposal_call.reset(token)
+
+
+def proposal_call() -> ProposalCall | None:
+    """The proposal being left (``proposal_for_job``), or None outside one."""
+    return _proposal_call.get()
+
+
+def proposal_call_for(tool: str, arguments: dict[str, Any]) -> ProposalCall | None:
+    """The proposal marker covering exactly this call (normalized ``tool``,
+    the arguments without any assertion), or None."""
+    call = _proposal_call.get()
+    if call is None or call.tool != tool or call.digest != arguments_digest(arguments):
+        return None
+    return call
+
+
+# The proposed rules waiting for a System Manager (oe_connector's
+# proposed_rules): Home's "Needs you" reads them from code, as the principal's
+# own caller, never a turn (connected_systems.ERPNEXT_WITHHELD_TOOLS).
+PROPOSED_RULES_TOOL = "erpnext__proposed_rules"
+
+
+@dataclass(frozen=True)
+class HomeRead:
+    """The one read Home's code makes as a person: the gateway tool, the
+    digest of its exact arguments, and who it runs as."""
+
+    tool: str
+    digest: str
+    caller: ErpnextCaller
+
+
+_home_read: ContextVar[HomeRead | None] = ContextVar("erpnext_home_read", default=None)
+
+
+@contextmanager
+def proposed_rules_as(arguments: dict[str, Any], person: Any) -> Iterator[None]:
+    """Mark the one ``erpnext__proposed_rules`` call with exactly
+    ``arguments`` that Home makes for ``person``, as their own ERPNext user,
+    with no turn. Code only. Raises ``WatchRefused`` unless ``person`` is the
+    active principal with an email (oe_connector answers a System Manager
+    only), without per-person access, or under a turn or any other marker."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    if current_session.get() is not None:
+        raise WatchRefused("home-read-in-turn")
+    if other_marker_bound() or _watch_call.get() is not None or _home_read.get() is not None:
+        raise WatchRefused("home-read-with-other-marker")
+    email = _email_of(person)
+    if not email or getattr(person, "is_principal", False) is not True or getattr(person, "active", False) is not True:
+        raise WatchRefused("home-read-not-principal")
+    setting = signing_setting()
+    if not setting:
+        raise WatchRefused("watch-needs-keys")
+    try:
+        load_private_key(setting)
+    except ValueError:
+        raise WatchRefused("key-malformed") from None
+    plain = {k: v for k, v in arguments.items() if k != ASSERTION_ARG}
+    token = _home_read.set(HomeRead(PROPOSED_RULES_TOOL, arguments_digest(plain), ErpnextCaller("user", email)))
+    try:
+        yield
+    finally:
+        _home_read.reset(token)
+
+
+def home_read() -> HomeRead | None:
+    """Home's read being made (``proposed_rules_as``), or None."""
+    return _home_read.get()
+
+
+def home_read_for(tool: str, arguments: dict[str, Any]) -> HomeRead | None:
+    """Home's read marker covering exactly this call, or None."""
+    call = _home_read.get()
+    if call is None or call.tool != tool or call.digest != arguments_digest(arguments):
+        return None
+    return call
 
 
 class CallerRefused(Exception):
@@ -746,6 +926,12 @@ def mint(
             raise ValueError("a watch caller is named by its job's id")
         if purpose is not None or tool.startswith("draft"):
             raise ValueError("a watch job only reads: no draft tool, no purpose")
+        if is_erpnext_write(f"erpnext__{tool}"):
+            # Its one write is a proposal, only inside that job's own marker
+            # for exactly these arguments.
+            marked = proposal_call_for(f"erpnext__{tool}", {k: v for k, v in arguments.items() if k != ASSERTION_ARG})
+            if marked is None or marked.job != caller.job:
+                raise ValueError("a watch job writes only the proposal its runner marked")
     elif caller.job:
         raise ValueError("only a watch caller names a job")
     if caller.kind == "user" and "@" not in caller.email:

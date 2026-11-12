@@ -3147,6 +3147,31 @@ export async function getErpnextDraftCards(signal?: AbortSignal): Promise<Erpnex
   return body.cards;
 }
 
+// A bank rule the bank-rules job proposed, waiting for a System Manager
+// (GET /erpnext/proposed-rules). `word` is bank-line text: shown as text only.
+export interface ProposedRule {
+  name: string;
+  kind: string;
+  company: string;
+  account: string;
+  transaction_type: string;
+  word: string;
+  lines: number;
+  misses: number;
+  url: string;
+  proposed: string;
+}
+
+// [] for anyone but the principal, a principal who isn't a System Manager,
+// or a backend without them (404).
+export async function getProposedRules(signal?: AbortSignal): Promise<ProposedRule[]> {
+  const res = await fetch(`${API_BASE}/erpnext/proposed-rules`, { signal });
+  if (res.status === 403 || res.status === 404) return [];
+  if (!res.ok) throw await delegationError(res, "Couldn't load the proposed rules.");
+  const body = (await res.json()) as { rules: ProposedRule[] };
+  return body.rules;
+}
+
 export async function approveErpnextDraft(id: number): Promise<ErpnextDraftCreated | null> {
   const res = await fetch(`${API_BASE}/decisions/${id}/approve`, {
     method: "POST",

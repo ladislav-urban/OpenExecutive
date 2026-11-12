@@ -192,6 +192,10 @@ class RunOutcome:
     # Items of a may-fail read ERPNext refused this run (a file it couldn't
     # read): never a card, counted so the run says so.
     unread: int = 0
+    # Its proposals (``_propose_all``): how many ERPNext wrote, and each
+    # refusal's code with its count.
+    proposed: int = 0
+    proposal_refused: dict[str, int] = field(default_factory=dict)
 
     def detail(self) -> dict[str, Any]:
         """What ``watch_runs.detail`` keeps: codes and counts only."""
@@ -203,6 +207,9 @@ class RunOutcome:
             out["routed_principal"] = self.routed_principal
         if self.unread:
             out["unread"] = self.unread
+        if self.proposed or self.proposal_refused:
+            out["proposed"] = self.proposed
+            out["proposal_refused"] = dict(sorted(self.proposal_refused.items()))
         return out
 
 
@@ -583,6 +590,12 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             specs.extend(job.extra_notices(settings, today))
         except Exception:
             logger.warning("watch: job %s's own notices couldn't be read this run", job.id)
+    if job.read_notices is not None:
+        # Likewise, from its reads with this install's own record of them.
+        try:
+            specs.extend(job.read_notices(tuple(results), settings, today))
+        except Exception:
+            logger.warning("watch: job %s's notices from its reads couldn't be made this run", job.id)
     if not all(
         isinstance(s, registry.CardSpec | registry.DraftSpec) and isinstance(s.key, str) and s.key for s in specs
     ):
@@ -603,6 +616,10 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     made = await cards.leave_drafts(job, day, row, run_route, drafts, reasons)
     outcome.draft_cards, outcome.draft_repeats, outcome.draft_capped = made.left, made.repeats, made.capped
     outcome.checks, outcome.check_refused = made.checks, made.check_refused
+    if job.proposals is not None:
+        told = await _propose_all(job, day, tuple(results), settings, today, outcome)
+        if told is not None:
+            notices = [*notices, told]
     to = run_route.person_id
     if made.all_refused_for_permissions:
         # Nothing the reviewer could act on: the principal hears of it.
@@ -637,6 +654,143 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         ) is not None:
             outcome.cards += 1
     return outcome
+
+
+# --------------------------------------------------------------------------- #
+# Proposals
+# --------------------------------------------------------------------------- #
+
+_SEAL_RE = re.compile(r"[0-9a-f]{64}")
+_PROPOSAL_NAME_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f]{1,140}")
+
+
+async def _propose_all(
+    job: registry.WatchJob, day: str, results: tuple[Mapping[str, Any], ...], settings: registry.Settings,
+    today: date, outcome: RunOutcome,
+) -> registry.CardSpec | None:
+    """Leave the job's proposals (``job.proposals``), each through its own
+    marker, and return the run's notice of them for the principal (counts and
+    codes only), or None when it tried none. A refusal is counted by its code
+    and never stops the run; the day's bound stops the rest."""
+    try:
+        specs = list((job.proposals or (lambda *_: ()))(results, settings, today))
+    except Exception:
+        logger.warning("watch: job %s's proposals couldn't be built this run", job.id)
+        specs = []
+    specs = [s for s in specs if isinstance(s, registry.ProposalSpec)][:registry.PROPOSAL_CAP_DAY]
+    for spec in specs:
+        code = await _propose(job, day, spec)
+        if code == "":
+            outcome.proposed += 1
+            continue
+        outcome.proposal_refused[code] = outcome.proposal_refused.get(code, 0) + 1
+        if code in ("proposal-cap", "watch-job-off", "erpnext_not_connected"):
+            break
+    return _proposal_notice(job, day, outcome.proposed, outcome.proposal_refused)
+
+
+async def _propose(job: registry.WatchJob, day: str, spec: registry.ProposalSpec) -> str:
+    """One proposal under its marker: "" when ERPNext wrote it, else a
+    refusal code (never ERPNext's text). Never raises."""
+    from openexecutive.orchestrator import erpnext_caller
+    from openexecutive.orchestrator.mcp_gateway import gateway_server_names, get_active_gateway
+    from openexecutive.prompts.connected_systems import ERPNEXT_SERVER
+
+    gateway = get_active_gateway()
+    if gateway is None or ERPNEXT_SERVER not in gateway_server_names(gateway):
+        return "erpnext_not_connected"
+    tool = job.proposal_gateway_tool
+    arguments = json.loads(json.dumps(dict(spec.arguments)))
+    try:
+        with erpnext_caller.proposal_for_job(job.id, tool, arguments, day=day):
+            raw = await asyncio.wait_for(
+                gateway.call_tool({"name": tool, "arguments": arguments}), timeout=CALL_TIMEOUT_S,
+            )
+    except erpnext_caller.WatchRefused as refused:
+        return refused.reason
+    except TimeoutError:
+        # It may still have been written in ERPNext: recorded as unknown.
+        _audit_proposal(job, day, spec, name="", seal="", place=0, outcome="unknown")
+        return "timeout"
+    except Exception:
+        _audit_proposal(job, day, spec, name="", seal="", place=0, outcome="unknown")
+        return "unanswered"
+    try:
+        result = json.loads(raw)
+    except (TypeError, ValueError, RecursionError):
+        return _proposal_refusal(job, raw)
+    if isinstance(result, dict) and result.get("timed_out") is True:
+        # The gateway's own ceiling: it may still have been written.
+        _audit_proposal(job, day, spec, name="", seal="", place=0, outcome="unknown")
+        return "timeout"
+    if not isinstance(result, dict) or "error" in result or result.get("ok") is not True:
+        return _proposal_refusal(job, result.get("error") if isinstance(result, dict) else "")
+    name, seal, place = result.get("name"), result.get("row_hash"), result.get("chain_index")
+    _audit_proposal(
+        job, day, spec,
+        name=name if isinstance(name, str) and _PROPOSAL_NAME_RE.fullmatch(name) else "",
+        seal=seal if isinstance(seal, str) and _SEAL_RE.fullmatch(seal) else "",
+        place=place if isinstance(place, int) and not isinstance(place, bool) and place > 0 else 0,
+    )
+    return ""
+
+
+def _proposal_refusal(job: registry.WatchJob, said: object) -> str:
+    """A refused proposal's code: the job's own reading of oe_connector's text
+    (only searched, never kept), else "refused"."""
+    try:
+        code = job.proposal_refusal(said) if job.proposal_refusal is not None else "refused"
+    except Exception:
+        code = "refused"
+    return code if isinstance(code, str) and re.fullmatch(r"[a-z_-]{1,40}", code) else "refused"
+
+
+def _audit_proposal(
+    job: registry.WatchJob, day: str, spec: registry.ProposalSpec, *, name: str, seal: str, place: int,
+    outcome: str = "proposed",
+) -> None:
+    """A proposal's audit row: the proposal's name in ERPNext and its seal in
+    the OE Draft chain (kept here too, as a card's is, so the two records
+    check each other), or ``outcome`` "unknown" when the call didn't answer
+    and may still have been written. Never the rule's word or account."""
+    from openexecutive.audit import log_event
+
+    said = f"proposed {name or 'a rule'}" if outcome == "proposed" else "may have proposed a rule"
+    log_event(
+        "watch_proposal",
+        f"Watch job {job.id} {said} in ERPNext for {day}",
+        actor=f"watch:{job.id}",
+        details={
+            "job": job.id, "day": day, "key": hashlib.sha256(spec.key.encode("utf-8")).hexdigest()[:16],
+            "outcome": outcome, "name": name, **({"row_hash": seal, "chain_index": place} if seal else {}),
+        },
+        private=True,
+    )
+
+
+def _proposal_notice(
+    job: registry.WatchJob, day: str, proposed: int, refused: Mapping[str, int],
+) -> registry.CardSpec | None:
+    """The run's one notice for the principal, in code's words: how many it
+    proposed and why the others weren't, as counts and codes."""
+    if not proposed and not refused:
+        return None
+    lines = []
+    if proposed:
+        lines.append(
+            f"{proposed} {job.card_noun} left in ERPNext for a System Manager to enable or dismiss. "
+            "Nothing changes in ERPNext until someone enables one."
+        )
+    if refused:
+        said = ", ".join(f"{code} {n}" for code, n in sorted(refused.items()))
+        lines.append(f"Not proposed: {said}.")
+    return registry.CardSpec(
+        key=f"proposals:{day}",
+        summary=f"{job.title}: {proposed} proposed" if proposed else f"{job.title}: nothing proposed",
+        notes=tuple(lines),
+        count=proposed,
+        to_principal=True,
+    )
 
 
 def principal_first(notices: list[registry.CardSpec]) -> list[registry.CardSpec]:
