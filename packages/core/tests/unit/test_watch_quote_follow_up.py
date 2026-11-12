@@ -188,8 +188,8 @@ def test_quote_follow_up_is_listed_each_weekday_morning_with_its_shared_reads() 
                 {**SETTINGS, "assign_to": " buyer@co.example"}, {**SETTINGS, "assign_to": 5}):
         with pytest.raises(registry.SettingsError):
             registry.check_settings(JOB, bad)
-    # Every other job keeps a finding once a day.
-    assert [j.id for j in registry._LISTED if j.once] == ["quote-follow-up"]
+    # Every other job but late deliveries keeps a finding once a day.
+    assert [j.id for j in registry._LISTED if j.once] == ["quote-follow-up", "late-deliveries"]
 
 
 def test_no_read_lists_a_list_inside_a_list_or_a_sensitive_doctype() -> None:

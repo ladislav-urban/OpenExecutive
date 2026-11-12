@@ -11765,7 +11765,8 @@ watch:
     figure or a card's field (a model writes only reason lines). Listed:
     collections (watch.jobs.collections), payment checks
     (watch.jobs.payment_checks), quote follow-up
-    (watch.jobs.quote_follow_up), bank matching
+    (watch.jobs.quote_follow_up), late deliveries
+    (watch.jobs.late_deliveries), bank matching
     (watch.jobs.bank_matching, phase 2) and invoice capture
     (watch.jobs.invoice_capture, phase 2).
   registry: |
@@ -11822,7 +11823,8 @@ watch:
     job runs each day, in order, the first its schedule; empty: once a day)
     and weekdays (0 Monday to 6 Sunday); due_slots(now, weekday) gives the
     keys ("HH:MM", "" for a daily job) due by now. once (default False):
-    each finding raised once ever, not once a day: after a notice of the
+    each finding raised once ever, not once a day (a job that wants once
+    a week puts the ISO week in the finding key, as late-deliveries does): after a notice of the
     job is left, runner._mark_told records its key, its rows' keys and
     CardSpec.counted (findings it counts without naming) as dedup_key
     digests in watch_told; the job's rules read them back with
@@ -11848,7 +11850,7 @@ watch:
     reviewer's notices by runner._without_rows), and a notice whose key was
     told before isn't left again. JOBS is a read-only
     mapping of _LISTED (collections, payment-checks, bank-matching,
-    invoice-capture, quote-follow-up),
+    invoice-capture, quote-follow-up, late-deliveries),
     imported at the
     module's end (watch.jobs imports the registry first); the test job
     watch.jobs._example is put in by tests only.
@@ -12317,6 +12319,68 @@ watch:
     (currency [A-Z]{3}, customer equal to its settled clean, reference
     nameable) naming reference_name (one line, no control characters, at most 1000),
     allocated_to equal to assignee() now, and _todo's output unchanged.
+  late_deliveries: |
+    watch.jobs.late_deliveries: 07:15, weekdays 0-4, company time;
+    card_cap_day 5; once True with the finding key po:<name>:<ISO week>
+    (YYYY-Www), so an order is raised once a week while late; no
+    reason_schema (no model call); card_noun "chase tasks"; settings
+    company, min_days_late 2 (1-60), assign_to "" (an ERPNext user;
+    empty: the reviewer), skip_suppliers [] (0-50 names). Two reads (in
+    watch_job_vectors.json with shape cases, and the shared
+    watch_shape_vectors.json cases, matching oe_connector's
+    watch_shape_vectors and watch_users.JOB_ACCESS["late-deliveries"]:
+    read Purchase Order, Purchase Receipt, Supplier, Company; report
+    Supplier Delivery Record): list_records Purchase Order (name,
+    supplier, status, transaction_date, schedule_date, per_received,
+    grand_total, currency, items.item_code, items.qty,
+    items.received_qty, items.schedule_date) with {company, docstatus 1,
+    per_received ["<", 100], schedule_date ["<", today]}, limit 500, a
+    row per order and line; run_report Supplier Delivery Record with
+    {company, from_date today - 365, to_date today}, no limit (the
+    tool's default), derived and skipped when no order counts. No list
+    in a list: Closed, On Hold and Completed are dropped in code from
+    status. A line's fields are read under items.<field> or the bare
+    name (frappe's child-field select keeps the bare column name, so a
+    bare schedule_date is the line's). Rules: a line is late when
+    qty - received_qty > 0 and its schedule_date < today; an order's
+    days = today - its oldest late line's date, counted when >=
+    min_days_late; skip_suppliers dropped; days desc, grand_total desc,
+    name. The supplier's record from the report's lines_received,
+    lines_late and average_days_late (whole counts, late <= lines,
+    finite average, else the row is left out): RECORD_LATE "late on N of
+    M lines in 12 months, X days on average", RECORD_ON_TIME, RECORD_NONE
+    "no receipts in 12 months" (no row or no lines), RECORD_UNREAD "not
+    read this run" when the report was truncated. Outputs: one CardSpec
+    "Late deliveries" (key late:<company>:<day>, up to 10 rows keyed
+    po:<name>:<week> with supplier, order, days late, due, missing (3
+    lines, then a count), value, status, record; count the new ones;
+    notes for more than 10, read 1 cut, record cut); a DraftSpec ToDo
+    create per late order (fields description from TEMPLATE with the
+    supplier and the first late line's item through settled (runner.clean
+    until stable, 140), allocated_to assign_to or the reviewer's
+    normalized email (late_deliveries.assignee, read again at check),
+    priority High when days > 7 else Medium, date today, reference_type
+    Purchase Order, reference_name; expect reference "Purchase Order
+    <name>" and the description; notice its row with KEPT_LINE, told
+    only when ERPNext kept it from the reviewer). No DraftSpec when read
+    1 was truncated, for a name not nameable, for a description the
+    template's own regex doesn't take (a quantity past 10 digits), or for
+    an order on_earlier_card finds (a live or executing card of the job
+    on that Purchase Order whose dedup_key isn't this week's), so a card
+    left late one week isn't doubled the next. Within the week the card
+    store's once rules hold (tried, approved, dismissed and no_answer
+    hold; expired and job_changed are re-carded). check_fields: create
+    ToDo only, exactly the six ToDo fields, reference a Purchase Order,
+    High or Medium, description matching _TEMPLATE_RE (the record one of
+    code's four forms) naming reference_name, supplier and item equal to
+    their settled clean, reference nameable, one line, no control
+    characters, at most 1000, allocated_to equal to assignee() now, and
+    _todo's output unchanged. The chase note is text the buyer sends
+    from their own mail: no mail path. Not done here: a ToDo still open
+    in ERPNext for the order isn't seen here (no read of ToDo); only
+    oe_connector's draft_check could refuse a second one. Known residual, as payment checks:
+    a row reaches the reviewer's notice when its card's check doesn't run
+    that run.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds
