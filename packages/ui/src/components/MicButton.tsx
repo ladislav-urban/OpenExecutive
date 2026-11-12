@@ -71,7 +71,7 @@ export default function MicButton({ disabled, onText, onError }: Props) {
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch {
-      onError("Open Executive can't use the microphone. Allow it in your browser's site settings.");
+      onError("This app can't use the microphone. Allow it in your browser's site settings.");
       return;
     }
     const type = pickRecordingType((t) => MediaRecorder.isTypeSupported(t));

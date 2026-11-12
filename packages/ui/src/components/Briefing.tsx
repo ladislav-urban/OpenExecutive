@@ -1,5 +1,6 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -179,6 +180,7 @@ interface PanelView {
 
 export default function Briefing({ onContinue, onOpenChat, showHeader = false, firstName, banner, panel }: BriefingProps) {
   const router = useRouter();
+  const product = useProductName();
   // Solo (one person, just for themselves): no departments, roster or
   // cross-team lanes — see the `solo` branches below.
   const { mode } = useWorkspace();
@@ -986,8 +988,8 @@ export default function Briefing({ onContinue, onOpenChat, showHeader = false, f
                 type="text"
                 value={askText}
                 onChange={(e) => setAskText(e.target.value)}
-                placeholder="Ask your Executive anything…"
-                aria-label="Ask your Executive"
+                placeholder={`Ask ${product} anything…`}
+                aria-label={`Ask ${product}`}
                 className="min-w-0 flex-1 bg-transparent py-2 text-base text-fg placeholder:text-fg-muted focus:outline-none"
               />
               <button

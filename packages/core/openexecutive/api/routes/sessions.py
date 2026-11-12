@@ -708,7 +708,7 @@ async def rewind_session(session_id: str, body: RewindRequest, request: Request)
         raise HTTPException(status_code=409, detail="The last message is someone else's, so it can't be redone.")
     lock = await _acquire_session_turn(session_id, 0.5)
     if lock is None:
-        raise HTTPException(status_code=409, detail="The Executive is still answering in this chat.")
+        raise HTTPException(status_code=409, detail="Still answering in this chat.")
     try:
         asked = rewind_last_turn(session_id, body.last_message_id)
     finally:
