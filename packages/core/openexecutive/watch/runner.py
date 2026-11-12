@@ -613,9 +613,16 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # ERPNext refused the reviewer's check, the cap) is told as its notice.
     # One ERPNext kept from the reviewer is told to the principal, never back
     # to the reviewer it was kept from.
+    # A finding already shown as a notice's row isn't told again on its own,
+    # unless ERPNext kept it from the reviewer: then its row comes off the
+    # reviewer's notice and its own notice goes to the principal. A once
+    # job's finding is told on its own only then: its rows say the rest.
+    notices = _without_rows(notices, made.kept_from_reviewer)
+    rows = {item.key for spec in notices for item in spec.items}
     notices = notices + [
         dataclasses.replace(s.notice, to_principal=True) if s.key in made.kept_from_reviewer else s.notice
-        for s in made.unproposed if s.notice is not None
+        for s in made.unproposed
+        if s.notice is not None and (s.key in made.kept_from_reviewer or (s.key not in rows and not job.once))
     ]
     # The cap counts attempts a day across the job's slots (watch_days), not
     # successes, so a notice that fails to store never lets another finding
@@ -623,9 +630,10 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # The principal's notices take their places first, so a morning's
     # findings never use up the day before a check kept from the reviewer.
     ordered = principal_first(notices)
+    told_before = told(job, [spec.key for spec in ordered]) if job.once and ordered else set()
     for n, spec in enumerate(ordered):
         key = dedup_key(job.id, spec.key)
-        if _still_open(key) or _raised_today(key, day):
+        if _still_open(key) or _raised_today(key, day) or spec.key in told_before:
             outcome.repeats += 1
             continue
         if take_day(job.id, day, "notices", 1, job.card_cap_day) == 0:
@@ -640,6 +648,25 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             if job.once:
                 _mark_told(job, day, spec)
     return outcome
+
+
+def _without_rows(notices: list[registry.CardSpec], kept: set[str]) -> list[registry.CardSpec]:
+    """``notices`` without the rows of findings ERPNext kept from the
+    reviewer (``DraftOutcome.kept_from_reviewer``); a notice left with no
+    row and nothing it counts is dropped."""
+    if not kept:
+        return notices
+    out: list[registry.CardSpec] = []
+    for spec in notices:
+        items = tuple(item for item in spec.items if item.key not in kept)
+        if len(items) == len(spec.items):
+            out.append(spec)
+            continue
+        if not items and not spec.counted:
+            continue
+        gone = len(spec.items) - len(items)
+        out.append(dataclasses.replace(spec, items=items, count=max(spec.count - gone, 0) if spec.count else 0))
+    return out
 
 
 def _mark_told(job: registry.WatchJob, day: str, spec: registry.CardSpec) -> None:

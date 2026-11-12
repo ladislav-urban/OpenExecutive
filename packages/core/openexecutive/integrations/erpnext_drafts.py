@@ -1351,8 +1351,8 @@ SOD_JOB_TEXT = "You set up this job, so someone else approves its cards. Nothing
 CONFIGURER_MARKERS = ("ERPNext records no one as having set up the job", "in oe_connector_watch_jobs. Nothing was made")
 CONFIGURER_TEXT = (
     "The ERP doesn't record the person who set up this job as the one this card names, so nothing was made and "
-    "the card is closed. An ERP operator records the job's configurer; the next "
-    "run proposes it again."
+    "the card is closed. An ERP operator records the job's configurer; a later "
+    "run proposes it again while it's still due."
 )
 
 

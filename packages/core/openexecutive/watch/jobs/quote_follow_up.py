@@ -115,11 +115,17 @@ TEMPLATE = (
     "and what would win it. If it's lapsed, offer to re-quote at today's prices."
 )
 _TEMPLATE_RE = re.compile(
-    r"Call (?P<customer>.{1,140}) about (?P<quotation>\S{1,140}) \((?P<value>-?[\d,]+\.\d\d(?: \S{1,10})?), "
+    r"Call (?P<customer>.{1,140}) about (?P<quotation>\S{1,140}) \((?P<value>-?[\d,]+\.\d\d(?: [A-Z]{3})?), "
     r"valid till (?P<valid_till>\d{4}-\d{2}-\d{2})\): ask whether it's still wanted, and what would win it\. "
     r"If it's lapsed, offer to re-quote at today's prices\."
 )
 _CONTROL = re.compile(r"[\x00-\x1f\x7f-\x9f]")
+# A currency as a ToDo names it: ISO 4217's three capitals, else left out.
+_CURRENCY_RE = re.compile(r"[A-Z]{3}")
+KEPT_LINE = (
+    "The ERP didn't let the job's reviewer prepare its task, so it is told here: follow it up in the ERP, "
+    "or give the reviewer access to the quotation."
+)
 LEADS_LINE = "{n} more to leads, not named."
 QUOTES_CUT_LINE = "Not every quotation could be read this run, so some may not be shown."
 ORDERS_CUT_LINE = (
@@ -268,11 +274,15 @@ def customers_to_check(result: Mapping[str, Any], settings: Settings, today: dat
     """The customers whose orders read 2 asks for (the most pressing
     quotations' first, at most ``MAX_LIST``), whether more were cut, and the
     oldest of their quotations' dates."""
+    from openexecutive.watch.registry import _slot_holds
+
     order: list[str] = []
     oldest: date | None = None
     for follow in candidates(result, settings, today):
         quote = follow.quote
-        if not quote.to_customer:
+        # An id the slot wouldn't take (an invisible character in it) is
+        # never asked about: its quotations stay unchecked, with no task.
+        if not quote.to_customer or not _slot_holds("$customers", [quote.customer], today):
             continue
         if quote.customer not in order:
             order.append(quote.customer)
@@ -337,22 +347,66 @@ def _when(follow: FollowUp) -> str:
     return f"{follow.days} day{'s' if follow.days != 1 else ''} left"
 
 
-def _customer_text(quote: Quote) -> str:
-    """The customer as the ToDo names it: ERPNext's name, cleaned as a
-    notice cleans it (one line, no links or markdown), at most 140."""
+def settled(text: str) -> str:
+    """``text`` cleaned as a notice cleans it (one line, no links or
+    markdown, at most 140), again until cleaning changes nothing, so a
+    stored ToDo can be held to it: a link's "[link]" loses its brackets,
+    and the result is its own clean. "" when it never settles."""
     from openexecutive.watch.runner import clean
 
-    return clean(quote.customer_name, CUSTOMER_MAX) or clean(quote.customer, CUSTOMER_MAX) or "the customer"
+    for _ in range(5):
+        again = clean(text, CUSTOMER_MAX)
+        if again == text:
+            return text
+        text = again
+    return ""
+
+
+def _customer_text(quote: Quote) -> str:
+    """The customer as the ToDo names it: ERPNext's name, ``settled``."""
+    return settled(quote.customer_name) or settled(quote.customer) or "the customer"
+
+
+def _todo_currency(currency: str) -> str:
+    return currency if _CURRENCY_RE.fullmatch(currency) else ""
+
+
+def nameable(name: str) -> bool:
+    """Whether a quotation's name can stand in a ToDo's description as is:
+    ERPNext's name pattern, and its own clean."""
+    from openexecutive.integrations.erpnext_changes import _DOC_RE
+
+    return _DOC_RE.fullmatch(name) is not None and settled(name) == name
 
 
 def description(quote: Quote) -> str:
     """The ToDo's description: code's template around the quotation's own
     figures and the customer's cleaned name, at most 1,000 characters."""
     text = TEMPLATE.format(
-        customer=_customer_text(quote), quotation=quote.name, value=_money(quote.grand_total, quote.currency),
+        customer=_customer_text(quote), quotation=quote.name,
+        value=_money(quote.grand_total, _todo_currency(quote.currency)),
         valid_till=quote.valid_till.isoformat(),
     )
     return " ".join(_CONTROL.sub(" ", text).split())[:DESCRIPTION_MAX]
+
+
+def _row(follow: FollowUp, notes: tuple[str, ...] = ()) -> CardSpec:
+    """A quotation as the notice shows it: one of its rows, or a notice of
+    its own (``notes``)."""
+    quote = follow.quote
+    return CardSpec(
+        key=follow.key,
+        summary=quote.customer_name or quote.customer,
+        values=(
+            ("Quotation", quote.name),
+            ("Value", _money(quote.grand_total, quote.currency)),
+            ("Quoted", quote.quoted.isoformat() if quote.quoted else ""),
+            ("Valid till", quote.valid_till.isoformat()),
+            ("Lapses", _when(follow)),
+            ("Status", quote.status),
+        ),
+        notes=notes,
+    )
 
 
 def todo_date(follow: FollowUp, today: date) -> date:
@@ -384,25 +438,13 @@ def build(
         return []
     # Orders not read for every customer: no task for those quotations.
     unchecked = {f.quote.name for f in named if f.quote.customer not in asked or orders_cut}
+    # A name the ToDo's template can't hold as is gets no task either.
+    untasked = {f.quote.name for f in named if not nameable(f.quote.name)}
 
     new = [f for f in named if f.key not in told]
     new_leads = [f for f in leads if f.key not in told]
     shown = new[:NOTICE_MAX]
-    items = tuple(
-        CardSpec(
-            key=f.key,
-            summary=f.quote.customer_name or f.quote.customer,
-            values=(
-                ("Quotation", f.quote.name),
-                ("Value", _money(f.quote.grand_total, f.quote.currency)),
-                ("Quoted", f.quote.quoted.isoformat() if f.quote.quoted else ""),
-                ("Valid till", f.quote.valid_till.isoformat()),
-                ("Lapses", _when(f)),
-                ("Status", f.quote.status),
-            ),
-        )
-        for f in shown
-    )
+    items = tuple(_row(f) for f in shown)
     notes: list[str] = []
     if len(new) > NOTICE_MAX:
         notes.append(MORE_LINE.format(n=len(new) - NOTICE_MAX, shown=NOTICE_MAX))
@@ -426,7 +468,7 @@ def build(
     drafts: list[DraftSpec] = []
     for follow in named:
         quote = follow.quote
-        if quote.name in unchecked:
+        if quote.name in unchecked or quote.name in untasked:
             continue
         text = description(quote)
         drafts.append(DraftSpec(
@@ -444,6 +486,10 @@ def build(
             expect={"reference": f"{QUOTATION} {quote.name}", "description": text},
             title=f"Follow up {quote.name}: {_customer_text(quote)}",
             group=quote.customer,
+            # Told on its own only when ERPNext keeps the quotation from the
+            # reviewer (the runner strips its row from the reviewer's notice
+            # and sends this to the principal).
+            notice=_row(follow, notes=(KEPT_LINE,)),
         ))
     return [*out, *drafts[:DRAFTS_MAX]]
 
@@ -504,6 +550,7 @@ def check_fields(operation: str, doctype: str, fields: Mapping[str, Any], name: 
     if (
         found is None or found.group("quotation") != reference or len(text or "") > DESCRIPTION_MAX
         or _CONTROL.search(text or "") or text != " ".join((text or "").split())
+        or found.group("customer") != settled(found.group("customer")) or not nameable(reference)
     ):
         return "A quote-follow-up card's description is the job's own: Call <customer> about <quotation> ..."
     expected = assignee()

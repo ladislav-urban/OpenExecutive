@@ -356,6 +356,25 @@ def mark_told(job_id: str, keys: Sequence[str], day: str, *, path: Path | None =
         conn.close()
 
 
+def forget_told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> None:
+    """Drop ``keys`` from the job's told rows (a card record whose card
+    expired or was closed by code)."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return
+    conn = connect(path)
+    try:
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            conn.execute(
+                f"DELETE FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            )
+    finally:
+        conn.close()
+
+
 def day_cards(job_id: str, day: str, *, path: Path | None = None) -> int:
     """The draft cards the job's runs took for ``day`` so far."""
     return day_count(job_id, day, "cards", path=path)

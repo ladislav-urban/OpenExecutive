@@ -11828,10 +11828,20 @@ watch:
     digests in watch_told; the job's rules read them back with
     runner.told (raises when unreadable, so the run stops rather than tell
     everything again) and leave them out of the notice only (their
-    DraftSpecs are still built); cards.leave_drafts skips a finding any
-    card of the job was ever left for: in the ledger, or a watch_told row
-    card:<digest> (cards.carded_key, written when a new card is left), since
-    job_cards lists at most 5000 draft cards. JOBS is a read-only
+    DraftSpecs are still built); cards._once_held keeps a finding from a
+    new card while its card waits for the current reviewer and check_fields
+    still builds it unchanged, or once it was approved, executed, reversed
+    or rejected (dismissed by a person), or failed with closed_code
+    no_answer; a waiting card that expired or code would now refuse is
+    closed (expired / job_changed), and closed_externally or other failed
+    cards don't hold, so the finding is carded again while due. A finding
+    job_cards' 5000-card listing no longer shows is held by a watch_told
+    row card:<digest> (cards.carded_key, written when a new card is left,
+    dropped by settings.forget_told when its card is seen not holding).
+    runner: a once job's DraftSpec.notice is told only for a finding in
+    kept_from_reviewer (to the principal, its row stripped from the
+    reviewer's notices by runner._without_rows), and a notice whose key was
+    told before isn't left again. JOBS is a read-only
     mapping of _LISTED (collections, payment-checks, bank-matching,
     invoice-capture, quote-follow-up),
     imported at the
@@ -12285,10 +12295,15 @@ watch:
     High for the 3 largest grand_total else Medium, date max(today,
     valid_till - 1), reference_type Quotation, reference_name; expect
     reference "Quotation <name>" and the description), none when the
-    customer was beyond the 50 asked or read 2 was truncated. check_fields:
+    customer was beyond the 50 asked, its id failed the $customers slot
+    (registry._slot_holds, so it's never asked) or read 2 was truncated,
+    nor for a name not nameable (_DOC_RE and its own settled clean); the
+    ToDo's currency only as [A-Z]{3}. Each DraftSpec carries its row as
+    notice with KEPT_LINE, told only when ERPNext kept it from the reviewer. check_fields:
     create ToDo only, exactly erpnext_drafts' six ToDo fields, reference a
     Quotation, priority High or Medium, description matching _TEMPLATE_RE
-    naming reference_name (one line, no control characters, at most 1000),
+    (currency [A-Z]{3}, customer equal to its settled clean, reference
+    nameable) naming reference_name (one line, no control characters, at most 1000),
     allocated_to equal to assignee() now, and _todo's output unchanged.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to

@@ -467,9 +467,9 @@ def test_the_next_day_tells_nothing_again_and_leaves_no_second_card(
     _run()
     # Cara dismisses one card; the notice is read and dismissed too.
     first = sorted(_job_cards(), key=lambda c: c.id)[0]
-    from openexecutive.memory.decision_ledger import close_externally
+    from openexecutive.memory.decision_ledger import STATUS_REJECTED, mark_resolved
 
-    close_externally(first.id, reason="dismissed")
+    mark_resolved(first.id, STATUS_REJECTED, resolver_person_id=team.cara)
     calls = len(erp.calls)
     # The same quotations the next day (less two whose state changes overnight).
     same = [q for q in QUOTES if q["name"] not in ("QTN-2", "QTN-5")]
@@ -575,7 +575,7 @@ def test_a_changed_assignee_since_the_card_is_refused_at_approval(
 def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from openexecutive.memory.decision_ledger import close_externally
+    from openexecutive.memory.decision_ledger import STATUS_REJECTED, mark_resolved
 
     eight = [_q(f"QTN-E{i}", f"Cust {i}", 4, 1000.0 + 100 * i) for i in range(8)]
 
@@ -594,7 +594,7 @@ def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
         f"QTN-E{i}" for i in range(3, 8)]
     # Cara handles (dismisses) day 1's cards.
     for card in _job_cards():
-        close_externally(card.id, reason="dismissed")
+        mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
     # Day 2: the other three cards, no row told again, no dismissed card again.
     erp.replies.extend([_list(eight), _list([], "Sales Order")])
     erp.replies.extend(_checks_for(specs(date.fromisoformat(NEXT_DAY))[5:]))
@@ -607,8 +607,150 @@ def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
     # the job's own record keeps a second card from being left.
     monkeypatch.setattr(drafts, "job_cards", lambda *_a, **_k: [])
     for card in _job_cards():
-        close_externally(card.id, reason="dismissed")
+        mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
     day3 = (TODAY + timedelta(days=2)).isoformat()
     erp.replies.extend([_list(eight), _list([], "Sales Order")])
     third = _run(day3)
     assert (third.draft_cards, third.checks, third.draft_repeats) == (0, 0, 8)
+
+
+# --------------------------------------------------------------------------- #
+# Review fixes: an odd customer id, cards that lapse or code closes, the
+# ToDo's text held to the builder's, and rows ERPNext keeps from the reviewer
+# --------------------------------------------------------------------------- #
+
+
+def test_a_customer_id_the_slot_wont_take_leaves_its_quotation_unchecked(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    odd = _q("QTN-Z", "Zero​Width Co", 2, 5000.0)
+    rows = [odd, QUOTES[0]]
+    built = qfu._orders(SETTINGS, TODAY, ({"rows": rows},))
+    assert isinstance(built, Derived) and built.arguments["filters"]["customer"] == ["in", ["Orion Switchgear"]]
+    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    [spec] = [s for s in qfu.build(_results(rows, []), SETTINGS, TODAY, assignee=REVIEWER)
+              if isinstance(s, DraftSpec)]
+    assert spec.fields["reference_name"] == "QTN-1"
+    erp.replies.append(_checked(dict(spec.fields)))
+    outcome = _run()
+    assert (outcome.status, outcome.draft_cards) == ("done", 1)
+    [notice] = _alerts()
+    assert "QTN-Z" in notice.body and qfu.ORDERS_CUT_LINE in notice.body
+
+
+def _one_card_run(erp: FakeErpnext, day: str = DAY, rows: list[dict[str, Any]] | None = None,
+                  assignee: str = REVIEWER) -> runner.RunOutcome:
+    rows = rows if rows is not None else [QUOTES[0]]
+    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    specs = [s for s in qfu.build(_results(rows, []), SETTINGS, date.fromisoformat(day), assignee=assignee)
+             if isinstance(s, DraftSpec)]
+    erp.replies.extend(_checks_for(specs))
+    return _run(day)
+
+
+def test_an_expired_card_is_left_again_on_the_next_run(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _one_card_run(erp).draft_cards == 1
+    # Its three days pass unanswered.
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(seconds=-1))
+    second = _one_card_run(erp, NEXT_DAY)
+    assert second.draft_cards == 1
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(days=3))
+    cards = sorted(_job_cards(), key=lambda c: c.id)
+    assert [c.status for c in cards] == ["closed_externally", "proposed"]
+    assert cards[0].reversal_reason == "expired"
+
+
+def test_a_card_code_refuses_after_the_assignee_changed_is_left_again_for_the_new_one(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], approvals: None,
+) -> None:
+    _one_card_run(erp)
+    [card] = _job_cards()
+    settings = {**SETTINGS, "assign_to": "buyer@co.example"}
+    _save(team.principal, reviewer=team.cara, settings=settings)
+    fresh = get_decision_instance(card.id)
+    assert fresh is not None
+    with pytest.raises(drafts.ApproveRefused) as refused:
+        asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
+    assert refused.value.code == "malformed"
+    second = _one_card_run(erp, NEXT_DAY, assignee="buyer@co.example")
+    assert second.draft_cards == 1
+    old, new = sorted(_job_cards(), key=lambda c: c.id)
+    assert (old.status, old.reversal_reason) == ("closed_externally", "job_changed")
+    assert drafts._payload(new)["fields"]["allocated_to"] == "buyer@co.example"
+
+
+def test_an_approved_card_is_never_left_again(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], approvals: None,
+) -> None:
+    _one_card_run(erp)
+    [card] = _job_cards()
+    erp.replies.append(json.dumps({"ok": True, "doctype": "ToDo", "name": "TD-1", "docstatus": 0}))
+    fresh = get_decision_instance(card.id)
+    assert fresh is not None
+    asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
+    erp.replies.extend([_list([QUOTES[0]]), _list([], "Sales Order")])
+    second = _run(NEXT_DAY)
+    assert (second.draft_cards, second.checks, second.draft_repeats) == (0, 0, 1)
+
+
+@pytest.mark.parametrize("description", [
+    "Call <b>Orion</b> about QTN-1 (4,000.00 EUR, valid till {vt}): ask whether it's still wanted, "
+    "and what would win it. If it's lapsed, offer to re-quote at today's prices.",
+    "Call Orion https://evil.example about QTN-1 (4,000.00 EUR, valid till {vt}): ask whether it's still wanted, "
+    "and what would win it. If it's lapsed, offer to re-quote at today's prices.",
+    "Call Orion about QTN-1 (4,000.00 evil.io, valid till {vt}): ask whether it's still wanted, "
+    "and what would win it. If it's lapsed, offer to re-quote at today's prices.",
+    "Call Orion [link] about QTN-1 (4,000.00 EUR, valid till {vt}): ask whether it's still wanted, "
+    "and what would win it. If it's lapsed, offer to re-quote at today's prices.",
+])
+def test_a_stored_todo_text_the_builder_wouldnt_make_is_refused(
+    job_on: WatchJob, description: str,
+) -> None:
+    [card] = [s for s in _specs(quotes=[QUOTES[0]], orders=[]) if isinstance(s, DraftSpec)]
+    assert qfu.check_fields("create", "ToDo", card.fields) == dict(card.fields)
+    bad = {**card.fields, "description": description.format(vt=_in(3))}
+    assert isinstance(qfu.check_fields("create", "ToDo", bad), str)
+
+
+def test_the_builder_settles_names_and_drops_an_odd_currency() -> None:
+    hostile = _q("QTN-H", "H", 2, 10.0, customer_name="Evil.co [x](https://a.example) <b>")
+    hostile["currency"] = "evil.io"
+    [card] = [s for s in _specs(quotes=[hostile], orders=[]) if isinstance(s, DraftSpec)]
+    text = card.fields["description"]
+    assert "evil.io" not in text and "(10.00, valid till" in text and "<" not in text
+    found = qfu._TEMPLATE_RE.fullmatch(text)
+    assert found is not None and qfu.settled(found.group("customer")) == found.group("customer")
+    # A quotation name the template can't hold as is: on the notice, no task.
+    odd = _q("QTN.evil.io", "Orion", 2, 10.0)
+    specs = _specs(quotes=[odd], orders=[])
+    assert [s for s in specs if isinstance(s, DraftSpec)] == []
+    assert [s for s in specs if isinstance(s, CardSpec)]
+
+
+def test_a_quotation_erpnext_keeps_from_the_reviewer_is_told_to_the_principal_only(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    rows = [QUOTES[0], QUOTES[2]]
+    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    specs = [s for s in qfu.build(_results(rows, []), SETTINGS, TODAY, assignee=REVIEWER) if isinstance(s, DraftSpec)]
+    assert [s.fields["reference_name"] for s in specs] == ["QTN-3", "QTN-1"]
+    # ERPNext refuses Cara's check of QTN-3 for her own permissions.
+    erp.replies.append(json.dumps({"error": "You are not permitted to read Quotation QTN-3."}))
+    erp.replies.append(_checked(dict(specs[1].fields)))
+    outcome = _run()
+    assert (outcome.draft_cards, outcome.routed) == (1, "reviewer")
+    notices = _alerts()
+    mine = [a for a in notices if a.routed_to_person_id == team.cara]
+    theirs = [a for a in notices if a.routed_to_person_id == team.principal]
+    assert len(mine) == 1 and "QTN-1" in mine[0].body and "QTN-3" not in mine[0].body
+    # The subject counts the run's findings, the principal's one included.
+    assert mine[0].headline == f"Quote follow-up: 2 found on {DAY}"
+    assert len(theirs) == 1 and "QTN-3" in theirs[0].body and qfu.KEPT_LINE in theirs[0].body
+    assert "not permitted" not in theirs[0].body
+    # Told once: the next run tells neither again.
+    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    erp.replies.append(json.dumps({"error": "You are not permitted to read Quotation QTN-3."}))
+    _run(NEXT_DAY)
+    assert len(_alerts()) == 2
