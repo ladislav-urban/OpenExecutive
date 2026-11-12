@@ -11379,7 +11379,11 @@ integrations:
     `chart` kind (one DocType's count, sum or average over a Date field or
     grouped by a Link or Select field, drawn on its read-only
     dynocortex-chart page as the person), a report that draws its own chart
-    stays the report, and a single figure gets no chart. OpenExecutive never
+    stays the report, and a single figure gets no chart. Accounts Receivable
+    and Accounts Payable take one party as party_type with party (a list of
+    names), never 'customer' or 'supplier' (oe_connector's views.check refuses
+    a filter the report doesn't declare); any other report's filters are
+    checked with erpnext__describe_report first. OpenExecutive never
     reads `kind`: oe_connector's views.check is the one authority on kinds
     and caps a chart spec at 2,000 characters, under MAX_VIEW_JSON, so the
     model gets a tool error rather than a view dropped here. The show tool's
@@ -11388,7 +11392,10 @@ integrations:
     expected_view_kinds / forbidden_view_kinds: the runner collects the
     turn's views as the route does (collect_views) and
     evals.scenarios.view_kinds_check fails the scenario deterministically
-    (erpnext_054 opens a chart, erpnext_055 none). The response
+    (erpnext_054 opens a chart, erpnext_055 none). expected_report_filters
+    (report name -> filter names) fails it unless an accepted view of that
+    report carries those filters (erpnext_094: Accounts Receivable by
+    party_type and party). The response
     adds `views` and `call` when there are any. They are data: oe_connector's
     panel.ask checks each view again as the signed-in ERPNext user and builds
     every desk route itself. Off the panel, the gateway refuses
