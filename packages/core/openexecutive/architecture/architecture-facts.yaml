@@ -10720,6 +10720,24 @@ integrations:
     does not know is skipped yet the request is still accepted, so the event
     would be marked sent and lost for the month.
 
+    Dunning drafts (phase 0's S2; oe_connector's draft_dunning): a payment
+    reminder for one overdue, submitted Sales Invoice, through ERPNext's own
+    create_dunning as the person, with the Dunning Type's fee, interest and
+    letter. Offered only once ERPNEXT_DRAFT_DOCTYPES lists Dunning. Its fields
+    are sales_invoice, an optional dunning_type and posting_date (no later
+    than today plus a day's grace for ERPNext's time zone; ERPNext refuses a
+    future one). erpnext_drafts.pin_from_check stores the check's own
+    posting_date in the card's fields, so approval on a later day sends it
+    and builds the same letter with the same interest. A Dunning card needs a
+    sound fingerprint or none is left. Its dedupe digest leaves the date out
+    (one card per invoice and type: asking again replaces the waiting card
+    through the fingerprint rule). The card shows each installment as a
+    field, the fee, interest, what it adds and what the letter asks for, and
+    the letter's body and closing with tags out and a marked preview
+    (LETTER_SHOWN_MAX), as fields, never in the app's own notes. A refusal
+    that an installment fell due since the card closes it like
+    CHANGED_SINCE_PROPOSED.
+
     Drafts a person approves (phase 4a, and 4b's Quotation and Purchase
     Order; integrations/erpnext_drafts.py; design oe_connector
     docs/finished_work/erpnext-phase4-plan.md). Off unless ERPNEXT_DRAFTS_ENABLED and

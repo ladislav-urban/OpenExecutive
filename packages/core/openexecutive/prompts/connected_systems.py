@@ -146,6 +146,7 @@ ERPNEXT_DISCOVERY_QUERIES: dict[str, str] = {
 # but the approval-card path's own (integrations.erpnext_drafts).
 ERPNEXT_DRAFT_TOOLS: frozenset[str] = frozenset({
     "erpnext__draft_check",
+    "erpnext__draft_dunning",
     "erpnext__draft_material_request",
     "erpnext__draft_purchase_order",
     "erpnext__draft_quotation",
@@ -379,6 +380,7 @@ _ERPNEXT_AS_CALLER = (
 # for the DocTypes this install drafts (erpnext_draft_doctypes).
 # Process-constant, like the lines above.
 _ERPNEXT_DRAFT_KINDS = {
+    "Dunning": "a Dunning (a payment reminder letter for one overdue Sales Invoice; nothing reaches the customer until someone prints or emails it)",
     "Material Request": "a Material Request (a restock)",
     "Purchase Order": "a Purchase Order (an order to a supplier, from lines or from a submitted Material Request or Supplier Quotation)",
     "Quotation": "a Quotation (a quote for a customer)",
