@@ -1004,3 +1004,10 @@ def test_a_run_of_payment_checks_needs_a_date_of_its_own(job_on: WatchJob) -> No
     assert payment_checks._history(SETTINGS, TODAY, (json.loads(_list([])),)) is None
     assert payment_checks._bank(SETTINGS, TODAY, (json.loads(_list([])),)) is None
     assert date.fromisoformat(RELEASE) == TODAY + timedelta(days=erpnext_block.RELEASE_DAYS)
+
+def test_a_hold_card_is_never_left_for_an_invoice_name_approval_would_refuse() -> None:
+    held = {"set": {"on_hold": 1, "hold_comment": payment_checks.hold_comment("ACC-PINV-2026-00001", "high")}}
+    assert isinstance(payment_checks.check_fields("update", "Purchase Invoice", held, "ACC-PINV-2026-00007"), dict)
+    for name in ("FP-№-2026-0099", "ER​-2026-99", "RE－2026－99", "Fä-99"):
+        assert isinstance(payment_checks.check_fields("update", "Purchase Invoice", held, name), str), name
+

@@ -150,7 +150,10 @@ def _as_shown(value: str) -> str:
     or a zero-width space that the card would drop is never written either."""
     from openexecutive.utils.prompt_blocks import plain
 
-    return _CONTROL.sub("", plain(value)).strip()
+    # Control characters out first, then made plain: plain() folds last, so
+    # a tab deleted after it would leave a letter and a combining mark that
+    # compose only when the value is checked again at approval.
+    return plain(_CONTROL.sub("", value)).strip()
 
 
 def comment_text(value: Any) -> str:

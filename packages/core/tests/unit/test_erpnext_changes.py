@@ -168,6 +168,13 @@ def test_what_is_stored_is_shown_the_same_when_checked_again() -> None:
     _, first = changes.check_change("comment", "Purchase Invoice", "X-1", {"text": "Cafe\u200b\u0301 invoice"})  # type: ignore[misc]
     _, again = changes.check_change("comment", "Purchase Invoice", "X-1", first)  # type: ignore[misc]
     assert first == again == {"text": "Caf\u00e9 invoice"}
+    # A tab before a combining mark too (control characters go before the fold).
+    for field in ("remarks", "cost_center"):
+        _, upd = changes.check_change(  # type: ignore[misc]
+            "update", "Purchase Invoice", "X-1", {"set": {field: "Cafe\t\u0301 invoice"}},
+        )
+        _, upd_again = changes.check_change("update", "Purchase Invoice", "X-1", upd)  # type: ignore[misc]
+        assert upd == upd_again == {"set": {field: "Caf\u00e9 invoice"}}
 
 
 def test_a_link_field_is_stored_on_one_line_as_shown() -> None:
