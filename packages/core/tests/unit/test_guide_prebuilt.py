@@ -92,8 +92,22 @@ def test_named_swaps_the_product_word_outside_code_and_links() -> None:
     assert prebuilt.named(text, "Dynocortex") == (
         "Ask Dynocortex in `OpenExecutive/packages` or [the docs](https://x.example/OpenExecutive)."
     )
-    # A name is written as it is, never read as a regex template.
-    assert prebuilt.named("OpenExecutive's mail", r"A\1B") == r"A\1B's mail"
+    # A name is written as it is, never read as a regex template, and its
+    # Markdown punctuation is escaped so it never becomes a link or emphasis.
+    assert prebuilt.named("OpenExecutive's mail", r"A\1B") == r"A\\1B's mail"
+    assert prebuilt.named("Ask OpenExecutive.", "[Sign in](https://x.example/a)") == (
+        r"Ask \[Sign in\]\(https://x.example/a\)."
+    )
+    assert prebuilt.named("OpenExecutive", "*Acme* `ops`") == r"\*Acme\* \`ops\`"
+    # Code blocks, multi-line code spans, titled or bracketed link targets,
+    # autolinks, URLs and addresses keep the word.
+    kept = (
+        "```\ngit clone https://x.example/OpenExecutive.git\n```\n"
+        "`OpenExecutive\nrepo` [a](https://x.example/OpenExecutive \"OpenExecutive\") [b](<x/OpenExecutive>) "
+        "<https://x.example/OpenExecutive> https://x.example/OpenExecutive www.OpenExecutive.example "
+        "ops@OpenExecutive.example"
+    )
+    assert prebuilt.named(kept, "D") == kept
     assert prebuilt.named("OpenExecutives and XOpenExecutive", "D") == "OpenExecutives and XOpenExecutive"
 
 

@@ -25,18 +25,27 @@ _STORE = PrebuiltDocStore(Path(__file__).parent / "prebuilt")
 # a setting or a URL stays right. On-screen labels ("Settings → Your
 # Executive") are quoted as the screen says them.
 PRODUCT_WORD = "OpenExecutive"
-_KEPT_RE = re.compile(r"(`[^`\n]*`|\]\([^)\s]*\))")
+# Kept as written: fenced code blocks, code spans (on one line or across
+# lines), link targets (with a title or in angle brackets), autolinks, bare
+# URLs and email addresses.
+_KEPT_RE = re.compile(
+    r"(```.*?```|~~~.*?~~~|`[^`]+`|\]\([^)]*\)|<[^<>\s]+>|https?://\S+|www\.\S+|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)",
+    re.S,
+)
 _PRODUCT_RE = re.compile(r"\b" + PRODUCT_WORD + r"\b")
+# Markdown's punctuation, escaped in a name so it reads as the name, never as
+# emphasis, a code span, a link or a table cell.
+_MARKDOWN_RE = re.compile(r"([\\`*_\[\]()!|#~<>])")
 
 
 def named(text: str, product: str | None = None) -> str:
     """``text`` with the product's name (``utils.product_name``) for
-    ``PRODUCT_WORD``, outside code spans and link targets."""
+    ``PRODUCT_WORD``, outside code, links, URLs and addresses."""
     if product is None:
         from openexecutive.utils.product_name import product_name
 
         product = product_name()
-    name: str = product
+    name: str = _MARKDOWN_RE.sub(r"\\\1", product)
     parts = _KEPT_RE.split(text)
     # A callable, so a name is written as it is, never read as a template.
     return "".join(part if i % 2 else _PRODUCT_RE.sub(lambda _m: name, part) for i, part in enumerate(parts))
