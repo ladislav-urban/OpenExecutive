@@ -51,6 +51,9 @@ KIND = "Bank Transaction Rule"
 EVIDENCE_TOOL = "bank_rule_evidence"
 PROPOSE_TOOL = "propose_rule"
 EVIDENCE_SHAPE: Mapping[str, Any] = {"company": "$company"}
+# The same read once a chain head is kept: oe_connector also returns the row
+# at that index (``chain_at``), so rows rewritten and then outgrown show.
+SEEN_SHAPE: Mapping[str, Any] = {"company": "$company", "seen_index": "$chain_index"}
 # Mondays, after the bank-matching job's morning run.
 WEEKDAYS = frozenset({0})
 SCHEDULE = time(10, 30)
@@ -82,6 +85,10 @@ CHAIN_LINE = (
     "ERPNext's draft log is shorter than when the bank-rules job last read it (row {then}, now {now}). "
     "Rows may have been deleted; run oe-connector-verify-drafts."
 )
+CHAIN_REWRITTEN_LINE = (
+    "ERPNext's draft log no longer holds the row the bank-rules job last read at row {then}: it was deleted or "
+    "changed. Rows may have been rewritten; run oe-connector-verify-drafts."
+)
 CHAIN_GONE_LINE = (
     "ERPNext no longer reports its draft log's newest row to the bank-rules job (row {then} when it last read "
     "it). Rows may have been deleted; run oe-connector-verify-drafts."
@@ -93,9 +100,38 @@ CHAIN_GONE_LINE = (
 # --------------------------------------------------------------------------- #
 
 
-def _evidence_args(settings: Settings, today: date, prior: tuple[Mapping[str, Any], ...] = ()) -> ReadArguments:
+def _kept(settings: Settings) -> tuple[int, str] | None:
+    """The chain head this job kept for its company, or None."""
+    from openexecutive.watch.settings import get_chain_head
+
     company = settings["company"]
-    return {"company": company} if isinstance(company, str) and company else None
+    return get_chain_head(JOB_ID, company) if isinstance(company, str) and company else None
+
+
+def _evidence_args(settings: Settings, today: date, prior: tuple[Mapping[str, Any], ...] = ()) -> ReadArguments:
+    """The read before any head is kept (a head of 0 is no row to ask for)."""
+    company = settings["company"]
+    if not isinstance(company, str) or not company:
+        return None
+    kept = _kept(settings)
+    return {"company": company} if kept is None or kept[0] < 1 else None
+
+
+def _seen_args(settings: Settings, today: date, prior: tuple[Mapping[str, Any], ...] = ()) -> ReadArguments:
+    """The read once a head is kept: with the kept place, as ``seen_index``."""
+    company = settings["company"]
+    kept = _kept(settings) if isinstance(company, str) and company else None
+    if kept is None or kept[0] < 1:
+        return None
+    return {"company": company, "seen_index": kept[0]}
+
+
+def evidence(reads: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
+    """The run's one evidence result: whichever of its two reads ran."""
+    for result in reads:
+        if isinstance(result, Mapping) and result:
+            return result
+    return {}
 
 
 def _candidate(item: Any) -> dict[str, str] | None:
@@ -143,7 +179,7 @@ def proposals(reads: Sequence[Mapping[str, Any]], settings: Settings, today: dat
         return ()
     return tuple(
         ProposalSpec(key=_key(rule), arguments=proposal_arguments(company, rule))
-        for rule in candidates(reads[0], company)[:MAX_PROPOSALS]
+        for rule in candidates(evidence(reads), company)[:MAX_PROPOSALS]
     )
 
 
@@ -187,7 +223,7 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
 def _head(reads: Sequence[Mapping[str, Any]]) -> tuple[int, str] | None:
     """The chain head the read returned, or None when it gave none fit to
     keep (no head, a negative or non-whole index, a hash not 64 hex)."""
-    head = reads[0].get("chain_head") if reads and isinstance(reads[0], Mapping) else None
+    head = evidence(reads).get("chain_head")
     if not isinstance(head, Mapping):
         return None
     index, row_hash = head.get("index"), head.get("row_hash")
@@ -196,6 +232,15 @@ def _head(reads: Sequence[Mapping[str, Any]]) -> tuple[int, str] | None:
     if not isinstance(row_hash, str) or not _HEX_RE.fullmatch(row_hash):
         return None
     return index, row_hash
+
+
+def _row_still_there(result: Mapping[str, Any], then: int, then_hash: str) -> bool:
+    """Whether the read's ``chain_at`` is the row this job kept: the same
+    index and hash. A kept head of 0 (no row yet) has nothing to compare."""
+    if then < 1:
+        return True
+    at = result.get("chain_at")
+    return isinstance(at, Mapping) and at.get("index") == then and at.get("row_hash") == then_hash
 
 
 def chain_notices(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -> Sequence[CardSpec]:
@@ -226,16 +271,28 @@ def chain_notices(reads: Sequence[Mapping[str, Any]], settings: Settings, today:
             ),
         )
     index, row_hash = head
-    if seen is None or index > seen[0] or (index == seen[0] and row_hash == seen[1]):
+    if seen is None:
         swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
         return ()
-    then, _then_hash = seen
-    spec = CardSpec(
-        key=f"chain:{then}:{index}:{row_hash[:16]}",
-        summary="ERPNext's draft log is shorter than before",
-        notes=(CHAIN_LINE.format(then=then, now=index),),
-        to_principal=True,
-    )
+    then, then_hash = seen
+    if index > then or (index == then and row_hash == then_hash):
+        if _row_still_there(evidence(reads), then, then_hash):
+            swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
+            return ()
+        # Longer, but the row last kept is gone or changed: rewritten, then outgrown.
+        spec = CardSpec(
+            key=f"chain:rewritten:{then}:{then_hash[:16]}:{index}",
+            summary="ERPNext's draft log was changed",
+            notes=(CHAIN_REWRITTEN_LINE.format(then=then),),
+            to_principal=True,
+        )
+    else:
+        spec = CardSpec(
+            key=f"chain:{then}:{index}:{row_hash[:16]}",
+            summary="ERPNext's draft log is shorter than before",
+            notes=(CHAIN_LINE.format(then=then, now=index),),
+            to_principal=True,
+        )
     if raised_ever(dedup_key(JOB_ID, spec.key)):
         # Told already: this head is the one to compare with from now on.
         swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
@@ -246,7 +303,10 @@ def chain_notices(reads: Sequence[Mapping[str, Any]], settings: Settings, today:
 JOB: WatchJob = WatchJob(
     id=JOB_ID,
     title="Bank rules",
-    reads=(WatchRead(EVIDENCE_TOOL, EVIDENCE_SHAPE, _evidence_args, "the bank rules reconciled lines support"),),
+    reads=(
+        WatchRead(EVIDENCE_TOOL, EVIDENCE_SHAPE, _evidence_args, "the bank rules reconciled lines support"),
+        WatchRead(EVIDENCE_TOOL, SEEN_SHAPE, _seen_args, "the bank rules reconciled lines support"),
+    ),
     build=build,
     schedule=SCHEDULE,
     card_cap_day=3,
@@ -264,5 +324,6 @@ JOB: WatchJob = WatchJob(
 def listing() -> dict[str, Any]:
     """The job's entry in ``oe_connector_watch_jobs`` as an operator writes
     it: its one read, run as its own ERP user (oe_connector admits its
-    ``propose_rule`` for a company this read allows, never listed)."""
+    ``propose_rule`` for a company this read allows, never listed, and checks
+    a read with ``seen_index`` against this one without it)."""
     return {"as_job_user": True, "reads": [{"tool": EVIDENCE_TOOL, **EVIDENCE_SHAPE}]}

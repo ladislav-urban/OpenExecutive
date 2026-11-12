@@ -51,10 +51,15 @@ INTEREST = {"account": "Interest Income - AC", "direction": "in", "word": "inter
 SEAL = "b" * 64
 
 
-def _evidence(*candidates: dict[str, Any], company: str = "Acme", head: dict[str, Any] | None = None) -> str:
+_NO_ROW: Any = object()
+
+
+def _evidence(*candidates: dict[str, Any], company: str = "Acme", head: dict[str, Any] | None = None,
+              chain_at: Any = _NO_ROW) -> str:
     return json.dumps({
         "company": company, "period": {"from": "2025-11-10", "to": DAY}, "candidates": list(candidates),
         "truncated": False, "chain_head": HEAD if head is None else head,
+        **({} if chain_at is _NO_ROW else {"chain_at": chain_at}),
         "acting": {"kind": "watch", "job": "bank-rules", "as_job_user": True, "user": "oe-watch-bank-rules@erp.example"},
     })
 
@@ -98,7 +103,11 @@ def _run(job: WatchJob = JOB, day: str = DAY) -> runner.RunOutcome:
 
 def test_bank_rules_is_listed_weekly_with_its_one_read_and_its_proposal_tool() -> None:
     assert registry.get("bank-rules") is JOB and JOB in registry._LISTED
-    assert [(r.tool, r.repeat, dict(r.shape)) for r in JOB.reads] == [("bank_rule_evidence", 0, {"company": "$company"})]
+    # The same read twice: before a chain head is kept, and with it (seen_index), never both a run.
+    assert [(r.tool, r.repeat, dict(r.shape)) for r in JOB.reads] == [
+        ("bank_rule_evidence", 0, {"company": "$company"}),
+        ("bank_rule_evidence", 0, {"company": "$company", "seen_index": "$chain_index"}),
+    ]
     assert JOB.weekdays == frozenset({0}) and JOB.schedule == time(10, 30)
     assert JOB.default_settings == {"company": ""}
     assert JOB.reason_schema is None and JOB.check_fields is None
@@ -395,27 +404,47 @@ def test_under_its_marker_only_that_exact_call_goes_through(job_on: WatchJob, er
 # --------------------------------------------------------------------------- #
 
 
-@pytest.mark.parametrize(("head", "alert"), [
-    ({"index": 45, "row_hash": "d" * 64}, False),
-    ({"index": 41, "row_hash": "a" * 64}, False),
-    ({"index": 41, "row_hash": "e" * 64}, True),
-    ({"index": 30, "row_hash": "f" * 64}, True),
+KEPT_ROW = {"index": 41, "row_hash": "a" * 64}
+
+
+@pytest.mark.parametrize(("head", "chain_at", "alert"), [
+    ({"index": 45, "row_hash": "d" * 64}, KEPT_ROW, ""),
+    ({"index": 41, "row_hash": "a" * 64}, KEPT_ROW, ""),
+    ({"index": 41, "row_hash": "e" * 64}, None, "draft log is shorter"),
+    ({"index": 30, "row_hash": "f" * 64}, None, "draft log is shorter"),
+    # Longer, but the row kept last time is gone or changed: rewritten, then outgrown.
+    ({"index": 45, "row_hash": "d" * 64}, None, "no longer holds the row"),
+    ({"index": 45, "row_hash": "d" * 64}, {"index": 41, "row_hash": "c" * 64}, "no longer holds the row"),
+    ({"index": 45, "row_hash": "d" * 64}, {"index": 40, "row_hash": "a" * 64}, "no longer holds the row"),
 ])
-def test_a_shorter_chain_than_last_seen_tells_the_principal(
-    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, head: dict[str, Any], alert: bool,
+def test_a_chain_shorter_or_rewritten_since_last_seen_tells_the_principal(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, head: dict[str, Any], chain_at: Any, alert: str,
 ) -> None:
-    # The first run keeps the head and proposes nothing.
+    # The first run keeps the head and proposes nothing; it has no head to ask about.
     erp.replies.append(_evidence())
     _run(job_on, "2026-11-09")
-    assert _alerts() == []
-    erp.replies.append(_evidence(head=head))
+    assert _alerts() == [] and _plain(erp.calls[0][1]) == {"company": "Acme"}
+    erp.replies.append(_evidence(head=head, chain_at=chain_at))
     _run(job_on, DAY)
-    shown = [a for a in _alerts() if "draft log is shorter" in a.body]
-    assert bool(shown) is alert
+    # The second asks for the row it kept, by its place.
+    assert _plain(erp.calls[1][1]) == {"company": "Acme", "seen_index": 41}
+    assert erp.claims(1)["sub"] == "bank-rules"
+    shown = [a for a in _alerts() if "draft log" in a.body]
+    assert bool(shown) is bool(alert)
     if alert:
-        assert shown[0].routed_to_person_id == team.principal
-        assert f"(row 41, now {head['index']})" in shown[0].body
+        assert alert in shown[0].body and shown[0].routed_to_person_id == team.principal
         assert "oe-connector-verify-drafts" in shown[0].body
+        assert "row 41" in shown[0].body
+    else:
+        assert watch_settings.get_chain_head(JOB.id, "Acme") == (head["index"], head["row_hash"])
+
+
+def test_seen_index_is_a_chain_place_and_the_listing_never_holds_it() -> None:
+    read = JOB.reads[1]
+    assert not registry.shape_mismatch(read.shape, {"company": "Acme", "seen_index": 10**9}, TODAY)
+    for bad in (0, -1, 10**9 + 1, "41", 41.0, True):
+        assert registry.shape_mismatch(read.shape, {"company": "Acme", "seen_index": bad}, TODAY), bad
+    assert "seen_index" not in json.dumps(bank_rules.listing())
 
 
 # --------------------------------------------------------------------------- #

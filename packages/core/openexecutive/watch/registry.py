@@ -71,7 +71,12 @@ LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers")
 # one read per value (an operator lists bank matching's
 # ``bank_lines_to_match`` once per Bank Account). Checked here as a name;
 # oe_connector checks the literal and its own list of accounts.
-LOCAL_SLOTS: tuple[str, ...] = ("$bank_account",)
+# ``$chain_index``: the OE Draft chain's place the bank-rules job kept last
+# time, sent as bank_rule_evidence's ``seen_index``, which oe_connector
+# checks itself (its listing holds the read without it).
+LOCAL_SLOTS: tuple[str, ...] = ("$bank_account", "$chain_index")
+# A chain index's bound (oe_connector's own).
+MAX_CHAIN_INDEX = 10**9
 # Slots that only mean something together, as a read_attachment read's
 # top-level name and file, beside "doctype": "Purchase Invoice" (the
 # invoice-capture job's mailed draft and its mail's one file; oe_connector's
@@ -463,6 +468,8 @@ def _text_ok(value: str, *, allow_empty: bool = False) -> bool:
 def _slot_holds(slot: str, value: Any, today: date) -> bool:
     if slot == "$int":
         return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_INT
+    if slot == "$chain_index":
+        return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CHAIN_INDEX
     if slot == "$date":
         if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
             return False

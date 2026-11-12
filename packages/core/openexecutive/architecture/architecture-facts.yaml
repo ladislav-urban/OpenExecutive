@@ -11417,7 +11417,8 @@ integrations:
     erpnext__propose_rule (phase 3's bank-rules job; propose_rule only under
     its proposal marker) and erpnext__proposed_rules (Home's own read, no
     job's). Phase 3 pins those three (ladislav-urban/oe_connector#562,
-    TOOLS_DIGEST f250ccf3, 33 tools; re-pinned to main's value at merge).
+    TOOLS_DIGEST 0230539b, 33 tools; re-pinned to main's value at merge,
+    365dec61 with #564).
     The phase 2 pin is aa01ad95, 30 tools:
     draft_check takes fill and match, and draft_match_bank_line and
     draft_fill_purchase_invoice are pinned (no card uses the fill yet).
@@ -12160,9 +12161,12 @@ watch:
     run oe-connector-verify-drafts." That head becomes the baseline only
     once the notice was left (runner.raised_ever), so a run that fails
     first says it again. A head missing or malformed after one was kept
-    says CHAIN_GONE_LINE. It sees a net-shorter chain only: rows rewritten
-    and then outgrown before the next run aren't seen here (verify-drafts
-    checks the whole chain). A proposal call that times out leaves a
+    says CHAIN_GONE_LINE. Once a head is kept the job reads with
+    seen_index (a second WatchRead, SEEN_SHAPE, local slot $chain_index
+    1..10^9; oe_connector's listing holds the read without it), and
+    oe_connector returns chain_at, the row at that index or null: a longer
+    head whose kept row is gone or changed says CHAIN_REWRITTEN_LINE
+    (rewritten, then outgrown). A proposal call that times out leaves a
     watch_proposal row with outcome "unknown" (it may have been written).
   proposed_rules_home: |
     integrations.erpnext_rule_proposals: Home's "Needs you" list of the

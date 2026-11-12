@@ -36,7 +36,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "audit_drafts": "086c6aaa377a06f3104d176d57cd9201ff14ab9e0f510a059e373df67d992149",
     "bank_line_candidates": "310b32757b2b53c3c2cd0603b16f7cbd719e01ed41f17d0c213bb033ccd42e74",
     "bank_lines_to_match": "f6d693c3f0bfc4bdd16e8ab2192aa1473ca02181cf98c94da09c5f65e3cbe609",
-    "bank_rule_evidence": "2f01c086d1bc601b580013f3dc9a5a9fdc2fb752ad303afd76a1c5c62215c0be",
+    "bank_rule_evidence": "6f4ad32a5c88e39e360cade4c848bc4ed180cb4b4f2f4b0e77c6d80c8377828b",
     "confirm_figure": "7e92126de1a33bced94e4b247220bac4fddaf8c26f0ec141fd612011cf34102b",
     "customer_payment_record": "fc960953b41f8a2cfc639e1d3277b38e348883a089bda0f5d60707ea18f7d4ea",
     "describe_doctype": "857eb11de056c01ca1a85be1552e22e04068b63bf37ccdf7de15edfc99cc13a3",
@@ -67,7 +67,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "supplier_orders": "abfa94e11de532f9cf1531c221dd4f8e8120816c215fb4b2780fd2edc338c1f8",
 }
 # oe_connector's protocol.TOOLS_DIGEST for the definitions pinned above.
-TOOLS_DIGEST = "f250ccf3d091af810fd7afec13bfda64103a4ec806e29c997ccacc7bd5c1903f"
+TOOLS_DIGEST = "0230539bdab6eaa2854e76b8932f83d8ee171bb6a7b639150d4419b76e4d385d"
 
 # The supplier tools as oe_connector serves them (its mcp/protocol.py
 # SUPPLIER_TOOLS), offered to the A2A agent from this copy rather than from
