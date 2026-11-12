@@ -2,7 +2,9 @@
 one row per job, day and slot, written by ``watch.runner``) and its days
 (``watch_days``: the draft cards its runs left, the checks they had ERPNext
 make and the notices they tried to leave, each counted in a transaction
-across slots and restarts, and its one failure notice a day).
+across slots and restarts, the amount its match cards proposed, and its one
+failure notice a day). ``watch_approved`` counts what each approver approved
+of a job's amount-capped cards a day (bank matching's), one row per card.
 
 One row per job: ``enabled`` (off until the principal turns it on), who
 configured it last and when, ``settings`` (JSON, exactly the job's
@@ -51,6 +53,7 @@ _RUNS_DDL = """CREATE TABLE IF NOT EXISTS {table} (
     )"""
 RUNS_TABLE = "watch_runs"
 DAYS_TABLE = "watch_days"
+APPROVED_TABLE = "watch_approved"
 
 _DDL = (
     f"""CREATE TABLE IF NOT EXISTS {JOBS_TABLE} (
@@ -77,14 +80,29 @@ _DDL = (
         day TEXT NOT NULL,
         cards INTEGER NOT NULL DEFAULT 0,
         failure_noticed INTEGER NOT NULL DEFAULT 0,
+        amount REAL NOT NULL DEFAULT 0,
         checks INTEGER NOT NULL DEFAULT 0,
         notices INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (job, day)
     )""",
+    # One row per amount-capped card approved (or claimed for approval: a
+    # timeout still counts) on a day, the company's, by its approver.
+    f"""CREATE TABLE IF NOT EXISTS {APPROVED_TABLE} (
+        job TEXT NOT NULL,
+        day TEXT NOT NULL,
+        person_id INTEGER NOT NULL,
+        decision_id INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        PRIMARY KEY (job, day, decision_id)
+    )""",
 )
 # Columns added after the table first shipped: name -> its definition.
 _RUN_COLUMNS = {"detail": "TEXT NOT NULL DEFAULT '{}'"}
-_DAY_COLUMNS = {"checks": "INTEGER NOT NULL DEFAULT 0", "notices": "INTEGER NOT NULL DEFAULT 0"}
+_DAY_COLUMNS = {
+    "amount": "REAL NOT NULL DEFAULT 0",
+    "checks": "INTEGER NOT NULL DEFAULT 0",
+    "notices": "INTEGER NOT NULL DEFAULT 0",
+}
 # What a day's row counts against a cap (``take_day``).
 DAY_COUNTS = frozenset({"cards", "checks", "notices"})
 # The columns a run row had before slots, copied as they are by the migration.
@@ -151,9 +169,9 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
             except sqlite3.OperationalError:
                 # Another connection added it meanwhile.
                 logger.debug("watch: column %s already added", column)
-    have_days = {row[1] for row in conn.execute(f"PRAGMA table_info({DAYS_TABLE})")}
+    days = {row[1] for row in conn.execute(f"PRAGMA table_info({DAYS_TABLE})")}
     for column, definition in _DAY_COLUMNS.items():
-        if column not in have_days:
+        if column not in days:
             try:
                 conn.execute(f"ALTER TABLE {DAYS_TABLE} ADD COLUMN {column} {definition}")
             except sqlite3.OperationalError:
@@ -194,6 +212,83 @@ def take_day(job_id: str, day: str, what: str, n: int, cap: int, *, path: Path |
             )
         conn.execute("COMMIT")
         return taken
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def take_day_amount(job_id: str, day: str, amount: float, cap: float, *, path: Path | None = None) -> bool:
+    """Take ``amount`` of the job's ``cap`` for ``day``'s proposed cards, read
+    and counted in one ``BEGIN IMMEDIATE`` transaction, as ``take_day_cards``.
+    Whether it was taken: never past the cap, so a card that would pass it
+    isn't left. A negative ``amount`` gives that much back (a card not left
+    after all), never below 0."""
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            f"INSERT OR IGNORE INTO {DAYS_TABLE} (job, day) VALUES (?, ?)", (job_id, day)  # noqa: S608
+        )
+        row = conn.execute(
+            f"SELECT amount FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
+        ).fetchone()
+        used = float(row[0] or 0) if row else 0.0
+        if amount >= 0 and used + amount > cap:
+            conn.execute("ROLLBACK")
+            return False
+        conn.execute(
+            f"UPDATE {DAYS_TABLE} SET amount = ? WHERE job = ? AND day = ?",  # noqa: S608
+            (max(0.0, used + amount), job_id, day),
+        )
+        conn.execute("COMMIT")
+        return True
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def take_approved_amount(
+    job_id: str, day: str, person_id: int, decision_id: int, amount: float, cap: float, *, path: Path | None = None,
+) -> bool:
+    """Count one card's ``amount`` against what was approved of the job's
+    cards on ``day``, by anyone, read and written in one ``BEGIN IMMEDIATE``
+    transaction: whether it fits ``cap`` with what was approved already. The
+    cap is the job's day, never one approver's: a reviewer changed mid-day
+    starts from what the day already took. ``person_id`` is kept with the
+    row, for the audit.
+    A card counted that day is counted once, however often it is approved
+    again (a timeout, a refusal), and never given back: it counts from its
+    claim. Fails closed: an error raises."""
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        held = conn.execute(
+            f"SELECT 1 FROM {APPROVED_TABLE} WHERE job = ? AND day = ? AND decision_id = ?",  # noqa: S608
+            (job_id, day, decision_id),
+        ).fetchone()
+        if held is not None:
+            conn.execute("COMMIT")
+            return True
+        row = conn.execute(
+            f"SELECT COALESCE(SUM(amount), 0) FROM {APPROVED_TABLE} WHERE job = ? AND day = ?",  # noqa: S608
+            (job_id, day),
+        ).fetchone()
+        used = float(row[0] or 0) if row else 0.0
+        if used + amount > cap:
+            conn.execute("ROLLBACK")
+            return False
+        conn.execute(
+            f"INSERT INTO {APPROVED_TABLE} (job, day, person_id, decision_id, amount) VALUES (?, ?, ?, ?, ?)",  # noqa: S608
+            (job_id, day, person_id, decision_id, amount),
+        )
+        conn.execute("COMMIT")
+        return True
     except Exception:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
