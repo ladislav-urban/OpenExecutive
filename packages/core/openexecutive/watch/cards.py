@@ -477,7 +477,10 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
         seen.add(key)
         fields = payload.get("fields")
         final = _final(card)
-        if card.status == STATUS_EXECUTING or (card.status == STATUS_PROPOSED and tried(card, payload, final)):
+        # A tried card holds whatever became of it (a waiting one _tidy closed
+        # as expired included): its try may have made the draft. A failed one
+        # is told apart by its final closed_code below, since ERPNext answered.
+        if card.status == STATUS_EXECUTING or (card.status != STATUS_FAILED and tried(card, payload, final)):
             held.add(key)
         elif card.status == STATUS_PROPOSED:
             target = payload.get("name")

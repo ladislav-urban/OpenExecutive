@@ -852,3 +852,26 @@ def test_a_name_with_a_space_gets_a_row_and_no_task() -> None:
     assert [s for s in specs if isinstance(s, DraftSpec)] == []
     [notice] = [s for s in specs if isinstance(s, CardSpec)]
     assert [dict(i.values)["Quotation"] for i in notice.items] == ["QTN 1"]
+
+
+def test_a_tried_card_tidied_as_expired_still_holds_its_finding(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _one_card_run(erp)
+    [card] = _job_cards()
+    tried = {**drafts._payload(card), "tried": True}
+    assert update_open_payload(card.id, tried, expected_json=card.proposed_payload_json)
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(seconds=-1))
+    # The reviewer's cards are listed before the next run: _tidy closes it.
+    assert drafts.open_cards(team.cara) == []
+    [closed] = _job_cards()
+    assert (closed.status, closed.reversal_reason) == ("closed_externally", "expired")
+    second = _one_card_run(erp, NEXT_DAY)
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(days=3))
+    assert (second.draft_cards, second.checks, second.draft_repeats) == (0, 0, 1)
+    assert len(_job_cards()) == 1
+    # Its card: record is kept, so the listing's gap can't free it either.
+    key = runner.dedup_key(JOB.id, "q:QTN-1:lapsing")
+    from openexecutive.watch.cards import carded_key
+
+    assert watch_settings.told(JOB.id, [carded_key(key)]) == {carded_key(key)}
