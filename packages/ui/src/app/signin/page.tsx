@@ -7,10 +7,11 @@ import { LOCAL_LOGIN_PROVIDER_ID } from "@/lib/localLogin";
 import { DEFAULT_PRODUCT_NAME } from "@/lib/productName";
 import { OIDC_PROVIDER_ID } from "@/lib/oidc";
 import { RETURN_COOKIE } from "@/lib/signinReturn";
+import { describeError } from "@/lib/signinError";
 import BrandMark from "@/components/BrandMark";
 import EmbedSignIn, { EmbedProductName } from "@/components/embed/EmbedSignIn";
 
-type SearchParams = Promise<{ callbackUrl?: string; error?: string }>;
+type SearchParams = Promise<{ callbackUrl?: string; error?: string; reason?: string }>;
 
 // Only same-origin paths allowed — a leading `/` followed by anything other
 // than another `/` (which would be protocol-relative, e.g. `//evil.com`).
@@ -21,7 +22,7 @@ function safeCallbackUrl(raw: string | undefined): string {
 }
 
 export default async function SignInPage({ searchParams }: { searchParams: SearchParams }) {
-  const { callbackUrl, error } = await searchParams;
+  const { callbackUrl, error, reason } = await searchParams;
   const safeDest = safeCallbackUrl(callbackUrl);
 
   // If already signed in, bounce straight to the destination — but only with a
@@ -38,7 +39,7 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
     redirect("/signin/sso?failed=1");
   }
 
-  const errorMessage = error ? describeError(error) : null;
+  const errorMessage = error ? describeError(error, reason) : null;
   const googleConfigured = Boolean(process.env.AUTH_GOOGLE_ID?.trim());
   const buttonClass =
     "w-full rounded-md bg-white px-4 py-2 text-sm font-medium text-zinc-900 hover:bg-zinc-100 transition";
@@ -139,17 +140,4 @@ export default async function SignInPage({ searchParams }: { searchParams: Searc
       </div>
     </main>
   );
-}
-
-function describeError(code: string): string {
-  switch (code) {
-    case "AccessDenied":
-      return "That account can’t sign in here: it isn’t on the allow-list for this workspace, or its email isn’t verified. Ask an admin to add you.";
-    case "CredentialsSignin":
-      return "Open only works in a browser on the computer running Open Executive, at http://localhost:3000.";
-    case "Configuration":
-      return "Authentication is misconfigured. Contact the administrator.";
-    default:
-      return "Sign-in failed. Try again, or contact the administrator if this keeps happening.";
-  }
 }

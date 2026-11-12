@@ -60,7 +60,9 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # And: a revaluation changes a balance by its gain or loss (the website
 # retake, Nov 3, 2026, month-end step 6).
 # And again: People is checked first when asked how to reach someone.
-TEAM_PERSONA_SHA256 = "e2970123dd2cc6b4eb3a5e7f9673b7ec8b2997da28b381caf26b782c5dc0e17b"
+# And: correcting itself is for its own errors only; a card closed because
+# the records changed is said as such, never "Earlier I ...".
+TEAM_PERSONA_SHA256 = "d4fd63e858de2e34e2068403fc321029d066a8fe32a9c05ddf574b8d335e30ef"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",

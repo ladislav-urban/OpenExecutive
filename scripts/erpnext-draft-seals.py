@@ -9,6 +9,9 @@ it consistently; compared with these records, it can. On the ERPNext site:
     uv run --project packages/core python scripts/erpnext-draft-seals.py > seals.json   # set EPISODIC_DB_PATH if the API uses another ledger
     bench --site <site> oe-connector-verify-drafts --expect seals.json
 
+In the Docker image, `openexecutive draft-seals` does the same
+(`docker compose exec -T api openexecutive draft-seals > seals.json`).
+
 The output is {card key: {"row_hash", "chain_index"}}, read from this
 install's decision ledger (``integrations.erpnext_drafts.recorded_seals``).
 """
