@@ -12469,7 +12469,8 @@ watch:
     project_status (dotted or bare key) joined, each raw text and the
     join cut at STATUS_RAW_MAX 1200 as read, tags dropped, html.unescape,
     then settled (runner.clean until stable) at QUOTE_MAX 300, ending
-    CUT_MARK "..." when cut. Late-task lines lead with the count ("8, 3
+    CUT_MARK "..." when cut there or when the raw text passed
+    STATUS_RAW_MAX (rows kept to one past it, so the cut is seen). Late-task lines lead with the count ("8, 3
     not shown: ..."), subjects shortened to 36; held lines lead with the
     count and oldest due date, titles shortened to 100; MORE_HELD_LINE past
     10 on hold; PROJECTS_CUT_LINE names both the 50 cap and a name the slot
@@ -12486,7 +12487,8 @@ watch:
     facts); notes for more than 10 and each cut read; count active +
     held. Bad rows are skipped, never stop the run (a missing rows list in
     read 1 stops the run as any job's would). Cost: one reason call a run on
-    the fast model, max_tokens 1200, numbers_from_facts True, actor
+    the fast model, max_tokens 1200, no_digits True (the instruction says
+    to describe the figures in words and never write a digit), actor
     watch:project-status (the
     runner's _cost_budget hook binds it once cost caps land).
   reasons: |
@@ -12506,10 +12508,15 @@ watch:
     runner._reasoned shows the model only rows with facts: a row with none
     (project-status's project with no update this week, its on-hold row)
     gets no line, and a run with none makes no call. With
-    ReasonSchema.numbers_from_facts (default False; project-status sets
-    it), runner.held_to_facts drops a line stating a number (numbers_in:
-    1,200.50 / 40 / 3.5) not among its own finding's numeric facts, logging
-    a count only. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
+    ReasonSchema.no_digits (default False; project-status sets it,
+    collections doesn't), runner.without_digits drops a line holding any
+    digit (runner.has_digit: str.isdigit / isdecimal / unicodedata.digit,
+    so ASCII, other scripts', full-width, superscript, subscript and
+    circled digits), logging a count only; the notice's own lines carry
+    every figure. Matching numbers against the finding's facts was
+    bypassable ("0" being another fact's value, "by7", "USD1200", "1,2",
+    "12e2", a minus sign, digits glued to CJK). Numbers written as words
+    remain a known residual. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
     limit before plain() (NFKC) and CLEAN_FLAT_FACTOR 2 x limit after,
     before _MARKDOWN_RE and the backtracking _URL_RE (a 4000-char U+33D8
     update took 7.7 s to clean before).

@@ -72,6 +72,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
@@ -247,8 +248,6 @@ _MARKDOWN_RE = re.compile(r"[*_`#>\[\]()|~<>\\!]")
 # before it is normalised, and the normalised text kept before any pattern.
 CLEAN_RAW_FACTOR = 4
 CLEAN_FLAT_FACTOR = 2
-# A number in a model's line, as code writes them (1,200.50; 40; 3.5).
-_NUMBER_RE = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
 
 
 def clean(text: object, limit: int = MAX_VALUE_CHARS) -> str:
@@ -827,36 +826,20 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
-def numbers_in(line: str) -> list[float]:
-    """The numbers a line states, as code writes them (``1,200.50``, ``40``)."""
-    out: list[float] = []
-    for found in _NUMBER_RE.findall(line):
-        try:
-            out.append(float(found.replace(",", "")))
-        except ValueError:
-            continue
-    return out
+def has_digit(line: str) -> bool:
+    """Whether ``line`` holds any digit at all: an ASCII or other Unicode
+    decimal digit, or a superscript, subscript or circled one."""
+    return any(ch.isdigit() or ch.isdecimal() or unicodedata.digit(ch, None) is not None for ch in line)
 
 
-def held_to_facts(
-    reasons: Mapping[str, str], facts: Mapping[str, Mapping[str, Any]],
-) -> tuple[dict[str, str], int]:
-    """``reasons`` without each line that states a number its own finding's
-    numeric facts don't hold (``ReasonSchema.numbers_from_facts``): one
-    finding's outside text can't steer another's figures. Returns the lines
-    kept and how many were dropped."""
-    kept: dict[str, str] = {}
-    dropped = 0
-    for key, line in reasons.items():
-        allowed = [
-            float(v) for v in (facts.get(key) or {}).values()
-            if isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
-        ]
-        if all(any(math.isclose(n, a, abs_tol=1e-9) for a in allowed) for n in numbers_in(line)):
-            kept[key] = line
-        else:
-            dropped += 1
-    return kept, dropped
+def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
+    """``reasons`` without each line that holds any digit
+    (``ReasonSchema.no_digits``): the notice's own lines carry every figure,
+    so the model's line may only say in words what they mean. Returns the
+    lines kept and how many were dropped. Numbers written as words ("zero
+    days") are a known residual."""
+    kept = {key: line for key, line in reasons.items() if not has_digit(line)}
+    return kept, len(reasons) - len(kept)
 
 
 async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> dict[str, str]:
@@ -887,13 +870,11 @@ async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]
         )
         reasons = parse_reasons(text, ids)
         schema = job.reason_schema
-        if schema is not None and schema.numbers_from_facts:
-            width = value_chars(job)
-            reasons, dropped = held_to_facts(reasons, {s.key: _facts(s, width) for s in specs})
+        if schema is not None and schema.no_digits:
+            reasons, dropped = without_digits(reasons)
             if dropped:
                 # A count only: never the line, which may quote outside text.
-                logger.warning("watch: job %s dropped %d reason line(s) naming a number not in their facts",
-                               job.id, dropped)
+                logger.warning("watch: job %s dropped %d reason line(s) holding a digit", job.id, dropped)
         return reasons
     except Exception:
         logger.warning("watch: job %s's reason step failed; its notices go without reasons", job.id)

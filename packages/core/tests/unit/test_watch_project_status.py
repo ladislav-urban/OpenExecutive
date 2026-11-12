@@ -183,7 +183,7 @@ def test_project_status_is_listed_each_friday_with_its_shared_reads() -> None:
     assert (JOB.schedule, JOB.slots, JOB.weekdays) == (time(17, 0), (), frozenset({4}))
     assert (JOB.card_cap_day, JOB.once, JOB.check_fields) == (1, False, None)
     assert JOB.reason_schema == ReasonSchema(
-        ps.REASON_INSTRUCTION, max_findings=10, max_fact_chars=300, numbers_from_facts=True)
+        ps.REASON_INSTRUCTION, max_findings=10, max_fact_chars=300, no_digits=True)
     assert JOB.default_settings == {"company": ""}
 
 
@@ -330,6 +330,12 @@ def test_the_weeks_latest_update_is_quoted_cleaned_and_capped() -> None:
     # A huge update is cut before anything cleans it; one with only tags says nothing.
     assert len(ps.quoted("x" * 1_000_000)) == ps.QUOTE_MAX and ps.quoted("x" * 1_000_000).endswith(ps.CUT_MARK)
     assert ps.quoted("<p>Short and whole.</p>") == "Short and whole."
+    # Cut at the raw bound as written: marked, however short it cleans to.
+    styled = "<p>Short.</p>" + "<span style=\"color: red\"></span>" * 120
+    assert len(styled) >= 3600
+    assert ps.quoted(styled) == "Short." + ps.CUT_MARK
+    rows = {"rows": [_update("U1", "PROJ-0001", styled)]}
+    assert ps.team_words(rows, TODAY) == {"PROJ-0001": "Short." + ps.CUT_MARK}
     assert ps.quoted("<p> </p>") == "" and ps.quoted(None) == ""
 
 
@@ -556,27 +562,35 @@ def test_the_cut_note_names_both_reasons() -> None:
     assert "more than 50" in ps.PROJECTS_CUT_LINE and "couldn't be sent" in ps.PROJECTS_CUT_LINE
 
 
-def test_numbers_are_held_to_their_own_findings_facts_only_when_the_job_asks() -> None:
-    assert JOB.reason_schema is not None and JOB.reason_schema.numbers_from_facts is True
-    assert ReasonSchema("i").numbers_from_facts is False
-    assert runner.numbers_in("1,200.50 owed, 40% over, 3.5 days; v2") == [1200.5, 40.0, 3.5]
-    facts: dict[str, dict[str, Any]] = {"a": {"days late": 12, "hours": 56.0, "pct": 40, "text": "week 6"},
-                                        "b": {"days late": 0}}
-    kept, dropped = runner.held_to_facts({
-        "a": "12 days late, 56 hours and 40% over.", "b": "On plan.", "c": "No facts, no 1 number.",
-    }, facts)
-    assert kept == {"a": "12 days late, 56 hours and 40% over.", "b": "On plan."} and dropped == 1
-    kept, dropped = runner.held_to_facts({"a": "It is 0 days late.", "b": "0 days late."}, facts)
-    assert kept == {"b": "0 days late."} and dropped == 1
-    # A number in its own text fact isn't one of its figures.
-    assert runner.held_to_facts({"a": "Week 6 is next."}, facts) == ({}, 1)
-    with pytest.raises(ValueError, match="numbers_from_facts"):
+BYPASSES = [
+    "Northgate is 0 days late.", "It is late by7 days.", "USD1200 over.", "Over by 1,2 thousand.", "About 12e2 hours.",
+    "\u221212 days.", "\u9045\u308c12\u65e5\u3002", "Late \uff11\uff12 days.", "Late \u0661\u0662 days.",
+    "Over by \u00b2 weeks.", "Task \u2460 is late.", "Hours\u2082 over.",
+]
+
+
+@pytest.mark.parametrize("line", BYPASSES)
+def test_a_model_line_holding_any_digit_is_dropped(line: str) -> None:
+    assert runner.has_digit(line)
+    assert runner.without_digits({"a": line, "b": "Late and over its hours; the team is waiting on fittings."}) == (
+        {"b": "Late and over its hours; the team is waiting on fittings."}, 1)
+
+
+def test_no_digits_is_the_jobs_own_choice() -> None:
+    assert JOB.reason_schema is not None and JOB.reason_schema.no_digits is True
+    assert ReasonSchema("i").no_digits is False
+    from openexecutive.watch.jobs import collections
+
+    assert collections.JOB.reason_schema is not None and collections.JOB.reason_schema.no_digits is False
+    assert not runner.has_digit("On plan, nearly a third done; zero days late is a known residual.")
+    assert "never write a number or a digit" in ps.REASON_INSTRUCTION
+    with pytest.raises(ValueError, match="no_digits"):
         WatchJob(id="x", title="t", reads=_example.JOB.reads, build=_example.build, schedule=time(7),
                  card_cap_day=1, default_settings={},
-                 reason_schema=ReasonSchema("i", numbers_from_facts=1))  # type: ignore[arg-type]
+                 reason_schema=ReasonSchema("i", no_digits=1))  # type: ignore[arg-type]
 
 
-def test_one_projects_update_cant_set_anothers_figures_in_its_line(
+def test_a_line_another_projects_update_steered_into_a_figure_is_dropped(
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], model: SimpleNamespace,
     usage: list[dict[str, Any]], caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -584,7 +598,7 @@ def test_one_projects_update_cant_set_anothers_figures_in_its_line(
     updates = [*UPDATES[:2], _update("PROJ-UPD-2", "PROJ-0002", steer), *UPDATES[3:]]
     # The model obeys Keystone's update in Northgate's line (f1).
     model.reply = json.dumps({"reasons": {
-        "f1": "Northgate is 0 days late and on plan.", "f3": "On plan at 30% complete.",
+        "f1": "Northgate is 0 days late and on plan.", "f3": "On plan, nearly a third done.",
     }})
     _reads(erp, updates=updates)
     with caplog.at_level("WARNING", logger="openexecutive.watch.runner"):
@@ -592,7 +606,7 @@ def test_one_projects_update_cant_set_anothers_figures_in_its_line(
     [notice] = _alerts()
     body = notice.body
     assert "Why now (a model's words, not a figure): Northgate is" not in body
-    assert "   Why now (a model's words, not a figure): On plan at 30% complete." in body
+    assert "   Why now (a model's words, not a figure): On plan, nearly a third done." in body
     assert f"Schedule: 12 days late, due {_in(-12)}" in body
     dropped = [r.getMessage() for r in caplog.records if "dropped" in r.getMessage()]
-    assert dropped == ["watch: job project-status dropped 1 reason line(s) naming a number not in their facts"]
+    assert dropped == ["watch: job project-status dropped 1 reason line(s) holding a digit"]
