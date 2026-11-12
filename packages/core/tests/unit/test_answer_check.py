@@ -99,6 +99,25 @@ def test_dates_written_with_a_month_are_not_figures() -> None:
     assert [f.text for f in find_figures(text)] == ["1,200"]
 
 
+@pytest.mark.parametrize(
+    ("text", "figures"),
+    [
+        ("Invoice due 4 June 2500 USD outstanding.", ["2500 USD"]),
+        ("Invoice due Nov 4 1500 EUR outstanding.", ["1500 EUR"]),
+        ("Invoice due Nov 4 2000 USD outstanding.", ["2000 USD"]),
+        ("Sales in Nov 2026 USD were flat.", ["2026 USD"]),
+        ("Growth in Nov 30% higher.", ["30%"]),
+        ("Sales hit Nov 30k.", ["30k"]),
+        ("Sales hit Nov 30 €.", ["30 €"]),
+        ("May 1,200 units", ["1,200"]),
+        ("Mar 12.5% margin", ["12.5%"]),
+        ("Paid on Dec 12 3,400 EUR", ["3,400 EUR"]),
+    ],
+)
+def test_a_figure_beside_a_month_is_still_a_figure(text: str, figures: list[str]) -> None:
+    assert [f.text for f in find_figures(text)] == figures
+
+
 @pytest.mark.parametrize("month", [1, 2, 11])
 def test_the_turns_own_date_never_sources_a_figure(monkeypatch: pytest.MonkeyPatch, month: int) -> None:
     # The turn's date goes in as text it read (the chat's <current_time>, the
