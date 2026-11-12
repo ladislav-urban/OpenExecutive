@@ -5603,7 +5603,32 @@ chat:
     must be a source name; near one source name (case/punctuation, or 0/1/2
     edits by length) is written in by code; otherwise left out or removed.
     Source names only from name fields (answer_check_context's names, report
-    Link/*_name columns, company), never remarks.
+    Link/*_name columns, company), never remarks. An Account / Cost Center /
+    Warehouse name less its " - <abbr>" company suffix (1-10 capitals or
+    digits) is confirmed (NameSources.short, from fields linking those
+    DocTypes); answer_correct.remove drops a table whole when its rows added
+    up to a kept total row's figure and no longer do.
+    Held to the figure's own kind (demo reshoot, Nov 10, 2026): check 2's
+    "wrong" value is refused (cannot_tell) when the figure plainly isn't
+    money (Figure.not_money: a count, or days/hours/stars/units after it)
+    and every operand is only ever a money column's value (Sources.money;
+    any op but ratio/percent/percent_change), or when it is more than
+    MAX_FACTOR (3) times off the figure (never for ratio/percent/
+    percent_change, nor to or from 0). Why: "averaging 62.5 days" came
+    back as a mean of paid amounts.
+    Numeric strings: check 1 reads a rating field's string ("4") and a
+    dotted child field's (list_records fields "parameters.rating") when the
+    child table's numeric fields name it; check 2 accepts a plain numeric
+    string operand (still one of ERPNext's own values).
+    Own differences (figure_check._own_differences): "$A … $B, $D under/over
+    the <noun>" in one sentence (answer_correct.units), the noun named right
+    before B ("a BOM of $B"), where D isn't |A - B| but is |T - B| for
+    exactly one figure T of the reply's own table total row: A gets T as its
+    arithmetic and is written in like a wrong product. No table total, no
+    flag: a mismatch alone may compare with something the sentence omits.
+    record_titles: an id alone in its brackets gets ", title" inside them;
+    one sharing its brackets gets nothing. A string rating ("1") is never
+    read as a Rating fraction (only a JSON number is).
     Check 3 (PR (c), orchestrator/figure_confirm.py): a figure matched to a
     list_records total that is a MEASURES quick way (no other narrowing; GL
     reads with named accounts for cash/COGS) is asked of oe_connector's
@@ -6138,7 +6163,7 @@ audit:
     - external_signal_deferred — one row per poll that skipped entries whose published_at is more than the row's future-skew tolerance ahead (aggregated — `count`, `future_skew_hours`, `race_tick`, and up to 10 `entries` each with `dedup_key`, `published_at`, `summary` and `provenance_url`, so an operator can tell WHAT was held back). Emitted from the scan loop's finally, so it survives a poll that raises later in the same row. A deferred entry is by design NOT written to external_signals (that would burn its dedup key and mute it for good), so this row is its only trace until its date passes and it is judged normally.
     - external_signal_promoted — one row per signal promoted into the alerts pipeline (post-suppression cascade). Carries `signal_id`, `watchlist_id`, `watchlist_slug`, `source_kind`, `severity_hint`, `dedup_key`, `provenance_url`. Pair with `external_signal_received` to compute promotion rate per watchlist row.
     - external_monitor_poll — one row per watchlist row polled in a scan tick, emitted even when the row's poll raised or was cancelled (`failed` set to true, with `signals_emitted` still counting rows that landed before the failure, so the audit log stands on its own); `failed` is also true when the adapter crashed or no adapter is registered. A row with no registered adapter is still marked polled so it honours the cadence rather than re-firing every heartbeat. Carries `watchlist_id`, `watchlist_slug`, `signal_type`, `signals_emitted`, `duration_ms`, `failed`. Enables per-source health drill-down (`GET /audit?event_type=external_monitor_poll`) without needing a dedicated debug endpoint.
-    - watchlist_research_periodic_ran — emitted by the periodic cron whenever the workflow actually fires. Carries `state_hash` (the input fingerprint at run time), `trigger` (`cold_start`, `state_changed`, or `staleness_floor`), `findings` count, `tool_calls` count, `ok_tool_calls`, `run_id`. The next tick reads the most recent row to decide skip-or-run (its `state_hash` for the fingerprint compare, its `ts` for the staleness floor). These three research run-history rows are the ONLY audit_log rows a fixture load/unload clears (via `monitoring.research.scheduler.clear_research_run_history`, called from `cli.fixture_loader._apply_state_from_source`): load wipes the profile/initiatives/watchlist that feed the fingerprint but otherwise preserves audit_log, so without this reset a same-fixture reload within the staleness floor would make the freshly-seeded scan skip itself and surface zero findings. A full reset still wipes all of audit_log. Also carries `usage` — the run's rollup of every model call it made (`calls`, token classes, `web_search_requests`, and `by_source` per actor), copied from the workflow's `result` event — so a run's weight is readable from the audit log."
+    - watchlist_research_periodic_ran — emitted by the periodic cron whenever the workflow actually fires. Carries `state_hash` (the input fingerprint at run time), `trigger` (`cold_start`, `state_changed`, `staleness_floor`, or `demo_reset_carry` for the row a demo reset writes when it keeps the last run), `findings` count, `tool_calls` count, `ok_tool_calls`, `run_id`. The next tick reads the most recent row to decide skip-or-run (its `state_hash` for the fingerprint compare, its `details.run_ts`, else its `ts`, for the staleness floor). These three research run-history rows are the ONLY audit_log rows a fixture load/unload clears (via `monitoring.research.scheduler.clear_research_run_history`, called from `cli.fixture_loader._apply_state_from_source`) — load wipes the profile/initiatives/watchlist that feed the fingerprint but otherwise preserves audit_log, so without this reset a same-fixture reload within the staleness floor would make the freshly-seeded scan skip itself and surface zero findings. A full reset still wipes all of audit_log. A demo reset of the same company (`cli.demo_reset`, which checks the installed profile before step 1 replaces it, and passes `keep_research`) keeps the last run instead, when one of its alerts is still live (`monitoring.research.carry`) — `snapshot_last_research` reads, before the wipe, the alerts tagged `research_run:<run id>` (stamped only in `alerts.pipeline.evaluate_and_dispatch`, on insert and on coalesce, never for TTL-exempt sources) and the watch rows whose `config_json._policy.run_id` names the run. `restore_research` puts them back after the wipe, in one transaction — alerts column for column with their ids (INSERT OR IGNORE, so a bundle row on the same `(source, external_id)` wins), their held actions and approvals dropped, then watch rows with `baselined_at` and `last_polled_at` NULL (no signal carried), routed people resolved through the bundle's own name map or kept by id. If no live alert landed it rolls back. Then it writes one `ran` row with the post-reset fingerprint, the real run's `run_ts`, `run_id`, `findings` and `carried` set to true (no `usage`, so the run isn't counted twice), and a `watchlist_research_carried` row with counts. The recent_research artifact stays with a carried run. Any failure clears as before, so the next tick cold-starts. Also carries `usage` — the run's rollup of every model call it made (`calls`, token classes, `web_search_requests`, and `by_source` per actor), copied from the workflow's `result` event — so a run's weight is readable from the audit log."
     - watchlist_research_periodic_skipped — emitted when the state_hash matches the last `_ran` row. Carries `state_hash`. Visible cost-saving signal in the audit log.
     - watchlist_research_periodic_failed — emitted on workflow timeout / crash. Carries `state_hash` + `error` or `reason`.
     - watchlist_research_added / watchlist_research_suggested / watchlist_research_rejected — one row per `propose_watch` the research watch policy decided (`monitoring.research.watch_policy`). Carries `slug`, `target`, `signal_type`, `rationale`, `entity`, `grounding_kind`, `score`, `reasons`, and for adds the quiet defaults applied (`cadence`, `severity_floor`, `trigger`). `_added` also renders in the brief's HANDLED block as `watching`.
@@ -8753,6 +8778,58 @@ integrations:
     the UI proxy (proxySegments SERVER_ONLY). Person.directory_subject is
     never serialised elsewhere.
 
+    Admit at sign-in (directory_sync.admit_one, POST /auth/directory-admit):
+    the invariant is that it does only what the next run would do for one
+    person (create a team or demo Person through the run's own _add, in
+    admit mode, which never links) or nothing, believing nothing from the
+    web app but who to look up. Order: sync off or config_problem ->
+    disabled; subject not a lowercase UUID (<= 64) or email not an address
+    (<= 254, normalised) -> invalid; a non-archived Person linked to the
+    subject -> exists (untouched, a suspended one stays so); anyone holding
+    the email, alias included -> address_held, unless the subject reads as
+    linked on a second look (a concurrent admit of the same person) ->
+    exists. None of these reads the
+    provider or is audited. Then the per-subject limit (30 s; the map pruned
+    and capped at 10,000, refusing at the cap rather than evicting), a
+    process-wide slot of one admit (busy at once), the global cap (20 a
+    minute, counting only admits that reach the provider). Reads, all
+    before _run_lock, through KeycloakReader with an admit timeout (3 s a
+    call, 3 s budget in all, the 401 token retry inside it; the client
+    closed in a finally): users/{id} (404 -> unknown; body id must equal
+    the subject), _member (inactive, email_mismatch), users/{id}/groups
+    paged. Member = a path at or under DIRECTORY_SYNC_GROUP AND that
+    group's id in the group's tree as _group_tree walks it (both, so a
+    slash-named root group and a moved-out group are not_member); demo =
+    a path under DIRECTORY_SYNC_DEMO_GROUP OR the id in its tree (either,
+    the narrower role). Trees cached 60 s per (issuer, admin URL, path),
+    at most 50 groups (else error), a failed read never cached. Then
+    _run_lock with a 0.5 s wait (busy; the budget plus this wait stay
+    under the web app's 4 s, so nothing is admitted after it gave up), the subject and email re-checked,
+    _add, registry.invalidate; after_roster_write after the lock. Any
+    failure writes nothing and answers error. Audit directory_admit
+    (code, email domain, subject SHA-256 prefix, person id) only for
+    admits that reached the provider; busy and rate_limited log a warning
+    with a counter. The route is server-only (_server_only, the shared
+    secret, never in _UNAUTHENTICATED_PATHS, the UI proxy's SERVER_ONLY).
+    UI: signIn calls it only for OIDC, DIRECTORY_SYNC_ENABLED mirrored on
+    the UI, a verified email, a non-env roster denial and a string sub,
+    with a 4 s timeout (lib/directoryAdmit.ts). On admitted or exists one
+    fresh /auth/allowed-emails read (createRosterLoader's refresh(), which
+    chains after any in-flight fetch and stores the tracked promise so it
+    clears) replaces the roster cache and gives the sign-in its subjects;
+    the allow-list and directoryRefusal then run again. loadDirectorySubjects
+    stays uncached. That cache is the server bundle's; the middleware's
+    bundle (authorized) has a loader of its own, so judgeSession uses
+    resolveSessionAllowed: a refusal of an SSO session whose signedInAt is
+    newer than that loader's fetchedAt reads the roster once more before
+    revoking (a failed read keeps the roster-unknown contract). Without it
+    the middleware revoked the just-admitted session on its older roster and
+    the browser looped between / and /signin until that cache expired. not_member, busy and rate_limited redirect to
+    /signin?error=AccessDenied&reason=directory_waiting, whose text is
+    keyed on that fixed value (lib/signinError.ts). After an admit in a
+    re-created realm the "none came back" stop can't trip, but the brake
+    still holds and a teammate can't be admitted (address_held).
+
     People and Setup status (step 8): GET /people/directory (principal
     only) maps the last finished run's candidate addresses to unlinked
     active People; POST /people/{id}/directory-link calls link(). The cards
@@ -10855,7 +10932,8 @@ integrations:
     the erpnext_draft_created audit row. The chain alone cannot show its
     newest rows removed or a consistent rewrite (no secret key), so
     recorded_seals() exports {card key - row_hash, chain_index}
-    (scripts/erpnext-draft-seals.py) for oe-connector-verify-drafts --expect
+    (`openexecutive draft-seals`, or scripts/erpnext-draft-seals.py from a
+    checkout; both exit 1 on an empty ledger) for oe-connector-verify-drafts --expect
     to compare with the log. One oversight record per card, for an auditor
     (oe_connector plan item 6): integrations/erpnext_oversight.records(since,
     until) turns each erpnext_draft card into {who asked (asked_by), where
@@ -10925,14 +11003,66 @@ integrations:
     containing CHANGED_SINCE_PROPOSED (oe_connector built the draft again
     and it no longer matches the card's fingerprint: a source document, a
     price or a rate changed) closes the card (finish_execution failed, with
-    last_error, attempts unchanged), audits erpnext_draft_changed and
-    answers 409 changed_since_proposed; asking again leaves a fresh card.
+    last_error, attempts unchanged, closed_code changed_since_proposed),
+    audits erpnext_draft_changed and answers 409 changed_since_proposed;
+    asking again leaves a fresh card.
     Any other failure:
     update_open_payload(while_executing=True) with last_error and attempts
     while the claim is still held, then release_claim, so a second tap
     can't claim it in between and lose the count; so
     approving again re-sends the same key (oe_connector's "OE Draft" log
-    returns the draft it already made); ATTEMPTS_MAX 5, then failed.
+    returns the draft it already made); ATTEMPTS_MAX 5, then failed, with
+    closed_code no_answer for every such final failure: oe_connector refuses
+    with a plain-text ToolError, which can't be told apart from a timeout by
+    its shape, so nothing says nothing was made ("the approval didn't go
+    through after several tries, and whether a draft was made isn't
+    recorded"). A failure that leaves the card waiting stores no code.
+    closed_code is our own word from a fixed set, never the ERP's text.
+    What became of a conversation's cards reaches its later turns as a
+    <decided_cards> block in the user turn (erpnext_drafts.decided_cards_note,
+    called from Executive._build_messages after <pending_followups>; never
+    a cached system block, so the cached prefix and tools are unchanged).
+    Whose cards: on ERPNext's panel the team member its signed email names
+    (erpnext_panel._person_for; never on a from_web_chat turn, whatever
+    email it carries), on ERPNext's desk (host_turn) the person the ERP is
+    asked as there (erpnext_caller._host_caller must pass: signed in, a
+    team member, a private conversation; caller_person_id, never the
+    page's word), anywhere else the turn's person_id (no
+    caller_person_id fallback; the principal only when principal_speaking,
+    as leaving a card needs; a teammate only when
+    people_tools.teammate_on_verified_surface is that same person, and on
+    the web only under signed sign-ins, as GET /erpnext/drafts), filtered
+    on approver_person_id and the
+    card's originating_session_id. Only a panel turn or a conversation
+    nobody else reads (history_chat.private_chat and not shared_chat); never
+    unattended, email or private-to-principal turns. Cards decided in the
+    last 72 hours (CARD_TTL), newest 5, oldest first; an expired card counts
+    from created_at + CARD_TTL, so one tidied late is not news, and the note
+    never calls open_cards or _tidy. Each line is code-written: the doctype
+    when it is in DRAFT_TOOLS (else "A draft"), the time, and a fixed
+    sentence per outcome (approved: an unsubmitted draft was made;
+    dismissed; expired; a dismissed or expired card with attempts > 0,
+    marked tried (approve writes tried: true into the payload right after
+    the claim, before the call, so a call cut off by a restart still
+    counts; a mark that can't be written releases the claim and refuses
+    busy, with no call) or left executing says an approval was tried and to check in the ERP,
+    never that nothing was made; closed per closed_code, a closed_externally card
+    with reversal_reason changed as replaced by a newer card, and any other
+    or missing code as "the reason wasn't recorded; don't guess one"). An
+    approved draft's name shows only when it matches
+    [A-Za-z0-9][A-Za-z0-9._/-]{0,59}, inside an untrusted block (source
+    erpnext). last_error and the ERP's words never reach it. Its instruction
+    line says to mention a card only when asked or relevant and that a card
+    closed because the records changed is not the model's error (the
+    persona's "Correct yourself plainly, once" is for its own errors only).
+    Any failure leaves the note out. A note sets Session.read_erpnext, and
+    audit.erpnext_reads.conversation_read_erpnext (behind
+    executive._conversation_read_erpnext) also answers yes for a session
+    that left any erpnext_draft card (_left_a_draft_card,
+    decision_ledger.list_session_instances), so a
+    rebuilt channel session keeps such replies out of peer and department
+    memory. Evals give a scenario's decided_cards through
+    erpnext_drafts.decided_cards_override, never the ledger.
     Dismiss is reject (audit only). Audit rows, private to the person:
     erpnext_draft_proposed / created / failed / dismissed. GET
     /erpnext/drafts lists the caller's own waiting cards (api/routes/
@@ -11283,7 +11413,7 @@ integrations:
     offered to chat). call_tool refuses them first in its ERPNext
     block, under every marker and on every turn, and _drop_blocked_tools
     hides them, with the draft tools no card uses yet (Dunning, update,
-    comment), which _check_erpnext_draft refuses anyway. Each moves to a
+    comment, the invoice block), which _check_erpnext_draft refuses anyway. Each moves to a
     marker-gated list when its own path exists, never to PINNED_ERPNEXT_TOOLS.
 
     A2A for suppliers' agents (design "Next", item 3;
@@ -12310,7 +12440,11 @@ fixtures:
     way), except the research scan's run history
     (clear_research_run_history): the bundle is the same company every
     night, so a kept fingerprint would make watchlist_research_scan skip
-    itself. The API holds a shared flock on company/.demo_reset.lock from
+    itself. When the installed profile already names the bundle's company
+    and one of the last periodic run's alerts is still live, the reset
+    keeps that run instead (monitoring/research/carry.py): its alerts, its
+    watch rows re-baselined and a run row dated to the real run, so the
+    scan runs weekly (the staleness floor) rather than after every reset. The API holds a shared flock on company/.demo_reset.lock from
     the first step of its lifespan to the last of its shutdown
     (take_api_lock, off the event loop), and the reset takes it
     exclusively, so the reset refuses while the API starts, runs or stops,

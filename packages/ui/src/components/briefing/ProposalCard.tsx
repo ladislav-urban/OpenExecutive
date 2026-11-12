@@ -341,7 +341,7 @@ export default function ProposalCard({
   const status = isMonitoring ? null : proposalStatusChip(proposal);
   // "private:" tags only route the card; they mean nothing to the reader.
   const visibleTags = proposal.topic_tags.filter(
-    (t) => t !== "artifact" && !t.startsWith("failed_run:") && !t.startsWith("private:"),
+    (t) => t !== "artifact" && !t.startsWith("failed_run:") && !t.startsWith("private:") && !t.startsWith("research_run:"),
   );
   const ageShown = status != null && status.label.endsWith(" old");
   const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal, ageShown);
