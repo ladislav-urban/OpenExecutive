@@ -13,10 +13,15 @@ check, so resume is then open rather than leaving a pause no one can lift.
 
 ``paused_by`` comes from the ``x-caller-email`` the UI proxy stamps from the
 signed-in session; direct API callers fall back to ``"api"``.
+
+Also here: the owner's safety level, "When should I check with you?"
+(``orchestrator.outside_mode``), with any channel set apart from it, which
+only the principal may change.
 """
 from __future__ import annotations
 
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -115,3 +120,79 @@ def resume_executive(request: Request) -> ExecutiveStatus:
             },
         )
     return _status(request)
+
+
+class OutsideContentOut(BaseModel):
+    # The company's level: "ask" (Careful), "outsiders" (Balanced) or "trust"
+    # (Hands-off): orchestrator.outside_mode.
+    mode: str
+    # Channels set apart from it: channel -> mode. Any other follows ``mode``.
+    channels: dict[str, str] = Field(default_factory=dict)
+    # The channels a level can be set on (outside_mode.CHANNELS), in order.
+    channel_ids: list[str] = Field(default_factory=list)
+    # Whether THIS caller may change it: the principal only.
+    can_change: bool = False
+
+
+class OutsideContentIn(BaseModel):
+    mode: Literal["ask", "outsiders", "trust"]
+    # Channel changes: a mode sets the channel apart, null makes it follow
+    # ``mode`` again. Channels left out keep what they have.
+    channels: dict[str, Literal["ask", "outsiders", "trust"] | None] | None = None
+
+
+def _outside_out(*, can_change: bool) -> OutsideContentOut:
+    from openexecutive.orchestrator import outside_mode
+
+    # One level drives every channel (orchestrator.levels): no channel is
+    # set apart any more, so none is offered.
+    return OutsideContentOut(mode=outside_mode.get_mode(), channels={}, channel_ids=[], can_change=can_change)
+
+
+def _is_principal(request: Request) -> bool:
+    from openexecutive.api.routes.people import caller_is_principal
+
+    return caller_is_principal(request)
+
+
+@router.get("/executive/outside-content", response_model=OutsideContentOut)
+def get_outside_content(request: Request) -> OutsideContentOut:
+    """The safety level: when a read of someone else's text holds what the
+    Executive does next (orchestrator.outside_mode), and the channels set
+    apart from it."""
+    return _outside_out(can_change=_is_principal(request))
+
+
+@router.put("/executive/outside-content", response_model=OutsideContentOut)
+def set_outside_content(request: Request, body: OutsideContentIn) -> OutsideContentOut:
+    """Change it. The principal only: it decides how far text from outside
+    the company can steer their Executive."""
+    from openexecutive.orchestrator import outside_mode
+
+    if not _is_principal(request):
+        raise HTTPException(status_code=403, detail="Only the account owner can change this.")
+    if any(value is not None for value in (body.channels or {}).values()):
+        raise HTTPException(status_code=422, detail="One level applies to every channel.")
+    before = outside_mode.get_mode()
+    before_channels = outside_mode.stored_channels()
+    actor = api_caller.actor(request)
+    # Setting the level clears any channel an older version set apart.
+    outside_mode.set_mode(
+        body.mode, updated_by=actor, channels=dict.fromkeys(before_channels),
+    )
+    after_channels = outside_mode.stored_channels()
+    if before != body.mode or before_channels != after_channels:
+        from openexecutive.audit import log_event as audit_log
+
+        audit_log(
+            "outside_content_mode_changed",
+            f"Safety level: {before} -> {body.mode}",
+            actor=actor,
+            details={
+                "before": before,
+                "mode": body.mode,
+                "channels_before": before_channels,
+                "channels": after_channels,
+            },
+        )
+    return _outside_out(can_change=True)

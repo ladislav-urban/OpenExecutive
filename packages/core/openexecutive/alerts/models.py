@@ -33,6 +33,36 @@ def is_private_alert(alert: object) -> bool:
     return any(str(t).lower() == PRIVATE_ALERT_TAG for t in tags)
 
 
+# Topic tag naming one more person a private alert is also for: an ERPNext
+# alert whose event named who may read it (``credit_hold``'s ``for_users``,
+# integrations/erpnext_events.py), matched to People. The alert stays
+# private: it never reaches a broadcast, a live push, a department, anyone's
+# brief or the reflection. Only the named person's own Home, the alert's own
+# route and a push to their own private chat let them in. The pipeline
+# strips any such tag the triage model writes; only the event's own list sets one.
+NAMED_TAG_PREFIX = "named:"
+# The sources whose events may name people. Nothing else's tags count.
+NAMED_SOURCES = frozenset({"erpnext"})
+
+
+def named_people(alert: object) -> frozenset[int]:
+    """The People ids a private alert is also for (``NAMED_TAG_PREFIX``);
+    empty for any alert that isn't private or isn't from a named source."""
+    if not is_private_alert(alert) or getattr(alert, "source", None) not in NAMED_SOURCES:
+        return frozenset()
+    ids: set[int] = set()
+    for tag in getattr(alert, "topic_tags", None) or []:
+        text = str(tag)
+        if text.startswith(NAMED_TAG_PREFIX) and text[len(NAMED_TAG_PREFIX):].isdigit():
+            ids.add(int(text[len(NAMED_TAG_PREFIX):]))
+    return frozenset(ids)
+
+
+def named_for(alert: object, person_id: int | None) -> bool:
+    """Whether a private alert names ``person_id`` as one it is for."""
+    return isinstance(person_id, int) and person_id in named_people(alert)
+
+
 # Source of a document the Executive published (`draft_artifact`). Each one
 # is its owner's alone (``owner_person_id``; none = the principal's): it never
 # reaches a surface that serves anyone else (see ``artifact_visible_to``).
@@ -94,6 +124,16 @@ class AlertChannel(StrEnum):
     COMPANY_BROADCAST = "company_broadcast"
 
 
+# What a card can need from its reader (``Alert.needs``).
+NEEDS_ANSWER = "answer"
+NEEDS_CHOICE = "choice"
+NEEDS_OK = "ok"
+NEEDS_FYI = "fyi"
+CARD_NEEDS: frozenset[str] = frozenset({NEEDS_ANSWER, NEEDS_CHOICE, NEEDS_OK, NEEDS_FYI})
+# A pick offers this many choices, each this long at most.
+MIN_CHOICES, MAX_CHOICES, MAX_CHOICE_CHARS = 2, 4, 60
+
+
 class AlertEvent(BaseModel):
     """An external event that may or may not become an alert."""
 
@@ -110,6 +150,11 @@ class AlertEvent(BaseModel):
     # Producer-supplied dedup key that overrides the triage model's own
     # (monitoring sets ``watch:<slug>`` so one watch = one open alert).
     dedup_hint: str = ""
+    # With ``dedup_hint``: a later event folds into the open card by adding
+    # its words under the earlier ones ("Then: ..."), not replacing them, so
+    # a follow-up never erases what was first asked (one card per sender's
+    # mail, see ``orchestrator.alert_tools``).
+    follow_up: bool = False
     # Person the alert should be routed to (assigned_to_person_id from the
     # Executive's create_alert tool). Lands on the row so the "principal
     # owns unrouted" rule stops sweeping every triage-born alert to them.
@@ -123,12 +168,19 @@ class AlertEvent(BaseModel):
     # routes it to the principal, keeps it out of every broadcast and live
     # push, and never coalesces it into a card someone else can see.
     private: bool = False
+    # With ``private``: People ids the alert is also for (``NAMED_TAG_PREFIX``),
+    # set only by the ERPNext event route from the event's own list.
+    named_person_ids: list[int] = Field(default_factory=list)
     # Set only by the create_alert tool on a team member's chat turn: who
     # raised it, for its "Raised by <name>" label. Such an alert keeps a
     # source and id the server picked (``TEAM_RAISED_SOURCE``), whatever the
     # turn asked, and never goes out as a company-wide broadcast — a person
     # or department only (alerts/pipeline.py).
     raised_by: str = ""
+    # What the card needs from its reader (``Alert.needs``).
+    needs: str = ""
+    question: str = ""
+    choices: list[str] = Field(default_factory=list)
 
 
 # The source of every alert a team member raises from chat (see
@@ -220,6 +272,14 @@ class Alert(BaseModel):
     # Whose document a drafted artifact is (orchestrator/artifact_records.py);
     # NULL on a draft = the principal's. Unused on every other source.
     owner_person_id: int | None = None
+    # What the card needs from its reader (CARD_NEEDS): an answer
+    # typed on the card, a pick of ``choices``, an OK to do one exact thing,
+    # or nothing (for them to know). '' on rows written before, and on cards
+    # that keep their own buttons. ``question`` is what an answer or pick is
+    # to; the reply goes back into the work (POST /alerts/{id}/answer).
+    needs: str = ""
+    question: str = ""
+    choices: list[str] = Field(default_factory=list)
 
 
 class UserPreferences(BaseModel):

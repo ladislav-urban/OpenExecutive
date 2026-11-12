@@ -15,9 +15,10 @@ import {
   NEW_CHAT_DESCRIPTION,
   SETTINGS_NAV_ITEM,
 } from "@/components/shell/navConfig";
-import { getBadges } from "@/lib/api";
+import { getBadges, listMemoryChanges } from "@/lib/api";
 import { reviewBadgeFrom } from "@/lib/badges";
 import { NEW_CHAT_PATH } from "@/lib/chatRoutes";
+import { MEMORY_VISITED_EVENT, readLastVisit, writeLastVisit } from "@/lib/memoryChanges";
 
 /**
  * Wiring the chat home passes in. The chat home (`/`, `/chats/new`,
@@ -59,7 +60,7 @@ export default function AppSidebar({
   companyName,
   home,
 }: AppSidebarProps) {
-  const { mode, role } = useWorkspace();
+  const { mode, role, hasDepartments } = useWorkspace();
   const [reviewBadge, setReviewBadge] = useState(0);
 
   // Knowledge base badge: items waiting in its review queue (GET /badges).
@@ -71,7 +72,15 @@ export default function AppSidebar({
       .catch(() => {});
   }, [pathname]);
 
-  const destinations = buildDestinations({ isOnboarded, reviewBadge, mode, roleKind: role.role_kind });
+  const memoryNews = useMemoryNews(pathname);
+
+  const destinations = buildDestinations({
+    isOnboarded,
+    reviewBadge,
+    mode,
+    roleKind: role.role_kind,
+    hasDepartments,
+  });
   const newChatActive = home ? home.mode === "chat" && home.activeSessionId === undefined : false;
 
   return (
@@ -142,6 +151,7 @@ export default function AppSidebar({
                 description={d.description}
                 active={active}
                 badge={d.badge}
+                dot={d.key === "pulse" && memoryNews}
               />
             );
           })}
@@ -220,6 +230,7 @@ function NavRow({
   description,
   active,
   badge,
+  dot,
 }: {
   href?: string;
   onClick: () => void;
@@ -229,6 +240,8 @@ function NavRow({
   description?: string;
   active: boolean;
   badge?: number;
+  /** Something new to see there (Memory, since the last visit). */
+  dot?: boolean;
 }) {
   const tone = active
     ? "bg-accent/10 text-accent font-semibold"
@@ -244,8 +257,54 @@ function NavRow({
       <Icon name={icon} size="w-5 h-5" />
       <span className="flex-1 truncate">{label}</span>
       {badge != null && badge > 0 && <Badge count={badge} />}
+      {dot && (
+        <span className="h-2 w-2 rounded-full bg-emerald-400" role="status" aria-label="New since your last visit" />
+      )}
     </SidebarEntry>
   );
+}
+
+/** Whether Memory has something new since it was last opened in this
+ * browser: looked at on each move and every few minutes, cleared when
+ * Memory is opened. The first time, the clock starts now. */
+function useMemoryNews(pathname: string): boolean {
+  const [news, setNews] = useState(false);
+  const [visits, setVisits] = useState(0);
+  const [tick, setTick] = useState(0);
+
+  useEffect(() => {
+    const onVisit = () => {
+      setNews(false);
+      setVisits((n) => n + 1);
+    };
+    window.addEventListener(MEMORY_VISITED_EVENT, onVisit);
+    const timer = window.setInterval(() => setTick((n) => n + 1), 3 * 60_000);
+    return () => {
+      window.removeEventListener(MEMORY_VISITED_EVENT, onVisit);
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (pathname.startsWith("/memories")) return;
+    const since = readLastVisit();
+    if (!since) {
+      writeLastVisit(new Date().toISOString());
+      return;
+    }
+    let cancelled = false;
+    listMemoryChanges(since)
+      .then((rows) => {
+        if (!cancelled) setNews(Boolean(rows && rows.length > 0));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [pathname, visits, tick]);
+
+  // On Memory itself there is nothing to point at; the visit restarts the clock.
+  return news && !pathname.startsWith("/memories");
 }
 
 function Badge({ count }: { count: number }) {

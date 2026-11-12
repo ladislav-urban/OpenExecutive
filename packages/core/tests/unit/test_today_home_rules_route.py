@@ -66,7 +66,9 @@ def test_the_principal_gets_their_lanes_actions_and_counts(board: dict[str, Any]
     }
     assert [t["key"] for t in body["tiles"]] == ["departments", "people", "team"]
     assert body["dismiss_older"]["alert_ids"] == []
-    assert len(body["snooze_choices"]) >= 2
+    # Tomorrow morning always; later today and Monday depend on the clock
+    # (a late Sunday run has neither).
+    assert len(body["snooze_choices"]) >= 1
     assert body["quiet"] is False and body["quiet_banner"] is False
 
 

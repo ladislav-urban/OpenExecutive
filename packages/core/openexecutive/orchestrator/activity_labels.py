@@ -61,6 +61,7 @@ _LABELS: dict[str, str] = {
     "lookup_person": "Looking up people…",
     "ack_alert": "Updating a proposal…",
     "find_alerts": "Looking through the briefing board…",
+    "answer_card": "Answering a card…",
 
     # Calendar. These write, so none of them says "checking" — the label is
     # emitted before the call runs and must not promise a read.
@@ -107,6 +108,7 @@ _LABELS: dict[str, str] = {
     "run_executive_research": "Researching…",
     "create_alert": "Flagging something for review…",
     "run_python_job": "Working on the files…",
+    "save_file": "Saving the file…",
     "draft_artifact": "Writing that up…",
     "list_artifacts": "Looking through earlier work…",
     "get_artifact": "Rereading that document…",
@@ -131,6 +133,7 @@ _LABELS: dict[str, str] = {
     "read_my_email_attachment": "Reading an attachment…",
     "save_my_email_attachment": "Saving a file from your email…",
     "remind_me": "Setting a reminder…",
+    "watch_for_email": "Watching for that email…",
     "propose_actions": "Leaving you a card to approve…",
     "find_in_app": "Looking that up in the app…",
     "do_in_app": "Making that change…",
@@ -141,6 +144,8 @@ _LABELS: dict[str, str] = {
 
     # Always in the loop: the speaker's own notes
     "recall_history": "Checking your notes…",
+    # Earlier chats: the speaker's own
+    "search_past_chats": "Checking our earlier chats…",
 
     # MCP gateway. `call_tool` is dynamic and handled in `_label_for`.
     "search_tools": "Looking for the right tool…",
@@ -202,6 +207,7 @@ _PRIORITY: tuple[frozenset[str], ...] = (
     frozenset({
         "create_alert",
         "ack_alert",
+        "answer_card",
         "draft_artifact",
         "add_watchlist_entry",
         "remove_watchlist_entry",

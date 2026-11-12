@@ -20,6 +20,7 @@ from openexecutive.delegation import ghostwriter as gw
 from openexecutive.delegation import settings as dsettings
 from openexecutive.delegation.gmail import (
     CreatedDraft,
+    DraftInfo,
     DraftSpec,
     GmailError,
     MailMessage,
@@ -356,6 +357,114 @@ def test_the_chip_links_to_the_draft_only_when_one_was_saved() -> None:
     assert evil is not None and evil["link"] is None
 
 
+def test_the_chip_carries_the_saved_draft_for_send() -> None:
+    from openexecutive.orchestrator.action_chips import summarize_action
+
+    chip = summarize_action(
+        tool_name="ghostwrite_email", tool_input={},
+        tool_result=json.dumps({
+            "status": "drafted", "draft_row": 7, "to": [DANA], "cc": [], "subject": "Re: pilot",
+            "preview": "Yes to Oct 5.",
+        }),
+    )
+    assert chip is not None
+    assert chip["draft"] == {"row": 7, "to": [DANA], "cc": [], "subject": "Re: pilot", "preview": "Yes to Oct 5."}
+    # No row kept (or not a real one): no Send under the chat.
+    for row in (None, 0, True, "7"):
+        bare = summarize_action(
+            tool_name="ghostwrite_email", tool_input={},
+            tool_result=json.dumps({"status": "drafted", "to": [DANA], "draft_row": row}),
+        )
+        assert bare is not None and "draft" not in bare
+
+
+def test_a_saved_draft_names_its_row(roster: SimpleNamespace, composer: list[str]) -> None:
+    from openexecutive.delegation import drafts
+
+    result = _run(_session(FakeMailbox()), {"intent": "Yes to Oct 5.", "thread_id": "t1"})
+    row = drafts.get_row(result["draft_row"])
+    assert row is not None and row.source == drafts.SOURCE_CHAT and row.thread_id == "t1"
+
+
+class DraftingMailbox(FakeMailbox):
+    """Keeps each draft it saves, so a redraft can find and delete the last."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.saved: dict[str, DraftInfo] = {}
+        self.deleted: list[str] = []
+
+    async def create_draft(self, spec: DraftSpec) -> CreatedDraft:
+        self.drafts.append(spec)
+        n = len(self.drafts)
+        message = MailMessage(
+            id=f"m{100 + n}", thread_id=spec.thread_id or f"tnew{n}", to=list(spec.to), subject=spec.subject,
+        )
+        self.saved[f"d{n}"] = DraftInfo(draft_id=f"d{n}", message=message)
+        return CreatedDraft(draft_id=f"d{n}", message_id=message.id, thread_id=message.thread_id)
+
+    async def get_draft(self, draft_id: str) -> DraftInfo | None:
+        return self.saved.get(draft_id)
+
+    async def delete_draft(self, draft_id: str) -> bool:
+        self.deleted.append(draft_id)
+        return self.saved.pop(draft_id, None) is not None
+
+
+def test_a_redraft_in_the_thread_replaces_the_earlier_draft(roster: SimpleNamespace, composer: list[str]) -> None:
+    mailbox = DraftingMailbox()
+    session = _session(mailbox)
+    first = _run(session, {"intent": "Yes to Oct 5.", "thread_id": "t1"})
+    assert "replaced_earlier_drafts" not in first
+    second = _run(session, {"intent": "Yes to Oct 5, without the last line.", "thread_id": "t1"})
+    # The first one is out of their Drafts and no longer counts as waiting.
+    assert second["replaced_earlier_drafts"] == 1
+    assert mailbox.deleted == ["d1"] and list(mailbox.saved) == ["d2"]
+    old = ddrafts.get_row(first["draft_row"])
+    assert old is not None and old.gone_at
+
+
+def test_a_draft_they_edited_is_never_replaced(roster: SimpleNamespace, composer: list[str]) -> None:
+    mailbox = DraftingMailbox()
+    session = _session(mailbox)
+    first = _run(session, {"intent": "Yes to Oct 5.", "thread_id": "t1"})
+    # Edited in their mailbox: Gmail gave it a new message id.
+    edited = mailbox.saved["d1"]
+    mailbox.saved["d1"] = DraftInfo(draft_id="d1", message=MailMessage(id="m-edited", thread_id="t1", to=[DANA]))
+    second = _run(session, {"intent": "Yes to Oct 5, shorter.", "thread_id": "t1"})
+    assert "replaced_earlier_drafts" not in second
+    assert mailbox.deleted == [] and "d1" in mailbox.saved and edited.draft_id == "d1"
+    row = ddrafts.get_row(first["draft_row"])
+    assert row is not None and not row.gone_at
+
+
+def test_a_draft_can_replace_one_from_another_chat_it_names(roster: SimpleNamespace, composer: list[str]) -> None:
+    mailbox = DraftingMailbox()
+    first = _run(_session(mailbox), {"intent": "Yes to Oct 5.", "thread_id": "t1"})
+    # Another conversation, a new email: nothing replaced unless it is named.
+    other = _session(mailbox)
+    plain = _run(other, {"intent": "Send the Q3 numbers", "to": [TEAM]})
+    assert "replaced_earlier_drafts" not in plain and "d1" in mailbox.saved
+    named = _run(other, {"intent": "Yes to Oct 5, final.", "to": [DANA], "replaces": "dana brand refresh"})
+    assert named["replaced_earlier_drafts"] == 1
+    assert mailbox.deleted == ["d1"] and "d2" in mailbox.saved
+    assert ddrafts.get_row(first["draft_row"]).gone_at  # type: ignore[union-attr]
+
+
+def test_a_new_email_replaces_only_its_own_earlier_version(roster: SimpleNamespace, composer: list[str]) -> None:
+    mailbox = DraftingMailbox()
+    session = _session(mailbox)
+    _run(session, {"intent": "Send the Q3 numbers", "to": [TEAM]})
+    _run(session, {"intent": "Hi", "to": ["kai@newclient.example"]})
+    # The same conversation, to Ben again: the first draft to him goes.
+    again = _run(session, {"intent": "Send the Q3 numbers, with the totals", "to": [TEAM]})
+    assert again["replaced_earlier_drafts"] == 1
+    assert mailbox.deleted == ["d1"] and sorted(mailbox.saved) == ["d2", "d3"]
+    # Another conversation never reaches this one's drafts.
+    elsewhere = _run(_session(mailbox), {"intent": "Numbers again", "to": [TEAM]})
+    assert "replaced_earlier_drafts" not in elsewhere and sorted(mailbox.saved) == ["d2", "d3", "d4"]
+
+
 def test_it_has_an_activity_label() -> None:
     from openexecutive.orchestrator.activity_labels import _LABELS
 
@@ -557,3 +666,173 @@ def test_the_writers_notes_for_every_recipient_reach_the_composer(
     # Everyone the draft goes to, To and Cc alike.
     assert asked == [(_owner().id, [DANA, "sam@northpeak.example"])]
     assert '<writer_noted>\n[2026-09-28] promised: "we can start Oct 12"\n</writer_noted>' in composer[-1]
+
+
+# --------------------------------------------------------------------------- #
+# Drive files
+# --------------------------------------------------------------------------- #
+
+DRIVE_ID = "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"
+
+
+def test_drive_files_go_onto_a_new_draft(
+    roster: SimpleNamespace, composer: list[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import drive_attach
+
+    asked: list[tuple[list[str], int | None]] = []
+
+    async def fetch(ids: list[str], viewer: int | None, **_kw: Any) -> drive_attach.DriveFiles:
+        asked.append((ids, viewer))
+        return drive_attach.DriveFiles(files=[("bill.pdf", "application/pdf", b"%PDF")], skipped=1)
+
+    monkeypatch.setattr(drive_attach, "fetch", fetch)
+    mailbox = FakeMailbox()
+    result = _run(_session(mailbox, "email dana the bills"), {
+        "intent": "Here are the bills.", "to": [DANA], "drive_files": [DRIVE_ID, DRIVE_ID],
+    })
+    assert result["status"] == "drafted"
+    assert result["attached"] == ["bill.pdf"]
+    assert "attachments_left_off" in result["flags"]
+    assert mailbox.drafts[0].attachments == [("bill.pdf", "application/pdf", b"%PDF")]
+    # Deduplicated, and fetched for the speaker (whose saved files they may use).
+    assert asked == [([DRIVE_ID], roster.principal)]
+
+
+def test_a_drive_file_that_cannot_be_fetched_makes_no_draft(
+    roster: SimpleNamespace, composer: list[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import drive_attach
+
+    async def fetch(ids: list[str], viewer: int | None, **_kw: Any) -> drive_attach.DriveFiles:
+        raise drive_attach.AttachError("Google Drive isn't connected")
+
+    monkeypatch.setattr(drive_attach, "fetch", fetch)
+    mailbox = FakeMailbox()
+    result = _run(_session(mailbox), {"intent": "x", "to": [DANA], "drive_files": [DRIVE_ID]})
+    assert "isn't connected" in result["error"] and "no draft" in result["error"]
+    assert mailbox.drafts == []
+
+
+def test_drive_files_are_checked_before_the_mailbox_opens(roster: SimpleNamespace) -> None:
+    session = _session(FakeMailbox())
+    bad = _run(session, {"intent": "x", "to": [DANA], "drive_files": ["../../etc/passwd"]})
+    assert "Not a Drive file id" in bad["error"]
+    on_forward = _run(session, {"intent": "x", "to": [DANA], "forward": "t1", "drive_files": [DRIVE_ID]})
+    assert "not a forward" in on_forward["error"]
+    assert session.turn_delegation.touched_mail is False
+
+
+def test_a_team_member_gets_no_drive_files(roster: SimpleNamespace) -> None:
+    """They come from the Executive's own Drive, which can hold much a team
+    member can't open themselves."""
+    person = people_store.get_person(roster.teammate)
+    assert person is not None
+    mailbox = FakeMailbox(opened=TEAM)
+    session = Session(delegation_override=DelegationOverride(enabled=True, gmail=mailbox, person=person))
+    assert pin_turn_delegation(session, "email dana the bills").offered
+    result = _run(session, {"intent": "x", "to": [DANA], "drive_files": [DRIVE_ID]})
+    assert "Only the owner" in result["error"]
+    assert mailbox.drafts == []
+
+
+def test_files_chosen_after_an_outside_read_are_named_for_a_check(
+    roster: SimpleNamespace, composer: list[str], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import drive_attach
+    from openexecutive.orchestrator import outside_content as oc
+
+    async def fetch(ids: list[str], viewer: int | None, **_kw: Any) -> drive_attach.DriveFiles:
+        return drive_attach.DriveFiles(files=[("bill.pdf", "application/pdf", b"%PDF")])
+
+    monkeypatch.setattr(drive_attach, "fetch", fetch)
+    session = _session(FakeMailbox(), "email dana the bills")
+    state = oc.begin_turn(session, user_message="email dana the bills")
+    oc.mark(oc.GATEWAY)
+    try:
+        result = _run(session, {"intent": "Bills.", "to": [DANA], "drive_files": [DRIVE_ID]})
+    finally:
+        oc.end_turn(state)
+    assert "name each attached file" in result["check_attachments"]
+
+
+# --------------------------------------------------------------------------- #
+# Any file, by handle (orchestrator/file_refs.py)
+# --------------------------------------------------------------------------- #
+
+
+class MailboxWithFiles(FakeMailbox):
+    """Message m1 carries the signed LOIs as one PDF."""
+
+    async def list_attachments(self, message_id: str) -> list[Any]:
+        from openexecutive.delegation.gmail import MailAttachment
+
+        assert message_id == "m1"
+        return [MailAttachment(index=1, name="Signed LOIs.pdf", mime_type="application/pdf", size=4)]
+
+    async def attachment_bytes(self, message_id: str, index: int) -> tuple[Any, bytes]:
+        return (await self.list_attachments(message_id))[index - 1], b"%PDF"
+
+
+def test_an_emailed_file_goes_onto_a_reply_without_a_drive_step(
+    roster: SimpleNamespace, composer: list[str],
+) -> None:
+    mailbox = MailboxWithFiles()
+    result = _run(_session(mailbox, "reply to Dana and attach the signed LOIs"), {
+        "intent": "Signed LOIs attached; good to move forward.", "thread_id": "t1", "files": ["mail:m1#1"],
+    })
+    assert result["status"] == "drafted" and result["attached"] == ["Signed LOIs.pdf"]
+    assert mailbox.drafts[0].attachments == [("Signed LOIs.pdf", "application/pdf", b"%PDF")]
+    assert mailbox.drafts[0].thread_id == "t1"
+
+
+def test_a_file_from_earlier_in_the_conversation_goes_onto_a_draft(
+    roster: SimpleNamespace, composer: list[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator import conversation_files
+
+    monkeypatch.setattr(conversation_files, "root", lambda: tmp_path / "files")
+    mailbox = FakeMailbox()
+    session = _session(mailbox, "send dana the Willow Court LOI")
+    conversation_files.keep(session.session_id, {"LOI - Willow Court.pdf": b"%PDF-half"})
+    result = _run(session, {"intent": "Attached.", "to": [DANA], "files": ["file:LOI - Willow Court.pdf"]})
+    assert result["attached"] == ["LOI - Willow Court.pdf"]
+    assert mailbox.drafts[0].attachments == [("LOI - Willow Court.pdf", "application/pdf", b"%PDF-half")]
+    # Another conversation's files are not found.
+    other = _session(FakeMailbox(), "send dana the Willow Court LOI")
+    missing = _run(other, {"intent": "Attached.", "to": [DANA], "files": ["file:LOI - Willow Court.pdf"]})
+    assert "No file named" in missing["error"]
+
+
+def test_bad_handles_are_refused_before_the_mailbox_opens(roster: SimpleNamespace) -> None:
+    session = _session(FakeMailbox())
+    bad = _run(session, {"intent": "x", "to": [DANA], "files": ["C:/secret.pdf"]})
+    assert "isn't a file handle" in bad["error"]
+    on_forward = _run(session, {"intent": "x", "to": [DANA], "forward": "t1", "files": ["mail:m1#1"]})
+    assert "forward carries its own files" in on_forward["error"]
+    assert session.turn_delegation.touched_mail is False
+
+
+def test_a_team_member_gets_no_drive_handles(roster: SimpleNamespace) -> None:
+    person = people_store.get_person(roster.teammate)
+    assert person is not None
+    mailbox = FakeMailbox(opened=TEAM)
+    session = Session(delegation_override=DelegationOverride(enabled=True, gmail=mailbox, person=person))
+    assert pin_turn_delegation(session, "email dana the bills").offered
+    result = _run(session, {"intent": "x", "to": [DANA], "files": [f"drive:{DRIVE_ID}"]})
+    assert "Only the owner" in result["error"]
+    assert mailbox.drafts == []
+
+
+def test_cc_goes_on_a_new_email_and_a_reply(roster: SimpleNamespace, composer: list[str]) -> None:
+    mailbox = FakeMailbox()
+    new = _run(_session(mailbox, "email dana and cc priya@co.example"), {
+        "intent": "x", "to": [DANA], "cc": ["Priya@co.example", DANA],
+    })
+    assert new["cc"] == ["priya@co.example"] and mailbox.drafts[0].cc == ["priya@co.example"]
+    reply = _run(_session(mailbox, "reply and cc priya@co.example"), {
+        "intent": "x", "thread_id": "t1", "cc": ["priya@co.example"],
+    })
+    assert "priya@co.example" in mailbox.drafts[1].cc and reply["status"] == "drafted"
+    bad = _run(_session(mailbox), {"intent": "x", "to": [DANA], "cc": ["not an address"]})
+    assert "`cc`" in bad["error"]

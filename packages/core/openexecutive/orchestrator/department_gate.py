@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from openexecutive.departments.models import AuthorityLevel
-from openexecutive.orchestrator import take_the_lead
+from openexecutive.orchestrator import card_details, take_the_lead
 from openexecutive.people.models import AuthorityScope, Person
 
 logger = logging.getLogger(__name__)
@@ -244,9 +244,12 @@ def hold(
     mcp: bool,
     session_id: str | None = None,
     db_path: Path | None = None,
+    held: bool = False,
 ) -> int:
     """Make a held action a decision for its approver, with a card on Today.
-    The same action still waiting is that card, not a new one."""
+    The same action still waiting is that card, not a new one. ``held``: the
+    owner's level put it on a card (``orchestrator.levels``), so Approve may
+    carry out any step the Executive runs, not only a send."""
     from openexecutive.alerts.models import PRIVATE_ALERT_TAG, AlertSeverity
     from openexecutive.alerts.store import insert_alert
     from openexecutive.audit import log_event
@@ -261,7 +264,8 @@ def hold(
     base = "department_action:" + hashlib.sha256(
         # Someone on no People entry is told apart by their chat.
         json.dumps(
-            [person.id if person.id is not None else f"session:{session_id}", tool, tool_input, mcp],
+            [person.id if person.id is not None else f"session:{session_id}", tool, tool_input, mcp]
+            + (["held"] if held else []),
             sort_keys=True, default=str,
         ).encode()
     ).hexdigest()[:32]
@@ -290,7 +294,8 @@ def hold(
         "fields": take_the_lead.editable_fields(tool, tool_input, mcp=mcp),
         # Everything the call says, in full: the card shows this before it
         # can be approved, since the summary keeps only the start.
-        "details": _details(tool_input),
+        "details": card_details.plain(tool, tool_input),
+        **({"held": True} if held else {}),
     }
     decision_id = create_decision_instance(
         decision_class=DECISION_CLASS,
@@ -309,7 +314,10 @@ def hold(
             source=DECISION_ALERT_SOURCE,
             external_id=external_id,
             severity=AlertSeverity.HIGH.value if escalated else AlertSeverity.MEDIUM.value,
-            headline=f"{who} asked the Executive to: {shown}"[:160],
+            headline=(
+                f"Waiting for your OK: {shown}" if held and person.is_principal
+                else f"{who} asked the Executive to: {shown}"
+            )[:160],
             body=f"{shown}\n\nIt waited because {verdict.reason}.",
             suggested_action=shown,
             topic_tags=[
@@ -343,15 +351,6 @@ def hold(
 
 
 _HOLD_KEY_TRIES = 50
-
-
-def _details(tool_input: dict[str, Any]) -> list[dict[str, str]]:
-    """Each field of the call and its whole value, as text."""
-    out = []
-    for key, value in tool_input.items():
-        text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
-        out.append({"field": str(key), "value": text})
-    return out
 
 
 def _waiting(decision_id: int, verdict: Verdict) -> str:
@@ -389,6 +388,12 @@ async def _gated(
         )
     if verdict.run:
         return await inner(tool_input)
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.people.demo import demo_refusal, demo_turn
+
+    if getattr(person, "demo", False) is True or demo_turn(current_session.get()):
+        # A demo person's step is refused, never carded (people.demo).
+        return demo_refusal(name)
     try:
         decision_id = hold(person, name, tool_input, verdict, mcp=mcp, session_id=session_id)
     except Exception:

@@ -258,9 +258,9 @@ def test_a_held_send_becomes_a_card_and_does_nothing(
     assert instance.originating_session_id == "s-1"
     payload = json.loads(instance.proposed_payload_json)
     assert payload["tool"] == "send_slack_dm" and payload["requested_by_person_id"] == team["sam"].id
-    # The whole call, for the card to show before it can be approved.
+    # The whole call in plain words, for the card to show before it can be approved.
     assert payload["details"] == [
-        {"field": "user_id", "value": "U_RIA"}, {"field": "text", "value": _send()["text"]},
+        {"field": "User id", "value": "U_RIA"}, {"field": "Message", "value": _send()["text"]},
     ]
 
     [card] = alerts_store.list_alerts(limit=10)
@@ -394,11 +394,18 @@ def test_declining_is_recorded(
 # ── wired into a chat turn ────────────────────────────────────────────────────
 
 
+@pytest.mark.parametrize("hands_off", [False, True])
 @pytest.mark.parametrize("who", ["sam", "owner"])
 def test_a_teammates_chat_turn_goes_through_the_gate(
-    team: dict[str, Person], monkeypatch: pytest.MonkeyPatch, who: str,
+    team: dict[str, Person], monkeypatch: pytest.MonkeyPatch, who: str, hands_off: bool,
 ) -> None:
-    """A team member's send waits; the owner's own goes, as before."""
+    """A team member's send waits; the owner's own goes, as before. Hands-off
+    is the owner's trust in their own Executive: it doesn't waive the range
+    they set for their people."""
+    if hands_off:
+        from openexecutive.orchestrator import outside_mode
+
+        monkeypatch.setattr(outside_mode, "get_mode", lambda **_: outside_mode.TRUST)
     from unittest.mock import patch
 
     from openexecutive.orchestrator.executive import Executive

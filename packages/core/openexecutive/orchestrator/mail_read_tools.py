@@ -14,9 +14,9 @@ so they are fenced the same way:
 - **Offered** only on a turn ``pin_turn_delegation`` offered Act as me to,
   never in ``_ALL_SKILL_TOOLS``; the handler re-checks the pin and the surface.
 - **Private.** Before the first read each marks the turn as having read the
-  owner's mail (``TurnDelegation.touched_mail`` and ``read_mail``): its audit rows are private,
-  it teaches no memory, the conversation is theirs alone, and nothing that
-  opens a link, runs a script or workflow, or posts to everyone runs for the rest
+  owner's mail (``TurnDelegation.touched_mail`` and ``read_mail``): its audit
+  rows are private, it teaches only their own private memory, the conversation
+  is theirs alone, and nothing that opens a link, runs a script or workflow, or posts to everyone runs for the rest
   of the turn (``delegation.lockdown``).
 - **Read-only.** Nothing is changed, labelled, drafted or sent. A calendar
   read is fenced like a mail read (an invite's title is anyone's words), and
@@ -30,6 +30,8 @@ so they are fenced the same way:
 - **Attachments are read, never kept.** A file's text comes back in an
   untrusted block, parsed in an isolated worker (``knowledge.loader``); unlike
   a file sent to the Executive, it is never added to the company knowledge.
+- **In a workflow** they read its creator's mailbox instead, on the creator's
+  own run (``delegation.workflow_reads``, through ``AS_CREATOR``).
 - **Other people's words are data.** Each message someone else wrote comes
   back inside an ``<untrusted_content>`` block (``content_trust``); the
   speaker's own sent mail (``threads.mine``: SENT, from their address) is
@@ -42,6 +44,7 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable
+from contextvars import ContextVar
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
@@ -51,6 +54,8 @@ SEARCH_MY_EMAIL = "search_my_email"
 READ_MY_EMAIL = "read_my_email"
 MY_EMAIL_AWAITING_REPLY = "my_email_awaiting_reply"
 READ_MY_EMAIL_ATTACHMENT = "read_my_email_attachment"
+# Their unsent drafts shown after a thread's messages, newest last.
+_DRAFTS_SHOWN = 2
 MY_EMAIL_READ_BEFORE = "my_email_read_before"
 MY_CALENDAR = "my_calendar"
 SAVE_MY_EMAIL_ATTACHMENT = "save_my_email_attachment"
@@ -63,7 +68,7 @@ SAVES_PER_TURN = 10
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 MAX_ATTACHMENT_CHARS = 15_000
 # What the document reader can turn into text (knowledge.loader, pdf_reader).
-READABLE_SUFFIXES = frozenset({".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".csv", ".md", ".txt", ".rst"})
+READABLE_SUFFIXES = frozenset({".pdf", ".docx", ".doc", ".xlsx", ".xlsm", ".csv", ".md", ".txt", ".rst", ".ics", ".eml"})
 MAX_RESULTS = 10
 INBOX_DAYS = 3
 AWAITING_DAYS = 14
@@ -76,6 +81,12 @@ _AWAITING_CANDIDATES = 15
 # Sent less than this long ago isn't waiting yet.
 _AWAITING_MIN_AGE = timedelta(days=1)
 _FETCH_CONCURRENCY = 4
+
+# Set by ``delegation.workflow_reads`` for one call of a workflow's read: the
+# workflow's creator (a ``_Writer``), already checked there, read in place of
+# the chat turn's speaker. Their run is theirs alone, so no conversation is
+# marked private.
+AS_CREATOR: ContextVar[Any] = ContextVar("mail_read_as_creator", default=None)
 
 _DATA_NOTE = (
     "From their own mailbox. Subjects, senders and message text are what other "
@@ -131,7 +142,8 @@ READ_MY_EMAIL_TOOL: dict[str, Any] = {
         "Read one email thread in the mailbox of the person you are speaking "
         "with, by the thread_id search_my_email or my_email_awaiting_reply "
         f"returned: its last {READ_MESSAGES} messages, each sender's own words "
-        "(quoted history left out), and the files attached to them "
+        "(quoted history left out), drafts saved there marked not sent, and "
+        "the files attached to them "
         "(`attachments`: message_id and index; open one with "
         "read_my_email_attachment). Their own messages are marked yours. Use it "
         "to answer what a thread says or to summarise it. Read-only."
@@ -338,7 +350,8 @@ async def _run(
     from openexecutive.delegation.gmail import STATUS_MESSAGES, GmailAuthError, GmailError
     from openexecutive.orchestrator.delegation_tools import _open_mailbox, _writer
 
-    writer = _writer(tool_name)
+    creator = AS_CREATOR.get()
+    writer = creator if creator is not None else _writer(tool_name)
     if isinstance(writer, str):
         return writer
     refused = check(writer) if check is not None else None
@@ -348,7 +361,7 @@ async def _run(
     if refused is not None:
         return refused
     try:
-        refused = await _open_mailbox(writer)
+        refused = await (_open_creators_mailbox(writer) if creator is not None else _open_mailbox(writer))
         if refused is not None:
             return refused
         return await read(writer)
@@ -359,9 +372,22 @@ async def _run(
         return _error("Couldn't read their mailbox just now. Try again in a moment.")
 
 
-async def _recent_inbox(mailbox: Any, days: int, limit: int) -> list[dict[str, str]]:
+async def _open_creators_mailbox(writer: Any) -> str | None:
+    """``_open_mailbox`` for a workflow's creator (``AS_CREATOR``)."""
+    from openexecutive.delegation.gmail import STATUS_MESSAGES, gmail_status
+
+    writer.pinned.touched_mail = writer.pinned.read_mail = True
+    writer.pinned.mail_vetted = False  # re-vetted only by the loop's check_mail_read
+    status = await gmail_status(writer.email, gmail=writer.mailbox)
+    if status != "connected":
+        return _error(STATUS_MESSAGES[status], status=status)
+    return None
+
+
+async def _recent_inbox(mailbox: Any, days: int, limit: int) -> list[tuple[dict[str, str], str]]:
     """The newest thread of each of the last ``limit`` messages that reached
-    their inbox in ``days`` days (their own left out)."""
+    their inbox in ``days`` days (their own left out), each with its sender's
+    address when the mail service authenticated it (``_verified``)."""
     from openexecutive.delegation.ghostwriter import one_line
 
     listed = await mailbox.inbox_message_ids(
@@ -384,14 +410,25 @@ async def _recent_inbox(mailbox: Any, days: int, limit: int) -> list[dict[str, s
 
     messages = await asyncio.gather(*(fetch(i) for i in picked))
     return [
-        {
-            "thread_id": m.thread_id,
-            "subject": one_line(m.subject, 160),
-            "from": one_line(_sender(m), 160),
-            "date": one_line(m.date or m.received_at, 60),
-        }
+        (
+            {
+                "thread_id": m.thread_id,
+                "subject": one_line(m.subject, 160),
+                "from": one_line(_sender(m), 160),
+                "date": one_line(m.date or m.received_at, 60),
+            },
+            _verified(m.from_addr, m.sender_authenticated),
+        )
         for m in messages
     ]
+
+
+def _verified(sender: str, authenticated: Any) -> str:
+    """The sender's address when the mail service authenticated it, else empty."""
+    from email.utils import parseaddr
+
+    address = parseaddr(str(sender or ""))[1].strip().lower()
+    return address if authenticated is True and "@" in address else ""
 
 
 async def handle_search_my_email(tool_input: dict[str, Any]) -> str:
@@ -404,17 +441,26 @@ async def handle_search_my_email(tool_input: dict[str, Any]) -> str:
     async def read(writer: Any) -> str:
         if query:
             found = await writer.mailbox.search_threads(query, max_results=limit)
-            threads = [
-                {
-                    "thread_id": t.id,
-                    "subject": one_line(t.subject, 160),
-                    "from": one_line(t.sender, 160),
-                    "date": one_line(t.date, 60),
-                }
+            listed = [
+                (
+                    {
+                        "thread_id": t.id,
+                        "subject": one_line(t.subject, 160),
+                        "from": one_line(t.sender, 160),
+                        "date": one_line(t.date, 60),
+                    },
+                    _verified(t.sender, getattr(t, "sender_authenticated", False)),
+                )
                 for t in found
             ]
         else:
-            threads = await _recent_inbox(writer.mailbox, days, limit)
+            listed = await _recent_inbox(writer.mailbox, days, limit)
+        threads = [entry for entry, _ in listed]
+        for entry, address in listed:
+            if address:
+                writer.pinned.mail_verified[entry["thread_id"]] = address
+            else:
+                writer.pinned.mail_verified.pop(entry["thread_id"], None)
         _note_senders(writer, [t["from"] for t in threads])
         if not threads:
             return json.dumps({
@@ -442,6 +488,13 @@ def _render_thread(messages: list[Any], first: int, own: str) -> str:
     for i, m in enumerate(messages, first):
         text = plain(sender_new_text(m.text or ""))[:READ_MESSAGE_CHARS]
         date = one_line(m.date or m.received_at, 60)
+        if "DRAFT" in m.labels:
+            # Saved, never sent: whoever wrote it (them, Act as me, another
+            # app), it went to no one, so its words stay quoted data.
+            to = ", ".join([*m.to, *m.cc][:10])
+            header = f"[{i}] Your draft, not sent — {date}\nTo: {one_line(to, 400)}"
+            parts.append(f"[{i}]\n" + wrap_untrusted(f"{header}\n\n{text}", source="email", author=own))
+            continue
         if mine(m, own):
             # Outside any block, so it can neither open nor close a tag, nor
             # start what looks like another message.
@@ -494,17 +547,24 @@ async def handle_read_my_email(tool_input: dict[str, Any]) -> str:
     async def read(writer: Any) -> str:
         thread = await writer.mailbox.get_thread(thread_id)
         messages = [m for m in thread.messages if "DRAFT" not in m.labels]
-        if not messages:
+        # Their drafts in it come after the last messages, marked not sent, so
+        # a thread that is only a draft (a new email saved for them) does not
+        # read as empty and a draft never pushes a real message out.
+        drafts = [m for m in thread.messages if "DRAFT" in m.labels][-_DRAFTS_SHOWN:]
+        if not messages and not drafts:
             return json.dumps({"status": "not_found", "detail": "That thread has no messages."})
         shown = messages[-READ_MESSAGES:]
         first = len(messages) - len(shown) + 1
-        _remember_read(writer, thread.id, messages[0])
+        if messages:  # a thread that is only their draft is not mail they read
+            _remember_read(writer, thread.id, messages[0])
         _note_senders(writer, [_sender(m) for m in shown])
+        shown = shown + drafts
         return json.dumps({
             "status": "ok",
             "thread_id": thread.id,
-            "subject": one_line(messages[0].subject, 200),
+            "subject": one_line((messages or drafts)[0].subject, 200),
             "messages_in_thread": len(messages),
+            "drafts_shown": len(drafts),
             "shown_from": first,
             "thread": _render_thread(shown, first, writer.email),
             "attachments": await _attachment_list(writer.mailbox, shown, first),
@@ -691,37 +751,6 @@ async def handle_read_my_email_attachment(tool_input: dict[str, Any]) -> str:
     )
 
 
-# Words that ask for a file to be saved somewhere: "save the LOIs", "upload
-# them", "put it in my Drive". Without one in what they typed this turn,
-# nothing is copied: a mail's text can't ask for it. Kept narrow on purpose
-# ("keep", "link", "copy" and "folder" turn up in everyday asks).
-_SAVE_WORDS = frozenset({"onedrive", "save", "saved", "upload"})
-# "Drive" counts only as the place ("to my Drive", "in Drive", "Google
-# Drive"), not "our drive to hire".
-_DRIVE_AFTER = frozenset({"google", "in", "into", "my", "on", "to", "your"})
-_WORD_RE = re.compile(r"[^\W\d_]+", re.UNICODE)
-_NOT_ASKED = (
-    "Save a file only when they ask you to, in their own words: they haven't "
-    "asked to save or upload a file in this message. Ask them "
-    "whether they want it saved to your Drive or OneDrive. Do not retry until "
-    "they say so."
-)
-
-
-def _asked_to_save(writer: Any) -> str | None:
-    """Why this turn may not copy a file out of their mail, or None: their
-    own words this turn (``own_words``: no quoted backstory, no attached
-    file's text) must ask for it. Plain code, fails closed."""
-    from openexecutive.delegation.settings import own_words
-
-    typed = own_words(getattr(writer.pinned, "speaker_text", "") or "")
-    words = [w.lower() for w in _WORD_RE.findall(typed)] if typed else []
-    asked = bool(set(words) & _SAVE_WORDS) or any(
-        word == "drive" and i > 0 and words[i - 1] in _DRIVE_AFTER for i, word in enumerate(words)
-    )
-    return None if asked else _error(_NOT_ASKED, status="not_asked")
-
-
 async def handle_save_my_email_attachment(tool_input: dict[str, Any]) -> str:
     from openexecutive.delegation.ghostwriter import one_line
     from openexecutive.orchestrator import mail_file_save as save
@@ -743,7 +772,7 @@ async def handle_save_my_email_attachment(tool_input: dict[str, Any]) -> str:
     too_large = f"over {MAX_ATTACHMENT_BYTES // (1024 * 1024)} MB"
 
     def check(writer: Any) -> str | None:
-        return _id_refusal(writer, message_id, "message") or _asked_to_save(writer)
+        return _id_refusal(writer, message_id, "message")
 
     async def read(writer: Any) -> str:
         if getattr(writer.mailbox, "saves_to_storage", True) is False:

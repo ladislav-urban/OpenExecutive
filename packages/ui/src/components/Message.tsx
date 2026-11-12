@@ -8,7 +8,7 @@ import AnswerSourcesFooter from "@/components/AnswerSourcesFooter";
 import BrandMark from "@/components/BrandMark";
 import type { AnswerSources } from "@/lib/answerSources";
 import type { ActionTaken } from "@/lib/api";
-import { groupActions, opensDetails, type ChipGroup } from "@/lib/actionChips";
+import { dropReplaced, groupActions, opensDetails, type ChipGroup } from "@/lib/actionChips";
 import { loadsInline } from "@/lib/markdownImages";
 import { isMailboxLink } from "@/lib/replyCards";
 import { hostOf } from "@/lib/url";
@@ -17,6 +17,7 @@ import FeatureName from "@/components/FeatureName";
 import { ChatActionCards } from "@/components/ActionCards";
 import { ChatErpnextDraftCards, useDraftOutcomes } from "@/components/ErpnextDraftCards";
 import { chipSummary } from "@/lib/erpnextDraftWords";
+import ChatDraftCard from "@/components/ChatDraftCard";
 import { useExecutiveName } from "@/components/executive/ExecutiveStatusContext";
 
 interface MessageProps {
@@ -49,6 +50,8 @@ interface MessageProps {
   // A shared chat's messages from people: who wrote it. Someone else's sits
   // on the left under their name; the viewer's own stays on the right.
   author?: { name: string; mine: boolean };
+  // Under a finished reply, after its action chips: the "Memory updated" chip.
+  memory?: ReactNode;
 }
 
 // The small text buttons under a message (Copy, Try again, Edit).
@@ -285,6 +288,7 @@ export default function Message({
   onRetry,
   onEdit,
   author,
+  memory,
 }: MessageProps) {
   const executiveName = useExecutiveName();
   // Approval cards this reply left, shown under it (ActionCards), and the
@@ -303,6 +307,11 @@ export default function Message({
         .filter((a) => a.tool === "propose_erpnext_draft")
         .map((a) => a.decision_id)
         .filter((id): id is number => typeof id === "number"),
+    [actions],
+  );
+  // Emails written as you (Act as me), shown under it with Send.
+  const chatDrafts = useMemo(
+    () => dropReplaced(actions ?? []).flatMap((a) => (a.draft && typeof a.draft.row === "number" ? [a.draft] : [])),
     [actions],
   );
   if (role === "user" && author && !author.mine) {
@@ -384,11 +393,15 @@ export default function Message({
 
         {status && <div className="mt-3">{status}</div>}
 
-        {actions && actions.length > 0 && (draftIds.length > 0 ? <DraftAwareChips actions={actions} /> : <ActionChips actions={actions} />)}
+        {actions && actions.length > 0 && (draftIds.length > 0 ? <DraftAwareChips actions={dropReplaced(actions)} /> : <ActionChips actions={dropReplaced(actions)} />)}
+
+        {memory}
 
         {cardIds.length > 0 && <ChatActionCards ids={cardIds} />}
 
         {draftIds.length > 0 && <ChatErpnextDraftCards ids={draftIds} />}
+
+        {!isStreaming && chatDrafts.map((d) => <ChatDraftCard key={d.row} draft={d} />)}
 
         {sources && !isStreaming && <AnswerSourcesFooter sources={sources} />}
 
