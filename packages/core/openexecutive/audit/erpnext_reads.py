@@ -57,12 +57,29 @@ def conversation_read_erpnext(session: Any) -> bool:
     set). Fails closed."""
     if getattr(session, "read_erpnext", False) is True:
         return True
-    found = session_read_erpnext(getattr(session, "session_id", None))
+    session_id = getattr(session, "session_id", None)
+    found = session_read_erpnext(session_id) or _left_a_draft_card(session_id)
     if found and session is not None:
         # A frozen stand-in still gets the answer.
         with contextlib.suppress(Exception):
             session.read_erpnext = True
     return found
+
+
+def _left_a_draft_card(session_id: Any) -> bool:
+    """Whether conversation ``session_id`` left an ERPNext draft card: its
+    later turns are told what became of it
+    (``erpnext_drafts.decided_cards_note``), so it counts as having read
+    ERPNext. Fails closed: an unreadable ledger answers yes."""
+    if not isinstance(session_id, str) or not session_id:
+        return False
+    try:
+        from openexecutive.integrations.erpnext_drafts import conversation_has_cards
+
+        return conversation_has_cards(session_id)
+    except Exception:
+        logger.warning("couldn't check whether the conversation left a draft card — keeping it private", exc_info=True)
+        return True
 
 
 def mark_carried(session_id: str | None, from_session_ids: set[str]) -> bool:

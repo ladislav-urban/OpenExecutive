@@ -18,8 +18,12 @@ What it does (decided by the owner, Oct 27, 2026):
   and what Honcho holds of them (``honcho_client.forget_people``).
 - **Keeps** every directory-managed Person as it is, anyone added by hand,
   everyone's sign-in, the workspace settings, keys, the audit log and usage
-  records (only the research scan's run history goes, so the scan runs on the
-  new company), and the principal's own chats, memory and cards.
+  records, and the principal's own chats, memory and cards.
+- **Keeps the last research run** when the install already holds this same
+  company and one of that run's alerts is still live: its alerts, its watch
+  rows (re-baselined) and its run row (``monitoring/research/carry.py``), so
+  the 6-hourly scan runs weekly on the demo instead of after every reset.
+  Otherwise the scan's run history goes, so it runs on the new company.
 
 The bundle comes from another host, so it is untrusted: it is first copied
 into a private directory without following links (``stage_bundle``), then
@@ -661,6 +665,21 @@ def _reset_lock(settings: Any) -> Iterator[None]:
 # ── The reset ───────────────────────────────────────────────────────────────
 
 
+def same_company_installed(settings: Any, company: str) -> bool:
+    """Is the live profile, before the reset replaces it, this company?
+    Compared as ``_check_bundle`` compares, so a different company (a fixture
+    loaded during the day, a fresh install) never keeps research."""
+    from openexecutive.memory.company_profile import CompanyProfile
+
+    try:
+        installed = CompanyProfile.load_from_yaml(Path(settings.company_profile_path)).name.strip()
+    except Exception:
+        logger.exception("demo_reset: could not read the installed profile")
+        return False
+    return bool(installed) and installed == company.strip()
+
+
+
 async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
     """Apply the bundle in ``bundle_dir`` with the keep rules above."""
     from openexecutive.audit import log_event
@@ -674,10 +693,15 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
         async with fixture_loader._FIXTURE_OP_LOCK:
             demo_ids, fictional_ids, kept_names = _roster(DB_PATH)
             bundle = read_bundle(staged, settings.demo_reset_company, kept_names)
+            # Read before step 1 replaces the profile: the research carried
+            # over must be this same company's, never another one's.
+            keep_research = same_company_installed(settings, bundle.company)
             try:
                 gone_ids = sorted({*demo_ids, *fictional_ids})
                 gone_sessions = honcho_sessions(gone_ids, DB_PATH)
-                summary = await fixture_loader._apply_state_from_source(staged, settings, demo_reset=True)
+                summary = await fixture_loader._apply_state_from_source(
+                    staged, settings, demo_reset=True, keep_research=keep_research
+                )
                 cleared = clear_people_state(gone_ids, DB_PATH)
                 # Their memory in Honcho too, or the Executive recalls yesterday's demo.
                 peer_memory = await honcho_client.forget_people(gone_ids, gone_sessions)
