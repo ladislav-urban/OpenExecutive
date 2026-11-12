@@ -10442,7 +10442,10 @@ integrations:
     erpnext). last_error and the ERP's words never reach it. Its instruction
     line says to mention a card only when asked or relevant and that a card
     closed because the records changed is not the model's error (the
-    persona's "Correct yourself plainly, once" is for its own errors only).
+    persona's "Correct yourself plainly, once" is for its own errors only;
+    either way, a figure or date now differing from an earlier answer is
+    said in one sentence with both, never switched quietly: erpnext_084,
+    erpnext_095).
     Any failure leaves the note out. A note sets Session.read_erpnext, and
     _conversation_read_erpnext also answers yes for a session that left any
     erpnext_draft card (decision_ledger.list_session_instances), so a

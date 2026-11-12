@@ -61,7 +61,9 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # retake, Nov 3, 2026, month-end step 6).
 # And: correcting itself is for its own errors only; a card closed because
 # the records changed is said as such, never "Earlier I ...".
-TEAM_PERSONA_SHA256 = "2a52117855c21334f0f6ca377891bf2bc40bc0c3fd40b0043ddef392eccfbc2a"
+# And: a figure or date that now differs from an earlier answer is said, with
+# both, whatever the cause (erpnext_084, erpnext_095).
+TEAM_PERSONA_SHA256 = "5d3f52a393a246ec6cd7384f60b9ca88aa9721c8caa7cd04a46692c3b777398f"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",
