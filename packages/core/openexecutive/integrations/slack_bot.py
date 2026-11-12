@@ -384,6 +384,30 @@ def _count_distinct_humans(
     return len(humans)
 
 
+def _thread_root_context(
+    thread_replies: list[dict] | None, event: dict, bot_user_id: str | None
+) -> str:
+    """The message a reply in a Slack thread was written under: the thread's
+    first message (``integrations.reply_context``). "" when the reply isn't
+    in a thread, or Slack didn't hand the thread back."""
+    from openexecutive.integrations import reply_context
+
+    if not thread_replies:
+        return ""
+    root = thread_replies[0]
+    if not isinstance(root, dict) or str(root.get("ts") or "") == str(event.get("ts") or ""):
+        return ""
+    # Only a post by this bot's own user is the Executive's: another app's
+    # post (a bot id with no user) is just "an earlier message".
+    author = str(root.get("user") or "")
+    by_executive = bool(bot_user_id) and author == bot_user_id
+    writer = reply_context.whose(
+        by_executive=by_executive,
+        by_sender=bool(author) and author == str(event.get("user") or ""),
+    )
+    return reply_context.quote(writer, str(root.get("text") or ""))
+
+
 def _replies_to_gate_history(
     messages: list[dict], bot_user_id: str | None
 ) -> list[dict]:
@@ -475,6 +499,203 @@ async def _read_shared_files(
             logger.exception("Slack: attachment processing failed")
             notes.append("(Could not process the attached files)")
     return "\n\n".join(p for p in (*notes, text) if p), blocks
+
+
+# A card's buttons (integrations.channel_cards): one action id each, the
+# card's id and choice in the button's value.
+_CARD_ACTION_APPROVE = "oe_card_approve"
+_CARD_ACTION_SKIP = "oe_card_skip"
+_CARD_ACTION_RE = re.compile(rf"^({_CARD_ACTION_APPROVE}|{_CARD_ACTION_SKIP})$")
+_MAX_CARD_TEXT = 2900
+
+
+def _card_blocks(
+    text: str, decision_id: int | None = None, labels: tuple[str, str] = ("Approve", "Skip"),
+) -> list[dict[str, Any]]:
+    """A card as Slack blocks: its text as plain text (it may quote what
+    someone else wrote, so never mrkdwn), with the two buttons while it waits."""
+    from openexecutive.integrations import channel_cards
+
+    blocks: list[dict[str, Any]] = [
+        {"type": "section", "text": {"type": "plain_text", "text": text[:_MAX_CARD_TEXT], "emoji": False}},
+    ]
+    if decision_id is not None:
+        blocks.append({"type": "actions", "elements": [
+            {"type": "button", "action_id": _CARD_ACTION_APPROVE, "style": "primary",
+             "text": {"type": "plain_text", "text": labels[0]},
+             "value": channel_cards.callback_data(decision_id, channel_cards.APPROVE)},
+            {"type": "button", "action_id": _CARD_ACTION_SKIP,
+             "text": {"type": "plain_text", "text": labels[1]},
+             "value": channel_cards.callback_data(decision_id, channel_cards.SKIP)},
+        ]})
+    return blocks
+
+
+async def _send_cards(client: Any, channel: str, cards: list[int]) -> None:
+    """Post each card a DM reply left, with Approve and Skip buttons."""
+    from openexecutive.integrations import channel_cards
+
+    if not channel:
+        return
+    for decision_id in cards[: channel_cards.MAX_CARDS]:
+        try:
+            text = await asyncio.to_thread(channel_cards.card_text, decision_id)
+            if text:
+                labels = await asyncio.to_thread(channel_cards.card_buttons, decision_id)
+                await client.chat_postMessage(
+                    channel=channel, text=text[:_MAX_CARD_TEXT], blocks=_card_blocks(text, decision_id, labels),
+                    unfurl_links=False, unfurl_media=False,
+                )
+        except Exception:
+            logger.exception("Slack: couldn't send card %d", decision_id)
+
+
+async def send_dm_card(slack_user_id: str, decision_id: int, text: str, labels: tuple[str, str]) -> None:
+    """Post a card waiting outside any chat to ``slack_user_id``'s DM with the
+    bot (``channel_cards.push_waiting``). Raises when it couldn't."""
+    from slack_sdk.web.async_client import AsyncWebClient
+
+    from openexecutive.config import get_settings
+
+    token = get_settings().slack_bot_token
+    if not token or not slack_user_id:
+        raise RuntimeError("slack is not configured")
+    client = AsyncWebClient(token=token)
+    opened: Any = await client.conversations_open(users=slack_user_id)
+    channel = str(((opened or {}).get("channel") or {}).get("id") or "")
+    if not channel:
+        raise RuntimeError("slack did not open a DM")
+    await client.chat_postMessage(
+        channel=channel, text=text[:_MAX_CARD_TEXT], blocks=_card_blocks(text, decision_id, labels),
+        unfurl_links=False, unfurl_media=False,
+    )
+
+
+_MENTION_RE = re.compile(r"<@([A-Z0-9]+)(?:\|[^>]*)?>")
+
+
+async def note_chat_ask(event: dict[str, Any], client: Any) -> None:
+    """A message in a channel the bot is in: keep it when it mentions the
+    principal, and mark the asks it answers when the principal wrote it
+    (``integrations.chat_asks``). Never raises."""
+    from openexecutive.integrations import chat_asks
+    from openexecutive.people.store import find_person_by_slack_id, find_principal_person
+
+    try:
+        user = str(event.get("user") or "")
+        channel = str(event.get("channel") or "")
+        ts = str(event.get("ts") or "")
+        if not user or not channel or not ts:
+            return
+        thread = str(event.get("thread_ts") or ts)
+        principal = await asyncio.to_thread(find_principal_person)
+        own_id = str(getattr(principal, "slack_user_id", "") or "") if principal is not None else ""
+        if principal is None or principal.id is None or not own_id:
+            return
+        if user == own_id:
+            await asyncio.to_thread(
+                chat_asks.note_spoke, "slack", place=channel, thread=thread, top_level=thread == ts,
+                person_id=principal.id,
+            )
+            return
+        text = str(event.get("text") or "")
+        if own_id not in _MENTION_RE.findall(text):
+            return
+        author = await asyncio.to_thread(find_person_by_slack_id, user)
+        from_name = str(getattr(author, "full_name", "") or "")
+        if not from_name:
+            try:
+                info = await client.users_info(user=user)
+                profile = ((info or {}).get("user") or {})
+                from_name = str(profile.get("real_name") or profile.get("name") or "")
+            except Exception:
+                from_name = ""
+        place_name = ""
+        link = ""
+        try:
+            info = await client.conversations_info(channel=channel)
+            name = str(((info or {}).get("channel") or {}).get("name") or "")
+            place_name = f"#{name}" if name else ""
+        except Exception:
+            logger.info("Slack: couldn't name channel %s for an ask", channel, exc_info=True)
+        try:
+            found = await client.chat_getPermalink(channel=channel, message_ts=ts)
+            link = str((found or {}).get("permalink") or "")
+        except Exception:
+            logger.info("Slack: couldn't link an ask in %s", channel, exc_info=True)
+        first = (principal.full_name or "").split(" ")[0] or "you"
+        shown = _MENTION_RE.sub(lambda m: f"@{first}" if m.group(1) == own_id else "@someone", text)
+        await asyncio.to_thread(
+            chat_asks.note_ask, "slack", place=channel, thread=thread, message_ref=f"{channel}:{ts}",
+            person_id=principal.id, from_name=from_name or "Someone", text=shown, link=link,
+            place_name=place_name,
+        )
+    except Exception:
+        logger.warning("Slack: couldn't note a chat ask", exc_info=True)
+
+
+async def _is_own_dm(client: Any, user_id: str, channel_id: str) -> bool:
+    """Whether ``channel_id`` is the bot's DM with ``user_id``: Slack's own
+    answer, not the payload's."""
+    if not user_id or not channel_id.startswith("D"):
+        return False
+    try:
+        opened = await client.conversations_open(users=user_id)
+    except Exception:
+        logger.warning("Slack: couldn't check the DM for a card tap", exc_info=True)
+        return False
+    return str(((opened or {}).get("channel") or {}).get("id") or "") == channel_id
+
+
+async def handle_card_tap(body: dict[str, Any], client: Any) -> None:
+    """A tap on a card's Approve or Skip button (``channel_cards``). Slack
+    signed it; it counts only in the tapper's own DM with the bot, from
+    someone on the roster, and ``decisions.resolve_in_chat`` decides whether
+    the card is theirs."""
+    from openexecutive.audit import log_event as audit_log
+    from openexecutive.integrations import channel_cards
+    from openexecutive.people.store import find_person_by_slack_id
+
+    user_id = str((body.get("user") or {}).get("id") or "")
+    channel_id = str((body.get("channel") or {}).get("id") or "")
+    message = body.get("message") or {}
+    ts = str((body.get("container") or {}).get("message_ts") or message.get("ts") or "")
+    actions = body.get("actions") or []
+    parsed = channel_cards.parse_callback(actions[0].get("value") if actions else None)
+    person = await asyncio.to_thread(find_person_by_slack_id, user_id) if user_id else None
+    if parsed is None or person is None or not await _is_own_dm(client, user_id, channel_id):
+        logger.warning("Slack: ignored a card tap that isn't from its own DM")
+        if user_id and channel_id:
+            try:
+                await client.chat_postEphemeral(channel=channel_id, user=user_id,
+                                                text="This card is no longer there.")
+            except Exception:
+                logger.warning("Slack: couldn't answer an ignored card tap", exc_info=True)
+        return
+    decision_id, approve = parsed
+    line = await channel_cards.resolve(decision_id, person, approve=approve)
+    choice = "approve" if approve else "skip"
+    await asyncio.to_thread(
+        audit_log,
+        "integration_inbound",
+        f"Slack card {decision_id}: tapped {choice.capitalize()}: {line[:120]}",
+        actor="slack",
+        details={"channel": "slack", "slack_user": user_id, "decision_id": decision_id,
+                 "choice": choice, "outcome": channel_cards.outcome_of(line), "person_id": person.id},
+    )
+    if line == channel_cards.BUSY or not ts:
+        return
+    # The card keeps what it said, with the outcome under it and no buttons.
+    shown = ""
+    for block in message.get("blocks") or []:
+        if block.get("type") == "section":
+            shown = str((block.get("text") or {}).get("text") or "")
+            break
+    text = f"{shown}\n\n{line}" if shown else line
+    try:
+        await client.chat_update(channel=channel_id, ts=ts, text=text[:_MAX_CARD_TEXT], blocks=_card_blocks(text))
+    except Exception:
+        logger.exception("Slack: couldn't update card %d after the tap", decision_id)
 
 
 async def create_slack_app():
@@ -1022,6 +1243,35 @@ async def create_slack_app():
                     # Before the words, as Discord and Telegram inline it.
                     chat_user_message = f"{att_text}\n\n{chat_user_message}"
 
+                # A reply under a message in a thread says which message it
+                # answers. A DM is one conversation, so the thread's first
+                # message may be any earlier one; a channel thread's own
+                # history already holds its start, unless it's new to us.
+                reply_quote = ""
+                if is_threaded_reply and (mode == "dm" or not history):
+                    reply_quote = _thread_root_context(thread_replies, event, _bot_user_id)
+                    # A channel thread can be started by anyone: quote its
+                    # start only from the team, the Executive or the sender.
+                    root_author = str((thread_replies or [{}])[0].get("user") or "")
+                    if (
+                        reply_quote
+                        and mode != "dm"
+                        and root_author not in (_bot_user_id, event.get("user"))
+                        and not await asyncio.to_thread(_find_slack_sender, root_author)
+                    ):
+                        reply_quote = ""
+                if reply_quote:
+                    from openexecutive.integrations.reply_context import with_context
+
+                    chat_user_message = with_context(reply_quote, chat_user_message)
+
+                from openexecutive.integrations.channel_cards import shows_cards
+
+                # A DM shows the reply's cards with Approve and Skip buttons
+                # (SLACK_CARD_BUTTONS, integrations.channel_cards).
+                cards_here = mode == "dm" and shows_cards(session)
+                cards: list[int] = []
+
                 executive = Executive(mcp_gateway=get_active_gateway())
                 response = await executive.chat(
                     user_message=chat_user_message,
@@ -1029,13 +1279,14 @@ async def create_slack_app():
                     retrieved_context=retrieved_context,
                     episodic_context=episodic_context,
                     briefing_context=briefing_context,
-                    channel_context_block=build_channel_context_block("slack"),
+                    channel_context_block=build_channel_context_block("slack", cards_here=cards_here),
+                    cards=cards if cards_here else None,
                     person_id=person_id,
                     co_present_person_ids=co_present_person_ids or None,
                     attachment_blocks=att_image_blocks or None,
                     # Peer memory records what the sender wrote and the files'
                     # names, never a document's text as their words.
-                    memory_text=own_words if files else None,
+                    memory_text=own_words if (files or reply_quote) else None,
                 )
 
                 # No unfurls: Slack would fetch a link in the reply on its own,
@@ -1046,6 +1297,8 @@ async def create_slack_app():
                     text=with_chat_line(response, f"slack:{session_id}"),
                     thread_ts=thread_ts, unfurl_links=False, unfurl_media=False,
                 )
+                if cards and client is not None:
+                    await _send_cards(client, str(event.get("channel") or ""), cards)
 
                 # Persist AFTER the reply lands, and never let a persistence
                 # failure trigger the user-facing error path — the user
@@ -1081,7 +1334,9 @@ async def create_slack_app():
                     title=_session_title(sender_person, mode),
                     created_at=session.created_at.isoformat(),
                     owner_person_id=person_id,
-                    user_text=_format_user_content(own_words, speaker),
+                    user_text=_format_user_content(
+                        f"{reply_quote}\n\n{own_words}" if reply_quote else own_words, speaker
+                    ),
                     assistant_text=response,
                     also_session_id=also_session_id,
                     sender_person_id=sender_person.id,
@@ -1145,6 +1400,11 @@ async def create_slack_app():
                     session_id,
                 )
 
+    @app.action(_CARD_ACTION_RE)
+    async def card_tap(ack, body: dict, client) -> None:
+        await ack()
+        await handle_card_tap(body, client)
+
     @app.event("app_mention")
     async def handle_mention(event: dict, say, client) -> None:
         # Bolt auto-injects `client` (an AsyncWebClient) when listed in the
@@ -1176,6 +1436,7 @@ async def create_slack_app():
             async with inflight:
                 await _handle_message(event, say, client=client, mode="dm")
             return
+        await note_chat_ask(event, client)
 
         # A failed auth_test at startup left the id unset; try again
         # (rate-limited) so thread auto-continuation comes back on its own.

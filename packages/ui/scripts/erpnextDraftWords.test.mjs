@@ -51,3 +51,40 @@ test("a chip follows its card's outcome", async () => {
   assert.equal(chipSummary("Waiting for your approval", "approved"), "Approved");
   assert.equal(chipSummary("Booked: Lunch", "approved"), "Booked: Lunch");
 });
+
+test("a change or a comment says what it did, never 'submit the new draft'", async () => {
+  const words = await import("../src/lib/erpnextDraftWords.ts");
+  assert.equal(words.cardKind("Purchase Invoice", "update", true), "Change to a Purchase Invoice");
+  assert.equal(words.cardKind("Purchase Invoice", "comment", true), "Comment on a Purchase Invoice");
+  assert.equal(words.cardKind("Quotation", undefined, true), "Quotation draft");
+  assert.equal(words.changeMadeLine("update", "Purchase Invoice", "PINV-1", false),
+    "Purchase Invoice PINV-1 is changed in the ERP, still unsubmitted.");
+  assert.equal(words.changeMadeLine("comment", "Purchase Invoice", "PINV-1", false),
+    "Your comment is now on Purchase Invoice PINV-1.");
+  assert.doesNotMatch(words.changeMadeLine("update", "Purchase Invoice", "PINV-1", true), /submit it/);
+});
+
+test("a credit-limit raise card says what it raises and that the order is still a draft", async () => {
+  const words = await import("../src/lib/erpnextDraftWords.ts");
+  assert.equal(words.cardKind("Customer", "credit", true), "Raise a credit limit");
+  assert.equal(words.cardKind("Purchase Invoice", "block", true), "Hold a submitted Purchase Invoice");
+  assert.equal(words.jobCardKind("Purchase Invoice", "block", "Payment checks"),
+    "Hold a submitted Purchase Invoice from the Payment checks job");
+  assert.match(words.changeMadeLine("block", "Purchase Invoice", "PINV-2", false), /on hold in the ERP, until someone unblocks it/);
+  assert.doesNotMatch(words.changeMadeLine("block", "Purchase Invoice", "PINV-2", false), /unsubmitted|submit it/);
+  assert.equal(words.cardKind("Customer", "credit", false), "Raise a credit limit");
+  assert.equal(
+    words.creditMadeLine("Harbor Electric Co-op", "Aurora Components", "31,000.00 USD", false),
+    "Harbor Electric Co-op's credit limit at Aurora Components is now 31,000.00 USD. " +
+      "The order is still a draft for its owner to submit.",
+  );
+  assert.match(words.creditMadeLine("H", "A", "1.00 USD", true), /^H's credit limit at A was already 1\.00 USD\./);
+  assert.doesNotMatch(words.CREDIT_CHANGED_NOTE, /ERPNext/);
+});
+
+test("a watch job's card names its job and labels its reason line", async () => {
+  const words = await import("../src/lib/erpnextDraftWords.ts");
+  assert.equal(words.jobCardKind("Dunning", "create", "Collections"), "Dunning draft from the Collections job");
+  assert.equal(words.whyNowLine("Usually pays in 5 days; 30 days late now."),
+    "Why now: Usually pays in 5 days; 30 days late now.");
+});

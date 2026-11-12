@@ -135,6 +135,10 @@ CSV_COLUMNS = (
     "unchanged",
     "last_error",
     "private",
+    "operation",
+    "target",
+    "asked_by_person_id",
+    "approver",
 )
 
 
@@ -150,7 +154,10 @@ def _outcome(card: Any, final: dict[str, Any]) -> str:
     from openexecutive.integrations.erpnext_drafts import CHANGED_SINCE_PROPOSED
 
     if card.status == "closed_externally":
-        return {"expired": "expired", "changed": "replaced: ERPNext's reading changed"}.get(
+        return {
+            "expired": "expired", "changed": "replaced: ERPNext's reading changed",
+            "sod_refused": "not made: separation of duties",
+        }.get(
             card.reversal_reason or "", "closed"
         )
     if card.status == "failed":
@@ -208,13 +215,24 @@ def records(
         payload, final = _json(card.proposed_payload_json), _json(card.final_payload_json)
         made = final.get("created")
         created: dict[str, Any] = made if isinstance(made, dict) else {}
-        asked_in = payload.get("asked_in") or ("alert" if payload.get("from_alert") is not None else "chat")
+        # A watch job's card was asked for by no conversation: its job left it.
+        asked_in = payload.get("asked_in") or (
+            "watch" if payload.get("source") == "watch"
+            else "alert" if payload.get("from_alert") is not None else "chat"
+        )
         out.append({
             "decision_id": card.id,
             "card_key": card.idempotency_key,
             "doctype": payload.get("doctype"),
+            # create, or update / comment on an existing document (erpnext_changes).
+            "operation": payload.get("operation") or "create",
+            "target": payload.get("name"),
             "proposed_at": card.created_at,
             "asked_by": payload.get("asked_by"),
+            # A credit raise's preparer, by People id, and the person it went
+            # to for approval (erpnext_credit); for other cards, its person.
+            "asked_by_person_id": payload.get("asked_by_person_id"),
+            "approver": _who(card.approver_person_id),
             "asked_in": asked_in,
             "conversation": card.originating_session_id,
             "from_alert": payload.get("from_alert"),
@@ -463,5 +481,7 @@ def to_csv(rows: list[dict[str, Any]]) -> str:
             erp.get("state"), erp.get("modified"), erp.get("modified_by"),
             _yes(r.get("seal_in_log")), _yes(erp.get("unchanged")),
             r.get("last_error"), "yes" if r.get("private") else "",
+            r.get("operation") or "create", r.get("target"),
+            r.get("asked_by_person_id"), r.get("approver"),
         ]])
     return buffer.getvalue()

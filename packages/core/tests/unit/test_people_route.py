@@ -343,3 +343,13 @@ def test_a_principal_added_here_gets_wildcard_and_a_second_is_refused(client: Te
     second = client.post("/people", json={"full_name": "Mallory", "is_principal": True})
     assert second.status_code == 409
     assert [p["full_name"] for p in client.get("/people").json()] == ["Olive"]
+
+
+def test_the_owner_cannot_add_a_second_principal(client: TestClient, team: dict[str, int]) -> None:
+    r = client.post(
+        "/people",
+        json={"full_name": "Pat", "is_principal": True, "email": "pat@acme.io"},
+        headers=OWNER,
+    )
+    assert r.status_code == 409
+    assert [p["full_name"] for p in client.get("/people").json() if p["is_principal"]] == ["Olive"]

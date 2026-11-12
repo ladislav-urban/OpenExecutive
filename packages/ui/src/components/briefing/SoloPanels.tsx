@@ -24,8 +24,9 @@ import { reviewExcerpt, reviewRanLabel, topThreeSlot, topThreeWhy } from "@/lib/
 
 import { PanelIntro, RankBadge, TONE_TEXT } from "./shared";
 
-// Solo-only parts of Home. Each loads its own data through a hook here, so
-// the tile row can count it before its side panel is opened.
+// Solo's parts of Home (Due soon is on every Home). Each loads its own data
+// through a hook here, so the tile row can count it before its side panel is
+// opened.
 
 // ── Your projects ─────────────────────────────────────────────────────────
 // The projects (initiatives) the Executive is tracking as active — the solo
@@ -116,7 +117,7 @@ export function ProjectsPanelBody({ state }: { state: ReturnType<typeof useActiv
               {confirmDrop === p.id && (
                 <div role="alert" className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/5 px-3 py-2.5">
                   <p className="text-sm text-fg">
-                    Drop &ldquo;{p.title}&rdquo;? <ProductName /> stops tracking it, and it is removed from Pulse.
+                    Drop &ldquo;{p.title}&rdquo;? <ProductName /> stops tracking it, and it is removed from Memory.
                   </p>
                   <div className="mt-2 flex gap-2">
                     <Button size="sm" variant="danger" onClick={() => void close(p, "drop")} disabled={busyId !== null}>

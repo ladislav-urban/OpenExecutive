@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canClaimPrincipal,
   defaultKindForTab,
   defaultPeopleTab,
   effectiveKind,
@@ -8,7 +9,7 @@ import {
   isContact,
   personCardStatus,
   peopleForTab,
-  shouldOfferTeamMode,
+  shouldSwitchToTeam,
   tabsFor,
 } from "../src/lib/peopleKinds.ts";
 
@@ -62,12 +63,12 @@ test("the principal is always on the team", () => {
   assert.equal(effectiveKind("contact", false), "contact");
 });
 
-test("adding a teammate in solo offers team mode; a contact or the principal does not", () => {
-  assert.equal(shouldOfferTeamMode("solo", "team", false), true);
-  assert.equal(shouldOfferTeamMode("solo", "contact", false), false);
-  assert.equal(shouldOfferTeamMode("solo", "team", true), false);
-  assert.equal(shouldOfferTeamMode("solo", "contact", true), false);
-  assert.equal(shouldOfferTeamMode("team", "team", false), false);
+test("adding a teammate in solo switches to team mode; a contact or the principal does not", () => {
+  assert.equal(shouldSwitchToTeam("solo", "team", false), true);
+  assert.equal(shouldSwitchToTeam("solo", "contact", false), false);
+  assert.equal(shouldSwitchToTeam("solo", "team", true), false);
+  assert.equal(shouldSwitchToTeam("solo", "contact", true), false);
+  assert.equal(shouldSwitchToTeam("team", "team", false), false);
 });
 
 test("a card's one status: email for a contact, leave or reply time for the team", () => {
@@ -94,4 +95,12 @@ test("a suspended person's card says so, and who suspended them", () => {
     "Suspended (directory)",
   );
   assert.equal(personCardStatus({ ...base, suspended: false }, "2026-10-03").label, "On leave until 2026-10-10");
+});
+
+test("This is me is offered only while nobody is the principal", () => {
+  assert.equal(canClaimPrincipal([TEAMMATE, CLIENT], false), true);
+  assert.equal(canClaimPrincipal([], false), true);
+  assert.equal(canClaimPrincipal(ROSTER, false), false);
+  // Not while the list is loading: it may hold the principal.
+  assert.equal(canClaimPrincipal([], true), false);
 });

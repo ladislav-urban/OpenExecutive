@@ -2,15 +2,24 @@
 
 Routes:
   GET /erpnext/drafts — the caller's own draft cards still waiting
-                        (``integrations.erpnext_drafts``), from the database;
-                        no ERPNext call. Approve and Dismiss are
+                        (``integrations.erpnext_drafts``), from the database.
+                        Its only ERPNext calls: up to three of the caller's
+                        own credit-raise cards read again as them, each at
+                        most once a minute (``erpnext_credit.recheck``),
+                        marking ``changed`` where ERPNext now reads one
+                        differently. Approve and Dismiss are
                         ``POST /decisions/{id}/approve`` and ``/reject``.
-  GET /erpnext/alert-drafts — the principal's open ERPNext alerts that
-                        suggest a draft, for their "Prepare" button
-                        (``integrations.erpnext_alert_drafts``); [] for anyone
-                        else, as ERPNext alerts are the principal's alone.
-  POST /erpnext/alert-drafts/{alert_id} — the principal's tap: ERPNext checks
-                        the suggested draft as them and the usual card is left.
+  GET /erpnext/alert-drafts — the open ERPNext alerts that suggest a draft
+                        the caller may prepare, for their "Prepare" button
+                        (``integrations.erpnext_alert_drafts``): the
+                        principal's, and a credit hold's raise for the people
+                        it names (with teammates' drafts on and signed
+                        sign-ins); [] for anyone else.
+  POST /erpnext/alert-drafts/{alert_id} — the tap: ERPNext checks the
+                        suggested draft as the person who tapped and the usual
+                        card is left (a raise's for whoever approves it,
+                        ``integrations.erpnext_credit``). ``decision_id`` is
+                        null when no card was left and ``message`` says why.
   GET /erpnext/drafts/oversight — one oversight record per ERPNext draft card
                         (``integrations.erpnext_oversight``), for the principal
                         alone: ``since`` / ``until`` (ISO dates or times),
@@ -77,6 +86,8 @@ class DraftCardOut(BaseModel):
     expires_at: str
     why: str
     doctype: str
+    # "create", "update" or "comment" (integrations.erpnext_changes).
+    operation: str = "create"
     fields: list[DraftFieldOut]
     lines: list[DraftLineOut]
     notes: list[str]
@@ -84,6 +95,12 @@ class DraftCardOut(BaseModel):
     # "erpnext_panel" when asked for in ERPNext's panel, "erpnext_desk" when
     # from ERPNext's desk, else "".
     asked_in: str = ""
+    # A credit-limit raise ERPNext now reads differently: approving is refused.
+    changed: bool = False
+    # A watch job's card: the job's title, and its reason line (a model's
+    # words, shown as "Why now").
+    job_title: str = ""
+    why_now: str = ""
 
 
 class DraftCardsOut(BaseModel):
@@ -91,8 +108,10 @@ class DraftCardsOut(BaseModel):
 
 
 @router.get("/erpnext/drafts", response_model=DraftCardsOut)
-def get_erpnext_drafts(request: Request) -> DraftCardsOut:
+async def get_erpnext_drafts(request: Request) -> DraftCardsOut:
+    from openexecutive.api import caller as api_caller
     from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.integrations.erpnext_credit import recheck
     from openexecutive.integrations.erpnext_drafts import cards
     from openexecutive.people.store import get_person
 
@@ -117,6 +136,11 @@ def get_erpnext_drafts(request: Request) -> DraftCardsOut:
             status_code=503,
             detail={"code": "unavailable", "message": "Couldn't read the drafts waiting for you."},
         ) from exc
+    # Here only, never in cards(), which Home's count calls.
+    try:
+        await recheck(person, found, api_caller.caller(request))
+    except Exception:
+        logger.warning("erpnext_drafts: reading the credit raises again failed", exc_info=True)
     return DraftCardsOut(cards=[DraftCardOut(**asdict(card)) for card in found])
 
 
@@ -130,21 +154,47 @@ class AlertDraftsOut(BaseModel):
 
 
 class PreparedOut(BaseModel):
-    decision_id: int
+    # None when no card was left (a raise only someone with credit authority
+    # may prepare): ``message`` says who can.
+    decision_id: int | None
     # The same draft was already waiting on this card.
     already_waiting: bool
+    # What to tell the person who tapped, for a raise; "" otherwise.
+    message: str = ""
+
+
+def _tapper(request: Request) -> Any:
+    """The caller's own active team entry, or None."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.people.store import get_person
+
+    person_id = _resolve_caller_person_id(request)
+    person = get_person(person_id) if person_id is not None else None
+    if person is None or person.id is None or not person.active or person.kind != "team":
+        return None
+    return person
 
 
 @router.get("/erpnext/alert-drafts", response_model=AlertDraftsOut)
 def get_erpnext_alert_drafts(request: Request) -> AlertDraftsOut:
+    from openexecutive.api.caller import signing_on
     from openexecutive.api.routes.people import caller_is_principal
     from openexecutive.integrations.erpnext_alert_drafts import open_suggestions
-    from openexecutive.integrations.erpnext_drafts import drafts_on
+    from openexecutive.integrations.erpnext_drafts import drafts_on, teammates_on
 
-    if not caller_is_principal(request) or not drafts_on():
+    if not drafts_on():
         return AlertDraftsOut(suggestions=[])
+    viewer: Any = None
+    if not caller_is_principal(request):
+        # The same gate as GET /erpnext/drafts: a teammate only under signed
+        # sign-ins, and only when teammates may have drafts at all.
+        if not signing_on() or not teammates_on():
+            return AlertDraftsOut(suggestions=[])
+        viewer = _tapper(request)
+        if viewer is None or viewer.is_principal:
+            return AlertDraftsOut(suggestions=[])
     try:
-        found = open_suggestions()
+        found = open_suggestions(viewer=viewer)
     except Exception:
         logger.exception("erpnext_alert_drafts: reading the suggestions failed")
         return AlertDraftsOut(suggestions=[])
@@ -154,18 +204,38 @@ def get_erpnext_alert_drafts(request: Request) -> AlertDraftsOut:
 @router.post("/erpnext/alert-drafts/{alert_id}", response_model=PreparedOut)
 async def prepare_erpnext_alert_draft(alert_id: int, request: Request) -> PreparedOut:
     from openexecutive.alerts import store
+    from openexecutive.alerts.models import named_for
     from openexecutive.api import caller as api_caller
     from openexecutive.api.routes.people import caller_is_principal
-    from openexecutive.integrations.erpnext_alert_drafts import prepare
+    from openexecutive.integrations import erpnext_credit
+    from openexecutive.integrations.erpnext_alert_drafts import prepare, suggestion_for
     from openexecutive.integrations.erpnext_drafts import ApproveRefused
 
+    gone = HTTPException(status_code=404, detail={"code": "gone", "message": "That alert isn't there."})
     alert = store.get_alert(alert_id)
-    # The principal's alone: anyone else is told it isn't there.
-    if alert is None or alert.source != "erpnext" or not caller_is_principal(request):
-        raise HTTPException(status_code=404, detail={"code": "gone", "message": "That alert isn't there."})
+    if alert is None or alert.source != "erpnext":
+        raise gone
+    principal = caller_is_principal(request)
+    tapper = _tapper(request)
+    if principal and (tapper is None or not tapper.is_principal):
+        from openexecutive.people.store import find_principal_person
+
+        tapper = find_principal_person()
+    suggestion = suggestion_for(alert)
+    raise_card = suggestion is not None and suggestion["doctype"] == erpnext_credit.DOCTYPE
+    # The principal's alone, but for a credit hold's raise, which the people
+    # it names may prepare too: anyone else is told it isn't there.
+    if not principal and not (raise_card and tapper is not None and named_for(alert, tapper.id)):
+        raise gone
     if alert.status not in ("unread", "read"):
         raise HTTPException(status_code=409, detail={"code": "closed", "message": "That alert is already closed."})
     try:
+        if raise_card:
+            prepared = await erpnext_credit.prepare(alert, caller=api_caller.caller(request), tapper=tapper)
+            return PreparedOut(
+                decision_id=prepared.decision_id, already_waiting=prepared.decision_id is not None and not prepared.new,
+                message=prepared.message,
+            )
         decision_id, new = await prepare(alert, caller=api_caller.caller(request))
     except ApproveRefused as refused:
         raise HTTPException(

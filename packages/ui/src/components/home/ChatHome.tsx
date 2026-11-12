@@ -65,6 +65,8 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
   const [activeMessages, setActiveMessages] = useState<ChatMessage[]>([]);
   // Words to find in the chat opened from a Chats-page search (`?find=`).
   const [activeFind, setActiveFind] = useState<string | undefined>();
+  // The open chat came from a working row's Watch (see Chat's `watch`).
+  const [activeWatch, setActiveWatch] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   // Briefing-first landing: default to "briefing" so opening the app shows
   // what's been happening, not an empty chat. Switches to "chat" when the
@@ -93,12 +95,13 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
   // yanking them into the old chat mid-turn.
   const selectGenRef = useRef(0);
 
-  const handleSelectSession = useCallback(async (sessionId: string, find?: string) => {
+  const handleSelectSession = useCallback(async (sessionId: string, find?: string, watch?: boolean) => {
     const gen = ++selectGenRef.current;
     try {
       const msgs = await getSessionMessages(sessionId);
       if (gen !== selectGenRef.current) return;
       setActiveFind(find);
+      setActiveWatch(Boolean(watch));
       setActiveSessionId(sessionId);
       setActiveMessages(msgs);
       setDebugEvents([]);
@@ -113,6 +116,7 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
 
   const handleNewChat = useCallback(() => {
     selectGenRef.current++;
+    setActiveWatch(false);
     setActiveSessionId(undefined);
     setActiveMessages([]);
     setDebugEvents([]);
@@ -138,6 +142,7 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
   // before sending, or just hit send.
   const handleContinueFromBriefing = useCallback((prompt: string, memoryText?: string) => {
     selectGenRef.current++;
+    setActiveWatch(false);
     setActiveSessionId(undefined);
     setActiveMessages([]);
     setDebugEvents([]);
@@ -151,6 +156,7 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
   // brandmark/header — clicking it returns home from a chat session.
   const handleBackToBriefing = useCallback(() => {
     selectGenRef.current++;
+    setActiveWatch(false);
     setActiveSessionId(undefined);
     setActiveMessages([]);
     setDebugEvents([]);
@@ -436,6 +442,7 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
           {mode === "briefing" ? (
             <Briefing
               onContinue={handleContinueFromBriefing}
+              onOpenChat={(id, watch) => void handleSelectSession(id, undefined, watch)}
               showHeader
               firstName={firstName ?? undefined}
               banner={homeBanner}
@@ -452,6 +459,7 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
               initialMessages={activeMessages}
               initialSessionId={activeSessionId}
               initialFind={activeFind}
+              watch={activeWatch}
               initialInput={pendingPrompt}
               // Briefing handoffs (Discuss / Approve / Dismiss / Edit&Approve)
               // are commitments, not drafts, so they auto-fire the first
