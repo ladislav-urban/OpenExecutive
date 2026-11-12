@@ -20,7 +20,9 @@ import openexecutive
 OLD_NAME = re.compile(r"\b(?:[Tt]he|[Yy]our) Executive\b|\bOpen Executive\b")
 PACKAGE = Path(openexecutive.__file__).parent
 # Workflows whose "the Executive" / "Open Executive" is in a model's prompt only.
-_PROMPT_ONLY_WORKFLOWS = frozenset({"end_of_day_digest", "executive_reflection", "executive_research", "morning_brief"})
+_PROMPT_ONLY_WORKFLOWS = frozenset({
+    "designer", "end_of_day_digest", "executive_reflection", "executive_research", "morning_brief",
+})
 USER_FACING = (
     *sorted((PACKAGE / "api" / "routes").rglob("*.py")),
     *sorted((PACKAGE / "delegation").rglob("*.py")),
