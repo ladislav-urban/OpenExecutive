@@ -7789,6 +7789,17 @@ user_guide:
     required-key validation live in the store. The UI reuses the
     architecture `DynamicSection` component via a `basePath` prop
     ("architecture" default, "guide" for the guide).
+  product_name: |
+    The guide's own words name the product one way, "OpenExecutive"
+    (guide.prebuilt.PRODUCT_WORD). GET /guide/sections/{id} and the
+    read_user_guide tool serve a section through guide.prebuilt.get_named,
+    which writes the install's name (OE_PRODUCT_NAME via
+    utils.product_name; "Open Executive" when unset) in its place outside
+    code spans and link targets, the same split oe_connector's help_page.named
+    uses when oe-connector-sync-guide copies these files into ERPNext's Help.
+    On-screen labels ("Settings -> Your Executive", "Pause Executive") stay as
+    the UI writes them. test_guide_prebuilt fails a section whose own words
+    (outside code, links, bold and italic) say "Executive" or "Open Executive".
   maintenance: |
     When a user-facing feature is added or materially changed, add/update
     the matching `guide/prebuilt/<id>.json` plus its registry entry in
