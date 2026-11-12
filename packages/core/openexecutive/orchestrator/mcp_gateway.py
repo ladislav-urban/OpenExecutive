@@ -691,6 +691,10 @@ _ERPNEXT_PREFIX = "erpnext__"
 # tool outside ERPNEXT_DRAFT_TOOLS, called only by the payment-checks job's
 # card executor, so hidden from search and discovered only on that call.
 ERPNEXT_BLOCK_TOOL = "erpnext__draft_block_invoice"
+# Likewise its bank-line match (integrations.erpnext_match), called only by
+# the bank-matching job's card executor.
+ERPNEXT_MATCH_TOOL = "erpnext__draft_match_bank_line"
+ERPNEXT_JOB_WRITE_TOOLS = frozenset({ERPNEXT_BLOCK_TOOL, ERPNEXT_MATCH_TOOL})
 
 # Server names `load_mcp_server` never registers. extensible-mcp hands a URL
 # server the line of the `tokens` file named after it, and indexes its tools as
@@ -3880,9 +3884,9 @@ def _drop_blocked_tools(text: object) -> Any:
             or normalized in ERPNEXT_SUPPLIER_TOOLS
             or normalized in ERPNEXT_CODE_ONLY_TOOLS
             or normalized in ERPNEXT_WITHHELD_TOOLS
-            # A draft tool no card here uses yet (the invoice block, outside its job card;
-            # any new one until its card exists):
-            # the call is refused anyway, so the model needn't read it.
+            # A draft tool no card here uses yet (a job's block or bank match, outside
+            # its job card; any new one until its card exists): the call is refused
+            # anyway, so the model needn't read it.
             or (normalized.startswith(DRAFT_TOOL_PREFIX) and normalized not in ERPNEXT_DRAFT_TOOLS)
             or name in changed
         )
@@ -3919,16 +3923,17 @@ def _is_undiscovered_refusal(
         return False
     # The draft tools are never shown to the model, so they are discovered the
     # same way (only the gated draft path calls them, by these exact names).
-    # So are a watch job's withheld read and the payment-checks job's block:
-    # a call reaches here only once its own gate let it through (the job's
-    # read marker; the executor's marker for that card).
+    # So are a watch job's withheld read and a job's own write (the
+    # payment-checks job's block, the bank-matching job's match): a call
+    # reaches here only once its own gate let it through (the job's read
+    # marker; the executor's marker for that card).
     pinned = tool_name in PINNED_GOOGLE_TOOLS or (
         (
             tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS
             or tool_name in ERPNEXT_SUPPLIER_TOOLS
             or tool_name in ERPNEXT_CODE_ONLY_TOOLS
             or tool_name in ERPNEXT_WITHHELD_TOOLS
-            or tool_name == ERPNEXT_BLOCK_TOOL
+            or tool_name in ERPNEXT_JOB_WRITE_TOOLS
             or tool_name in (ERPNEXT_AUDIT_TOOL, ERPNEXT_SHOW_TOOL)
         )
         and ERPNEXT_SERVER in server_names

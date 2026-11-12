@@ -36,8 +36,14 @@ export function draftMadeLine(doctype: string, name: string | null, alreadyCreat
     : `The draft is in ${erp}, unsubmitted. Review and submit it there.`;
 }
 
-/** The line an approved change, comment or hold shows. */
+/** The line an approved change, comment, hold or bank match shows. */
 export function changeMadeLine(operation: string, doctype: string, name: string, already: boolean): string {
+  if (operation === "match") {
+    // ERPNext's own bank reconciliation: the line matched, its vouchers cleared.
+    return already
+      ? `Bank line ${name} was already matched in the ERP.`
+      : `Bank line ${name} is matched in the ERP, its vouchers cleared. Nothing was created or cancelled.`;
+  }
   if (operation === "block") {
     // ERPNext's own Block Invoice on a submitted invoice: held until a person unblocks it.
     return already
@@ -66,9 +72,10 @@ export const CREDIT_CHANGED_NOTE =
   "This changed in the ERP since it was left (what the customer owes, the order or its limit). " +
   "Approving it is refused: dismiss it and prepare the raise again from the alert.";
 
-/** The card's kind, over its headline: a new draft, a change, a comment, a raise or a hold. */
+/** The card's kind, over its headline: a new draft, a change, a comment, a raise, a hold or a bank match. */
 export function cardKind(doctype: string, operation: string | undefined, named: boolean): string {
   if (operation === "credit") return "Raise a credit limit";
+  if (operation === "match") return "Match a bank line";
   if (operation === "block") return `Hold a submitted ${doctype}`;
   if (operation === "update") return `Change to a ${doctype}`;
   if (operation === "comment") return `Comment on a ${doctype}`;
