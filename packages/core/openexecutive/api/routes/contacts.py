@@ -1,0 +1,216 @@
+"""Routes for contacts the Executive keeps up to date (``people.contact_keeper``).
+
+- ``GET /contacts/changes`` — the switch, how the last look went, and the
+  changes of the last 30 days (``person_id`` for one person's every change).
+- ``PUT /contacts/keeper`` — the switch: ``on``, ``ask`` or ``off``.
+- ``POST /contacts/changes/{id}/undo`` — take back a change.
+- ``POST /contacts/changes/{id}/accept`` / ``/dismiss`` — Add / Not now on a
+  suggestion.
+- ``POST /contacts/changes/seen`` — Got it: clears the card.
+- ``GET /contacts/last-contact`` — when the principal last emailed, heard
+  from or met each person (from ``people.contact_notes``), for the People
+  list's Last contact column and sort. People with nothing yet are left out.
+- ``GET /contacts/{person_id}/note`` — what the Executive remembers about one
+  person, contact or teammate (``people.contact_notes``): 404 when it has
+  nothing yet, and an empty ``note`` when only the activity is known (as
+  after a remove). The principal's alone, whoever it is about.
+- ``PUT /contacts/{person_id}/note`` — the principal's own wording for it;
+  the keeper then leaves it as written. ``DELETE`` removes the note (the
+  activity stays); the keeper may write a new one only from new mail or
+  meetings.
+
+Contacts are the principal's alone, so every route answers only a caller
+that resolves to the principal (``people.caller_is_principal``): 404 for
+anyone else, so nobody learns there is anything here.
+"""
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import BaseModel
+
+from openexecutive.api.routes.people import caller_is_principal
+from openexecutive.people import contact_changes as changes
+from openexecutive.people import contact_notes
+
+router = APIRouter()
+
+
+class ContactChangesOut(BaseModel):
+    mode: changes.Mode
+    # How the last look went: "ok", "act_as_me_off", "not_connected", ...;
+    # "" before the first one.
+    status: str
+    last_run_at: str | None
+    changes: list[changes.ContactChange]
+
+
+class LastContact(BaseModel):
+    person_id: int
+    at: str
+    # How: "emailed", "heard" or "met".
+    how: str
+
+
+class LastContactsOut(BaseModel):
+    people: list[LastContact]
+
+
+class ContactNoteIn(BaseModel):
+    note: str
+
+
+class KeeperModeIn(BaseModel):
+    mode: changes.Mode
+
+
+def _require_principal(request: Request) -> None:
+    if not caller_is_principal(request):
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+@router.get("/contacts/changes", response_model=ContactChangesOut)
+def get_contact_changes(request: Request, person_id: int | None = None) -> ContactChangesOut:
+    _require_principal(request)
+    last, status = changes.last_run()
+    return ContactChangesOut(
+        mode=changes.get_mode(),
+        status=status,
+        last_run_at=last.isoformat() if last is not None else None,
+        changes=changes.list_changes(person_id=person_id),
+    )
+
+
+@router.put("/contacts/keeper", response_model=ContactChangesOut)
+def put_contact_keeper(body: KeeperModeIn, request: Request) -> ContactChangesOut:
+    _require_principal(request)
+    changes.set_mode(body.mode)
+    return get_contact_changes(request)
+
+
+@router.post("/contacts/changes/seen", response_model=ContactChangesOut)
+def post_contact_changes_seen(request: Request) -> ContactChangesOut:
+    _require_principal(request)
+    changes.mark_seen()
+    return get_contact_changes(request)
+
+
+def _decide(change_id: int, request: Request, verb: str) -> changes.ContactChange:
+    _require_principal(request)
+    act = {"undo": changes.undo, "accept": changes.accept, "dismiss": changes.dismiss}[verb]
+    try:
+        return act(change_id)
+    except changes.UndoRefused as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/contacts/changes/{change_id}/undo", response_model=changes.ContactChange)
+def post_contact_change_undo(change_id: int, request: Request) -> changes.ContactChange:
+    return _decide(change_id, request, "undo")
+
+
+@router.post("/contacts/changes/{change_id}/accept", response_model=changes.ContactChange)
+def post_contact_change_accept(change_id: int, request: Request) -> changes.ContactChange:
+    return _decide(change_id, request, "accept")
+
+
+@router.post("/contacts/changes/{change_id}/dismiss", response_model=changes.ContactChange)
+def post_contact_change_dismiss(change_id: int, request: Request) -> changes.ContactChange:
+    return _decide(change_id, request, "dismiss")
+
+
+def last_contact(note: contact_notes.ContactNote) -> LastContact | None:
+    """The latest of emailed, heard from and met, or None when none is known.
+
+    The stored times mix formats (a provider's own offset, ``Z``, our UTC
+    isoformat), so they are compared as instants and returned in UTC."""
+    seen = [
+        (moment, how)
+        for raw, how in ((note.last_emailed_at, "emailed"), (note.last_heard_at, "heard"), (note.last_met_at, "met"))
+        if raw and (moment := _instant(raw)) is not None
+    ]
+    if not seen:
+        return None
+    moment, how = max(seen, key=lambda pair: pair[0])
+    return LastContact(person_id=note.person_id, at=moment.isoformat(), how=how)
+
+
+def _instant(raw: str) -> datetime | None:
+    try:
+        moment = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(UTC)
+
+
+@router.get("/contacts/last-contact", response_model=LastContactsOut)
+def get_last_contacts(request: Request) -> LastContactsOut:
+    _require_principal(request)
+    from openexecutive.people import store as people_store
+
+    ids = [
+        p.id
+        for p in people_store.list_people(include_contacts=True)
+        if p.id is not None and not p.is_principal and p.active
+    ]
+    out = [lc for note in contact_notes.get_many(ids).values() if (lc := last_contact(note)) is not None]
+    return LastContactsOut(people=sorted(out, key=lambda lc: lc.person_id))
+
+
+@router.get("/contacts/{person_id}/note", response_model=contact_notes.ContactNote)
+def get_contact_note(person_id: int, request: Request) -> contact_notes.ContactNote:
+    _require_principal(request)
+    from openexecutive.people import store as people_store
+
+    person = people_store.get_person(person_id)
+    note = contact_notes.get(person_id) if person is not None and not person.is_principal else None
+    if note is None or person is None or not person.active:
+        raise HTTPException(status_code=404, detail="Not found")
+    return note
+
+
+def _note_person(person_id: int) -> None:
+    from openexecutive.people import store as people_store
+
+    person = people_store.get_person(person_id)
+    if person is None or person.is_principal or not person.active:
+        raise HTTPException(status_code=404, detail="Not found")
+
+
+def _audit_note(event: str, person_id: int) -> None:
+    try:
+        from openexecutive.audit import log_event
+
+        log_event(event, f"Contact note for person {person_id} changed from the People page",
+                  actor="principal", details={"person_id": person_id}, private=True)
+    except Exception:  # noqa: BLE001 - the change already landed.
+        pass
+
+
+@router.put("/contacts/{person_id}/note", response_model=contact_notes.ContactNote)
+def edit_contact_note(person_id: int, body: ContactNoteIn, request: Request) -> contact_notes.ContactNote:
+    _require_principal(request)
+    _note_person(person_id)
+    if len(" ".join(body.note.split())) > contact_notes.NOTE_MAX:
+        raise HTTPException(status_code=422, detail=f"Keep the note under {contact_notes.NOTE_MAX} characters")
+    note = contact_notes.clean_note(body.note)
+    if not note:
+        raise HTTPException(
+            status_code=422,
+            detail="Write the note in plain words, without links, email addresses, @ or < signs",
+        )
+    contact_notes.put_owner_note(person_id, note)
+    _audit_note("contact_note_edited", person_id)
+    saved = contact_notes.get(person_id)
+    if saved is None:
+        raise HTTPException(status_code=404, detail="Not found")
+    return saved
+
+
+@router.delete("/contacts/{person_id}/note", status_code=204)
+def remove_contact_note(person_id: int, request: Request) -> None:
+    _require_principal(request)
+    _note_person(person_id)
+    contact_notes.clear_note(person_id)
+    _audit_note("contact_note_removed", person_id)

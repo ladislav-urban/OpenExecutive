@@ -29,7 +29,7 @@ def test_route_to_specialist_passes_episodic_to_analyze(monkeypatch) -> None:
         "openexecutive.orchestrator.router.load_principal_role", lambda: ""
     )
     monkeypatch.setattr(
-        "openexecutive.memory.facts.render_facts_for_prompt", lambda: "STANDING FACTS — x"
+        "openexecutive.memory.facts.render_facts_for_prompt", lambda **kw: "STANDING FACTS — x"
     )
     analyze_mock = AsyncMock(return_value="analysis result")
     with patch.object(SPECIALIST_REGISTRY["cso"], "analyze", analyze_mock):
@@ -163,7 +163,7 @@ def test_a_panel_turns_specialists_read_no_standing_facts(monkeypatch) -> None:
     monkeypatch.setattr("openexecutive.orchestrator.router.load_company_stage", lambda: "")
     monkeypatch.setattr("openexecutive.orchestrator.router.load_principal_role", lambda: "")
     monkeypatch.setattr(
-        "openexecutive.memory.facts.render_facts_for_prompt", lambda: "runway: 4 months (per Sam Lee)"
+        "openexecutive.memory.facts.render_facts_for_prompt", lambda **_kw: "runway: 4 months (per Sam Lee)"
     )
 
     def facts_seen(session: Session) -> str:

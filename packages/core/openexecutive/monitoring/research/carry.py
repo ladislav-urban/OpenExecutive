@@ -72,15 +72,13 @@ def _columns(conn: sqlite3.Connection, table: str) -> list[str]:
 def _live(row: dict[str, Any], now: datetime) -> bool:
     """``alerts/lifecycle.is_live`` on a raw row, and not archived."""
     from openexecutive.alerts.lifecycle import is_live
-    from openexecutive.alerts.models import Alert
+    from openexecutive.alerts.store import _row_to_alert
 
     if row.get("archived_at"):
         return False
     try:
-        data = dict(row)
-        for key in ("topic_tags", "channels_attempted", "channels_delivered"):
-            data[key] = json.loads(data.get(key) or "[]")
-        return is_live(Alert(**data), now)
+        # The store's own reader knows every JSON column the table has.
+        return is_live(_row_to_alert(row), now)  # type: ignore[arg-type]
     except Exception:
         logger.exception("research.carry: could not read alert %s", row.get("id"))
         return False

@@ -28,6 +28,7 @@ from openexecutive.api.routes import (
     chat_directory,
     clients,
     company_profile,
+    contacts,
     decisions,
     delegation,
     departments,
@@ -42,6 +43,7 @@ from openexecutive.api.routes import (
     history,
     knowledge,
     may_do,
+    memory_changes,
     notifications,
     onboarding,
     people,
@@ -57,7 +59,9 @@ from openexecutive.api.routes import (
     take_the_lead,
     today,
     version,
+    watch_jobs,
     watchlist,
+    worked_out,
     workflow_designer,
     workflows,
     workspace,
@@ -72,6 +76,7 @@ from openexecutive.integrations.erpnext_panel import router as erpnext_panel_rou
 from openexecutive.integrations.google_chat import router as google_chat_router
 from openexecutive.integrations.slack_events import router as slack_events_router
 from openexecutive.integrations.telegram_bot import router as telegram_router
+from openexecutive.observability import configure_tracing
 from openexecutive.utils.deployment import is_local_login, is_public_deployment
 
 if TYPE_CHECKING:
@@ -931,7 +936,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="Open Executive API",
         description="AI-powered virtual executive team",
-        version="0.6.1",  # x-release-please-version
+        version="0.6.9",  # x-release-please-version
         lifespan=lifespan,
     )
 
@@ -1053,9 +1058,12 @@ def create_app() -> FastAPI:
     app.include_router(may_do.router, tags=["delegation"])
     app.include_router(history.router, tags=["memories"])
     app.include_router(reflection.router, tags=["memories"])
+    app.include_router(worked_out.router, tags=["memories"])
+    app.include_router(memory_changes.router, tags=["memories"])
     app.include_router(audit.router, tags=["audit"])
     app.include_router(departments.router, tags=["departments"])
     app.include_router(people.router, tags=["people"])
+    app.include_router(contacts.router, tags=["people"])
     app.include_router(chat_directory.router, tags=["people"])
     app.include_router(today.router, tags=["today"])
     app.include_router(badges.router, tags=["today"])
@@ -1072,6 +1080,7 @@ def create_app() -> FastAPI:
     app.include_router(erpnext_demo_people_router, tags=["erpnext"])
     app.include_router(erpnext_a2a_router, tags=["erpnext"])
     app.include_router(erpnext_drafts.router, tags=["erpnext"])
+    app.include_router(watch_jobs.router, tags=["erpnext"])
     app.include_router(architecture.router, tags=["architecture"])
     app.include_router(guide.router, tags=["guide"])
     app.include_router(health.router, tags=["health"])
@@ -1083,6 +1092,8 @@ def create_app() -> FastAPI:
     # x-api-key. Mounting also lazily creates mcp.session_manager, which the
     # lifespan runs (see above).
     mcp_server.mount(app)
+
+    configure_tracing(app)
 
     return app
 

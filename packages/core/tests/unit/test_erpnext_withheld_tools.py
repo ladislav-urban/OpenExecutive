@@ -72,6 +72,41 @@ def test_tool_search_never_shows_a_withheld_tool(monkeypatch: pytest.MonkeyPatch
         assert name not in kept
 
 
+@pytest.mark.parametrize("tool", ["erpnext__draft_dunning", "erpnext__draft_update", "erpnext__draft_comment"])
+def test_a_draft_tool_is_refused_without_its_card(erp: Any, roster: Any, tool: str) -> None:
+    from openexecutive.orchestrator.schedule_tools import set_session
+
+    gateway = mcp_gateway.get_active_gateway()
+    assert gateway is not None
+    call = {"name": tool, "arguments": {"sales_invoice": "SINV-1", "doctype": "Purchase Invoice", "name": "PINV-1",
+                                        "text": "hi", "idempotency_key": "k" * 32, "expected_fingerprint": "f" * 64}}
+
+    async def go() -> str:
+        with set_session(_owner_turn(roster)):
+            return await gateway.call_tool(call)
+
+    assert "error" in json.loads(asyncio.run(go()))
+    assert erp.calls == []
+
+
+def test_a_model_written_check_cannot_ask_for_an_update_or_a_credit_raise(erp: Any, roster: Any) -> None:
+    from openexecutive.orchestrator.schedule_tools import set_session
+
+    gateway = mcp_gateway.get_active_gateway()
+    assert gateway is not None
+    for args in (
+        {"doctype": "Purchase Invoice", "operation": "update", "name": "PINV-1", "fields": {"set": {"remarks": "x"}}},
+        {"doctype": "Customer", "operation": "update", "name": "Harbor",
+         "fields": {"credit": {"company": "Aurora", "credit_limit": 1, "sales_order": "SO-1"}}},
+    ):
+        async def go(arguments: dict[str, Any] = args) -> str:
+            with set_session(_owner_turn(roster)):
+                return await gateway.call_tool({"name": "erpnext__draft_check", "arguments": arguments})
+
+        assert "error" in json.loads(asyncio.run(go()))
+    assert erp.calls == []
+
+
 def test_customers_payment_records_are_withheld_from_chat() -> None:
     # Many customers' payment behaviour in one call: the collections job's
     # own read, never the chat model's (phase 1).

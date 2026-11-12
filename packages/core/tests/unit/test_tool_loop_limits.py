@@ -109,4 +109,4 @@ def test_the_last_round_answers_without_tools() -> None:
     assert provider.calls[-1].get("tool_choice") == {"type": "none"}
     assert all("tool_choice" not in call for call in provider.calls[:-1])
     told = provider.calls[-1]["messages"][-1]["content"][-1]
-    assert told == {"type": "text", "text": executive_module._FINAL_ROUND_NOTE}
+    assert told == {"type": "text", "text": executive_module.LAST_ROUND_NOTE}

@@ -380,8 +380,9 @@ def _render_reflection_context(
         # levels and nobody else awaiting.
         parts.append("AREAS WITH GOALS AT RISK:")
         for d in at_risk:
+            where = f"area slug={d['slug']}" if d.get("slug") else "no area"
             parts.append(
-                f"- {d['title']} (area slug={d['slug']}): "
+                f"- {d['title']} ({where}): "
                 f"at_risk={d.get('at_risk_count', 0)} "
                 f"off_track={d.get('off_track_count', 0)}"
             )
@@ -389,6 +390,14 @@ def _render_reflection_context(
     elif at_risk:
         parts.append("DEPARTMENTS WITH RISK:")
         for d in at_risk:
+            if not d.get("slug"):
+                # The goals with no department: no head, channel or authority.
+                parts.append(
+                    f"- {d['title']} (no department): "
+                    f"at_risk={d.get('at_risk_count', 0)} "
+                    f"off_track={d.get('off_track_count', 0)}"
+                )
+                continue
             parts.append(
                 f"- {d['title']} (slug={d['slug']}): "
                 f"at_risk={d.get('at_risk_count', 0)} "
@@ -841,6 +850,7 @@ class ExecutiveReflectionWorkflow(Workflow):
             "send_discord_dm",
             "send_telegram_message",
             "ack_alert",
+            "answer_card",
             # Same reasoning as ack_alert: loop descriptions are quoted from
             # what people wrote, and nobody is watching this pass.
             "close_open_loop",

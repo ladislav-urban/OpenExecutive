@@ -425,12 +425,16 @@ has no Outlook address of its own on file is matched by that sign-in address,
 so use it on the People page and with `--email`.
 
 **Read my calendar (optional).** Run either script with `--calendar` to also
-grant read-only access to the person's own calendar (`calendar.readonly` on
-Google, which the OAuth client's consent screen must list; the delegated
-`Calendars.Read` permission on the Microsoft app). Then turn on **Read my
+grant access to the person's own calendar (`calendar.events` on Google, which
+the OAuth client's consent screen must list; the delegated
+`Calendars.ReadWrite` permission on the Microsoft app). Then turn on **Read my
 calendar** in Delegate → Act as me. The Executive reads events fresh each time
-and keeps nothing; a credential minted without `--calendar` keeps working for
-mail, and the switch says to reconnect with the flag.
+and keeps nothing. The one change it makes there is answering a meeting
+invite: Accept or Decline on an invite card on Home, or an accept on its own
+under Handle it for me. A credential minted without `--calendar` keeps working
+for mail, and the switch says to reconnect with the flag; one minted earlier
+with read-only calendar access (`calendar.readonly`, `Calendars.Read`) keeps
+reading, and its invite cards say to connect again to answer.
 
 ```bash
 MS365_MCP_CLIENT_ID=<app id> uv run python scripts/connect-own-outlook.py --email you@example.com
@@ -871,6 +875,56 @@ approved. Each draft is tagged "OpenExecutive", commented with who asked and
 approved, and logged in ERPNext's "OE Draft" list; OpenExecutive's audit log
 has a row for each card proposed, created, failed or dismissed.
 
+A Dunning (a payment reminder for one overdue Sales Invoice) is made through
+ERPNext's own "Create > Dunning", with the Dunning Type's fee, interest and
+letter (the company's default type unless one is named). List it on both
+sides to turn it on:
+
+```bash
+ERPNEXT_DRAFT_DOCTYPES=ToDo,Material Request,Dunning
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_draft_doctypes '["ToDo", "Material Request", "Dunning"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Material Request": 5000, "Dunning": 500}'
+```
+
+Its cap is on what the letter adds, the fee and interest, in company
+currency. The card shows each overdue installment, the charges and the
+letter's text as ERPNext renders it, and keeps the letter date its check
+used, so approving it on a later day makes the same letter. A payment, an
+edited letter template or an installment falling due since the card closes
+it, and asking again shows the letter as it is now. Submitting a Dunning
+sends nothing: the letter reaches the customer only when someone prints or
+emails it.
+
+Two more kinds of card change what is already in ERPNext, each off until
+listed on both sides. An update changes listed fields of an unsubmitted
+Purchase Invoice the person owns or was assigned (an open ToDo they were
+given counts, so it gives nothing beyond their own write permission): the
+supplier's invoice number and date, the dates, remarks, cost center,
+project and hold, the supplier only while empty, and each line's qty, rate,
+UOM, expense account, cost center, project and description; never its
+company, currency, taxes or links. A comment adds the person's words, as
+plain text, to a listed document.
+
+```bash
+ERPNEXT_DRAFT_UPDATE_DOCTYPES=Purchase Invoice
+ERPNEXT_DRAFT_COMMENT_DOCTYPES=Purchase Invoice,Sales Invoice
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_update_doctypes '["Purchase Invoice"]'
+bench --site <site> set-config -p oe_connector_comment_doctypes '["Purchase Invoice", "Sales Invoice"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Purchase Invoice": 20000}'
+```
+
+Set the Purchase Invoice cap before listing updates: a rate or qty can
+change, and the cap is on the grand total after the change. The card shows
+every field, line and total before and after, as ERPNext reads it, or the
+comment's whole text; a document changed since the card refuses, and the
+card closes. Nothing is ever submitted, and the workflow never moves.
+
 Teammates (phase 4b) can have drafts prepared too, each for themselves, once
 the API's environment says so:
 
@@ -895,6 +949,34 @@ check the draft as the owner and leaves the usual card to approve. The
 follow-up ToDo is worded from the invoice's figures and assigned to the
 owner. The DocType must be listed in `ERPNEXT_DRAFT_DOCTYPES` (both are by
 default); nothing else needs setting.
+
+A credit-hold alert (a draft Sales Order over its customer's credit limit)
+can suggest raising that customer's credit limit at its company, so the
+order fits. Off by default: it is the one card whose approval changes
+ERPNext at once, and the order itself is never submitted (its owner submits
+it in ERPNext). To turn it on:
+
+```bash
+ERPNEXT_DRAFTS_ENABLED=true
+ERPNEXT_CREDIT_RAISE=true
+# Set as the site's oe_connector_draft_sod: "agent" there means "agent" here.
+ERPNEXT_DRAFT_SOD=off
+```
+
+and on the site list Customer in `oe_connector_update_doctypes` and set
+`oe_connector_credit_raise_max` (the most one raise may add, in company
+currency; unset refuses every raise). **Prepare the raise** shows to the
+owner and to the people the alert names (each needs
+`ERPNEXT_DRAFTS_TEAMMATES` and signed sign-ins). ERPNext checks the raise as
+whoever taps; someone it won't let prepare one gets no card, and is told who
+can (the people given customer credit authority in People, else "your credit
+controller"). The card is approved by whoever tapped when they have customer
+credit authority in People and separation of duties is off, otherwise by the
+owner; with it on and the owner tapping, no card is left. Approval needs the
+credit authority role in ERPNext as well, within the site's cap. Keep
+`ERPNEXT_DRAFT_SOD` the same as the site's `oe_connector_draft_sod`: on there
+and off here, ERPNext refuses the approval and the card closes; on here and
+off there, only the owner approves raises. Demo people never approve one.
 
 **Suppliers' agents over A2A.** A supplier's own AI agent can ask, over A2A
 (Agent2Agent, JSON-RPC `message/send`), about that supplier's own submitted

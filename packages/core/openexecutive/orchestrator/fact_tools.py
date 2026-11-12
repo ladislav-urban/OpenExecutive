@@ -15,7 +15,7 @@ carrying the principal's authority. ``remember_fact`` is also open to a
 teammate on the People list talking from a surface that verified who they are
 (the web app signed in, their own Slack or Discord). Their fact is attributed
 — rendered "(per <name>)", so no prompt reads it as the principal's — and is
-held as a proposal until the principal approves it on the Pulse page, unless
+held as a proposal until the principal approves it on the Memory page, unless
 the principal marked that teammate trusted ("needs my approval" off;
 ``memory.facts``). Even a trusted teammate's fact that would replace one the
 principal set is held. A proposal never renders. Retiring a fact
@@ -32,7 +32,7 @@ A write also needs ``source_quote``: the speaker's exact words from this
 message (at least two words and eight characters), checked against what they
 typed this turn — never the backstory an adapter hydrates a reply with, and
 nothing at all when the message carries an attachment. It is the provenance
-the Pulse page shows the principal, and it keeps the model from storing its
+the Memory page shows the principal, and it keeps the model from storing its
 own inference, a document's figure or text quoted back at the principal as
 something they said. The quote alone only proves they asked; so a
 remember_fact statement's figures, names and date words, and an
@@ -80,11 +80,25 @@ REMEMBER_FACT_TOOL: dict[str, Any] = {
         "date you store must be one they wrote: never your own inference, a "
         "document's figure or a third party's words. For a company-profile field "
         "(industry, headcount, ARR, burn, runway, priorities, ...) use "
-        "update_company_profile instead (open_tools group memory)."
+        "update_company_profile instead (open_tools group memory). A decision "
+        "the speaker states they made ('we're going with the Q1 hire', 'we "
+        "won't renew Acme') is kept the same way with decision: true, so the "
+        "weekly review can ask later how it turned out."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
+            "decision": {
+                "type": "boolean",
+                "description": "True when this is a decision the speaker made, not a fact.",
+            },
+            "department": {
+                "type": "string",
+                "description": (
+                    "For a decision: the slug of the department it belongs to, when "
+                    "one fits. Leave out otherwise."
+                ),
+            },
             "subject": {
                 "type": "string",
                 "description": (
@@ -345,12 +359,6 @@ class _Hold:
     summary: str
 
 
-# A quote this short could be found in almost any message ("48", "yes"), so
-# it would prove nothing about what the principal said.
-_QUOTE_MIN_CHARS = 8
-_QUOTE_MIN_WORDS = 2
-
-
 def _own_words(session: Any) -> str | None:
     """What the principal typed this turn: the pinned speaker text without
     any block an adapter added (the ``<outbound_reply_context>`` backstory a
@@ -371,11 +379,6 @@ def _quote_error(quote: str, session: Any) -> str | None:
     if not quote:
         return "source_quote is required: the speaker's exact words from this message."
     nq = _normalize_for_quote_match(quote)
-    if len(nq.replace(" ", "")) < _QUOTE_MIN_CHARS or len(nq.split()) < _QUOTE_MIN_WORDS:
-        return (
-            "source_quote is too short to show what the speaker said: quote the "
-            "whole phrase that states it."
-        )
     spoken = _own_words(session)
     if spoken is None:
         return (
@@ -465,36 +468,6 @@ def _bare(word: str) -> str:
     return re.sub(r"['’]s$", "", word).strip("'’-")
 
 
-def _unsaid_claim_words(statement: str, session: Any) -> list[str]:
-    """The names and date words in ``statement`` the principal did not write
-    this turn. A figure-free claim carried in from a document ("Cedar Court's
-    lease expires in March" after "remember what the lease doc says") names
-    something they never said; a paraphrase of what they did say does not.
-
-    A name is a capitalised word, or any word holding a non-ASCII letter (a
-    look-alike capital cannot hide one). Only the statement's very first word
-    is exempt, being capitalised by grammar (a date word never is): exempting
-    every sentence's first word would let a steered model split a document's
-    names into one-word sentences ("Cedar Court's landlord. Acme.").
-    A statement is one fact, so a second sentence gets no such allowance. A
-    name the model writes in lower case is not caught — the gate narrows
-    what a real quote can carry in, it does not prove a paraphrase."""
-    from openexecutive.memory.episodic import _normalize_for_quote_match
-
-    spoken = _normalize_for_quote_match(_own_words(session) or "")
-    said = {_bare(w) for w in _WORD.findall(spoken)}
-    missing: list[str] = []
-    for i, m in enumerate(_WORD.finditer(statement)):
-        bare = _bare(m.group(0))
-        key = bare.lower()
-        if not key or key in _GLUE or key in said:
-            continue
-        name_like = bare[0].isupper() or not bare.isascii()
-        if key in _DATE_WORDS or (name_like and i > 0):
-            missing.append(bare)
-    return missing
-
-
 def _claim_error(label: str, text: str, session: Any) -> str | None:
     """None when every figure, name and date word in ``text`` (a field
     ``remember_fact`` stores and renders) is the principal's own."""
@@ -506,14 +479,9 @@ def _claim_error(label: str, text: str, session: Any) -> str | None:
                 "(a document or someone else did) — ask them."
                 + (_PREVIOUS_HINT if label == "previous_value" else "")
             )
-    unsaid = _unsaid_claim_words(text, session)
-    if unsaid:
-        return (
-            f"the {label} names {', '.join(repr(w) for w in unsaid[:5])}, which the "
-            "speaker did not write this turn. Use their terms, or — if it came from "
-            "a document or someone else — ask them to confirm it."
-            + (_PREVIOUS_HINT if label == "previous_value" else "")
-        )
+    # Names and dates are not checked against their words: a short answer
+    # ("Internal") to the Executive's own question names nothing, and the
+    # statement must still name what it is about.
     return None
 
 
@@ -652,9 +620,13 @@ def _remember_fact(tool_input: dict[str, Any]) -> str | _Hold:
         if existing is None or existing.status != "active" or existing.kind == "profile":
             return _bad(tool, f"no standing fact {replaces}. Check the '[fact N]' ids and call again.")
 
+    decision = tool_input.get("decision") is True
     args: dict[str, Any] = {
         "subject": subject, "statement": statement, "source_quote": quote,
         "previous_statement": previous, "replaces_fact_id": replaces,
+        # Left out (None), an edit of a decision stays one (record_fact).
+        "decision": True if decision else None,
+        "department": _department(tool_input) if decision else None,
     }
     provenance = _provenance(session)
     if teammate is not None:
@@ -673,6 +645,19 @@ def _remember_fact(tool_input: dict[str, Any]) -> str | _Hold:
     return _apply_remember(args, provenance)
 
 
+def _department(tool_input: dict[str, Any]) -> str:
+    """The decision's department: a slug of an existing department, else ""."""
+    slug = _text(tool_input, "department").strip().lower()
+    if not slug:
+        return ""
+    try:
+        from openexecutive.departments import registry
+
+        return slug if registry.get_state(slug) is not None else ""
+    except Exception:  # noqa: BLE001 - an unknown area keeps the decision, untagged.
+        return ""
+
+
 def _apply_remember(args: dict[str, Any], provenance: dict[str, Any]) -> str:
     """Store a checked fact: at once from chat, or on the principal's
     confirming reply to an emailed one. A teammate's fact is stored as a
@@ -686,7 +671,11 @@ def _apply_remember(args: dict[str, Any], provenance: dict[str, Any]) -> str:
     record: dict[str, Any] = {
         "subject": subject, "statement": statement, "source_quote": args["source_quote"],
         "previous_statement": args["previous_statement"],
-        "replaces_fact_id": args["replaces_fact_id"], **provenance,
+        "replaces_fact_id": args["replaces_fact_id"],
+        # A fact held for an emailed confirmation before decisions were facts
+        # carries neither key.
+        "decision": args.get("decision"), "department": args.get("department"),
+        **provenance,
     }
     try:
         try:
@@ -698,7 +687,7 @@ def _apply_remember(args: dict[str, Any], provenance: dict[str, Any]) -> str:
         return _bad(tool, (
             f"{facts.MAX_PENDING_PROPOSALS_PER_PERSON} of this teammate's facts are already "
             "waiting for the principal's approval. Tell them it will be kept once the "
-            "principal has reviewed those on the Pulse page."
+            "principal has reviewed those on the Memory page."
         ))
     except Exception as exc:
         logger.exception("remember_fact: write failed")
@@ -708,11 +697,22 @@ def _apply_remember(args: dict[str, Any], provenance: dict[str, Any]) -> str:
                      "recorded; do not retry the same call unchanged."
         })
 
+    if fact.status == "active" and fact.decision and fact.department:
+        from openexecutive.memory.episodic import _mirror_to_dept_honcho
+
+        try:
+            _mirror_to_dept_honcho(
+                department=fact.department, kind="decision", body=f"Decision: {statement}",
+                person_id=provenance.get("recorded_by_person_id"),
+            )
+        except Exception:  # noqa: BLE001 - the fact is kept; the mirror is best-effort.
+            logger.warning("remember_fact: department mirror failed", exc_info=True)
     _audit(
         tool, True,
         f"remember_fact {fact.id} ({fact.status}): {subject[:60]} — {statement[:80]}",
         {
             "fact_id": fact.id, "kind": fact.kind, "status": fact.status,
+            "decision": fact.decision, "department": fact.department,
             "recorded_by_role": fact.recorded_by_role, "subject": subject,
             "statement": statement, "previous": fact.previous_statement[:300],
             "superseded_ids": [f.id for f in superseded],
@@ -733,7 +733,7 @@ def _apply_remember(args: dict[str, Any], provenance: dict[str, Any]) -> str:
             "statement": fact.statement,
             "message": (
                 f"Kept as a proposal, not in use yet: {why}. The principal approves "
-                "or declines it on the Pulse page. Tell the person you are talking "
+                "or declines it on the Memory page. Tell the person you are talking "
                 "to that, and do not describe it as in effect."
             ),
         })
@@ -1012,7 +1012,7 @@ def _apply_profile_edit(
         )
         fact_id = row.id
     except Exception:
-        # The profile write already landed; the Pulse page just misses a line.
+        # The profile write already landed; the Memory page just misses a line.
         logger.warning("update_company_profile: provenance row failed", exc_info=True)
 
     _audit(

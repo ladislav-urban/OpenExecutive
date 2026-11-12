@@ -505,12 +505,17 @@ def test_email_to_a_contact_only_on_the_principals_turn(
     out, sent = _send(CONTACT_EMAIL, _sessions(roster)[surface])
     assert (sent.await_count == 1) is allowed
     if not allowed:
-        # Refused exactly like a stranger: nothing says the address is a contact.
+        # Below Hands-off it waits on an Approve card on a turn someone is in
+        # (orchestrator.levels); with no turn, refused exactly like a
+        # stranger: nothing says the address is a contact.
+        parsed = json.loads(out)
+        if parsed.get("status") == "waiting_for_approval":
+            return
         stranger, _ = _send("stranger@elsewhere.example", _sessions(roster)[surface])
-        assert json.loads(out)["error"] == json.loads(stranger)["error"].replace(
+        assert parsed["error"] == json.loads(stranger)["error"].replace(
             "stranger@elsewhere.example", CONTACT_EMAIL
         )
-        assert "contact" not in json.loads(out)["error"]
+        assert "contact" not in parsed["error"]
 
 
 @pytest.mark.parametrize("surface", [
@@ -521,8 +526,14 @@ def test_email_to_the_team_is_unchanged(roster: SimpleNamespace, surface: str) -
     assert sent.await_count == 1
 
 
-def test_a_stranger_is_still_refused_with_the_roster_message(roster: SimpleNamespace) -> None:
+def test_a_stranger_waits_on_an_approve_card(roster: SimpleNamespace) -> None:
     out, sent = _send("stranger@elsewhere.example", _principal_web(roster))
+    assert sent.await_count == 0
+    assert json.loads(out)["status"] == "waiting_for_approval"
+
+
+def test_with_no_turn_a_stranger_is_refused_with_the_roster_message(roster: SimpleNamespace) -> None:
+    out, sent = _send("stranger@elsewhere.example", None)
     assert sent.await_count == 0
     assert "EMAIL_ALLOWED_SENDERS" in json.loads(out)["error"]
 
@@ -1535,7 +1546,7 @@ def test_a_private_turn_emails_the_principal_and_nobody_else(roster: SimpleNames
     _, to_principal = _send(OWNER_EMAIL, _private_turn(roster))
     out, to_teammate = _send(TEAM_EMAIL, _private_turn(roster))
     assert to_principal.await_count == 1 and to_teammate.await_count == 0
-    assert "EMAIL_ALLOWED_SENDERS" in json.loads(out)["error"]
+    assert json.loads(out)["status"] == "waiting_for_approval"
 
 
 def test_a_private_turn_messages_the_principal_and_nobody_else(
@@ -1911,3 +1922,94 @@ def test_a_private_turn_writes_nothing_to_peer_or_department_memory(
         "Can you deal with this?", session, person_id=roster.principal, peer_memory_context="",
     ))
     assert bool(person_syncs) is synced and bool(dept_syncs) is synced
+
+
+# --- How to reach someone: People first ------------------------------------
+
+
+def test_lookup_person_finds_a_contact_with_details_on_the_principals_turn(
+    roster: SimpleNamespace,
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import handle_lookup_person
+    from openexecutive.people.models import ContactDetail
+
+    people_store.set_person_details(
+        roster.contact, [ContactDetail(kind="mobile", value="555-010-2030")]
+    )
+    out = _tool(handle_lookup_person, {"query": "jordan"}, _principal_web(roster))
+    [match] = out["matches"]
+    assert match["kind"] == "contact"
+    assert match["details"] == [{"kind": "mobile", "value": "555-010-2030"}]
+
+
+@pytest.mark.parametrize("surface", [
+    "teammate_web", "teammate_slack", "principal_by_email", "unattended",
+])
+def test_lookup_person_keeps_contacts_and_details_off_other_turns(
+    roster: SimpleNamespace, surface: str
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import handle_lookup_person
+    from openexecutive.people.models import ContactDetail
+
+    people_store.set_person_details(
+        roster.teammate, [ContactDetail(kind="mobile", value="555-010-4050")]
+    )
+    session = _non_principal_sessions(roster)[surface]
+    assert _tool(handle_lookup_person, {"query": "jordan"}, session)["matches"] == []
+    [ben] = _tool(handle_lookup_person, {"query": "ben"}, session)["matches"]
+    assert "details" not in ben and "kind" not in ben
+
+
+def test_lookup_person_audit_counts_the_team_only(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import handle_lookup_person
+
+    rows = _captured_audit(monkeypatch)
+    # "e" matches all three names: the principal sees the contact too.
+    principal_out = _tool(handle_lookup_person, {"query": "e"}, _principal_web(roster))
+    assert len(principal_out["matches"]) == 3
+    principal_rows = list(rows)
+    rows.clear()
+    _tool(handle_lookup_person, {"query": "e"}, _non_principal_sessions(roster)["teammate_web"])
+    assert principal_rows == rows
+
+
+def test_tools_and_persona_say_to_check_people_first_for_contact_details() -> None:
+    from openexecutive.orchestrator.people_tools import LIST_PEOPLE_TOOL
+    from openexecutive.orchestrator.schedule_tools import LOOKUP_PERSON_TOOL
+    from openexecutive.prompts.executive_persona import (
+        EXECUTIVE_PERSONA_PROMPT,
+        EXECUTIVE_PERSONA_SOLO_PROMPT,
+    )
+
+    assert "how to reach someone" in LIST_PEOPLE_TOOL["description"]
+    assert "how to reach someone" in LOOKUP_PERSON_TOOL["description"]
+    for persona in (EXECUTIVE_PERSONA_PROMPT, EXECUTIVE_PERSONA_SOLO_PROMPT):
+        assert persona.count("When asked how to reach someone") == 1
+
+
+def test_lookup_person_miss_on_the_principals_turn_points_to_email_then_web(
+    roster: SimpleNamespace,
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import handle_lookup_person
+
+    out = _tool(handle_lookup_person, {"query": "nobody"}, _principal_web(roster))
+    assert out["matches"] == []
+    assert "email, then the web" in out["hint"] and "Try list_people" not in out["hint"]
+
+
+def test_lookup_person_never_logs_a_contacts_name_on_the_principals_turn(
+    roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import handle_lookup_person
+
+    rows = _captured_audit(monkeypatch)
+    out = _tool(handle_lookup_person, {"query": "jordan"}, _principal_web(roster))
+    assert [m["full_name"] for m in out["matches"]] == ["Jordan Client"]
+    _tool(handle_lookup_person, {"query": "ben"}, _principal_web(roster))
+    (c_summary, c_details), (t_summary, t_details) = rows
+    assert "jordan" not in c_summary.lower() and "jordan" not in json.dumps(c_details).lower()
+    assert c_details["matches"] == 0
+    # A team match still logs its query as before.
+    assert t_details["query"] == "ben" and t_details["matches"] == 1
