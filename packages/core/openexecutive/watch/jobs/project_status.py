@@ -32,9 +32,10 @@ Its rules are code (``projects``, ``build``), unit-tested on fixed data:
   plan", or "no end date".
 - **Late tasks:** an open task (not Completed, Cancelled or a template)
   whose ``exp_end_date`` is before today, oldest first, up to 5 a project.
-- **The team's words:** the latest submitted update of the week, its users'
-  status texts joined, tags dropped, cleaned and cut to 300 characters
-  (``QUOTE_MAX``). None: "No status update this week", and no model line.
+- **The team's words:** the latest submitted update of the week (never one
+  dated after today), its users' status texts joined, cut to 1,200 raw
+  characters, tags dropped, cleaned and cut to 300 (``QUOTE_MAX``), marked
+  "..." when cut. None: "No status update this week", and no model line.
 - **Order:** the most days late first, then the most over, the most late
   tasks, the billed value and the name.
 
@@ -51,8 +52,10 @@ run on the fast model, its system prompt the runner's constant, the
 instruction this module's constant, its input each project's numbers and
 the team's cleaned words (``ReasonSchema.max_fact_chars`` 300), wrapped as
 untrusted. A project with no update this week, or on hold, has no facts, so
-the model never sees it. The line never sets a figure, a key, a title or
-the notice's route.
+the model never sees it. A line stating a number its own project's
+numeric facts don't hold is dropped (``numbers_from_facts``), so one
+project's update can't set another's figures in its line. The line never
+sets a figure, a key, a title or the notice's route.
 
 No card: the job leaves notices only (``check_fields`` is None), so the
 draft-card, hold and kept-from-reviewer paths don't apply to it.
@@ -118,10 +121,17 @@ NOTICE_MAX = 10
 LATE_TASKS_SHOWN = 5
 # Every ERPNext name or status, capped before it is cleaned.
 TEXT_MAX = 140
-# The team's status text: its raw length kept before tags are dropped and it
-# is cleaned, and the most of it quoted (on the notice and to the model).
-STATUS_RAW_MAX = 4000
+# The team's status text: its raw length kept as it is read (each users row,
+# and again all of an update's rows joined) before tags are dropped and it is
+# cleaned, and the most of it quoted (on the notice and to the model), marked
+# with CUT_MARK when cut. runner.clean bounds itself too (CLEAN_RAW_FACTOR).
+STATUS_RAW_MAX = 1200
 QUOTE_MAX = 300
+CUT_MARK = "..."
+# A late task's subject on a notice line, so five fit within the line's
+# width with the count first; a held project's title likewise.
+SUBJECT_SHOWN = 36
+TITLE_SHOWN = 100
 DAYS_MAX = 9999
 SHUT = frozenset({"completed", "cancelled"})
 ON_HOLD = "on hold"
@@ -134,8 +144,10 @@ REASON_INSTRUCTION = (
 )
 NO_UPDATE = "No status update this week"
 MORE_LINE = "{n} more open projects; the first {shown} are shown."
+MORE_HELD_LINE = "{n} more projects on hold; the first {shown} are shown."
 PROJECTS_CUT_LINE = (
-    "Not every open project could be read in full this run; those past the first 50 are left out."
+    "Not every open project could be read in full this run: there were more than 50, or a project's "
+    "name couldn't be sent in the read; those are left out."
 )
 TASKS_CUT_LINE = "Not every open task could be read this run, so some late tasks may be missing."
 UPDATES_CUT_LINE = "Not every project update could be read this run, so some projects may show none."
@@ -364,11 +376,17 @@ def settled(text: str, limit: int = QUOTE_MAX) -> str:
 def quoted(raw: object) -> str:
     """The team's status text as the job quotes it: its raw length capped
     before anything else, tags dropped, entities read, then cleaned (one
-    line, no links, no markdown) to at most ``QUOTE_MAX``."""
+    line, no links, no markdown) to at most ``QUOTE_MAX``, ending in
+    ``CUT_MARK`` when it was cut."""
     if not isinstance(raw, str):
         return ""
-    text = _TAG.sub(" ", raw[:STATUS_RAW_MAX])
-    return settled(html.unescape(text))
+    text = html.unescape(_TAG.sub(" ", raw[:STATUS_RAW_MAX]))
+    # Cleaned a little past the quote (its trailing space is stripped), to
+    # tell whether it was cut.
+    full = settled(text, QUOTE_MAX + 40)
+    if len(full) <= QUOTE_MAX:
+        return full
+    return settled(full[:QUOTE_MAX - len(CUT_MARK)].rstrip() + CUT_MARK)
 
 
 def _status_value(row: Mapping[str, Any]) -> Any:
@@ -377,16 +395,17 @@ def _status_value(row: Mapping[str, Any]) -> Any:
     return row["users.project_status"] if "users.project_status" in row else row.get("project_status")
 
 
-def team_words(result: Mapping[str, Any]) -> dict[str, str]:
-    """Each project's latest update of the week (by date, then name), its
-    users' status texts in order, as ``quoted``. A project whose latest
-    update says nothing usable has no words."""
+def team_words(result: Mapping[str, Any], today: date) -> dict[str, str]:
+    """Each project's latest update of the week (by date, then name; one
+    dated after today is never this week's), its users' status texts in
+    order, as ``quoted``. A project whose latest update says nothing usable
+    has no words."""
     latest: dict[str, tuple[date, str]] = {}
     texts: dict[str, list[str]] = {}
     for row in _rows(result, required=False):
         name, project = _name(row.get("name")), _name(row.get("project"))
         day = _day(row.get("date"))
-        if not name or not project or day is None:
+        if not name or not project or day is None or day > today:
             continue
         held = latest.get(project)
         if held is None or (day, name) > held:
@@ -396,7 +415,7 @@ def team_words(result: Mapping[str, Any]) -> dict[str, str]:
             texts.setdefault(name, []).append(text[:STATUS_RAW_MAX])
     out: dict[str, str] = {}
     for project, (_day_of, name) in latest.items():
-        words = quoted(" ".join(texts.get(name, [])))
+        words = quoted(" ".join(texts.get(name, []))[:STATUS_RAW_MAX])
         if words:
             out[project] = words
     return out
@@ -429,10 +448,18 @@ def _schedule_line(project: Project, today: date) -> str:
     return f"on plan, due {project.end.isoformat()}"
 
 
+def _short(text: str, width: int) -> str:
+    return text if len(text) <= width else text[:width - len(CUT_MARK)].rstrip() + CUT_MARK
+
+
 def _tasks_line(found: Sequence[LateTask]) -> str:
-    shown = "; ".join(f"{t.subject}, due {t.due.isoformat()}" for t in found[:LATE_TASKS_SHOWN])
+    """The count first (and how many aren't shown), then the oldest five,
+    each subject shortened so the line fits its width."""
+    shown = "; ".join(
+        f"{_short(t.subject, SUBJECT_SHOWN)}, due {t.due.isoformat()}" for t in found[:LATE_TASKS_SHOWN]
+    )
     rest = len(found) - LATE_TASKS_SHOWN
-    return f"{len(found)}: {shown}" + (f"; and {rest} more" if rest > 0 else "")
+    return f"{len(found)}" + (f", {rest} not shown" if rest > 0 else "") + f": {shown}"
 
 
 @dataclass(frozen=True)
@@ -485,11 +512,14 @@ def _held_row(held: Sequence[Status], today: date) -> CardSpec:
     values = []
     for status in held:
         late = status.late
+        # The count and date first, the title shortened, so the line keeps
+        # them within its width.
         said = (
-            f"{_plural(len(late), 'overdue task')}, the oldest {late[0].subject}, due {late[0].due.isoformat()}"
+            f"{_plural(len(late), 'overdue task')}, the oldest due {late[0].due.isoformat()}: "
+            f"{_short(late[0].subject, SUBJECT_SHOWN)}"
             if late else "no overdue task"
         )
-        values.append(("Project", f"{status.project.title}: {said}"))
+        values.append(("Project", f"{said}; {_short(status.project.title, TITLE_SHOWN)}"))
     return CardSpec(key=f"on-hold:{today.isoformat()}", summary="On hold", values=tuple(values))
 
 
@@ -500,7 +530,7 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
     if not chosen:
         return []
     late = late_tasks(tasks_result, today)
-    words = team_words(updates_result)
+    words = team_words(updates_result, today)
     statuses = [Status(p, tuple(late.get(p.name, ())), "" if p.on_hold else words.get(p.name, "")) for p in chosen]
     active = sorted((s for s in statuses if not s.project.on_hold), key=lambda s: s.order(today))
     held = [s for s in statuses if s.project.on_hold]
@@ -511,6 +541,8 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
     notes: list[str] = []
     if len(active) > NOTICE_MAX:
         notes.append(MORE_LINE.format(n=len(active) - NOTICE_MAX, shown=NOTICE_MAX))
+    if len(held) > NOTICE_MAX:
+        notes.append(MORE_HELD_LINE.format(n=len(held) - NOTICE_MAX, shown=NOTICE_MAX))
     if left_out or projects_result.get("truncated") is True:
         notes.append(PROJECTS_CUT_LINE)
     if tasks_result.get("truncated") is True:
@@ -540,6 +572,8 @@ JOB: WatchJob = WatchJob(
     weekdays=frozenset({4}),
     card_cap_day=1,
     default_settings={"company": ""},
-    reason_schema=ReasonSchema(REASON_INSTRUCTION, max_findings=NOTICE_MAX, max_fact_chars=QUOTE_MAX),
+    reason_schema=ReasonSchema(
+        REASON_INSTRUCTION, max_findings=NOTICE_MAX, max_fact_chars=QUOTE_MAX, numbers_from_facts=True,
+    ),
     card_noun="cards",
 )

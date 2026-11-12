@@ -243,12 +243,23 @@ _URL_RE = re.compile(
     r"|\b[\w-]+(?:\.[\w-]+)*\.[^\W\d_][\w-]+\b(?::\d+)?(?:[/?#]\S*)?"
 )
 _MARKDOWN_RE = re.compile(r"[*_`#>\[\]()|~<>\\!]")
+# clean's bounds, as multiples of the output's length: the raw text kept
+# before it is normalised, and the normalised text kept before any pattern.
+CLEAN_RAW_FACTOR = 4
+CLEAN_FLAT_FACTOR = 2
+# A number in a model's line, as code writes them (1,200.50; 40; 3.5).
+_NUMBER_RE = re.compile(r"(?<![\w.])\d[\d,]*(?:\.\d+)?")
 
 
 def clean(text: object, limit: int = MAX_VALUE_CHARS) -> str:
     """ERPNext's (or the model's) text as a notice may show it: control
     characters and line breaks gone, links and addresses replaced by
-    "[link]", markdown characters dropped, one line, at most ``limit``."""
+    "[link]", markdown characters dropped, one line, at most ``limit``.
+
+    Bounded whatever comes in: cut to ``CLEAN_RAW_FACTOR`` times ``limit``
+    before it is normalised and to ``CLEAN_FLAT_FACTOR`` times after (NFKC
+    can grow one character into many), so the link pattern, which
+    backtracks, never runs over more than twice the output's length."""
     from openexecutive.utils.prompt_blocks import plain
 
     if isinstance(text, bool) or text is None:
@@ -257,7 +268,8 @@ def clean(text: object, limit: int = MAX_VALUE_CHARS) -> str:
         text = str(text)
     if not isinstance(text, str):
         return ""
-    flat = " ".join(plain(text).split())
+    width = max(limit, 1)
+    flat = " ".join(plain(text[:width * CLEAN_RAW_FACTOR]).split())[:width * CLEAN_FLAT_FACTOR]
     flat = _MARKDOWN_RE.sub("", flat)
     flat = _URL_RE.sub("[link]", flat)
     flat = " ".join(flat.split())
@@ -815,6 +827,38 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
+def numbers_in(line: str) -> list[float]:
+    """The numbers a line states, as code writes them (``1,200.50``, ``40``)."""
+    out: list[float] = []
+    for found in _NUMBER_RE.findall(line):
+        try:
+            out.append(float(found.replace(",", "")))
+        except ValueError:
+            continue
+    return out
+
+
+def held_to_facts(
+    reasons: Mapping[str, str], facts: Mapping[str, Mapping[str, Any]],
+) -> tuple[dict[str, str], int]:
+    """``reasons`` without each line that states a number its own finding's
+    numeric facts don't hold (``ReasonSchema.numbers_from_facts``): one
+    finding's outside text can't steer another's figures. Returns the lines
+    kept and how many were dropped."""
+    kept: dict[str, str] = {}
+    dropped = 0
+    for key, line in reasons.items():
+        allowed = [
+            float(v) for v in (facts.get(key) or {}).values()
+            if isinstance(v, int | float) and not isinstance(v, bool) and math.isfinite(v)
+        ]
+        if all(any(math.isclose(n, a, abs_tol=1e-9) for a in allowed) for n in numbers_in(line)):
+            kept[key] = line
+        else:
+            dropped += 1
+    return kept, dropped
+
+
 async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> dict[str, str]:
     """One tool-less model call for the job's reason lines, by the specs'
     keys; {} when it fails or says nothing usable. Never raises."""
@@ -841,7 +885,16 @@ async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]
             getattr(b, "text", "") for b in getattr(response, "content", None) or []
             if getattr(b, "type", "") == "text"
         )
-        return parse_reasons(text, ids)
+        reasons = parse_reasons(text, ids)
+        schema = job.reason_schema
+        if schema is not None and schema.numbers_from_facts:
+            width = value_chars(job)
+            reasons, dropped = held_to_facts(reasons, {s.key: _facts(s, width) for s in specs})
+            if dropped:
+                # A count only: never the line, which may quote outside text.
+                logger.warning("watch: job %s dropped %d reason line(s) naming a number not in their facts",
+                               job.id, dropped)
+        return reasons
     except Exception:
         logger.warning("watch: job %s's reason step failed; its notices go without reasons", job.id)
         return {}
