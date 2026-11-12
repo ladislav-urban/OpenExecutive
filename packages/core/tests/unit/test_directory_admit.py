@@ -853,6 +853,34 @@ def test_an_address_another_person_holds_stays_address_held(kc: Keycloak) -> Non
     assert other.code == "address_held" and len(everyone()) == 1
 
 
+def test_a_held_address_never_waits_on_a_run(kc: Keycloak, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The second look waits only on the Person writes' own lock, never on
+    # _run_lock, which a run holds across its provider reads: a held address
+    # still answers at once while a run is going (the security review).
+    monkeypatch.setattr(directory_sync, "ADMIT_LOCK_WAIT_S", 5.0)
+    assert admit(kc, kc.user(61), "user61@example.com").admitted
+    assert directory_sync._run_lock.acquire(blocking=False)
+    try:
+        start = time.monotonic()
+        assert admit(kc, kc.user(161), "user61@example.com").code == "address_held"
+        assert time.monotonic() - start < 2
+    finally:
+        directory_sync._run_lock.release()
+
+
+def test_a_held_address_while_a_person_is_written_too_long_is_busy(
+    kc: Keycloak, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(directory_sync, "ADMIT_LOCK_WAIT_S", 0.05)
+    assert admit(kc, kc.user(62), "user62@example.com").admitted
+    assert directory_sync._person_write_lock.acquire(blocking=False)
+    try:
+        assert admit(kc, kc.user(162), "user62@example.com").code == "busy"
+    finally:
+        directory_sync._person_write_lock.release()
+    assert len(everyone()) == 1
+
+
 def test_concurrent_admits_of_different_people_never_interleave(kc: Keycloak) -> None:
     subjects = [kc.user(60 + n) for n in range(6)]
     out: list[directory_sync.AdmitResult] = []
