@@ -40,6 +40,7 @@ from datetime import date, time
 from typing import Any
 
 from openexecutive.watch.registry import (
+    MAX_CHAIN_INDEX,
     CardSpec,
     ProposalSpec,
     ReadArguments,
@@ -80,6 +81,7 @@ _REFUSALS: tuple[tuple[str, str], ...] = (
     ("is listed for bank matching", "no_listed_account"),
     ("you cannot read the company", "company_unreadable"),
     ("job's alone", "not_this_job"),
+    ("configurer_mismatch", "configurer_mismatch"),
     ("was set up by", "configurer_mismatch"),
     ("configured_by", "configurer_mismatch"),
 )
@@ -105,11 +107,9 @@ CHAIN_GONE_LINE = (
 
 
 def _kept(settings: Settings) -> tuple[int, str] | None:
-    """The chain head this job kept for its company, or None."""
-    from openexecutive.watch.settings import get_chain_head
-
+    """The chain head this run compares with for its company (``_baseline``), or None."""
     company = settings["company"]
-    return get_chain_head(JOB_ID, company) if isinstance(company, str) and company else None
+    return _baseline(company) if isinstance(company, str) and company else None
 
 
 def _evidence_args(settings: Settings, today: date, prior: tuple[Mapping[str, Any], ...] = ()) -> ReadArguments:
@@ -248,12 +248,13 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
 
 def _head(reads: Sequence[Mapping[str, Any]]) -> tuple[int, str] | None:
     """The chain head the read returned, or None when it gave none fit to
-    keep (no head, a negative or non-whole index, a hash not 64 hex)."""
+    keep (no head, an index not a whole number from 0 to MAX_CHAIN_INDEX, a
+    hash not 64 hex)."""
     head = evidence(reads).get("chain_head")
     if not isinstance(head, Mapping):
         return None
     index, row_hash = head.get("index"), head.get("row_hash")
-    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+    if not isinstance(index, int) or isinstance(index, bool) or not 0 <= index <= MAX_CHAIN_INDEX:
         return None
     if not isinstance(row_hash, str) or not _HEX_RE.fullmatch(row_hash):
         return None
@@ -269,61 +270,79 @@ def _row_still_there(result: Mapping[str, Any], then: int, then_hash: str) -> bo
     return isinstance(at, Mapping) and at.get("index") == then and at.get("row_hash") == then_hash
 
 
+def _told(key: str) -> bool:
+    """Whether the principal's notice keyed ``key`` was ever left."""
+    from openexecutive.watch.runner import dedup_key, raised_ever
+
+    return bool(key) and raised_ever(dedup_key(JOB_ID, key))
+
+
+def _baseline(company: str) -> tuple[int, str] | None:
+    """The head this run compares with: the kept one, or the one pending
+    since a notice once that notice was left (the head seen when it was
+    told). The read's ``seen_index`` and ``chain_notices`` both use it."""
+    from openexecutive.watch.settings import get_chain_state
+
+    state = get_chain_state(JOB_ID, company)
+    if state is None:
+        return None
+    if state.pending_index is not None and state.pending_hash and _told(state.pending_key):
+        return state.pending_index, state.pending_hash
+    return state.index, state.row_hash
+
+
+def _notice(key: str, summary: str, note: str) -> CardSpec:
+    return CardSpec(key=key, summary=summary, notes=(note,), to_principal=True)
+
+
 def chain_notices(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -> Sequence[CardSpec]:
     """Tell the principal when the chain head the read returned is behind
-    the one this job last kept (a lower index, or the same index with another
-    hash), or when it returned none after one was kept: counts and indexes
-    only. A head that has moved on is kept at once; one that is behind is
-    kept only once its notice was left (``runner.raised_ever``), so a run
-    that fails before leaving it tells it again next time."""
-    from openexecutive.watch.runner import dedup_key, raised_ever
-    from openexecutive.watch.settings import get_chain_head, swap_chain_head
+    the one this job compares with (a lower index, or the same index with
+    another hash), when it is longer but the row kept last is gone or
+    changed (``chain_at``), or when it returned none after one was kept:
+    counts and indexes only.
+
+    A head that is fine is kept at once. One that isn't is held as pending
+    with its notice, and becomes the head to compare with only once that
+    notice was left (``runner.raised_ever``): until then the same notice is
+    said again, and after it the next run compares its own head with the one
+    seen when it was told, so a chain that keeps growing never hides later
+    tampering behind a weekly repeat."""
+    from openexecutive.watch.settings import get_chain_state, set_chain_head, set_chain_pending
 
     company = settings["company"]
     if not isinstance(company, str) or not company:
         return ()
-    seen = get_chain_head(JOB_ID, company)
+    day = today.isoformat()
     head = _head(reads)
-    if head is None:
-        if seen is None:
-            return ()
-        then, then_hash = seen
-        return (
-            CardSpec(
-                key=f"chain:gone:{then}:{then_hash[:16]}",
-                summary="ERPNext's draft log can't be checked",
-                notes=(CHAIN_GONE_LINE.format(then=then),),
-                to_principal=True,
-            ),
-        )
-    index, row_hash = head
-    if seen is None:
-        swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
+    state = get_chain_state(JOB_ID, company)
+    if state is None:
+        if head is not None:
+            set_chain_head(JOB_ID, company, head[0], head[1], day)
         return ()
-    then, then_hash = seen
+    if state.pending_key and not _told(state.pending_key):
+        # Not left yet (the run failed, or the day's notices ran out): say it again.
+        return (_notice(state.pending_key, "ERPNext's draft log needs a check", state.pending_note),)
+    baseline = _baseline(company)
+    assert baseline is not None
+    then, then_hash = baseline
+    if head is None:
+        key, note = f"chain:gone:{then}:{then_hash[:16]}", CHAIN_GONE_LINE.format(then=then)
+        set_chain_pending(JOB_ID, company, None, None, key, note)
+        return (_notice(key, "ERPNext's draft log can't be checked", note),)
+    index, row_hash = head
     if index > then or (index == then and row_hash == then_hash):
         if _row_still_there(evidence(reads), then, then_hash):
-            swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
+            set_chain_head(JOB_ID, company, index, row_hash, day)
             return ()
         # Longer, but the row last kept is gone or changed: rewritten, then outgrown.
-        spec = CardSpec(
-            key=f"chain:rewritten:{then}:{then_hash[:16]}:{index}",
-            summary="ERPNext's draft log was changed",
-            notes=(CHAIN_REWRITTEN_LINE.format(then=then),),
-            to_principal=True,
-        )
+        key = f"chain:rewritten:{then}:{then_hash[:16]}:{index}:{row_hash[:16]}"
+        note, summary = CHAIN_REWRITTEN_LINE.format(then=then), "ERPNext's draft log was changed"
     else:
-        spec = CardSpec(
-            key=f"chain:{then}:{index}:{row_hash[:16]}",
-            summary="ERPNext's draft log is shorter than before",
-            notes=(CHAIN_LINE.format(then=then, now=index),),
-            to_principal=True,
-        )
-    if raised_ever(dedup_key(JOB_ID, spec.key)):
-        # Told already: this head is the one to compare with from now on.
-        swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
-        return ()
-    return (spec,)
+        key = f"chain:shorter:{then}:{then_hash[:16]}:{index}:{row_hash[:16]}"
+        note, summary = CHAIN_LINE.format(then=then, now=index), "ERPNext's draft log is shorter than before"
+    set_chain_pending(JOB_ID, company, index, row_hash, key, note)
+    return (_notice(key, summary, note),)
 
 
 JOB: WatchJob = WatchJob(

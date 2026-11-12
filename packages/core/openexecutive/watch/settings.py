@@ -97,14 +97,21 @@ _DDL = (
         amount REAL NOT NULL,
         PRIMARY KEY (job, day, decision_id)
     )""",
-    # The OE Draft chain's head a job last read in ERPNext, per company: its
-    # place and hash only (``chain_head``), so a shorter chain shows.
+    # The OE Draft chain's head a job keeps per company (its place and hash
+    # only, ``chain_head``), and, while a notice about the chain is being
+    # told, the head seen then (pending_*): it becomes the kept head once
+    # that notice was left (pending_key, the notice's own key; pending_note,
+    # its code-written line, to say again if it wasn't).
     f"""CREATE TABLE IF NOT EXISTS {HEADS_TABLE} (
         job TEXT NOT NULL,
         company TEXT NOT NULL,
         chain_index INTEGER NOT NULL,
         row_hash TEXT NOT NULL,
         seen_on TEXT NOT NULL,
+        pending_index INTEGER,
+        pending_hash TEXT,
+        pending_key TEXT NOT NULL DEFAULT '',
+        pending_note TEXT NOT NULL DEFAULT '',
         PRIMARY KEY (job, company)
     )""",
 )
@@ -329,47 +336,77 @@ def day_count(job_id: str, day: str, what: str, *, path: Path | None = None) -> 
     return int(row[0] or 0) if row else 0
 
 
-def get_chain_head(job_id: str, company: str, *, path: Path | None = None) -> tuple[int, str] | None:
-    """The chain head the job last kept for ``company``, or None."""
+@dataclass(frozen=True)
+class ChainState:
+    """The chain head a job keeps for a company, and the one pending while a
+    notice about it is told (``pending_key`` "" when none is)."""
+
+    index: int
+    row_hash: str
+    pending_index: int | None
+    pending_hash: str | None
+    pending_key: str
+    pending_note: str
+
+
+def get_chain_state(job_id: str, company: str, *, path: Path | None = None) -> ChainState | None:
+    """What the job keeps about the chain for ``company``, or None."""
     conn = connect(path)
     try:
         row = conn.execute(
-            f"SELECT chain_index, row_hash FROM {HEADS_TABLE} WHERE job = ? AND company = ?",  # noqa: S608
+            f"SELECT chain_index, row_hash, pending_index, pending_hash, pending_key, pending_note "  # noqa: S608
+            f"FROM {HEADS_TABLE} WHERE job = ? AND company = ?",
             (job_id, company),
         ).fetchone()
     finally:
         conn.close()
-    return (int(row[0]), str(row[1])) if row else None
+    if row is None:
+        return None
+    return ChainState(
+        int(row[0]), str(row[1]), int(row[2]) if row[2] is not None else None,
+        str(row[3]) if row[3] is not None else None, str(row[4] or ""), str(row[5] or ""),
+    )
 
 
-def swap_chain_head(
+def get_chain_head(job_id: str, company: str, *, path: Path | None = None) -> tuple[int, str] | None:
+    """The chain head the job keeps for ``company``, or None."""
+    state = get_chain_state(job_id, company, path=path)
+    return (state.index, state.row_hash) if state is not None else None
+
+
+def set_chain_head(
     job_id: str, company: str, index: int, row_hash: str, day: str, *, path: Path | None = None,
-) -> tuple[int, str] | None:
-    """Keep ``(index, row_hash)`` as the chain head the job last read for
-    ``company``, and return the one it replaces (None the first time), read
-    and written in one ``BEGIN IMMEDIATE`` transaction."""
+) -> None:
+    """Keep ``(index, row_hash)`` as the job's chain head for ``company``,
+    with nothing pending."""
     conn = connect(path)
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            row = conn.execute(
-                f"SELECT chain_index, row_hash FROM {HEADS_TABLE} WHERE job = ? AND company = ?",  # noqa: S608
-                (job_id, company),
-            ).fetchone()
-            conn.execute(
-                f"INSERT INTO {HEADS_TABLE} (job, company, chain_index, row_hash, seen_on) "  # noqa: S608
-                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (job, company) DO UPDATE SET "
-                "chain_index = excluded.chain_index, row_hash = excluded.row_hash, seen_on = excluded.seen_on",
-                (job_id, company, index, row_hash, day),
-            )
-            conn.execute("COMMIT")
-        except Exception:
-            if conn.in_transaction:
-                conn.execute("ROLLBACK")
-            raise
+        conn.execute(
+            f"INSERT INTO {HEADS_TABLE} (job, company, chain_index, row_hash, seen_on) "  # noqa: S608
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (job, company) DO UPDATE SET "
+            "chain_index = excluded.chain_index, row_hash = excluded.row_hash, seen_on = excluded.seen_on, "
+            "pending_index = NULL, pending_hash = NULL, pending_key = '', pending_note = ''",
+            (job_id, company, index, row_hash, day),
+        )
     finally:
         conn.close()
-    return (int(row[0]), str(row[1])) if row else None
+
+
+def set_chain_pending(
+    job_id: str, company: str, index: int | None, row_hash: str | None, key: str, note: str,
+    *, path: Path | None = None,
+) -> None:
+    """Hold the head seen now (None: none was) as pending while the notice
+    keyed ``key`` is told; the kept head stays until it is left."""
+    conn = connect(path)
+    try:
+        conn.execute(
+            f"UPDATE {HEADS_TABLE} SET pending_index = ?, pending_hash = ?, pending_key = ?, "  # noqa: S608
+            "pending_note = ? WHERE job = ? AND company = ?",
+            (index, row_hash, key, note, job_id, company),
+        )
+    finally:
+        conn.close()
 
 
 def take_failure_notice(job_id: str, day: str, *, path: Path | None = None) -> bool:

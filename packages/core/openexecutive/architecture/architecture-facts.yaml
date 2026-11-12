@@ -11417,8 +11417,9 @@ integrations:
     erpnext__propose_rule (phase 3's bank-rules job; propose_rule only under
     its proposal marker) and erpnext__proposed_rules (Home's own read, no
     job's). Phase 3 pins those three (ladislav-urban/oe_connector#562,
-    TOOLS_DIGEST 0230539b, 33 tools; re-pinned to main's value at merge,
-    365dec61 with #564).
+    TOOLS_DIGEST abbbe630, 33 tools; re-pinned to main's value at merge,
+    1e3c00b2 with #564). POST /audit/log refuses the watch_* rows
+    (CODE_ONLY_EVENT_TYPES): only the app writes them.
     The phase 2 pin is aa01ad95, 30 tools:
     draft_check takes fill and match, and draft_match_bank_line and
     draft_fill_purchase_invoice are pinned (no card uses the fill yet).
@@ -12156,20 +12157,20 @@ watch:
     name and its OE Draft seal (row_hash, chain_index), never the word or
     account. The run's notice to the principal (_proposal_notice) is counts
     and codes only. read_notices (chain_notices): the head is kept per job
-    and company in watch_chain_heads (settings.get_chain_head and
-    swap_chain_head, BEGIN IMMEDIATE). A head that moved on is kept at once.
-    A lower index, or the same index with another hash, than last kept
-    leaves the principal "ERPNext's draft log is shorter than when the
-    bank-rules job last read it (row n, now m). Rows may have been deleted;
-    run oe-connector-verify-drafts." That head becomes the baseline only
-    once the notice was left (runner.raised_ever), so a run that fails
-    first says it again. A head missing or malformed after one was kept
-    says CHAIN_GONE_LINE. Once a head is kept the job reads with
+    and company in watch_chain_heads (settings.get_chain_state,
+    set_chain_head, set_chain_pending). Once a head is kept the read sends
     seen_index (a second WatchRead, SEEN_SHAPE, local slot $chain_index
-    1..10^9; oe_connector's listing holds the read without it), and
-    oe_connector returns chain_at, the row at that index or null: a longer
-    head whose kept row is gone or changed says CHAIN_REWRITTEN_LINE
-    (rewritten, then outgrown). A proposal call that times out leaves a
+    1..10^9; oe_connector's listing holds the read without it) and
+    oe_connector returns chain_at, the row there or null. Said to the
+    principal: a head behind the baseline (CHAIN_LINE), a longer one whose
+    baseline row is gone or changed (CHAIN_REWRITTEN_LINE), or none fit to
+    keep (no head, index outside 0..10^9, bad hash: CHAIN_GONE_LINE). A head
+    that is fine is kept at once; one that isn't is held as pending with its
+    notice's key and line, said again until that notice was left
+    (runner.raised_ever), and then becomes the baseline the next run and its
+    seen_index compare with, so a chain that keeps growing after an alert is
+    still checked. A proposal call that times out (the runner's or the
+    gateway's timed_out) leaves a
     watch_proposal row with outcome "unknown" (it may have been written).
   proposed_rules_home: |
     integrations.erpnext_rule_proposals: Home's "Needs you" list of the

@@ -719,6 +719,10 @@ async def _propose(job: registry.WatchJob, day: str, spec: registry.ProposalSpec
         result = json.loads(raw)
     except (TypeError, ValueError, RecursionError):
         return _proposal_refusal(job, raw)
+    if isinstance(result, dict) and result.get("timed_out") is True:
+        # The gateway's own ceiling: it may still have been written.
+        _audit_proposal(job, day, spec, name="", seal="", place=0, outcome="unknown")
+        return "timeout"
     if not isinstance(result, dict) or "error" in result or result.get("ok") is not True:
         return _proposal_refusal(job, result.get("error") if isinstance(result, dict) else "")
     name, seal, place = result.get("name"), result.get("row_hash"), result.get("chain_index")
