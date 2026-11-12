@@ -74,6 +74,11 @@ STATUS_TABLE = "directory_sync_status"
 WRITES = ("created", "updated", "linked", "suspended", "restored", "profile updated")
 
 _run_lock = threading.Lock()
+# Held only while _add writes a new Person and links its subject (two
+# commits, milliseconds), never across a run's network reads: a sign-in that
+# finds the address held reads the subject again under it (admit_one), so
+# never between the two writes, and never waits on a run or makes one skip.
+_person_write_lock = threading.Lock()
 _token_lock = threading.Lock()
 _tokens: dict[tuple[str, str], tuple[str, float]] = {}
 
@@ -620,16 +625,17 @@ def _add(member: Member, report: Report, *, admit: bool = False) -> int | None:
     # departments, scopes or manager. Set on create only, so the principal
     # may change it.
     role = get_settings().directory_sync_demo_role.strip() if member.demo else ""
-    pid = store.upsert_person(full_name=member.full_name, role=role, email=member.email, kind="team")
-    try:
-        store.link_directory(pid, member.id)
-        if member.demo:
-            store.set_directory_demo(pid, True)
-    except Exception:
-        # Never leave an unlinked row behind: it would admit their email on
-        # any sign-in, unchecked by the directory.
-        store.archive_person(pid)
-        raise
+    with _person_write_lock:
+        pid = store.upsert_person(full_name=member.full_name, role=role, email=member.email, kind="team")
+        try:
+            store.link_directory(pid, member.id)
+            if member.demo:
+                store.set_directory_demo(pid, True)
+        except Exception:
+            # Never leave an unlinked row behind: it would admit their email on
+            # any sign-in, unchecked by the directory.
+            store.archive_person(pid)
+            raise
     _audit("directory_person_created", f"person #{pid} created from the directory", {"person_id": pid})
     _keep_profile(pid, member, report)
     return pid
@@ -954,10 +960,20 @@ def admit_one(
             # A suspended one stays so; an archived one doesn't count.
             return AdmitResult("exists", linked.id)
         if store.address_holder(norm) is not None:
-            # Read again: a sign-in of the same person at the same moment may
-            # have admitted them between the two reads (the run's _add writes
-            # the Person and its subject together), and they then exist.
-            again = store.find_person_by_directory_subject(subject)
+            # A sign-in of the same person at the same moment may be admitting
+            # them now. _add writes the Person (its address) and then links its
+            # subject as two commits under _person_write_lock, so read the
+            # subject again under that lock, never between the two: then they
+            # exist. The lock is held for those writes only (never a run's
+            # reads), so the wait is milliseconds; past ADMIT_LOCK_WAIT_S, busy
+            # (the caller asks again).
+            if not _person_write_lock.acquire(timeout=ADMIT_LOCK_WAIT_S):
+                _admit_limits.note_refused("busy", _subject_digest(subject))
+                return AdmitResult("busy")
+            try:
+                again = store.find_person_by_directory_subject(subject)
+            finally:
+                _person_write_lock.release()
             if again is not None:
                 return AdmitResult("exists", again.id)
             return AdmitResult("address_held")

@@ -21,7 +21,7 @@ import { cardEntry, noteAboutYou } from "@/lib/aboutYou";
 // Renders nothing when peer memory is off.
 
 const NOTHING_YET =
-  "Nothing learned about you yet. It fills in as you talk with the Executive.";
+  "Nothing learned about you yet. It fills in as you chat.";
 
 // Profile lines past this many fold behind a toggle.
 const CARD_PREVIEW_LINES = 4;
