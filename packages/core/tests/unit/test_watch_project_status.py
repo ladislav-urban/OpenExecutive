@@ -637,3 +637,15 @@ def test_an_update_whose_text_is_all_markup_says_so_in_codes_words() -> None:
     assert row.facts == {}
     [row] = _notice(projects=[PROJECTS[2]], tasks=[], updates=[]).items
     assert _values(row)["Update"] == ps.NO_UPDATE
+
+
+def test_comparison_signs_in_prose_are_not_taken_for_tags() -> None:
+    said = ps.quoted("Cost < budget, but hours > plan; we need a decision.")
+    assert "budget, but hours" in said and said.endswith("plan; we need a decision.")
+    # Real tags, a data-URI image and a tag the raw cut left open still go whole.
+    image = '<img src="data:image/png;base64,' + "A" * 900 + '">'
+    assert ps.quoted(f"<p>Cost <b>up</b> {image} now.</p><!-- note -->") == "Cost up now."
+    cut = "<p>Short.</p>" + "x" * 1180 + '<span style="color: red'
+    assert len(cut) > ps.STATUS_RAW_MAX + 1
+    said = ps.quoted(cut)
+    assert "span" not in said and "style" not in said and said.endswith(ps.CUT_MARK)
