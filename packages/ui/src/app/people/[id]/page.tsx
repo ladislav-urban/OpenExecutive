@@ -57,7 +57,7 @@ const ALL_SCOPES = [
   { value: "customer_credit", label: "Credit", hint: "Receives proposals involving credit or debt." },
   { value: "legal_sign", label: "Legal", hint: "Receives proposals with legal implications." },
   { value: "board_comms", label: "Board", hint: "Receives proposals before board communications." },
-  { value: "meeting_scheduling", label: "Meetings", hint: "Receives meetings the Executive wants to book." },
+  { value: "meeting_scheduling", label: "Meetings", hint: "Receives the meetings it books for you." },
   { value: "wildcard", label: "All (wildcard)", hint: "Receives anything no one else is scoped for — usually the principal." },
 ];
 
@@ -782,7 +782,7 @@ export default function PersonDetailPage() {
     if (
       suspend &&
       !window.confirm(
-        "Suspend this person? They can't sign in, message the Executive, approve anything or be emailed until you restore them. Nothing of theirs is deleted: their open loops wait and their working style is kept.",
+        "Suspend this person? They can't sign in, chat, approve anything or be emailed until you restore them. Nothing of theirs is deleted: their open loops wait and their working style is kept.",
       )
     ) {
       return;
@@ -933,7 +933,7 @@ export default function PersonDetailPage() {
                 <div className="mb-4 p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-[15px] text-fg">
                   {person.suspended_by === "directory"
                     ? "Suspended because they are no longer in your identity provider's directory. They come back on their own when they are added again."
-                    : "Suspended: they can't sign in, message the Executive, approve anything or be emailed."}{" "}
+                    : "Suspended: they can't sign in, chat, approve anything or be emailed."}{" "}
                   Their open loops wait and their working style is kept until they are restored.
                 </div>
               )}
@@ -992,7 +992,7 @@ export default function PersonDetailPage() {
                           onChange={(e) => setForm((f) => ({ ...f, kind: e.target.value as PersonKind }))}
                           className={INPUT_CLS}
                         >
-                          <option value="team">Team member — can sign in, message the Executive and approve</option>
+                          <option value="team">Team member — can sign in, chat and approve</option>
                           <option value="contact">Contact — outside the team and private to you, emailed only when you ask</option>
                         </select>
                       </label>

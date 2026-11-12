@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import Icon from "@/components/Icon";
 import { getAgentDetail, listPersonas, patchAgent, type PersonaMeta } from "@/lib/api";
 
@@ -31,6 +32,7 @@ interface Props {
 }
 
 export default function VoicePicker({ variant, onDone }: Props) {
+  const product = useProductName();
   const [voices, setVoices] = useState<PersonaMeta[]>([]);
   const [current, setCurrent] = useState<string>(DIRECT);
   const [picked, setPicked] = useState<string>(DIRECT);
@@ -90,7 +92,7 @@ export default function VoicePicker({ variant, onDone }: Props) {
 
   return (
     <div>
-      <div role="radiogroup" aria-label="Executive voice" className="grid gap-3 sm:grid-cols-3">
+      <div role="radiogroup" aria-label="Voice" className="grid gap-3 sm:grid-cols-3">
         {voices.map((v) => {
           const selected = picked === v.slug;
           return (
@@ -134,7 +136,7 @@ export default function VoicePicker({ variant, onDone }: Props) {
         <p className="mt-3 text-sm text-fg-subtle">
           {saving
             ? "Saving…"
-            : "Applies from the next message. Custom voices are made in Agent Council → Executive → Advanced settings."}
+            : `Applies from the next message. Custom voices are made in Agent Council → ${product} → Advanced settings.`}
         </p>
       )}
 

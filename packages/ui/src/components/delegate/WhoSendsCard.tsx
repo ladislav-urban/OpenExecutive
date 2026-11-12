@@ -1,5 +1,6 @@
 "use client";
 
+import { useNamed } from "@/components/embed/EmbedProvider";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { FIRST, MAILS, OPTIONS, TAB_NAMES, beats, sceneFor, sceneKey, type Step, type Tab } from "@/lib/whoSends";
@@ -98,6 +99,7 @@ function useReducedMotion(): boolean {
 }
 
 function Steps({ steps, shown, tab }: { steps: Step[]; shown: number; tab: Tab }) {
+  const named = useNamed();
   return (
     <ol
       className="grid gap-5 @min-[640px]:gap-6"
@@ -121,9 +123,9 @@ function Steps({ steps, shown, tab }: { steps: Step[]; shown: number; tab: Tab }
               >
                 {i + 1}
               </span>
-              <span className={`text-xs font-bold uppercase tracking-wide ${ACTOR[s.who]}`}>{s.name}</span>
+              <span className={`text-xs font-bold uppercase tracking-wide ${ACTOR[s.who]}`}>{named(s.name)}</span>
             </div>
-            <p className="mt-1.5 text-sm leading-snug text-fg">{s.does}</p>
+            <p className="mt-1.5 text-sm leading-snug text-fg">{named(s.does)}</p>
             {i < steps.length - 1 && (
               <span
                 aria-hidden
@@ -135,7 +137,7 @@ function Steps({ steps, shown, tab }: { steps: Step[]; shown: number; tab: Tab }
             )}
             {s.mail && (
               <div className={`mt-2 rounded-lg border px-2.5 py-1.5 text-[13px] text-fg ${s.mail.as ? MAIL_AS[s.mail.as] : "border-line bg-surface-overlay"}`}>
-                <span className="block text-[11px] text-fg-muted">{s.mail.from}</span>
+                <span className="block text-[11px] text-fg-muted">{named(s.mail.from)}</span>
                 {s.mail.text}
               </div>
             )}
@@ -147,6 +149,7 @@ function Steps({ steps, shown, tab }: { steps: Step[]; shown: number; tab: Tab }
 }
 
 function Sorted({ sends, shown }: { sends: number; shown: number }) {
+  const named = useNamed();
   return (
     <>
       <ul className="grid gap-2">
@@ -161,7 +164,7 @@ function Sorted({ sends, shown }: { sends: number; shown: number }) {
               }`}
             >
               <div className="min-w-0">
-                <span className="block text-xs text-fg-muted">{m.from}</span>
+                <span className="block text-xs text-fg-muted">{named(m.from)}</span>
                 <span className="text-sm text-fg">{m.text}</span>
               </div>
               <span
@@ -193,6 +196,7 @@ function Sorted({ sends, shown }: { sends: number; shown: number }) {
 }
 
 export default function WhoSendsCard() {
+  const named = useNamed();
   const hidden = useHidden();
   const reduced = useReducedMotion();
   const [tab, setTab] = useState<Tab>("act");
@@ -291,14 +295,14 @@ export default function WhoSendsCard() {
         {answers.map(([label, value]) => (
           <div key={label} className="rounded-xl border border-line bg-surface-base px-2.5 py-2 @min-[640px]:px-3">
             <dt className="text-[10px] uppercase tracking-wider text-fg-subtle @min-[640px]:text-[11px]">{label}</dt>
-            <dd className="mt-0.5 text-sm font-semibold leading-snug text-fg @min-[640px]:text-[15px]">{value}</dd>
+            <dd className="mt-0.5 text-sm font-semibold leading-snug text-fg @min-[640px]:text-[15px]">{named(value)}</dd>
           </div>
         ))}
       </dl>
 
       <div className="mt-3 rounded-xl border border-line bg-surface-base p-3 sm:p-4">
         <p className="mb-3 text-[15px] leading-relaxed text-fg" aria-live="polite">
-          {scene.line}
+          {named(scene.line)}
         </p>
         <div
           className="[--cols:1] @min-[640px]:[--cols:var(--n)]"

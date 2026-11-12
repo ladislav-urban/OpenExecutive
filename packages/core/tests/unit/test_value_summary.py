@@ -163,7 +163,7 @@ def test_an_empty_install_reads_as_zero(tmp_path: Path) -> None:
 def test_message_lists_non_zero_lines_and_the_link(db: Path, team: SimpleNamespace) -> None:
     _audit(db, OCT, "chat_turn", {"direction": "out"})
     text = value_summary.render_message(_summary(), link="https://oe.test/memories?tab=value")
-    assert text.startswith("**What your Executive did in October 2026**")
+    assert text.startswith("**What Open Executive did in October 2026**")
     assert "- Requests answered: 1" in text and "Meetings booked" not in text
     assert text.endswith("The full breakdown: https://oe.test/memories?tab=value")
     assert "$" not in text
