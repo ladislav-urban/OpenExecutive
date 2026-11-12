@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     # the request carries an `anthropic-workspace-id` header (#128). A
     # workspace-scoped key needs no value here.
     anthropic_workspace_id: str | None = Field(None, alias="ANTHROPIC_WORKSPACE_ID")
+    # Pydantic Logfire write token. Unset (the default) leaves request tracing
+    # off entirely; see openexecutive.observability for what a trace records.
+    logfire_token: str | None = Field(None, alias="LOGFIRE_TOKEN")
 
     default_model: str = Field("claude-sonnet-5-5", alias="DEFAULT_MODEL")
     # The model the specialists with deep reasoning on by default (CFO, legal,
@@ -142,6 +145,13 @@ class Settings(BaseSettings):
     # Anthropic calls from, which report no cost (audit/pricing.py). Empty:
     # the dated one shipped as openexecutive/audit/model_prices.json.
     model_prices_path: str = Field("", alias="MODEL_PRICES_PATH")
+    # The Executive's model for the one answer after someone pushes back on
+    # the last one (a thumbs down, "that's not what I asked", the same ask
+    # again, or a reply the claim check caught); the answer after that goes
+    # back to the normal model (orchestrator.pushback). Empty = off, every
+    # answer on the normal model. The Executive's Council card can set its
+    # own pick, which wins over this.
+    pushback_model: str = Field("", alias="PUSHBACK_MODEL")
 
     vector_store_path: Path = Field(_ROOT / "chroma_db", alias="VECTOR_STORE_PATH")
     company_profile_path: Path = Field(
@@ -451,11 +461,12 @@ class Settings(BaseSettings):
     # Whole-turn wall-clock ceiling for a streaming chat turn. Raised from 120s
     # because deep multi-specialist turns were being cut off mid-answer. A
     # ceiling this high is only tolerable because the user can end a turn
-    # themselves — see POST /chat/stop in api/routes/chat.py.
-    chat_stream_timeout_s: float = Field(300.0, alias="CHAT_STREAM_TIMEOUT_S")
+    # themselves — see POST /chat/stop in api/routes/chat.py. Raised again to
+    # 600s: filing two emails' worth of attachments to Drive ran past 300s.
+    chat_stream_timeout_s: float = Field(600.0, alias="CHAT_STREAM_TIMEOUT_S")
 
     # Extra wall-clock allowance added to chat_stream_timeout_s when a request
-    # opts in to Committee review (so 360s in total at the defaults). Committee
+    # opts in to Committee review (so 660s in total at the defaults). Committee
     # adds three reviewer calls + one full-pass revision on top of the draft,
     # typically 5–12s.
     committee_extra_timeout_s: float = Field(60.0, alias="COMMITTEE_EXTRA_TIMEOUT_S")
@@ -501,6 +512,11 @@ class Settings(BaseSettings):
     # The other way to hear Slack: with this set and no SLACK_APP_TOKEN, Slack
     # posts events to POST /webhook/slack, signed with the app's signing secret.
     slack_signing_secret: str | None = Field(None, alias="SLACK_SIGNING_SECRET")
+    # Approve and Skip buttons on the cards a reply leaves in a Slack DM
+    # (integrations.channel_cards). Needs Interactivity turned on in the Slack
+    # app's settings (with SLACK_SIGNING_SECRET, its Request URL is
+    # /webhook/slack); off, a DM points to the web app instead.
+    slack_card_buttons: bool = Field(False, alias="SLACK_CARD_BUTTONS")
     # Company-wide broadcast channels — when set, OE can post to "the
     # whole team" on a given integration without picking a specific
     # human or department. Used by `send_company_broadcast`. Each is
@@ -891,7 +907,7 @@ class Settings(BaseSettings):
     mcp_servers_config_path: Path = Field(
         _ROOT / "company" / "mcp_servers.json", alias="MCP_SERVERS_CONFIG_PATH"
     )
-    # Directories a workflow action step's `oe__read_file` tool may read —
+    # Directories `read_document` (a workflow step's `oe__read_document`) may read —
     # where tools that download files (e.g. Gmail attachments via
     # workspace-mcp) save them. Comma-separated. Empty means workspace-mcp's
     # own default: $WORKSPACE_ATTACHMENT_DIR, else ~/.workspace-mcp/attachments.
@@ -957,11 +973,47 @@ class Settings(BaseSettings):
     erpnext_draft_doctypes: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["ToDo", "Material Request"], alias="ERPNEXT_DRAFT_DOCTYPES"
     )
+    # Phase 0 (S3, integrations/erpnext_changes.py): cards that change an
+    # existing unsubmitted document, and cards that add a comment, for the
+    # DocTypes listed (comma-separated), as oe_connector's
+    # oe_connector_update_doctypes / oe_connector_comment_doctypes list them.
+    # Each is intersected with this app's own allowlist; both empty (off).
+    erpnext_draft_update_doctypes: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="ERPNEXT_DRAFT_UPDATE_DOCTYPES"
+    )
+    erpnext_draft_comment_doctypes: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="ERPNEXT_DRAFT_COMMENT_DOCTYPES"
+    )
     # Phase 4b: a verified teammate may have drafts prepared too, for
     # themselves, in a conversation nobody else reads, as their own ERPNext
     # user (who may read ERPNext as themselves; erpnext_caller.caller_for).
     # Off by default, so an install's drafts stay the principal's until set.
     erpnext_drafts_teammates: bool = Field(False, alias="ERPNEXT_DRAFTS_TEAMMATES")
+    # The credit-hold alert's "Prepare the raise" (integrations/erpnext_credit.py):
+    # a card that raises one company's credit limit for a customer whose
+    # draft Sales Order is held, approved by someone with customer credit
+    # authority. The first card whose approval changes a live master, so off
+    # by default; needs drafts on and oe_connector's Customer update listed.
+    erpnext_credit_raise: bool = Field(False, alias="ERPNEXT_CREDIT_RAISE")
+    # Separation of duties for those cards, set as oe_connector's
+    # oe_connector_draft_sod is on the site: "agent" means whoever prepared a
+    # raise never approves it (the card goes to the principal, or none is
+    # left when the principal prepared it). Set both the same; either
+    # mismatch fails closed: the site on and this off refuses the approval
+    # there, and this on with the site off only sends more cards to the
+    # principal.
+    erpnext_draft_sod: Literal["off", "agent"] = Field("off", alias="ERPNEXT_DRAFT_SOD")
+    # Watch jobs (watch/): the operator's master switch for the unattended
+    # ERPNext jobs defined in code. Off, no job runs whatever its row in
+    # `watch_jobs` says. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
+    erpnext_watch_jobs_enabled: bool = Field(False, alias="ERPNEXT_WATCH_JOBS_ENABLED")
+    # The payment-checks job's block card (integrations/erpnext_block.py):
+    # ERPNext's own Block Invoice on a submitted supplier invoice that likely
+    # repeats another, approved by the job's reviewer. The one card that
+    # changes a submitted document, so off by default; it also needs the
+    # job's block_submitted setting and oe_connector's draft_block_invoice
+    # pinned, and oe_connector_block_invoices on the site.
+    erpnext_block_invoice: bool = Field(False, alias="ERPNEXT_BLOCK_INVOICE")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
@@ -1044,7 +1096,8 @@ class Settings(BaseSettings):
 
     @field_validator(
         "web_search_allowed_domains", "web_search_blocked_domains",
-        "research_specialists", "workflow_file_dirs", "erpnext_draft_doctypes", mode="before",
+        "research_specialists", "workflow_file_dirs", "erpnext_draft_doctypes",
+        "erpnext_draft_update_doctypes", "erpnext_draft_comment_doctypes", mode="before",
     )
     @classmethod
     def _parse_domain_list(cls, v: Any) -> list[str]:
@@ -1214,8 +1267,12 @@ class Settings(BaseSettings):
     # ROUTING_MODEL.
     chat_review_enabled: bool = Field(True, alias="CHAT_REVIEW_ENABLED")
     chat_review_quiet_minutes: int = Field(30, ge=1, alias="CHAT_REVIEW_QUIET_MINUTES")
-    chat_review_max_per_day: int = Field(10, ge=0, alias="CHAT_REVIEW_MAX_PER_DAY")
+    chat_review_max_per_day: int = Field(50, ge=0, alias="CHAT_REVIEW_MAX_PER_DAY")
     chat_review_model: str = Field("", alias="CHAT_REVIEW_MODEL")
+    # What it worked out (memory.worked_out): figures the Executive worked
+    # out, kept with their source for that person's later turns.
+    worked_out_enabled: bool = Field(True, alias="WORKED_OUT_ENABLED")
+    worked_out_max_per_day: int = Field(40, ge=0, alias="WORKED_OUT_MAX_PER_DAY")
     # Replay of the misses (memory.replay): nightly, the turns the review
     # graded a miss run again with today's lessons and facts, in a dry run,
     # and a judge says whether they would now go right. At most MAX_CASES a
@@ -1232,7 +1289,7 @@ class Settings(BaseSettings):
     # cannot sit in /today (and the nudge queue) forever.
     attunement_loop_ttl_days: int = Field(21, alias="ATTUNEMENT_LOOP_TTL_DAYS")
     attunement_max_open_loops_per_person: int = Field(
-        15, alias="ATTUNEMENT_MAX_OPEN_LOOPS_PER_PERSON"
+        50, alias="ATTUNEMENT_MAX_OPEN_LOOPS_PER_PERSON"
     )
     # Tell a person, once, when someone else assigns them a task
     # (attunement/assignment_notice.py). Chasing it stays the nudge engine's.
@@ -1298,6 +1355,12 @@ class Settings(BaseSettings):
     # drafts limit above. Past it, replies wait on cards as before.
     delegation_handle_it_max_sends_per_day: int = Field(
         20, alias="DELEGATION_HANDLE_IT_MAX_SENDS_PER_DAY", ge=1, le=500
+    )
+    # Workflows that send email as their creator (delegation.workflow_email,
+    # oe__send_email_as_me): the most such emails a day per person, within
+    # the drafts limit above. Past it the step is told to stop.
+    delegation_workflow_max_sends_per_day: int = Field(
+        20, alias="DELEGATION_WORKFLOW_MAX_SENDS_PER_DAY", ge=1, le=500
     )
     # Whether the owner may let team members use Act as me for themselves
     # (Delegate → Act as me → "Let team members use it", off until they turn

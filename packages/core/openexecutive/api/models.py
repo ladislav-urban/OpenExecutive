@@ -245,7 +245,7 @@ class HealthResponse(BaseModel):
     # gateway failed to start used to look healthy here while no email went
     # out or came in.
     gateway: GatewayHealth | None = None
-    version: str = "0.6.1"  # x-release-please-version
+    version: str = "0.6.9"  # x-release-please-version
 
 
 class VersionResponse(BaseModel):
@@ -421,6 +421,12 @@ class ChatMessage(BaseModel):
     stopped: bool | None = None
     # A host origin's page wrote this line (a script there may have).
     from_host: bool | None = None
+    # The last reply only: the steps its turn held after an outside read,
+    # still waiting on the caller's go (outside_content.pending_held).
+    held_steps: list[str] | None = None
+    # The last reply only: what the content check flagged in its turn, in
+    # plain words, while fresh (outside_content.pending_flags).
+    flags: list[str] | None = None
 
 
 class TargetCustomerData(BaseModel):
@@ -456,6 +462,7 @@ class FinancialsData(BaseModel):
 
 class CompanyProfileResponse(BaseModel):
     name: str
+    website: str = ""
     industry: str
     stage: str
     founding_year: int | None
@@ -475,6 +482,7 @@ class CompanyProfileResponse(BaseModel):
 
 class CompanyProfileUpdateRequest(BaseModel):
     name: str | None = None
+    website: str | None = Field(default=None, max_length=300)
     industry: str | None = None
     stage: str | None = None
     founding_year: int | None = None
@@ -514,6 +522,9 @@ class WorkspaceResponse(BaseModel):
     # only to the principal, like the role; empty for anyone else.
     company_domains: list[str] = Field(default_factory=list)
     company_domains_custom: bool = False
+    # Whether any department exists. The UI shows the Departments tab only
+    # then: goals stand on their own, so a workspace may never need one.
+    has_departments: bool = False
 
 
 class WorkspaceUpdateRequest(BaseModel):
@@ -638,6 +649,19 @@ class OnboardDepartmentDraft(BaseModel):
     authority_level: str = "propose_only"
 
 
+class OnboardGoalDraft(BaseModel):
+    """One of this year's goals: saved with an owner (a drafted person's
+    name, empty = the owner of the workspace) and, when departments were
+    drafted, optionally inside one."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    title: str
+    target: str = ""
+    owner_name: str = ""
+    department_title: str = ""
+
+
 class OnboardTranscriptTurn(BaseModel):
     role: str
     text: str
@@ -651,11 +675,17 @@ class OnboardTurnResponse(BaseModel):
     max_questions: int
     question: str | None = None
     question_hint: str | None = None
+    # Suggested answers to the question, shown as buttons to tap.
+    question_options: list[str] = Field(default_factory=list)
     draft: CompanyProfileResponse | None = None
     draft_people: list[OnboardPersonDraft] = Field(default_factory=list)
     draft_departments: list[OnboardDepartmentDraft] = Field(default_factory=list)
+    draft_goals: list[OnboardGoalDraft] = Field(default_factory=list)
     confidence_notes: list[str] = Field(default_factory=list)
     summary: str | None = None
+    # The website pages setup read for this session (e.g. "example.com/team"),
+    # on the opening turn only. Empty with a website given: it couldn't be read.
+    website_pages: list[str] = Field(default_factory=list)
 
 
 class OnboardSessionResponse(OnboardTurnResponse):
@@ -670,6 +700,7 @@ class OnboardCommitRequest(BaseModel):
     profile: CompanyProfileUpdateRequest
     people: list[OnboardPersonDraft] = Field(default_factory=list)
     departments: list[OnboardDepartmentDraft] = Field(default_factory=list)
+    goals: list[OnboardGoalDraft] = Field(default_factory=list)
     # The principal's sign-in email, confirmed by the user on the review
     # screen (pre-filled from their own login). The one contact detail setup
     # saves: without it the signed-in owner matches no Person, so their chat

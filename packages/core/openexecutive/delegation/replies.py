@@ -57,6 +57,20 @@ class ReplyCard:
     questions: list[dict[str, Any]] = field(default_factory=list)
     # Changed by hand on the card: what is left open no longer holds Send.
     questions_settled: bool = False
+    # Everyone else the email went to: the card's Reply to choice adds them
+    # (delegation.card_drafts.set_recipients). Empty: no choice to make.
+    reply_others: list[str] = field(default_factory=list)
+    # What the email asks and what the draft says, in a line or two, for the
+    # card's closed view; "" on a card drafted before it (the card falls back
+    # to the start of what they wrote).
+    gist: str = ""
+    # What happened on the card since the draft was written, in order
+    # (delegation.answers.conversation): newer email in the conversation,
+    # what they asked to change, and what the Executive said it did.
+    conversation: list[dict[str, str]] = field(default_factory=list)
+    # When it was last brought up to date with newer mail ("" never): Send
+    # passes it back, so a version the card never showed asks again.
+    caught_up_at: str = ""
 
 
 def _strings(value: Any) -> list[str]:
@@ -66,11 +80,11 @@ def _strings(value: Any) -> list[str]:
 def cards(person: Any) -> list[ReplyCard]:
     """``person``'s open reply cards, newest first."""
     from openexecutive.delegation import training
-    from openexecutive.delegation.answers import questions_for
+    from openexecutive.delegation.answers import CAUGHT_UP_KEY, conversation, questions_for
     from openexecutive.delegation.card_drafts import QUESTIONS_SETTLED
     from openexecutive.delegation.gmail import credential_provider, mailbox_link
     from openexecutive.delegation.handle_it import REASONS
-    from openexecutive.delegation.inbox import card_payload, ledger_flags, open_cards
+    from openexecutive.delegation.inbox import REPLY_OTHERS, card_payload, ledger_flags, open_cards
 
     open_ = open_cards(person.id)
     payloads = [(c, card_payload(c)) for c in open_]
@@ -114,6 +128,10 @@ def cards(person: Any) -> list[ReplyCard]:
             mailbox=mailbox,
             questions=questions_for(payload),
             questions_settled=payload.get(QUESTIONS_SETTLED) is True,
+            reply_others=[] if payload.get("source") == "follow_up" else _strings(payload.get(REPLY_OTHERS)),
+            gist=str(payload.get("gist") or ""),
+            conversation=conversation(payload),
+            caught_up_at=str(payload.get(CAUGHT_UP_KEY) or ""),
         ))
     return out
 

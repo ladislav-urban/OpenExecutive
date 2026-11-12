@@ -139,6 +139,24 @@ def _lock() -> asyncio.Lock:
     return lock
 
 
+# Saves of named files into a named Drive folder: Drive keeps two files of
+# one name side by side, so these need no lock, only a cap on how many go to
+# the workspace server at once. A turn filing a whole email's attachments
+# otherwise spent ~4s per file in a row and ran out of time.
+GOOGLE_PARALLEL_SAVES = 4
+_GOOGLE_SLOTS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+    weakref.WeakKeyDictionary()
+)
+
+
+def _google_slot() -> asyncio.Semaphore:
+    loop = asyncio.get_running_loop()
+    slots = _GOOGLE_SLOTS.get(loop)
+    if slots is None:
+        slots = _GOOGLE_SLOTS[loop] = asyncio.Semaphore(GOOGLE_PARALLEL_SAVES)
+    return slots
+
+
 async def _call(gateway: Any, name: str, arguments: dict[str, Any]) -> str:
     """One code-built gateway call (``code_built_call``), discovering the tool
     first if this gateway session hasn't yet."""
@@ -174,6 +192,15 @@ def _folder_missing(text: str) -> bool:
     folder made. A quota, server or file-type error returns at once, so a
     failing save doesn't leave a new empty folder each time."""
     return _failed(text) and bool(_MISSING_RE.search(text))
+
+
+# The refusal for a remembered folder the Executive can no longer reach: one
+# made in a Drive it no longer signs in to (the gateway can't read its owner).
+_UNREACHABLE = ("could not read who owns",)
+
+
+def _folder_unreachable(text: str) -> bool:
+    return any(marker in text for marker in _UNREACHABLE)
 
 
 def _why(text: str) -> str:
@@ -262,9 +289,10 @@ async def _google(gateway: Any, data: bytes, name: str, mime: str, owner_id: int
         arguments["folder_id"], fresh = await _google_folder(gateway, account)
         made = await _call(gateway, "google_workspace__create_drive_file", arguments)
         created = None if _failed(made) else _CREATED_RE.search(made)
-        if created is not None or fresh or not _folder_missing(made):
+        if created is not None or fresh or not (_folder_missing(made) or _folder_unreachable(made)):
             break
-        # The remembered folder may be gone: make a new one, once.
+        # The remembered folder may be gone, or out of reach (one made in a
+        # Drive the Executive no longer signs in to): make a new one, once.
         saved_files.forget_folder(GOOGLE, account)
     if created is None:
         raise SaveFailed(f"Google Drive didn't take the file: {_why(made)}")

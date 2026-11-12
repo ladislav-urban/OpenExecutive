@@ -62,12 +62,14 @@ def _solo() -> None:
 
 def _decision(db: Path, *, days_ago: float, summary: str, outcome: str = "") -> int:
     ts = (datetime.now(UTC) - timedelta(days=days_ago)).isoformat()
+    from openexecutive.memory import facts
+
+    # A decision is a standing fact; its own subject keeps it from replacing another.
+    fact, _ = facts.record_fact(subject=f"Decision: {summary}", statement=summary, source_quote="",
+                                decision=True, db_path=db)
     with sqlite3.connect(str(db)) as conn:
-        cur = conn.execute(
-            "INSERT INTO decisions (timestamp, domain, summary, outcome) VALUES (?, ?, ?, ?)",
-            (ts, "strategy", summary, outcome),
-        )
-        return int(cur.lastrowid or 0)
+        conn.execute("UPDATE facts SET created_at = ?, outcome = ? WHERE id = ?", (ts, outcome, fact.id))
+    return fact.id
 
 
 def _initiative(db: Path, *, title: str, status: str, days_ago: float) -> int:
@@ -403,7 +405,7 @@ def _local(run_at: str, zone: str) -> datetime:
 
 
 def test_seeded_only_in_solo() -> None:
-    assert runner.seed_principal_briefs() == 4
+    assert runner.seed_principal_briefs() == 5  # the four daily kinds + goal_review
     assert _pending() == []
     _solo()
     assert runner.seed_principal_briefs() == 1  # only the weekly review was missing
