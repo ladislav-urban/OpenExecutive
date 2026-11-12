@@ -58,7 +58,8 @@ A run (``run_job``, its own task):
    code's own lines (how many cards wait, why none were prepared) after it.
    At most ``card_cap_day`` attempts a day across the job's slots and
    restarts (``watch_days.notices``), and a finding whose notice is still
-   open isn't raised again.
+   open isn't raised again. A ``once`` job's left notices record what they
+   told (``settings.mark_told``), which its rules leave out of later runs.
 """
 from __future__ import annotations
 
@@ -636,7 +637,32 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             to=_principal_id() if spec.to_principal else to,
         ) is not None:
             outcome.cards += 1
+            if job.once:
+                _mark_told(job, day, spec)
     return outcome
+
+
+def _mark_told(job: registry.WatchJob, day: str, spec: registry.CardSpec) -> None:
+    """A once job's findings this left notice told: its own key, its rows'
+    and those it counts (``CardSpec.counted``), as dedupe digests. One that
+    can't be recorded is told again on the next run, never lost."""
+    from openexecutive.watch.settings import mark_told
+
+    keys = [spec.key, *(item.key for item in spec.items), *spec.counted]
+    try:
+        mark_told(job.id, [dedup_key(job.id, k) for k in keys], day)
+    except Exception:
+        logger.warning("watch: job %s's told findings couldn't be recorded", job.id)
+
+
+def told(job: registry.WatchJob, keys: Sequence[str]) -> set[str]:
+    """Which of a once job's finding ``keys`` a notice told before (its
+    rules leave them out). Raises when they can't be read: the run stops
+    rather than tell them all again."""
+    from openexecutive.watch.settings import told as told_digests
+
+    digests = {dedup_key(job.id, k): k for k in keys}
+    return {digests[d] for d in told_digests(job.id, list(digests))}
 
 
 def principal_first(notices: list[registry.CardSpec]) -> list[registry.CardSpec]:

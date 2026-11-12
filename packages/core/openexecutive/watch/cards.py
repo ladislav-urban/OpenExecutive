@@ -24,7 +24,7 @@ of kinds that are on (a DocType listed for drafts or changes; a block only
 while ``erpnext_block.unavailable`` says nothing; a bank match only while
 ``erpnext_match.unavailable`` says nothing). For each ``DraftSpec``, in
 the job's order: none while the same finding's card waits or once one was
-left that day; at most ``card_cap_day`` a day across the job's slots
+left that day (for a ``once`` job, ever); at most ``card_cap_day`` a day across the job's slots
 (``settings.take_day_cards``), ``erpnext_drafts.JOB_OPEN_MAX`` waiting for
 the job, and never the reviewer past ``OPEN_CARDS_MAX`` less the headroom.
 The fields are the job's ``check_fields`` output; ERPNext checks them as the
@@ -385,9 +385,10 @@ async def leave_drafts(
         return out
     # A finding gets one card a day, whatever became of it: a job that runs at
     # several slots never proposes a card again the hour after it was dismissed.
+    # A once job's finding gets one card ever.
     left_today = {
         drafts._payload(c).get("dedup_key") for c in drafts.job_cards(job.id, open_only=False)
-        if drafts._payload(c).get("run_day") == day
+        if job.once or drafts._payload(c).get("run_day") == day
     }
     for n, spec in enumerate(specs):
         key = dedup_key(job.id, spec.key)

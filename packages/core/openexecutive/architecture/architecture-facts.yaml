@@ -11764,8 +11764,10 @@ watch:
     the Executive's tool loop, no model picks a read, and no model writes a
     figure or a card's field (a model writes only reason lines). Listed:
     collections (watch.jobs.collections), payment checks
-    (watch.jobs.payment_checks) and bank matching
-    (watch.jobs.bank_matching, phase 2).
+    (watch.jobs.payment_checks), quote follow-up
+    (watch.jobs.quote_follow_up), bank matching
+    (watch.jobs.bank_matching, phase 2) and invoice capture
+    (watch.jobs.invoice_capture, phase 2).
   registry: |
     watch.registry: WatchJob(id, title, reads, build, schedule,
     card_cap_day, default_settings, reason_schema=None, ..., slots=(),
@@ -11819,8 +11821,16 @@ watch:
     this install's own records, after build), card_noun, slots (the times a
     job runs each day, in order, the first its schedule; empty: once a day)
     and weekdays (0 Monday to 6 Sunday); due_slots(now, weekday) gives the
-    keys ("HH:MM", "" for a daily job) due by now. JOBS is a read-only
-    mapping of _LISTED (collections, payment-checks, bank-matching),
+    keys ("HH:MM", "" for a daily job) due by now. once (default False):
+    each finding raised once ever, not once a day: after a notice of the
+    job is left, runner._mark_told records its key, its rows' keys and
+    CardSpec.counted (findings it counts without naming) as dedup_key
+    digests in watch_told; the job's rules read them back with
+    runner.told (raises when unreadable, so the run stops rather than tell
+    everything again) and leave them out; cards.leave_drafts skips a
+    finding any card of the job was ever left for. JOBS is a read-only
+    mapping of _LISTED (collections, payment-checks, bank-matching,
+    invoice-capture, quote-follow-up),
     imported at the
     module's end (watch.jobs imports the registry first); the test job
     watch.jobs._example is put in by tests only.
@@ -11845,6 +11855,10 @@ watch:
     setting keys changed, reviewer changed, person id). No app_control
     action targets /watch/jobs (a test checks), so a turn can't turn a job
     on. ERPNEXT_WATCH_JOBS_ENABLED (off) is the operator's master switch.
+    watch_told (job, key, day; primary key job, key): a once job's told
+    findings as dedupe digests (never ERPNext text), written by
+    settings.mark_told in one BEGIN IMMEDIATE transaction that also drops
+    the job's rows older than TOLD_KEEP_DAYS (400), read by settings.told.
   caller: |
     erpnext_caller.watch_run(job, tool, arguments, today=): a ContextVar
     marker (WatchCall: job, gateway tool, arguments digest) bound to a
@@ -12233,6 +12247,46 @@ watch:
     block via erpnext_block.block_fields. A finding is raised once a day:
     a notice whose external_id <key>:<day> exists is a repeat
     (runner._raised_today), as is a card left that run_day.
+  quote_follow_up: |
+    watch.jobs.quote_follow_up: 07:30, weekdays 0-4, company time;
+    card_cap_day 5; once True; no reason_schema (no model call); card_noun
+    "follow-up tasks"; settings company, days_ahead 5 (1-30), min_amount 0
+    (0-1e9), assign_to "" (an ERPNext user; empty: the reviewer). Reads (in
+    watch_job_vectors.json, with shape cases): list_records Quotation
+    (name, party_name, quotation_to, customer_name, transaction_date,
+    valid_till, grand_total, currency, status, order_type, amended_from)
+    with {company, docstatus 1, valid_till [">=", today - 7]}, limit 500;
+    list_records Sales Order (name, customer, transaction_date,
+    items.prevdoc_docname) with {company, docstatus ["<", 2], customer
+    ["in", the counted quotations' customers, most pressing first, at most
+    50], transaction_date [">=", the oldest of their quotations, within
+    400 days]}, derived, skipped when none. No list in a list: status and
+    the two date bounds are sorted in code. Rules: lapsing = status Open,
+    Replied or Partially Ordered and valid_till today to today +
+    days_ahead; lapsed = valid_till 1-7 days ago and status Expired, Open
+    or Replied; grand_total >= min_amount; a quotation named in another's
+    amended_from is dropped (a revision counts once, as its latest); a
+    Sales Order line's prevdoc_docname naming it or its amended_from
+    closes it whatever its status; lapsed first, then grand_total / (1 +
+    |days|) descending, then name. quotation_to other than Customer: party
+    and customer_name dropped on reading, counted only ("N more to leads,
+    not named."), never carded. Outputs: one CardSpec "Quotations to
+    follow up" (key quotes:<company>:<day>, up to 10 rows keyed
+    q:<name>:<lapsing|lapsed> with customer, quotation, value, quoted,
+    valid till, days left / lapsed N days ago, status; count the new named
+    ones; counted the new lead keys; notes for more than 10, read 1
+    truncated, orders unchecked); a DraftSpec ToDo create per named
+    quotation (key q:<name>:<state>, fields description from TEMPLATE
+    with the customer through runner.clean(140), allocated_to assign_to or
+    the reviewer's normalized email (quote_follow_up.assignee), priority
+    High for the 3 largest grand_total else Medium, date max(today,
+    valid_till - 1), reference_type Quotation, reference_name; expect
+    reference "Quotation <name>" and the description), none when the
+    customer was beyond the 50 asked or read 2 was truncated. check_fields:
+    create ToDo only, exactly erpnext_drafts' six ToDo fields, reference a
+    Quotation, priority High or Medium, description matching _TEMPLATE_RE
+    naming reference_name (one line, no control characters, at most 1000),
+    allocated_to equal to assignee() now, and _todo's output unchanged.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds

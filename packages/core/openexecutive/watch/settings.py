@@ -5,6 +5,9 @@ make and the notices they tried to leave, each counted in a transaction
 across slots and restarts, the amount its match cards proposed, and its one
 failure notice a day). ``watch_approved`` counts what each approver approved
 of a job's amount-capped cards a day (bank matching's), one row per card.
+``watch_told`` holds, for a job that raises each finding once
+(``WatchJob.once``), the findings its left notices told: their dedupe
+digests (``runner.dedup_key``), never ERPNext's text.
 
 One row per job: ``enabled`` (off until the principal turns it on), who
 configured it last and when, ``settings`` (JSON, exactly the job's
@@ -24,8 +27,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +58,9 @@ _RUNS_DDL = """CREATE TABLE IF NOT EXISTS {table} (
 RUNS_TABLE = "watch_runs"
 DAYS_TABLE = "watch_days"
 APPROVED_TABLE = "watch_approved"
+TOLD_TABLE = "watch_told"
+# A told finding is forgotten after this many days.
+TOLD_KEEP_DAYS = 400
 
 _DDL = (
     f"""CREATE TABLE IF NOT EXISTS {JOBS_TABLE} (
@@ -94,6 +101,14 @@ _DDL = (
         decision_id INTEGER NOT NULL,
         amount REAL NOT NULL,
         PRIMARY KEY (job, day, decision_id)
+    )""",
+    # One row per finding a once job's notice told (its dedupe digest), with
+    # the company's day it was first told.
+    f"""CREATE TABLE IF NOT EXISTS {TOLD_TABLE} (
+        job TEXT NOT NULL,
+        key TEXT NOT NULL,
+        day TEXT NOT NULL,
+        PRIMARY KEY (job, key)
     )""",
 )
 # Columns added after the table first shipped: name -> its definition.
@@ -289,6 +304,50 @@ def take_approved_amount(
         )
         conn.execute("COMMIT")
         return True
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> set[str]:
+    """Which of ``keys`` (dedupe digests) a notice of the job told before."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return set()
+    conn = connect(path)
+    try:
+        found: set[str] = set()
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            found.update(row[0] for row in conn.execute(
+                f"SELECT key FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            ))
+        return found
+    finally:
+        conn.close()
+
+
+def mark_told(job_id: str, keys: Sequence[str], day: str, *, path: Path | None = None) -> None:
+    """Record ``keys`` (dedupe digests) as told by a notice left on ``day``,
+    and forget those told more than ``TOLD_KEEP_DAYS`` before it."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return
+    oldest = (date.fromisoformat(day) - timedelta(days=TOLD_KEEP_DAYS)).isoformat()
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
+            f"INSERT OR IGNORE INTO {TOLD_TABLE} (job, key, day) VALUES (?, ?, ?)",  # noqa: S608
+            [(job_id, key, day) for key in wanted],
+        )
+        conn.execute(f"DELETE FROM {TOLD_TABLE} WHERE job = ? AND day < ?", (job_id, oldest))  # noqa: S608
+        conn.execute("COMMIT")
     except Exception:
         if conn.in_transaction:
             conn.execute("ROLLBACK")
