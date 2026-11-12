@@ -174,7 +174,8 @@ def proposal_arguments(company: str, rule: Mapping[str, str], configured_by: str
 def configurer() -> str:
     """The email of whoever configured the job here (its row's
     configured_by_person_id, as ERPNext knows them), or "" when there is none
-    to name: then nothing is proposed."""
+    to name or they are no longer active: then nothing is proposed, as a job
+    card from a configurer gone is approved no more."""
     from openexecutive.orchestrator.erpnext_caller import _email_of
     from openexecutive.people.store import get_person
     from openexecutive.watch.settings import get_row
@@ -184,7 +185,7 @@ def configurer() -> str:
         person = get_person(person_id) if isinstance(person_id, int) else None
     except Exception:
         return ""
-    return _email_of(person) if person is not None else ""
+    return _email_of(person) if person is not None and person.active else ""
 
 
 def _key(rule: Mapping[str, str]) -> str:

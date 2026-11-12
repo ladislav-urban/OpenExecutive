@@ -702,3 +702,26 @@ def test_a_watch_row_is_never_posted_to_the_audit_log(tmp_path: Any) -> None:
     for kind in ("watch_proposal", "watch_run", "watch_job_configured"):
         said = client.post("/audit/log", json={"event_type": kind, "summary": "x", "actor": "watch:bank-rules"})
         assert said.status_code == 422, kind
+
+
+def test_a_configurer_no_longer_active_stops_the_proposals(job_on: WatchJob, team: SimpleNamespace) -> None:
+    from openexecutive.people import store as people_store
+
+    assert bank_rules.configurer() == OWNER
+    people_store.archive_person(team.principal)
+    assert bank_rules.configurer() == ""
+    assert bank_rules.proposals((json.loads(_evidence(FEE)),), SETTINGS, TODAY) == ()
+
+
+def test_a_heads_table_from_before_the_pending_columns_is_brought_up_to_date(tmp_path: Any) -> None:
+    import sqlite3
+
+    path = tmp_path / "old.db"
+    conn = sqlite3.connect(str(path))
+    conn.execute("CREATE TABLE watch_chain_heads (job TEXT NOT NULL, company TEXT NOT NULL, chain_index INTEGER "
+                 "NOT NULL, row_hash TEXT NOT NULL, seen_on TEXT NOT NULL, PRIMARY KEY (job, company))")
+    conn.execute("INSERT INTO watch_chain_heads VALUES ('bank-rules', 'Acme', 41, ?, ?)", ("a" * 64, DAY))
+    conn.commit()
+    conn.close()
+    state = watch_settings.get_chain_state("bank-rules", "Acme", path=path)
+    assert state is not None and (state.index, state.pending_key, state.pending_index) == (41, "", None)

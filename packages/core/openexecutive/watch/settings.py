@@ -123,6 +123,13 @@ _DAY_COLUMNS = {
     "notices": "INTEGER NOT NULL DEFAULT 0",
     "proposals": "INTEGER NOT NULL DEFAULT 0",
 }
+# watch_chain_heads' columns added after it was first made.
+_HEAD_COLUMNS = {
+    "pending_index": "INTEGER",
+    "pending_hash": "TEXT",
+    "pending_key": "TEXT NOT NULL DEFAULT ''",
+    "pending_note": "TEXT NOT NULL DEFAULT ''",
+}
 # What a day's row counts against a cap (``take_day``).
 DAY_COUNTS = frozenset({"cards", "checks", "notices", "proposals"})
 # The columns a run row had before slots, copied as they are by the migration.
@@ -188,6 +195,13 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
                 conn.execute(f"ALTER TABLE {RUNS_TABLE} ADD COLUMN {column} {definition}")
             except sqlite3.OperationalError:
                 # Another connection added it meanwhile.
+                logger.debug("watch: column %s already added", column)
+    heads = {row[1] for row in conn.execute(f"PRAGMA table_info({HEADS_TABLE})")}
+    for column, definition in _HEAD_COLUMNS.items():
+        if column not in heads:
+            try:
+                conn.execute(f"ALTER TABLE {HEADS_TABLE} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
                 logger.debug("watch: column %s already added", column)
     days = {row[1] for row in conn.execute(f"PRAGMA table_info({DAYS_TABLE})")}
     for column, definition in _DAY_COLUMNS.items():
