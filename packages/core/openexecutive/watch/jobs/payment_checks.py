@@ -321,7 +321,11 @@ def hold_comment(original: str, confidence: str) -> str:
 
 
 def _clean_comment(text: str) -> str:
-    return " ".join(_CONTROL.sub(" ", text).split())[:HOLD_COMMENT_MAX].strip()
+    """One line, made plain (as the card shows it and approval checks it:
+    erpnext_changes._as_shown), at most HOLD_COMMENT_MAX."""
+    from openexecutive.utils.prompt_blocks import plain
+
+    return " ".join(_CONTROL.sub(" ", plain(text)).split())[:HOLD_COMMENT_MAX].strip()
 
 
 # --------------------------------------------------------------------------- #

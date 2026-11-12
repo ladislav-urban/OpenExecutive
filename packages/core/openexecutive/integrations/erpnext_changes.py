@@ -116,7 +116,7 @@ _ROW_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,139}")
 # no control characters and no leading or trailing space ("Smith & Sons",
 # "Müller GmbH", "ACC/2026/001").
 _DOC_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^\x00-\x1f\x7f-\x9f\s])?")
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # oe_connector's _CONTROL: control characters, tab included, newline kept.
 _CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
 
@@ -183,6 +183,11 @@ def _value(field: str, value: Any, where: str) -> Any:
         raise ValueError(f"`{where}` is text.")
     cap = _TEXT_CAPS.get(field, 140)
     text = _as_shown(value)
+    if field not in _TEXT_CAPS:
+        # A link (cost center, project, unit, account) is shown on one line:
+        # stored and sent that way too, so two spaces or a line break can't
+        # name a look-alike record the card doesn't show.
+        text = " ".join(text.split())
     if not text:
         raise ValueError(f"`{where}` is text.")
     if len(text) > cap:
@@ -202,7 +207,9 @@ def check_change(operation: str, doctype: Any, name: Any, fields: Any) -> tuple[
         what = "changed" if operation == "update" else "commented on"
         return (f"Nothing can be {what} here." if not allowed
                 else f"`doctype` must be one of {', '.join(allowed)} to be {what}.")
-    if not isinstance(name, str) or not _DOC_RE.fullmatch(name.strip()):
+    if not isinstance(name, str) or not _DOC_RE.fullmatch(name.strip()) or _as_shown(name) != name.strip():
+        # Never a name with a hidden or folded character (a bidi override, a
+        # zero-width space): it would read as another document's on the card.
         return "`name` is the document's name, as ERPNext shows it."
     if not isinstance(fields, dict):
         return "`fields` must be an object."
