@@ -621,7 +621,7 @@ def card_history(found: Sequence[Late]) -> tuple[set[str], dict[str, int]]:
     own card or hold is the card store's to keep."""
     from openexecutive.integrations import erpnext_drafts as drafts
     from openexecutive.memory.decision_ledger import STATUS_EXECUTING, STATUS_PROPOSED
-    from openexecutive.watch.cards import carded_key
+    from openexecutive.watch.cards import held_key, kept_key
     from openexecutive.watch.runner import dedup_key
     from openexecutive.watch.settings import told
 
@@ -640,10 +640,11 @@ def card_history(found: Sequence[Late]) -> tuple[set[str], dict[str, int]]:
             carded[name] = card.id
         if card.status == STATUS_EXECUTING or (card.status == STATUS_PROPOSED and drafts.card_live(card)):
             waiting.add(name)
-    held_last_week = {
-        carded_key(dedup_key(JOB_ID, f"po:{f.order.name}:{previous_week(f.week)}")): f.order.name
-        for f in found if f.order.name not in carded
-    }
+    held_last_week: dict[str, str] = {}
+    for f in found:
+        if f.order.name not in carded:
+            last = dedup_key(JOB_ID, f"po:{f.order.name}:{previous_week(f.week)}")
+            held_last_week[held_key(last)] = held_last_week[kept_key(last)] = f.order.name
     if held_last_week:
         for record in told(JOB_ID, list(held_last_week)):
             carded[held_last_week[record]] = HELD_RANK

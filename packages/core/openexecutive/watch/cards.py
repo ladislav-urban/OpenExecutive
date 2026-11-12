@@ -399,7 +399,15 @@ async def leave_drafts(
     # A finding gets one card a day, whatever became of it: a job that runs at
     # several slots never proposes a card again the hour after it was dismissed.
     if job.once:
-        left_today = _once_held(job, reviewer.id, specs)
+        left_today, kept = _once_held(job, reviewer.id, specs)
+        # A finding held because ERPNext kept it from the reviewer (on an
+        # earlier run) is still kept: its row comes off the reviewer's
+        # notice, and its notice is offered to the principal until one of
+        # theirs has told it (the runner skips a finding told before).
+        for spec in specs:
+            if dedup_key(job.id, spec.key) in kept:
+                out.kept_from_reviewer.add(spec.key)
+                out.unproposed.append(spec)
     else:
         left_today = {
             drafts._payload(c).get("dedup_key") for c in drafts.job_cards(job.id, open_only=False)
@@ -450,8 +458,12 @@ _HELD_STATUSES = frozenset({
 })
 
 
-def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec]) -> set[Any]:
-    """The dedupe keys of a once job's findings that get no new card: a
+def _once_held(
+    job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec],
+) -> tuple[set[Any], set[str]]:
+    """The dedupe keys of a once job's findings that get no new card, and
+    those of them held because ERPNext kept them from the reviewer
+    (``kept_key``). No new card for: a
     card still waiting for the current reviewer and still the job's own
     (``check_fields`` builds it unchanged), one being approved, one whose
     approval was tried at all or went unanswered (its final ``closed_code``
@@ -460,7 +472,11 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
     job's assignee or reviewer changed, a configurer refusal), doesn't hold
     its finding: a waiting one is closed here, its ``card:`` record dropped,
     and the finding gets a new card while it's due. A finding the ledger's
-    listing no longer shows is held by its ``card:`` record."""
+    listing no longer shows is held by its ``card:`` record. A finding whose
+    check ERPNext refused for good is held by its ``held:`` or ``kept:``
+    record whatever older card of the same key the ledger shows: only
+    ``card:`` records (a card left) are dropped with a card that doesn't
+    hold."""
     from openexecutive.integrations import erpnext_drafts as drafts
     from openexecutive.memory.decision_ledger import (
         STATUS_EXECUTING,
@@ -521,9 +537,12 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
     if stale:
         forget_told(job.id, [carded_key(k) for k in stale])
     unseen = wanted - seen
-    recorded = told(job.id, [carded_key(k) for k in unseen]) if unseen else set()
+    asked = [carded_key(k) for k in unseen] + [held_key(k) for k in wanted] + [kept_key(k) for k in wanted]
+    recorded = told(job.id, asked) if asked else set()
     held |= {k for k in unseen if carded_key(k) in recorded}
-    return held
+    held |= {k for k in wanted if held_key(k) in recorded}
+    kept = {k for k in wanted if kept_key(k) in recorded}
+    return held | kept, kept
 
 
 def _final(card: Any) -> dict[str, Any]:
@@ -544,11 +563,24 @@ def carded_key(key: str) -> str:
     return f"card:{key}"
 
 
-def _mark_carded(job: registry.WatchJob, day: str, key: str) -> None:
+def held_key(key: str) -> str:
+    """A once job's record that ERPNext refused a finding's check for good
+    while it stands (a ToDo already open for it): held, never dropped with
+    an older card of the same key."""
+    return f"held:{key}"
+
+
+def kept_key(key: str) -> str:
+    """A once job's record that ERPNext kept a finding from the reviewer:
+    held, and its notice offered to the principal until one has told it."""
+    return f"kept:{key}"
+
+
+def _mark_carded(job: registry.WatchJob, day: str, key: str, record: Any = None) -> None:
     from openexecutive.watch.settings import mark_told
 
     try:
-        mark_told(job.id, [carded_key(key)], day)
+        mark_told(job.id, [(record or carded_key)(key)], day)
     except Exception:
         # The ledger's own card still counts: only its listing is bounded.
         logger.warning("watch: job %s's card couldn't be recorded as left", job.id)
@@ -594,7 +626,8 @@ async def _leave_one(
             # principal): held like a card left for it, so it isn't checked
             # again every run, using up the day's checks before the findings
             # behind it. A key with a period in it (a week) frees it then.
-            _mark_carded(job, day, key)
+            # Its own record kind: a kept one is still kept on later runs.
+            _mark_carded(job, day, key, kept_key if code in KEPT_CODES else held_key)
         out.unproposed.append(spec)
         return False
     if not isinstance(pinned, dict):

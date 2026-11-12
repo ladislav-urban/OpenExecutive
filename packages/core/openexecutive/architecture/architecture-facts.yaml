@@ -11845,9 +11845,18 @@ watch:
     no_answer or already_open (the ERP refused its ToDo as already open:
     that ToDo is the follow-up); and a once job's finding whose check came
     back in cards.HELD_CHECK_CODES (check_already_open, or KEPT_CODES:
-    kept from the reviewer, its row sent to the principal) gets its card:
-    record too (_mark_carded), so it isn't checked again every run and
-    can't use up the day's job_check_cap before the findings behind it; a never-tried waiting card that expired or code would now
+    kept from the reviewer, its row sent to the principal) is held by a
+    record of its own kind (cards.held_key held:<digest> for
+    check_already_open, cards.kept_key kept:<digest> for KEPT_CODES), so
+    it isn't checked again every run and can't use up the day's
+    job_check_cap before the findings behind it; _once_held reads held:
+    and kept: for every wanted key and never drops them (only card:
+    records, written when a card was left, go with a card that doesn't
+    hold), and returns the kept ones apart: leave_drafts adds those to
+    kept_from_reviewer and unproposed on every later run, so the runner
+    strips their rows from the reviewer's notice and offers their notices
+    to the principal until runner.told says one was left (one the day's
+    notice cap held back is told on a later day, never to the reviewer); a never-tried waiting card that expired or code would now
     refuse is closed (expired / job_changed) with
     decision_ledger.close_externally(proposed_only=True), and one that
     turned executing meanwhile (the close returns False) holds;
@@ -12410,7 +12419,7 @@ watch:
     at the start, or right after one of mcp_gateway._ERROR_TEXT_PREFIXES,
     "... tool <name>: " for those naming the tool, never after other
     text). card_history ranks an order held last week without a card
-    (its previous-week key's card: record) as carded most recently
+    (its previous-week key's held: or kept: record) as carded most recently
     (HELD_RANK). At the check:
     cards.CHECK_LINES check_already_open, no card. At approval
     (_carry_out, job cards' ToDo creates only): STATUS_FAILED with

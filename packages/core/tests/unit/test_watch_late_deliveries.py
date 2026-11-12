@@ -992,3 +992,73 @@ def test_findings_refused_as_already_open_are_held_and_the_ones_behind_get_check
     order = [f.order.name for f in ld.ranked(found, carded)]
     assert order[0] == "PO-N" and set(order[-20:]) == {f"PO-A{i:02d}" for i in range(20)}
     assert ld.previous_week("2026-W01") == "2025-W52"
+
+
+def test_kept_findings_past_the_days_notices_reach_the_principal_later_and_never_the_reviewer(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from .test_erpnext_drafts import _reply
+
+    # Eight orders ERPNext keeps from Cara (the most late), and PO-3 she may see.
+    kept = [_line(f"PO-K{i}", f"Sup K{i}", "A", 1.0, 0.0, -60 + i) for i in range(8)]
+    rows = kept + ORDERS[3:5]
+    checked: list[str] = []
+
+    async def call(_name: str, body: dict[str, Any]) -> Any:
+        erp.calls.append((body["tool_name"], dict(body["arguments"])))
+        if body["tool_name"] == "erpnext__draft_check":
+            name = body["arguments"]["fields"]["reference_name"]
+            checked.append(name)
+            if name.startswith("PO-K"):
+                return _reply(json.dumps({"error": f"You are not permitted to read Purchase Order {name}."}))
+            return _reply(_checked(body["arguments"]["fields"]))
+        return _reply(erp.replies.pop(0))
+
+    erp.session.call_tool = AsyncMock(side_effect=call)
+    names = [f"PO-K{i}" for i in range(8)]
+
+    def told_principal() -> list[str]:
+        return sorted(n for a in _alerts() if a.routed_to_person_id == team.principal for n in names if n in a.body)
+
+    def on_reviewers() -> list[str]:
+        return [n for a in _alerts() if a.routed_to_person_id == team.cara for n in names if n in a.body]
+
+    # Day 1: five principal notices (the day's cap), three capped.
+    erp.replies.extend([_list(rows), _list([]), _report([])])
+    first = _run()
+    assert (first.capped, len(told_principal())) == (4, 5)
+    assert on_reviewers() == []
+    # Day 2: no check of the eight; the other three reach the principal, none the reviewer.
+    checked.clear()
+    erp.replies.extend([_list(rows), _list([]), _report([])])
+    _run(NEXT_DAY)
+    assert not any(n.startswith("PO-K") for n in checked)
+    assert told_principal() == names and on_reviewers() == []
+    reviewers = [a for a in _alerts() if a.routed_to_person_id == team.cara]
+    assert len(reviewers) == 1 and "PO-3" in reviewers[0].body
+    # Day 3: nothing about them anywhere.
+    count = len(_alerts())
+    erp.replies.extend([_list(rows), _list([]), _report([])])
+    _run((TODAY + timedelta(days=2)).isoformat())
+    assert len(_alerts()) == count and not any(n.startswith("PO-K") for n in checked)
+
+
+def test_an_already_open_hold_survives_an_older_expired_card_of_its_key(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert _one_card_run(erp).draft_cards == 1
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(seconds=-1))
+    # The card expired; its finding is checked again, and its ToDo is open.
+    erp.replies.extend([_list(ORDERS[3:5]), _list([]), _report([])])
+    erp.replies.append(json.dumps({"error": "todo_already_open: ToDo for PO-3 is open."}))
+    second = _run(NEXT_DAY)
+    assert (second.draft_cards, second.checks) == (0, 1)
+    [old] = _job_cards()
+    assert (old.status, old.reversal_reason) == ("closed_externally", "expired")
+    # Later that week: still held, though the older card doesn't hold.
+    erp.replies.extend([_list(ORDERS[3:5]), _list([]), _report([])])
+    third = _run((TODAY + timedelta(days=2)).isoformat())
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(days=3))
+    assert (third.draft_cards, third.checks, third.draft_repeats) == (0, 0, 1)
