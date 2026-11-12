@@ -1402,6 +1402,17 @@ class Executive:
             user_content_parts.append(
                 {"type": "text", "text": f"<pending_followups>\n{followups}\n</pending_followups>"}
             )
+        # What became of the ERPNext draft cards this conversation left for
+        # its own person (approved, dismissed, expired, or closed and why, in
+        # fixed words), so a question about one is answered from the record
+        # rather than guessed. Changes as cards are decided, so the user turn.
+        from openexecutive.integrations.erpnext_drafts import decided_cards_note
+
+        decided = decided_cards_note(session, person_id)
+        if decided:
+            user_content_parts.append(
+                {"type": "text", "text": f"<decided_cards>\n{decided}\n</decided_cards>"}
+            )
 
         # Attachment blocks (images) are inserted before the text message so
         # the model sees the visual context first, then the user's question.
