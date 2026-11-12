@@ -929,3 +929,66 @@ def test_a_refusal_without_the_code_keeps_the_old_retry(
     again = get_decision_instance(card.id)
     assert again is not None and again.status == "proposed"
     assert drafts._payload(again)["attempts"] == 1
+
+
+def test_the_already_open_code_counts_only_at_the_start_or_after_a_gateway_wrapper() -> None:
+    from openexecutive.orchestrator.mcp_gateway import _ERROR_TEXT_PREFIXES
+
+    for text in ("Permission denied: todo_already_open: x", "PUR-ORD-2026-00012: todo_already_open: x",
+                 "x todo_already_open: y", " todo_already_open: x", "Error calling tool : todo_already_open: x"):
+        assert not drafts.already_open(text), text
+    assert drafts.already_open("todo_already_open: x")
+    for prefix in _ERROR_TEXT_PREFIXES:
+        wrapped = prefix + ("draft_todo: " if prefix.endswith("tool ") else "") + "todo_already_open: x"
+        assert drafts.already_open(wrapped), wrapped
+
+
+def test_findings_refused_as_already_open_are_held_and_the_ones_behind_get_checked(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from openexecutive.orchestrator.erpnext_caller import job_check_cap
+
+    from .test_erpnext_drafts import _reply
+
+    # 20 orders whose ToDo is already open (the most late), 3 behind them.
+    open_ones = [_line(f"PO-A{i:02d}", f"Sup {i:02d}", "A", 1.0, 0.0, -60 + i) for i in range(20)]
+    behind = [_line(f"PO-B{i}", f"Sup B{i}", "B", 1.0, 0.0, -5) for i in range(3)]
+    checked: list[str] = []
+
+    async def call(_name: str, body: dict[str, Any]) -> Any:
+        erp.calls.append((body["tool_name"], dict(body["arguments"])))
+        if body["tool_name"] == "erpnext__draft_check":
+            name = body["arguments"]["fields"]["reference_name"]
+            checked.append(name)
+            if name.startswith("PO-A"):
+                return _reply(json.dumps({"error": f"todo_already_open: ToDo for {name} is open."}))
+            return _reply(_checked(body["arguments"]["fields"]))
+        return _reply(erp.replies.pop(0))
+
+    erp.session.call_tool = AsyncMock(side_effect=call)
+    cap = job_check_cap(JOB)
+    assert cap < 20
+    # Tuesday: the day's checks go to the 20 first, up to the cap.
+    erp.replies.extend([_list(open_ones + behind), _list([]), _report([])])
+    first = _run()
+    assert (first.draft_cards, len(checked)) == (0, cap)
+    # Wednesday: none of those is checked again; the rest are, then the 3 behind.
+    checked.clear()
+    erp.replies.extend([_list(open_ones + behind), _list([]), _report([])])
+    second = _run(NEXT_DAY)
+    assert checked == [f"PO-A{i:02d}" for i in range(cap, 20)] + ["PO-B0", "PO-B1", "PO-B2"]
+    assert second.draft_cards == 3
+    # Thursday: the 20 aren't checked again that week.
+    checked.clear()
+    erp.replies.extend([_list(open_ones + behind), _list([]), _report([])])
+    _run((TODAY + timedelta(days=2)).isoformat())
+    assert checked == []
+    # Next week they're due again, ranked after orders never carded or held.
+    later = date.fromisoformat(NEXT_WEEK)
+    found = ld.candidates({"rows": open_ones + behind + [_line("PO-N", "New", "N", 1.0, 0.0, -3)]}, SETTINGS, later)
+    _waiting, carded = ld.card_history(found)
+    order = [f.order.name for f in ld.ranked(found, carded)]
+    assert order[0] == "PO-N" and set(order[-20:]) == {f"PO-A{i:02d}" for i in range(20)}
+    assert ld.previous_week("2026-W01") == "2025-W52"

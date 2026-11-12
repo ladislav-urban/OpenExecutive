@@ -744,6 +744,20 @@ def test_a_stored_todo_text_the_builder_wouldnt_make_is_refused(
     assert isinstance(qfu.check_fields("create", "ToDo", bad), str)
 
 
+def test_a_long_currency_or_status_is_capped_before_any_cleaning() -> None:
+    import time as clock
+
+    row = {**_q("QTN-C", "Orion", 2, 10.0), "currency": "a." * 10_000}
+    started = clock.perf_counter()
+    specs = _specs(quotes=[row], orders=[])
+    assert clock.perf_counter() - started < 2.0
+    [quote] = qfu.quotes({"rows": [row]})
+    assert quote.currency == ""
+    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    assert dict(notice.items[0].values)["Value"] == "10.00"
+    assert qfu.quotes({"rows": [{**row, "currency": "EUR", "status": "x" * 20_000}]})[0].status == ""
+
+
 def test_the_builder_settles_names_and_drops_an_odd_currency() -> None:
     hostile = _q("QTN-H", "H", 2, 10.0, customer_name="Evil.co [x](https://a.example) <b>")
     hostile["currency"] = "evil.io"

@@ -84,6 +84,7 @@ slice, the assignee, and the approver's day cap).
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -1365,18 +1366,29 @@ CONFIGURER_TEXT = (
 # same user, with a ToolError that starts with this stable code (chat and
 # panel ToDos are never refused). Refused before its daily count and before
 # any insert, so nothing was made: the card closes as handled
-# (CLOSED_ALREADY_OPEN), never a retried failure. The MCP layer may put a
-# short "...: " before it, so a bounded prefix is allowed; nowhere else.
+# (CLOSED_ALREADY_OPEN), never a retried failure. The code counts only at
+# the start of the error, or right after one of the gateway's own error
+# wrappers (mcp_gateway._ERROR_TEXT_PREFIXES; "... tool <name>: " for those
+# that name the tool), never after other text.
 ALREADY_OPEN_CODE = "todo_already_open:"
-_ALREADY_OPEN_RE = re.compile(r"(?:[\w .-]{0,80}:\s*)?" + re.escape(ALREADY_OPEN_CODE))
 ALREADY_OPEN_TEXT = "A task for this is already open in the ERP, so nothing new was made."
+
+
+@functools.lru_cache(maxsize=1)
+def _already_open_re() -> re.Pattern[str]:
+    from openexecutive.orchestrator.mcp_gateway import _ERROR_TEXT_PREFIXES
+
+    wrappers = [
+        re.escape(p) + (r"[A-Za-z0-9_-]{1,80}: " if p.endswith("tool ") else r"\s*") for p in _ERROR_TEXT_PREFIXES
+    ]
+    return re.compile(r"(?:" + "|".join(wrappers) + r")?" + re.escape(ALREADY_OPEN_CODE))
 
 
 def already_open(reason: str) -> bool:
     """Whether ERPNext refused a job card's ToDo as already open
     (``ALREADY_OPEN_CODE``). Matched by its code only; its text is never
     shown."""
-    return isinstance(reason, str) and _ALREADY_OPEN_RE.match(reason) is not None
+    return isinstance(reason, str) and _already_open_re().match(reason) is not None
 
 
 def _job_title(payload: dict[str, Any]) -> str:

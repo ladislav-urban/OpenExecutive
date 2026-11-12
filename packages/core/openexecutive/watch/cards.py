@@ -117,6 +117,14 @@ CHECK_LINES: dict[str, str] = {
 }
 
 
+# Checks refused because ERPNext keeps the finding from the reviewer: its
+# row goes to the principal instead.
+KEPT_CODES = frozenset({"check_permission", "check_not_theirs", "check_reviewer_sod", "check_fill_sod"})
+# Checks refused for good while the finding stands: a once job holds the
+# finding as if carded (``_mark_carded``) rather than check it every run.
+HELD_CHECK_CODES = KEPT_CODES | {"check_already_open"}
+
+
 @dataclass(frozen=True)
 class Route:
     """Who a run goes to: the reviewer (``reviewer`` set, ``reason`` "") or
@@ -578,8 +586,15 @@ async def _leave_one(
             out.check_refused += 1
         if code in ("check_permission", "check_not_theirs"):
             out.permission_refused += 1
-        if code in ("check_permission", "check_not_theirs", "check_reviewer_sod", "check_fill_sod"):
+        if code in KEPT_CODES:
             out.kept_from_reviewer.add(spec.key)
+        if job.once and code in HELD_CHECK_CODES:
+            # A once job's finding ERPNext refused for good (a ToDo already
+            # open for it, or kept from the reviewer, whose row goes to the
+            # principal): held like a card left for it, so it isn't checked
+            # again every run, using up the day's checks before the findings
+            # behind it. A key with a period in it (a week) frees it then.
+            _mark_carded(job, day, key)
         out.unproposed.append(spec)
         return False
     if not isinstance(pinned, dict):

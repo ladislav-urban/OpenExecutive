@@ -11843,7 +11843,11 @@ watch:
     payload), once it was approved, executed, reversed or rejected
     (dismissed by a person), or failed with the final payload's closed_code
     no_answer or already_open (the ERP refused its ToDo as already open:
-    that ToDo is the follow-up); a never-tried waiting card that expired or code would now
+    that ToDo is the follow-up); and a once job's finding whose check came
+    back in cards.HELD_CHECK_CODES (check_already_open, or KEPT_CODES:
+    kept from the reviewer, its row sent to the principal) gets its card:
+    record too (_mark_carded), so it isn't checked again every run and
+    can't use up the day's job_check_cap before the findings behind it; a never-tried waiting card that expired or code would now
     refuse is closed (expired / job_changed) with
     decision_ledger.close_externally(proposed_only=True), and one that
     turned executing meanwhile (the close returns False) holds;
@@ -12402,8 +12406,12 @@ watch:
     in ERPNext for the order isn't seen here (no read of ToDo):
     oe_connector's duplicate-ToDo guard refuses a job card's ToDo while an
     Open ToDo on the same document is allocated to the same user, with a
-    ToolError starting todo_already_open: (erpnext_drafts.already_open, a
-    bounded prefix allowed for the MCP layer's words). At the check:
+    ToolError starting todo_already_open: (erpnext_drafts.already_open:
+    at the start, or right after one of mcp_gateway._ERROR_TEXT_PREFIXES,
+    "... tool <name>: " for those naming the tool, never after other
+    text). card_history ranks an order held last week without a card
+    (its previous-week key's card: record) as carded most recently
+    (HELD_RANK). At the check:
     cards.CHECK_LINES check_already_open, no card. At approval
     (_carry_out, job cards' ToDo creates only): STATUS_FAILED with
     closed_code already_open, no attempt counted, no retry,

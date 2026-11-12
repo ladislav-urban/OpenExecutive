@@ -131,6 +131,9 @@ LINES_SHOWN = 3
 SHUT_STATUSES = frozenset({"Closed", "On Hold", "Completed"})
 DESCRIPTION_MAX = 1000
 TEXT_MAX = 140
+# How ``ranked`` places an order held last week without a card: as carded
+# after every real card.
+HELD_RANK = 2**62
 # A ToDo's description, code's template only (never a model's).
 TEMPLATE = (
     "Chase {supplier} on {order}: {lines} due {due}, {missing} missing. Ask for a confirmed delivery date "
@@ -286,6 +289,12 @@ def week_of(day: date) -> str:
     """An ISO week, as the finding key holds it (2026-W46)."""
     year, week, _ = day.isocalendar()
     return f"{year}-W{week:02d}"
+
+
+def previous_week(week: str) -> str:
+    """The ISO week before ``week`` (2026-W46 -> 2026-W45)."""
+    year, number = week.split("-W")
+    return week_of(date.fromisocalendar(int(year), int(number), 1) - timedelta(days=7))
 
 
 def candidates(result: Mapping[str, Any], settings: Settings, today: date) -> list[Late]:
@@ -605,11 +614,16 @@ def card_history(found: Sequence[Late]) -> tuple[set[str], dict[str, int]]:
     ``job_cards``' own cap), for the orders among ``found``: those an
     earlier week's card still waits for (live, or being approved: this
     week's finding gets no second card beside it), and each order's latest
-    earlier week's card id, whatever became of it (``ranked``). This week's
-    own card is the card store's to hold."""
+    earlier week's card id, whatever became of it (``ranked``). An order
+    held last week without a card (its check refused for good: a ToDo
+    already open, or kept from the reviewer) ranks as carded most
+    recently, so it doesn't take the day's first checks again. This week's
+    own card or hold is the card store's to keep."""
     from openexecutive.integrations import erpnext_drafts as drafts
     from openexecutive.memory.decision_ledger import STATUS_EXECUTING, STATUS_PROPOSED
+    from openexecutive.watch.cards import carded_key
     from openexecutive.watch.runner import dedup_key
+    from openexecutive.watch.settings import told
 
     this_week = {f.order.name: dedup_key(JOB_ID, f.key) for f in found}
     waiting: set[str] = set()
@@ -626,6 +640,13 @@ def card_history(found: Sequence[Late]) -> tuple[set[str], dict[str, int]]:
             carded[name] = card.id
         if card.status == STATUS_EXECUTING or (card.status == STATUS_PROPOSED and drafts.card_live(card)):
             waiting.add(name)
+    held_last_week = {
+        carded_key(dedup_key(JOB_ID, f"po:{f.order.name}:{previous_week(f.week)}")): f.order.name
+        for f in found if f.order.name not in carded
+    }
+    if held_last_week:
+        for record in told(JOB_ID, list(held_last_week)):
+            carded[held_last_week[record]] = HELD_RANK
     return waiting, carded
 
 
