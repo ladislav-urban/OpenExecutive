@@ -915,9 +915,11 @@ def _conversation_read_erpnext(session: Any) -> bool:
     """Whether this conversation has read ERPNext in any turn: the session's
     flag, else the audit log's ``mcp:erpnext__`` rows for its id (a channel
     adapter builds a new Session per message, and a restart rebuilds them
-    all). Its replies can restate the asker's own ERPNext figures, so they
-    stay out of everything other people's turns read. Fails closed: an
-    unreadable audit log answers yes."""
+    all), else an ERPNext draft card it left (its turns are told what became
+    of the card, ``erpnext_drafts.decided_cards_note``). Its replies can
+    restate the asker's own ERPNext figures, so they stay out of everything
+    other people's turns read. Fails closed: an unreadable audit log or
+    ledger answers yes."""
     if getattr(session, "read_erpnext", False) is True:
         return True
     session_id = getattr(session, "session_id", None)
@@ -925,6 +927,7 @@ def _conversation_read_erpnext(session: Any) -> bool:
         return False
     try:
         from openexecutive.audit.logger import get_audit_logger
+        from openexecutive.integrations.erpnext_drafts import conversation_has_cards
 
         # Every owner's rows: a teammate's own turn writes its rows as theirs
         # (private_to_person), which the default owner filter leaves out, so
@@ -934,7 +937,7 @@ def _conversation_read_erpnext(session: Any) -> bool:
                 event_type="tool_invocation", session_id=session_id, q="mcp:erpnext__", limit=1,
                 all_owners=True,
             )
-        )
+        ) or conversation_has_cards(str(session_id))
     except Exception:
         logger.warning("couldn't check whether the conversation read ERPNext — keeping it private", exc_info=True)
         return True
@@ -1333,6 +1336,17 @@ class Executive:
         if followups:
             user_content_parts.append(
                 {"type": "text", "text": f"<pending_followups>\n{followups}\n</pending_followups>"}
+            )
+        # What became of the ERPNext draft cards this conversation left for
+        # its own person (approved, dismissed, expired, or closed and why, in
+        # fixed words), so a question about one is answered from the record
+        # rather than guessed. Changes as cards are decided, so the user turn.
+        from openexecutive.integrations.erpnext_drafts import decided_cards_note
+
+        decided = decided_cards_note(session, person_id)
+        if decided:
+            user_content_parts.append(
+                {"type": "text", "text": f"<decided_cards>\n{decided}\n</decided_cards>"}
             )
 
         # Attachment blocks (images) are inserted before the text message so

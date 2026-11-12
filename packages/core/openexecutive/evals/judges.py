@@ -189,6 +189,33 @@ def _standing_facts_section(scenario: dict[str, Any]) -> str:
     return section
 
 
+def _decided_cards_section(scenario: dict[str, Any]) -> str:
+    """Judge context for scenarios whose conversation left ERPNext draft cards
+    that are no longer waiting (``decided_cards``): what the assistant was told
+    became of each. Only rendered for those scenarios; every other chat judge
+    prompt stays byte-identical. Lists the scenario's ``quality_criteria``
+    unless an earlier section already did."""
+    from openexecutive.evals.scenarios import decided_cards_section
+
+    section = decided_cards_section(scenario)
+    if not section:
+        return ""
+    criteria = [k.replace("_", " ") for k, v in (scenario.get("quality_criteria") or {}).items() if v]
+    if (
+        criteria
+        and not scenario.get("peer_memory_context")
+        and scenario.get("workspace_mode") != "solo"
+        and scenario.get("delegation") is None
+        and not scenario.get("standing_facts")
+    ):
+        section += (
+            f"\nAdditional criteria this response must satisfy: {', '.join(criteria)}. "
+            "Check each one. If any is not satisfied, overall must be 2 or lower and "
+            "notes must name the criterion that failed.\n"
+        )
+    return section
+
+
 async def judge_chat(
     scenario: dict[str, Any],
     response: str,
@@ -205,7 +232,7 @@ Evaluate this response to an executive question on a 1-5 scale for each dimensio
 RESPONSE: {response}
 
 Expected topics to cover: {', '.join(scenario.get('expected_topics', []))}
-{_peer_memory_section(scenario)}{_solo_section(scenario)}{_delegation_section(scenario, drafts)}{_standing_facts_section(scenario)}
+{_peer_memory_section(scenario)}{_solo_section(scenario)}{_delegation_section(scenario, drafts)}{_standing_facts_section(scenario)}{_decided_cards_section(scenario)}
 Rate each dimension (1=poor, 3=acceptable, 5=excellent):
 1. persona_coherence: Does it sound like a senior executive, not a generic AI?
 2. domain_accuracy: Is the advice factually correct and professionally sound?
