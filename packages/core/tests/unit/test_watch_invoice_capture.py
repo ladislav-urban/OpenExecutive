@@ -281,6 +281,8 @@ SIMULATED = {
     ("Acme", {"sender_from": None}, False),
     ("Acme", {"sender_from": "  "}, False),
     ("Acme", {"sender_checked": "demo-simulated "}, False),  # only the exact value
+    ("Acme", {"sender_from": "billing@lumen.com"}, False),   # never a real domain
+    ("Acme", {"sender_from": "billing@lumen.example.com"}, False),
 ])
 def test_the_demos_simulated_sender_passes_only_on_its_own_demo_company(
     monkeypatch: pytest.MonkeyPatch, demo: str, facts: dict[str, Any], allowed: bool,
@@ -330,6 +332,9 @@ def test_the_simulated_card_says_so_and_keeps_it_for_approval(monkeypatch: pytes
                 {"sender_checked": "dmarc-enforced", "sender_policy": "not checked: simulated"},
                 {"sender_checked": "simulated"}):
         assert erpnext_fill.slice_of({**summary, **odd}) is None, odd
+    labels = {f["label"]: f["value"] for f in view["fields"]}
+    assert labels["Checked by"] == "not checked (simulated for the demo)"
+    assert "Sender's domain policy" not in labels
     # A real mail's card shows no such line.
     real = erpnext_fill.card_view(_summary("ACC-PINV-1", ("Purchase Receipt", "PR-1"), 120.0))
     assert erpnext_fill.SIMULATED_LINE not in json.dumps(real)

@@ -433,4 +433,6 @@ def test_the_route_returns_the_gate_with_the_range_before_and_keeps_the_csv(
     # The CSV stays one row per record with the same columns: no summary.
     as_csv = client.get("/erpnext/drafts/oversight?format=csv", headers=owner).text
     assert next(csv.reader(io.StringIO(as_csv))) == list(oversight.CSV_COLUMNS) and len(oversight.CSV_COLUMNS) == 28
+    # Every row has every column (the last, sender_checked, written too).
+    assert {len(row) for row in csv.reader(io.StringIO(as_csv))} == {len(oversight.CSV_COLUMNS)}
     assert "approval_rate" not in as_csv

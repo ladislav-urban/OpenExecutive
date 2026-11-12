@@ -76,6 +76,7 @@ DMARC_CHECKED = "dmarc-enforced"
 # policy, never looked up (a .example domain has no DMARC record).
 DEMO_SIMULATED = "demo-simulated"
 SIMULATED_POLICY = "not checked: simulated"
+_SIMULATED_FROM_RE = re.compile(r"[a-z0-9._%+-]{1,64}@(?:[a-z0-9-]{1,63}\.)+example")
 SIMULATED_LINE = (
     "Sender simulated for the demo: on a real installation, only a mail whose sender's domain is "
     "DMARC-checked can fill an invoice."
@@ -197,7 +198,8 @@ def demo_simulated(facts: Mapping[str, Any]) -> bool:
     return (
         bool(demo) and isinstance(company, str) and company.strip() == demo
         and facts.get("sender_policy") == SIMULATED_POLICY
-        and isinstance(sender_from, str) and bool(sender_from.strip())
+        # Only a reserved .example address (RFC 2606): no real domain, ever.
+        and isinstance(sender_from, str) and _SIMULATED_FROM_RE.fullmatch(sender_from.strip().lower()) is not None
     )
 
 
@@ -504,16 +506,21 @@ def card_view(summary: Any) -> dict[str, Any]:
     totals = got.get("totals") if isinstance(got.get("totals"), dict) else {}
     assert isinstance(source, dict) and isinstance(supplier, dict) and isinstance(totals, dict)
     authserv = got.get("authserv_id")
+    simulated = got.get("sender_checked") == DEMO_SIMULATED
     shown: list[dict[str, str]] = [
         # Above the fill: who sent it was simulated, for the demo only.
-        *([{"label": "Sender", "value": SIMULATED_LINE}] if got.get("sender_checked") == DEMO_SIMULATED else []),
+        *([{"label": "Sender", "value": SIMULATED_LINE}] if simulated else []),
         {"label": "Draft invoice", "value": f"{DOCTYPE} {_shown(got.get('name'))}"},
         {"label": "Company", "value": _shown(got.get("company"))},
         {"label": "Supplier", "value": f"{_shown(supplier.get('supplier_name'))} ({_shown(supplier.get('name'))})"},
         {"label": "Sent from (the mail's own From)", "value": _shown(got.get("sender_from"))},
-        {"label": "Sender's domain policy",
-         "value": f"{_shown(got.get('sender_policy'))} ({_shown(got.get('sender_policy_domain'))})"},
-        {"label": "Checked by", "value": _shown(authserv) if authserv else "the account's mail server (stated)"},
+        *([] if simulated else [
+            {"label": "Sender's domain policy",
+             "value": f"{_shown(got.get('sender_policy'))} ({_shown(got.get('sender_policy_domain'))})"},
+            {"label": "Checked by", "value": _shown(authserv) if authserv else "the account's mail server (stated)"},
+        ]),
+        # The simulated mail was checked by no server: the card says so.
+        *([{"label": "Checked by", "value": "not checked (simulated for the demo)"}] if simulated else []),
         {"label": "Bills", "value": f"{_shown(source.get('doctype'))} {_shown(source.get('name'))}"},
         {"label": "Supplier's invoice no.", "value": _one_line(got.get("bill_no"), 60)},
         {"label": "Supplier's invoice date", "value": _shown(got.get("bill_date"))},

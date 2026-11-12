@@ -487,6 +487,6 @@ def to_csv(rows: list[dict[str, Any]]) -> str:
             _yes(r.get("seal_in_log")), _yes(erp.get("unchanged")),
             r.get("last_error"), "yes" if r.get("private") else "",
             r.get("operation") or "create", r.get("target"),
-            r.get("asked_by_person_id"), r.get("approver"),
+            r.get("asked_by_person_id"), r.get("approver"), r.get("sender_checked"),
         ]])
     return buffer.getvalue()
