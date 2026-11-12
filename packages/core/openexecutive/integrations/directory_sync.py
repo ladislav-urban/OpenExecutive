@@ -36,13 +36,17 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
+import hashlib
 import ipaddress
 import json
 import logging
+import re
 import sqlite3
 import threading
 import time
 import uuid
+from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -76,6 +80,10 @@ _tokens: dict[tuple[str, str], tuple[str, float]] = {}
 
 class DirectoryError(Exception):
     """Why a run stopped. It changed nothing."""
+
+
+class _NotFound(DirectoryError):
+    """The admin API answered 404 for something other than a group path."""
 
 
 @dataclass(frozen=True)
@@ -227,7 +235,14 @@ def _claims(token: str) -> dict[str, Any]:
 class KeycloakReader:
     """One group's members, read through Keycloak's admin API."""
 
-    def __init__(self, settings: Settings, *, transport: httpx.BaseTransport | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        timeout: float = TIMEOUT_S,
+        budget_s: float | None = None,
+    ) -> None:
         self.issuer = settings.directory_sync_issuer.strip().rstrip("/")
         self.admin_url = settings.directory_sync_admin_url.strip().rstrip("/")
         self.realm = _realm(self.issuer)
@@ -238,9 +253,25 @@ class KeycloakReader:
         # The group being read, for a "doesn't exist" message.
         self._reading = self.group
         self._client = httpx.Client(
-            timeout=TIMEOUT_S, follow_redirects=False, transport=transport
+            timeout=timeout, follow_redirects=False, transport=transport
         )
         self._fresh = False
+        # An admit's reads share one time budget (``budget_s``): each call is
+        # capped at ``timeout`` and at what is left of it. A run has none.
+        self._call_timeout = timeout
+        self._deadline = time.monotonic() + budget_s if budget_s is not None else None
+
+    def _timeout(self) -> dict[str, Any]:
+        """The per-request timeout under the budget, or nothing (the client's)."""
+        if self._deadline is None:
+            return {}
+        left = self._deadline - time.monotonic()
+        if left <= 0:
+            raise DirectoryError("the time for the reads ran out")
+        return {"timeout": min(self._call_timeout, left)}
+
+    def close(self) -> None:
+        self._client.close()
 
     def _token(self, *, fresh: bool = False) -> str:
         key = (self.issuer, self.client_id)
@@ -253,7 +284,8 @@ class KeycloakReader:
         url = f"{self.admin_url}/realms/{quote(self.realm)}/protocol/openid-connect/token"
         try:
             response = self._client.post(
-                url, data={"grant_type": "client_credentials"}, auth=(self.client_id, self._secret)
+                url, data={"grant_type": "client_credentials"}, auth=(self.client_id, self._secret),
+                **self._timeout(),
             )
             body = response.json() if response.status_code == 200 else {}
         except (httpx.HTTPError, ValueError) as error:
@@ -277,7 +309,7 @@ class KeycloakReader:
         while True:
             try:
                 response = self._client.get(
-                    url, params=params, headers={"Authorization": f"Bearer {token}"}
+                    url, params=params, headers={"Authorization": f"Bearer {token}"}, **self._timeout()
                 )
             except httpx.HTTPError as error:
                 raise DirectoryError(f"the admin API can't be reached: {type(error).__name__}") from None
@@ -287,6 +319,8 @@ class KeycloakReader:
             token = self._token(fresh=True)
         if response.status_code == 404 and path.startswith("group-by-path/"):
             raise DirectoryError(f"the group {self._reading} doesn't exist in the realm")
+        if response.status_code == 404:
+            raise _NotFound(f"the admin API answered 404 for {path.split('/')[0]}")
         if response.status_code != 200:
             raise DirectoryError(f"the admin API answered {response.status_code} for {path.split('/')[0]}")
         try:
@@ -315,7 +349,9 @@ class KeycloakReader:
             self._client.close()
         return {uid: _member(uid, user, demo=uid in demo) for uid, user in found.items()}
 
-    def _group_users(self, group_path: str) -> dict[str, dict[str, Any]]:
+    def _group_tree(self, group_path: str, *, limit: int | None = None) -> list[dict[str, Any]]:
+        """The group at ``group_path`` and every group under it. Past
+        ``limit`` groups the read stops (an admit's bound)."""
         self._reading = group_path
         path = "/".join(quote(part, safe="") for part in group_path.strip("/").split("/"))
         groups, todo = [], [self._get(f"group-by-path/{path}")]
@@ -323,6 +359,12 @@ class KeycloakReader:
             group = todo.pop()
             groups.append(group)
             todo += self._paged(f"groups/{quote(group['id'])}/children", briefRepresentation="true")
+            if limit is not None and len(groups) + len(todo) > limit:
+                raise DirectoryError(f"the group {group_path} holds more than {limit} groups")
+        return groups
+
+    def _group_users(self, group_path: str) -> dict[str, dict[str, Any]]:
+        groups = self._group_tree(group_path)
         found: dict[str, dict[str, Any]] = {}
         for group in groups:
             for user in self._paged(f"groups/{quote(group['id'])}/members", briefRepresentation="false"):
@@ -543,16 +585,22 @@ def _sync(report: Report, reader: DirectoryReader | None, allow_mass_suspend: bo
             logger.warning("directory_sync: roster intake reconcile failed", exc_info=True)
 
 
-def _add(member: Member, report: Report) -> None:
+def _add(member: Member, report: Report, *, admit: bool = False) -> int | None:
+    """Create a Person for ``member``, or report why not. Returns the new
+    Person's id when one was created. With ``admit`` (``admit_one``) it never
+    links anyone: an address someone holds is left to the run."""
     from openexecutive.people import store
 
     if not member.email:
-        return
+        return None
     holder_id = store.address_holder(member.email)
+    if holder_id is not None and admit:
+        report.add("conflict", member.email, "the address is held; left to the run")
+        return None
     if holder_id is not None:
         holder = store.get_person(holder_id)
         if holder is None:
-            return
+            return None
         if holder.directory_managed:
             report.add("conflict", member.email, "the address is another directory identity's")
         elif holder.is_principal and store.normalize_email(holder.email or "") == member.email:
@@ -564,10 +612,10 @@ def _add(member: Member, report: Report) -> None:
                        {"person_id": holder.id})
         else:
             report.add("candidate", member.email, f"link with `openexecutive directory-link --email {member.email}`")
-        return
+        return None
     report.add("created", member.email, "demo" if member.demo else "")
     if report.dry_run:
-        return
+        return None
     # A demo person starts with the demo role and nothing else: no
     # departments, scopes or manager. Set on create only, so the principal
     # may change it.
@@ -584,6 +632,7 @@ def _add(member: Member, report: Report) -> None:
         raise
     _audit("directory_person_created", f"person #{pid} created from the directory", {"person_id": pid})
     _keep_profile(pid, member, report)
+    return pid
 
 
 def _update(person: Person, member: Member, report: Report) -> None:
@@ -651,6 +700,307 @@ def _suspend(person: Person, settings: Settings) -> None:
         )
     _audit("directory_person_suspended", f"person #{person.id} suspended by the directory",
            {"person_id": person.id})
+
+
+# --------------------------------------------------------------------------- #
+# Admitting one person at sign-in
+# --------------------------------------------------------------------------- #
+#
+# The web app's sign-in refuses someone the roster doesn't hold yet: an
+# approved member waits for the next run. ``admit_one`` does for that one
+# person what the next run would do, and nothing else: it creates a Person
+# for an active member of the group, or does nothing. It never links,
+# restores, suspends, changes or reads anyone else, and it believes nothing
+# the web app sends beyond who to look up: every fact comes from the admin
+# API. The reads happen before ``_run_lock``; the lock is held only for the
+# store's re-checks and the write, so a heartbeat run is never kept waiting
+# on the network.
+
+ADMIT_CALL_TIMEOUT_S = 3.0
+# The reads' budget plus the lock wait stay under the web app's 4 s wait for
+# the answer, so the API never admits someone after the web app gave up.
+ADMIT_BUDGET_S = 3.0
+ADMIT_LOCK_WAIT_S = 0.5
+ADMIT_SUBJECT_WINDOW_S = 30.0
+ADMIT_SUBJECT_CAP = 10_000
+ADMIT_GLOBAL_PER_MINUTE = 20
+# A group tree an admit reads is kept this long, and holds at most this many
+# groups (more answers ``error``).
+ADMIT_TREE_TTL_S = 60.0
+ADMIT_TREE_MAX_GROUPS = 50
+
+_SUBJECT_RE = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+_EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+")
+_SUBJECT_MAX = 64
+_EMAIL_MAX = 254
+
+# What an admit answers. Only ``admitted`` lets anyone in.
+ADMIT_CODES = (
+    "admitted",       # a Person was created for them
+    "exists",         # a Person is already linked to them (left as it is)
+    "address_held",   # someone already holds the address (left to the run)
+    "unknown",        # no such user at the provider
+    "inactive",       # disabled, email not verified, or no email
+    "email_mismatch", # the provider has another email for them
+    "not_member",     # not in DIRECTORY_SYNC_GROUP
+    "invalid",        # the subject or email isn't the right shape
+    "disabled",       # the sync is off, or its settings can't be used
+    "busy",           # another admit or a run holds the way
+    "rate_limited",   # too many admits lately
+    "error",          # a read failed or answered the wrong shape
+)
+
+
+@dataclass(frozen=True)
+class AdmitResult:
+    code: str
+    person_id: int | None = None
+
+    @property
+    def admitted(self) -> bool:
+        return self.code == "admitted"
+
+
+class _AdmitLimits:
+    """In-process limits: one admit per subject per window, and a global cap
+    per minute counting only admits that reached the provider."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._subjects: dict[str, float] = {}
+        self._recent: deque[float] = deque()
+        self.refused = {"busy": 0, "rate_limited": 0}
+        self.clock: Callable[[], float] = time.monotonic
+
+    def reset(self) -> None:
+        with self._lock:
+            self._subjects.clear()
+            self._recent.clear()
+            self.refused = {"busy": 0, "rate_limited": 0}
+
+    def _prune(self, now: float) -> None:
+        old = [s for s, at in self._subjects.items() if not 0 <= now - at < ADMIT_SUBJECT_WINDOW_S]
+        for subject in old:
+            del self._subjects[subject]
+        while self._recent and not 0 <= now - self._recent[0] < 60.0:
+            self._recent.popleft()
+
+    def subject_ok(self, subject: str) -> bool:
+        """Whether this subject may be looked up now. At the cap, a new
+        subject is refused rather than a live entry evicted."""
+        now = self.clock()
+        with self._lock:
+            self._prune(now)
+            if subject in self._subjects:
+                return False
+            return len(self._subjects) < ADMIT_SUBJECT_CAP
+
+    def take(self, subject: str) -> bool:
+        """Count an admit about to reach the provider; False over a limit."""
+        now = self.clock()
+        with self._lock:
+            self._prune(now)
+            if subject in self._subjects or len(self._subjects) >= ADMIT_SUBJECT_CAP:
+                return False
+            if len(self._recent) >= ADMIT_GLOBAL_PER_MINUTE:
+                return False
+            self._subjects[subject] = now
+            self._recent.append(now)
+            return True
+
+    def note_refused(self, code: str, digest: str) -> None:
+        with self._lock:
+            self.refused[code] = self.refused.get(code, 0) + 1
+            count = self.refused[code]
+        logger.warning("directory admit: %s for subject %s (%d so far)", code, digest, count)
+
+
+_admit_limits = _AdmitLimits()
+# One admit in flight in this process; a second answers ``busy`` at once.
+_admit_slot = threading.Lock()
+_tree_lock = threading.Lock()
+_trees: dict[tuple[str, str, str], tuple[frozenset[str], float]] = {}
+
+
+def _subject_digest(subject: str) -> str:
+    return hashlib.sha256(subject.encode("utf-8")).hexdigest()[:12]
+
+
+def _under(path: str, group: str) -> bool:
+    return path == group or path.startswith(group + "/")
+
+
+def _tree_ids(reader: KeycloakReader, group_path: str) -> frozenset[str]:
+    """The ids of the group at ``group_path`` and every group under it, as
+    the run's tree walk reads them. Kept ``ADMIT_TREE_TTL_S``; a failed read
+    is never kept."""
+    key = (reader.issuer, reader.admin_url, group_path)
+    now = time.monotonic()
+    with _tree_lock:
+        kept = _trees.get(key)
+        if kept and 0 < kept[1] - now <= ADMIT_TREE_TTL_S:
+            return kept[0]
+    groups = reader._group_tree(group_path, limit=ADMIT_TREE_MAX_GROUPS)
+    ids = frozenset(str(g["id"]) for g in groups if isinstance(g.get("id"), str))
+    if len(ids) != len(groups):
+        raise ValueError("a group without a usable id")
+    with _tree_lock:
+        _trees[key] = (ids, time.monotonic() + ADMIT_TREE_TTL_S)
+    return ids
+
+
+def _user_groups(reader: KeycloakReader, subject: str) -> list[tuple[str, str]]:
+    """(id, path) of every group the user is directly in."""
+    groups = reader._paged(f"users/{quote(subject, safe='')}/groups", briefRepresentation="false")
+    out = []
+    for group in groups:
+        gid, path = group.get("id"), group.get("path")
+        if not isinstance(gid, str) or not isinstance(path, str):
+            raise ValueError("a group without an id or path")
+        out.append((gid, path))
+    return out
+
+
+def _read_member(settings: Settings, subject: str, email: str,
+                 transport: httpx.BaseTransport | None) -> Member | AdmitResult:
+    """The member ``subject`` is, read from the provider, or why not. Holds
+    no lock: every call here is network."""
+    reader = KeycloakReader(
+        settings, transport=transport, timeout=ADMIT_CALL_TIMEOUT_S, budget_s=ADMIT_BUDGET_S
+    )
+    try:
+        try:
+            user = reader._get(f"users/{quote(subject, safe='')}")
+        except _NotFound:
+            return AdmitResult("unknown")
+        if not isinstance(user, dict) or user.get("id") != subject:
+            return AdmitResult("error")
+        member = _member(subject, user)
+        if not member.active:
+            return AdmitResult("inactive")
+        if member.email != email:
+            return AdmitResult("email_mismatch")
+        groups = _user_groups(reader, subject)
+        # A member by both signals: a path at or under the group, and that
+        # group's id in the group's tree. A moved-out group fails the path, a
+        # root group named like a path ("/dynocortex/x") fails the id.
+        in_path = [gid for gid, path in groups if _under(path, reader.group)]
+        if not in_path:
+            return AdmitResult("not_member")
+        tree = _tree_ids(reader, reader.group)
+        if not any(gid in tree for gid in in_path):
+            return AdmitResult("not_member")
+        # Demo by either signal: the narrower role wins a disagreement.
+        demo = False
+        if reader.demo_group:
+            demo = any(_under(path, reader.demo_group) for _, path in groups) or bool(
+                {gid for gid, _ in groups} & _tree_ids(reader, reader.demo_group)
+            )
+        return dataclasses.replace(member, demo=demo)
+    finally:
+        reader.close()
+
+
+def _admit_write(member: Member) -> AdmitResult:
+    """Under ``_run_lock`` (a short wait, else ``busy``): the store's
+    re-checks and the write, as the run's ``_add`` does it."""
+    from openexecutive.people import registry, store
+
+    if not _run_lock.acquire(timeout=ADMIT_LOCK_WAIT_S):
+        return AdmitResult("busy")
+    try:
+        linked = store.find_person_by_directory_subject(member.id)
+        if linked is not None:
+            return AdmitResult("exists", linked.id)
+        if store.address_holder(member.email) is not None:
+            return AdmitResult("address_held")
+        report = Report(dry_run=False)
+        pid = _add(member, report, admit=True)
+        if pid is None or report.count("created") != 1:
+            return AdmitResult("error")
+        registry.invalidate()
+    finally:
+        _run_lock.release()
+    from openexecutive.integrations.roster_intake import after_roster_write
+
+    # A pending roster request from them is matched now, as after a run.
+    try:
+        after_roster_write()
+    except Exception:
+        logger.warning("directory admit: roster intake reconcile failed", exc_info=True)
+    return AdmitResult("admitted", pid)
+
+
+def admit_one(
+    subject: str, email: str, *, transport: httpx.BaseTransport | None = None
+) -> AdmitResult:
+    """Admit the one person signing in as ``subject`` with ``email`` if the
+    provider says they are an active member of the group: what the next run
+    would do for them. Raises nothing; writes nothing unless it answers
+    ``admitted``. ``transport`` replaces the network (tests)."""
+    from openexecutive.people import store
+
+    settings = get_settings()
+    if not settings.directory_sync_enabled or config_problem(settings):
+        return AdmitResult("disabled")
+    if not isinstance(subject, str) or len(subject) > _SUBJECT_MAX or not _SUBJECT_RE.fullmatch(subject):
+        return AdmitResult("invalid")
+    norm = store.normalize_email(email) if isinstance(email, str) else ""
+    if len(norm) > _EMAIL_MAX or not _EMAIL_RE.fullmatch(norm):
+        return AdmitResult("invalid")
+    try:
+        linked = store.find_person_by_directory_subject(subject)
+        if linked is not None:
+            # A suspended one stays so; an archived one doesn't count.
+            return AdmitResult("exists", linked.id)
+        if store.address_holder(norm) is not None:
+            # Read again: a sign-in of the same person at the same moment may
+            # have admitted them between the two reads (the run's _add writes
+            # the Person and its subject together), and they then exist.
+            again = store.find_person_by_directory_subject(subject)
+            if again is not None:
+                return AdmitResult("exists", again.id)
+            return AdmitResult("address_held")
+    except Exception as error:
+        logger.error("directory admit: the store check failed (%s)", type(error).__name__)
+        return AdmitResult("error")
+
+    digest = _subject_digest(subject)
+    if not _admit_limits.subject_ok(subject):
+        _admit_limits.note_refused("rate_limited", digest)
+        return AdmitResult("rate_limited")
+    if not _admit_slot.acquire(blocking=False):
+        _admit_limits.note_refused("busy", digest)
+        return AdmitResult("busy")
+    try:
+        if not _admit_limits.take(subject):
+            _admit_limits.note_refused("rate_limited", digest)
+            return AdmitResult("rate_limited")
+        try:
+            found = _read_member(settings, subject, norm, transport)
+            result = found if isinstance(found, AdmitResult) else _admit_write(found)
+        except DirectoryError:
+            result = AdmitResult("error")
+        except Exception as error:
+            # Never a traceback with the token or secret in its locals.
+            logger.error("directory admit: failed (%s)", type(error).__name__)
+            result = AdmitResult("error")
+    finally:
+        _admit_slot.release()
+    if result.code in ("busy", "rate_limited"):
+        _admit_limits.note_refused(result.code, digest)
+    else:
+        _audit(
+            "directory_admit",
+            f"directory admit at sign-in: {result.code}",
+            {
+                "code": result.code,
+                "subject_sha256": digest,
+                "email_domain": norm.rsplit("@", 1)[-1],
+                "person_id": result.person_id,
+            },
+        )
+    return result
 
 
 # --------------------------------------------------------------------------- #
