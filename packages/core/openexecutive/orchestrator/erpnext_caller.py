@@ -516,8 +516,8 @@ class WatchRefused(Exception):
 
 def other_marker_bound() -> bool:
     """Whether any marker but a watch read's is set: the brief's, the
-    oversight export's, the answer check's, a supplier's, a draft's or a
-    job's proposal."""
+    oversight export's, the answer check's, a supplier's, a draft's, a
+    job's proposal or Home's read."""
     return bool(
         _brief_run.get()
         or _oversight_run.get()
@@ -525,6 +525,7 @@ def other_marker_bound() -> bool:
         or _supplier_run.get()
         or _draft_call.get() is not None
         or _proposal_call.get() is not None
+        or _home_read.get() is not None
     )
 
 
@@ -661,6 +662,69 @@ def proposal_call_for(tool: str, arguments: dict[str, Any]) -> ProposalCall | No
     """The proposal marker covering exactly this call (normalized ``tool``,
     the arguments without any assertion), or None."""
     call = _proposal_call.get()
+    if call is None or call.tool != tool or call.digest != arguments_digest(arguments):
+        return None
+    return call
+
+
+# The proposed rules waiting for a System Manager (oe_connector's
+# proposed_rules): Home's "Needs you" reads them from code, as the principal's
+# own caller, never a turn (connected_systems.ERPNEXT_WITHHELD_TOOLS).
+PROPOSED_RULES_TOOL = "erpnext__proposed_rules"
+
+
+@dataclass(frozen=True)
+class HomeRead:
+    """The one read Home's code makes as a person: the gateway tool, the
+    digest of its exact arguments, and who it runs as."""
+
+    tool: str
+    digest: str
+    caller: ErpnextCaller
+
+
+_home_read: ContextVar[HomeRead | None] = ContextVar("erpnext_home_read", default=None)
+
+
+@contextmanager
+def proposed_rules_as(arguments: dict[str, Any], person: Any) -> Iterator[None]:
+    """Mark the one ``erpnext__proposed_rules`` call with exactly
+    ``arguments`` that Home makes for ``person``, as their own ERPNext user,
+    with no turn. Code only. Raises ``WatchRefused`` unless ``person`` is the
+    active principal with an email (oe_connector answers a System Manager
+    only), without per-person access, or under a turn or any other marker."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    if current_session.get() is not None:
+        raise WatchRefused("home-read-in-turn")
+    if other_marker_bound() or _watch_call.get() is not None or _home_read.get() is not None:
+        raise WatchRefused("home-read-with-other-marker")
+    email = _email_of(person)
+    if not email or getattr(person, "is_principal", False) is not True or getattr(person, "active", False) is not True:
+        raise WatchRefused("home-read-not-principal")
+    setting = signing_setting()
+    if not setting:
+        raise WatchRefused("watch-needs-keys")
+    try:
+        load_private_key(setting)
+    except ValueError:
+        raise WatchRefused("key-malformed") from None
+    plain = {k: v for k, v in arguments.items() if k != ASSERTION_ARG}
+    token = _home_read.set(HomeRead(PROPOSED_RULES_TOOL, arguments_digest(plain), ErpnextCaller("user", email)))
+    try:
+        yield
+    finally:
+        _home_read.reset(token)
+
+
+def home_read() -> HomeRead | None:
+    """Home's read being made (``proposed_rules_as``), or None."""
+    return _home_read.get()
+
+
+def home_read_for(tool: str, arguments: dict[str, Any]) -> HomeRead | None:
+    """Home's read marker covering exactly this call, or None."""
+    call = _home_read.get()
     if call is None or call.tool != tool or call.digest != arguments_digest(arguments):
         return None
     return call

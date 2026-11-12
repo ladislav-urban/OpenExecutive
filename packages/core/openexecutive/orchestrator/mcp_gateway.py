@@ -987,7 +987,59 @@ def _only_proposal_marker() -> bool:
         and not erpnext_caller.in_answer_check_run()
         and not erpnext_caller.in_supplier_run()
         and not erpnext_caller.draft_marker_set()
+        and erpnext_caller.home_read() is None
     )
+
+
+def _home_reads(normalized: str) -> bool:
+    """Whether this withheld tool is Home's own read of it
+    (``erpnext_caller.proposed_rules_as``): exactly this tool bound, with no
+    turn and no other marker. Its arguments are checked by
+    ``_check_home_read``."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    reading = erpnext_caller.home_read()
+    return (
+        reading is not None
+        and reading.tool == normalized
+        and current_session.get() is None
+        and erpnext_caller.proposal_call() is None
+        and erpnext_caller.watch_call() is None
+        and not erpnext_caller.in_brief_run()
+        and not erpnext_caller.in_oversight_run()
+        and not erpnext_caller.in_answer_check_run()
+        and not erpnext_caller.in_supplier_run()
+        and not erpnext_caller.draft_marker_set()
+    )
+
+
+def _check_home_read(
+    tool_name: str, normalized: str, arguments: dict[str, Any]
+) -> tuple[str | None, ErpnextCaller | None]:
+    """Who Home's read runs as: only inside its marker for exactly this tool
+    and these arguments, as the person the marker names. Every turn, job and
+    other path is refused."""
+    plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
+    marker = erpnext_caller.home_read_for(normalized, plain)
+    refusal = "it lists what waits for a person on their Home, and only Home reads it. Do not retry."
+    if marker is None or not _home_reads(normalized):
+        return _refuse_erpnext_call(tool_name, "home-read-outside-home", refusal), None
+    setting = erpnext_caller.signing_setting()
+    if not setting:
+        return _refuse_erpnext_call(
+            tool_name, "home-read-needs-keys",
+            "ERPNext's proposed rules need per-person access (ERPNEXT_CALLER_PRIVATE_KEY).",
+        ), None
+    try:
+        load_private_key(setting)
+    except ValueError:
+        logger.error("ERPNEXT_CALLER_PRIVATE_KEY is malformed; refusing every ERPNext call")
+        return _refuse_erpnext_call(
+            tool_name, "key-malformed",
+            "ERPNext's caller key is misconfigured on this install. Tell the "
+            "user an operator needs to fix ERPNEXT_CALLER_PRIVATE_KEY.",
+        ), None
+    return None, marker.caller
 
 
 def _job_proposes(normalized: str) -> bool:
@@ -4568,6 +4620,13 @@ class MCPGateway:
                 str(tool_name)[:200], "outside-proposal",
                 "a watch job's proposal makes only the one call its runner set up. Do not retry.",
             )
+        # And Home's read: its one tool and nothing else.
+        home = erpnext_caller.home_read()
+        if home is not None and normalized != home.tool:
+            return _refuse_erpnext_call(
+                str(tool_name)[:200], "outside-home-read",
+                "Home's read makes only the one call its code set up. Do not retry.",
+            )
         # Files saved from someone's own mail are theirs alone, and their
         # folder is no model's to name (see `_saved_files_hidden`). The save's
         # own code-built calls are the one exception.
@@ -4607,7 +4666,7 @@ class MCPGateway:
             # refused on every path but its own job's read
             # (_job_reads_withheld).
             if normalized in ERPNEXT_WITHHELD_TOOLS and not (
-                _job_reads_withheld(normalized) or _job_proposes(normalized)
+                _job_reads_withheld(normalized) or _job_proposes(normalized) or _home_reads(normalized)
             ):
                 return _refuse_erpnext_call(
                     tool_name, "withheld",
@@ -4642,6 +4701,8 @@ class MCPGateway:
                 )
             if normalized in erpnext_caller.ERPNEXT_PROPOSAL_TOOLS:
                 blocked, erp_caller = _check_erpnext_proposal(tool_name, normalized, arguments)
+            elif normalized == erpnext_caller.PROPOSED_RULES_TOOL:
+                blocked, erp_caller = _check_home_read(tool_name, normalized, arguments)
             elif erpnext_caller.is_erpnext_write(normalized):
                 blocked, erp_caller = _check_erpnext_draft(tool_name, normalized, arguments)
                 erp_purpose = erpnext_caller.PURPOSE_DRAFT

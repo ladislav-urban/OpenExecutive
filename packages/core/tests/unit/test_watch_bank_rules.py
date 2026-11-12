@@ -416,3 +416,127 @@ def test_a_shorter_chain_than_last_seen_tells_the_principal(
         assert shown[0].routed_to_person_id == team.principal
         assert f"(row 41, now {head['index']})" in shown[0].body
         assert "oe-connector-verify-drafts" in shown[0].body
+
+
+# --------------------------------------------------------------------------- #
+# Home's "Needs you": proposed_rules, read from code as the principal
+# --------------------------------------------------------------------------- #
+
+
+def _waiting(*items: dict[str, Any]) -> str:
+    return json.dumps({"company": None, "proposed_rules": list(items), "truncated": False})
+
+
+RULE_ITEM: dict[str, Any] = {
+    "name": "OE-RULE-0001", "kind": "Bank Transaction Rule", "company": "Acme", "status": "Proposed",
+    "proposed": "2026-11-10 10:31:02.123456", "proposed_by": "bank-rules",
+    "rule": {"account": "Bank Charges - AC", "transaction_type": "Withdrawal",
+             "description_contains": [{"check": "Contains", "value": "servicefee"}],
+             "min_amount": 2.5, "max_amount": 18.0},
+    "evidence": {"lines": 6, "misses": 0, "window": {"from": "2025-11-10", "to": DAY}},
+    "route": ["Form", "OE Proposed Rule", "OE-RULE-0001"],
+    "url": "https://erp.example/app/oe-proposed-rule/OE-RULE-0001",
+}
+
+
+@pytest.fixture
+def home(erp: FakeErpnext, roster: SimpleNamespace, signing: None) -> SimpleNamespace:
+    from openexecutive.integrations import erpnext_rule_proposals
+
+    erpnext_rule_proposals._reset_for_tests()
+    yield roster
+    erpnext_rule_proposals._reset_for_tests()
+
+
+def test_home_reads_the_waiting_proposals_as_the_principal(erp: FakeErpnext, home: SimpleNamespace) -> None:
+    from openexecutive.api.routes.erpnext_drafts import _waiting_rules
+    from openexecutive.integrations import erpnext_rule_proposals as rp
+    from openexecutive.people.store import get_person
+
+    principal = get_person(home.principal)
+    assert _waiting_rules(principal) == 0
+    erp.replies.append(_waiting(RULE_ITEM))
+    [rule] = asyncio.run(rp.waiting(principal, now=1000.0))
+    assert (rule.name, rule.account, rule.word, rule.transaction_type, rule.lines, rule.misses) == (
+        "OE-RULE-0001", "Bank Charges - AC", "servicefee", "Withdrawal", 6, 0)
+    assert rule.url == RULE_ITEM["url"] and rule.proposed == "2026-11-10T10:31:02"
+    [(name, sent)] = erp.calls
+    assert name == PROPOSED and _plain(sent) == {}
+    claims = erp.claims(0)
+    assert (claims["kind"], claims["sub"]) == ("user", OWNER)
+    # The count is the last read, with no ERPNext call; a fresh read waits FRESH_S.
+    assert _waiting_rules(principal) == 1
+    asyncio.run(rp.waiting(principal, now=1000.0 + rp.FRESH_S - 1))
+    assert len(erp.calls) == 1
+    erp.replies.append(_waiting())
+    assert asyncio.run(rp.waiting(principal, now=1000.0 + rp.FRESH_S + 1)) == ()
+    assert _waiting_rules(principal) == 0
+
+
+def test_a_teammate_never_reads_them_and_a_refusal_is_none(erp: FakeErpnext, home: SimpleNamespace) -> None:
+    from openexecutive.integrations import erpnext_rule_proposals as rp
+    from openexecutive.people.store import get_person
+
+    assert asyncio.run(rp.waiting(get_person(home.teammate))) == ()
+    assert erp.calls == []
+    with pytest.raises(erpnext_caller.WatchRefused, match="home-read-not-principal"), \
+            erpnext_caller.proposed_rules_as({}, get_person(home.teammate)):
+        pass
+    # oe_connector answers only a System Manager.
+    erp.replies.append(_refused("only a System Manager sees the proposed rules."))
+    assert asyncio.run(rp.waiting(get_person(home.principal))) == ()
+
+
+def test_only_oe_connectors_own_shape_is_shown() -> None:
+    from openexecutive.integrations import erpnext_rule_proposals as rp
+
+    rule = RULE_ITEM["rule"]
+    bad = [
+        {**RULE_ITEM, "status": "Enabled"},
+        {**RULE_ITEM, "kind": "Assignment Rule"},
+        {**RULE_ITEM, "name": "OE\nRULE"},
+        {**RULE_ITEM, "rule": {**rule, "description_contains": [{"check": "Contains", "value": "<b>fee</b>"}]}},
+        {**RULE_ITEM, "rule": {**rule, "description_contains": [{"check": "Regex", "value": "servicefee"}] * 2}},
+        {**RULE_ITEM, "rule": {**rule, "transaction_type": "Transfer"}},
+        "OE-RULE-0002",
+    ]
+    assert rp.parse(json.loads(_waiting(*bad))) == ()
+    [kept] = rp.parse(json.loads(_waiting({**RULE_ITEM, "url": "javascript:alert(1)", "proposed": "soon"})))
+    assert kept.url == "" and kept.proposed == ""
+    assert len(rp.parse({"proposed_rules": [RULE_ITEM] * 80})) == rp.MAX_ITEMS
+
+
+def test_under_homes_marker_only_its_one_read_goes_through(erp: FakeErpnext, home: SimpleNamespace) -> None:
+    from openexecutive.people.store import get_person
+
+    gateway = mcp_gateway.get_active_gateway()
+    assert gateway is not None
+
+    async def go(tool: str, args: dict[str, Any]) -> str:
+        with erpnext_caller.proposed_rules_as({}, get_person(home.principal)):
+            return await gateway.call_tool({"name": tool, "arguments": args})
+
+    for tool, args in ((PROPOSED, {"company": "Acme"}), ("erpnext__run_report", {"report_name": "x"}),
+                       (PROPOSE_RULE_TOOL, {"company": "Acme", "kind": bank_rules.KIND, "rule": bank_rules._candidate(FEE)})):
+        assert "error" in json.loads(asyncio.run(go(tool, args))), tool
+    assert erp.calls == []
+
+
+def test_the_route_lists_them_for_the_principal_alone(
+    erp: FakeErpnext, home: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from openexecutive.api.routes import erpnext_drafts as drafts_route
+
+    for var in ("OE_LOCAL_LOGIN", "OE_PUBLIC_DEPLOYMENT"):
+        monkeypatch.delenv(var, raising=False)
+    app = FastAPI()
+    app.include_router(drafts_route.router)
+    client = TestClient(app)
+    erp.replies.append(_waiting(RULE_ITEM))
+    shown = client.get("/erpnext/proposed-rules", headers={"x-caller-email": OWNER}).json()["rules"]
+    assert [r["name"] for r in shown] == ["OE-RULE-0001"] and shown[0]["word"] == "servicefee"
+    assert client.get("/erpnext/proposed-rules", headers={"x-caller-email": TEAM}).json() == {"rules": []}
+    assert len(erp.calls) == 1
