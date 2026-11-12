@@ -116,7 +116,9 @@ def _report(rows: list[dict[str, Any]], acting: Any = ACTING, **extra: Any) -> s
 
 
 def _reads(erp: FakeErpnext, **kw: Any) -> None:
-    erp.replies.extend([kw.get("orders", _list(ORDERS)), kw.get("record", _report(RECORD))])
+    erp.replies.extend([
+        kw.get("orders", _list(ORDERS)), kw.get("to_receive", _list([])), kw.get("record", _report(RECORD)),
+    ])
 
 
 def _checked(fields: dict[str, Any]) -> str:
@@ -129,8 +131,10 @@ def _checked(fields: dict[str, Any]) -> str:
 
 
 def _results(orders: list[dict[str, Any]] = ORDERS, record: list[dict[str, Any]] = RECORD,
-             **extra: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+             **extra: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    # Read 1a (To Receive and Bill), read 1b (To Receive), read 2.
     return ({"rows": orders, "truncated": extra.get("orders_cut", False)},
+            {"rows": extra.get("to_receive", []), "truncated": extra.get("to_receive_cut", False)},
             {"rows": record, "truncated": extra.get("record_cut", False)})
 
 
@@ -195,7 +199,7 @@ def _auto_checks(erp: FakeErpnext) -> None:
 def _one_card_run(erp: FakeErpnext, day: str = DAY, assignee: str = REVIEWER) -> runner.RunOutcome:
     """A run over PO-3 alone (late since two days before ``DAY``)."""
     rows = ORDERS[3:5]
-    erp.replies.extend([_list(rows), _report([])])
+    erp.replies.extend([_list(rows), _list([]), _report([])])
     built = ld.build(_results(rows, []), SETTINGS, date.fromisoformat(day), assignee=assignee)
     erp.replies.extend(_checks_for(built))
     return _run(day)
@@ -212,7 +216,8 @@ def test_late_deliveries_is_listed_each_weekday_morning_with_its_shared_reads() 
     assert listed["id"] == JOB.id and listed["as_job_user"] is True
     assert "late-deliveries" in VECTORS["phase1_jobs"]
     assert [{"tool": r.tool, **r.shape} for r in JOB.reads] == listed["reads"]
-    assert [r.tool for r in JOB.reads] == ["list_records", "run_report"]
+    assert [r.tool for r in JOB.reads] == ["list_records", "list_records", "run_report"]
+    assert [r.shape["filters"].get("status") for r in JOB.reads] == ["To Receive and Bill", "To Receive", None]
     for read in JOB.reads:
         assert registry.shape_problem(read.shape) == ""
     assert (JOB.schedule, JOB.slots, JOB.weekdays) == (time(7, 15), (), frozenset(range(5)))
@@ -227,13 +232,17 @@ def test_late_deliveries_is_listed_each_weekday_morning_with_its_shared_reads() 
 
 
 def test_no_read_lists_a_list_inside_a_list_or_a_sensitive_field() -> None:
-    orders, record = JOB.reads
+    billed, receive, record = JOB.reads
     for read in JOB.reads:
         filters = read.shape["filters"]
         assert not any(isinstance(e, list) for v in filters.values() if isinstance(v, list) for e in v)
-    assert orders.shape["doctype"] == "Purchase Order" and record.shape["report_name"] == "Supplier Delivery Record"
-    assert "status" not in orders.shape["filters"]
-    assert not {"owner", "contact_person", "contact_email", "terms", "items.rate"} & set(orders.shape["fields"])
+    assert record.shape["report_name"] == "Supplier Delivery Record"
+    for orders in (billed, receive):
+        assert orders.shape["doctype"] == "Purchase Order"
+        assert isinstance(orders.shape["filters"]["status"], str)
+        assert not {"owner", "contact_person", "contact_email", "terms", "items.rate"} & set(orders.shape["fields"])
+    assert {k: v for k, v in billed.shape.items() if k != "filters"} == {
+        k: v for k, v in receive.shape.items() if k != "filters"}
     assert "supplier" not in record.shape["filters"]
 
 
@@ -241,8 +250,13 @@ def test_read_one_is_every_open_order_due_before_today() -> None:
     args = ld._orders(SETTINGS, TODAY)
     assert isinstance(args, dict)
     assert registry.shape_mismatch(ld.ORDERS_SHAPE, args, TODAY) == ""
-    assert args["filters"] == {"company": "Acme", "docstatus": 1, "per_received": ["<", 100],
-                               "schedule_date": ["<", DAY]}
+    assert registry.shape_mismatch(ld.TO_RECEIVE_SHAPE, args, TODAY)
+    other = ld._to_receive(SETTINGS, TODAY)
+    assert isinstance(other, dict) and other["filters"]["status"] == "To Receive"
+    assert registry.shape_mismatch(ld.TO_RECEIVE_SHAPE, other, TODAY) == ""
+    assert {k: v for k, v in other.items() if k != "filters"} == {k: v for k, v in args.items() if k != "filters"}
+    assert args["filters"] == {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill",
+                               "per_received": ["<", 100], "schedule_date": ["<", DAY]}
     assert args["limit"] == ld.READ_LIMIT
     # Every listed field but the order's own schedule_date: a subset, which
     # the shape's top-level fields allow, so a bare schedule_date is a line's.
@@ -281,13 +295,13 @@ def test_long_erpnext_text_is_capped_before_any_cleaning() -> None:
 
 
 def test_read_two_is_the_years_record_and_skipped_when_nothing_is_late() -> None:
-    args = ld._record(SETTINGS, TODAY, ({"rows": ORDERS},))
+    args = ld._record(SETTINGS, TODAY, ({"rows": []}, {"rows": ORDERS}))
     assert isinstance(args, dict)
     assert registry.shape_mismatch(ld.RECORD_SHAPE, args, TODAY) == ""
     assert args == {"report_name": "Supplier Delivery Record",
                     "filters": {"company": "Acme", "from_date": _in(-365), "to_date": DAY}}
     # Nothing counts (only PO-4, a day late): skipped, never sent.
-    assert ld._record(SETTINGS, TODAY, ({"rows": [ORDERS[5]]},)) is None
+    assert ld._record(SETTINGS, TODAY, ({"rows": [ORDERS[5]]}, {"rows": []})) is None
     assert ld._record(SETTINGS, TODAY, ()) is None
 
 
@@ -549,16 +563,17 @@ def test_a_run_leaves_the_notice_and_a_todo_per_order_for_the_reviewer(
     outcome = _run()
     assert (outcome.status, outcome.routed, outcome.draft_cards, outcome.checks) == ("done", "reviewer", 4, 4)
     tools = [name for name, _sent in erp.calls]
-    assert tools == ["erpnext__list_records", "erpnext__run_report"] + ["erpnext__draft_check"] * 4
-    for index in range(2):
+    assert tools == ["erpnext__list_records"] * 2 + ["erpnext__run_report"] + ["erpnext__draft_check"] * 4
+    assert [erp.calls[i][1]["filters"]["status"] for i in range(2)] == ["To Receive and Bill", "To Receive"]
+    for index in range(3):
         claims = erp.claims(index)
         assert (claims["kind"], claims["sub"]) == ("watch", "late-deliveries")
-    sent = {k: v for k, v in erp.calls[1][1].items() if k != ASSERTION_ARG}
+    sent = {k: v for k, v in erp.calls[2][1].items() if k != ASSERTION_ARG}
     assert sent == {"report_name": "Supplier Delivery Record",
                     "filters": {"company": "Acme", "from_date": _in(-365), "to_date": DAY}}
-    check = {k: v for k, v in erp.calls[2][1].items() if k != ASSERTION_ARG}
+    check = {k: v for k, v in erp.calls[3][1].items() if k != ASSERTION_ARG}
     assert check == {"operation": "create", "doctype": "ToDo", "fields": dict(expected[0].fields)}
-    assert (erp.claims(2)["sub"], erp.claims(2)["purpose"]) == (REVIEWER, "draft")
+    assert (erp.claims(3)["sub"], erp.claims(3)["purpose"]) == (REVIEWER, "draft")
     made = sorted(_job_cards(), key=lambda c: c.id)
     assert [drafts._payload(c)["fields"]["reference_name"] for c in made] == ["PO-1", "PO-2", "PO-3", "PO-9"]
     payload = drafts._payload(made[0])
@@ -576,10 +591,10 @@ def test_a_run_leaves_the_notice_and_a_todo_per_order_for_the_reviewer(
 def test_nothing_late_reads_once_and_leaves_nothing(
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
 ) -> None:
-    erp.replies.append(_list([ORDERS[5]]))
+    erp.replies.extend([_list([ORDERS[5]]), _list([])])
     outcome = _run()
     assert (outcome.status, outcome.draft_cards) == ("done", 0)
-    assert [name for name, _sent in erp.calls] == ["erpnext__list_records"]
+    assert [name for name, _sent in erp.calls] == ["erpnext__list_records"] * 2
     assert _alerts() == [] and _job_cards() == []
 
 
@@ -601,7 +616,7 @@ def test_the_next_day_tells_nothing_again_and_next_week_raises_it_once_more(
     erp.replies.append(_checked(dict(po4.fields)))
     outcome = _run(NEXT_DAY)
     assert (outcome.status, outcome.draft_cards, outcome.checks, outcome.draft_repeats) == ("done", 1, 1, 4)
-    assert len(erp.calls) == calls + 3
+    assert len(erp.calls) == calls + 4
     [_first, second] = sorted(_alerts(), key=lambda a: a.id)
     assert "PO-4" in second.body and "PO-1" not in second.body
     for card in _job_cards():
@@ -624,7 +639,7 @@ def test_an_earlier_weeks_waiting_card_holds_the_order_from_a_second(
     [card] = _job_cards()
     found = ld.candidates({"rows": ORDERS[3:5]}, SETTINGS, date.fromisoformat(monday))
     assert ld.on_earlier_card(found) == {"PO-3"}
-    erp.replies.extend([_list(ORDERS[3:5]), _report([])])
+    erp.replies.extend([_list(ORDERS[3:5]), _list([]), _report([])])
     outcome = _run(monday)
     assert (outcome.draft_cards, outcome.checks) == (0, 0)
     assert len(_job_cards()) == 1
@@ -664,7 +679,7 @@ def test_an_order_erpnext_keeps_from_the_reviewer_is_told_to_the_principal_only(
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
 ) -> None:
     rows = [ORDERS[0], *ORDERS[3:5]]
-    erp.replies.extend([_list(rows), _report(RECORD)])
+    erp.replies.extend([_list(rows), _list([]), _report(RECORD)])
     specs = _cards_of(ld.build(_results(rows), SETTINGS, TODAY, assignee=REVIEWER))
     assert [s.fields["reference_name"] for s in specs] == ["PO-1", "PO-3"]
     erp.replies.append(json.dumps({"error": "You are not permitted to read Purchase Order PO-1."}))
@@ -678,7 +693,7 @@ def test_an_order_erpnext_keeps_from_the_reviewer_is_told_to_the_principal_only(
     assert len(theirs) == 1 and "PO-1" in theirs[0].body and ld.KEPT_LINE in theirs[0].body
     assert "not permitted" not in theirs[0].body
     # Told once that week: the next run tells neither again.
-    erp.replies.extend([_list(rows), _report(RECORD)])
+    erp.replies.extend([_list(rows), _list([]), _report(RECORD)])
     erp.replies.append(json.dumps({"error": "You are not permitted to read Purchase Order PO-1."}))
     _run(NEXT_DAY)
     assert len(_alerts()) == 2
@@ -711,7 +726,7 @@ def test_an_approved_card_is_never_left_again_that_week(
     fresh = get_decision_instance(card.id)
     assert fresh is not None
     asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
-    erp.replies.extend([_list(ORDERS[3:5]), _report([])])
+    erp.replies.extend([_list(ORDERS[3:5]), _list([]), _report([])])
     second = _run(NEXT_DAY)
     assert (second.draft_cards, second.checks, second.draft_repeats) == (0, 0, 1)
 
@@ -801,7 +816,7 @@ def test_thirty_late_orders_each_get_a_card_before_any_gets_a_second(
     days = ["2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-16", "2026-11-17", "2026-11-18"]
     order: list[str] = []
     for day in days:
-        erp.replies.extend([_list(thirty), _report([])])
+        erp.replies.extend([_list(thirty), _list([]), _report([])])
         before = {c.id for c in _job_cards()}
         assert _run(day).draft_cards == 5, day
         new = sorted((c for c in _job_cards() if c.id not in before), key=lambda c: c.id)
@@ -815,3 +830,38 @@ def test_thirty_late_orders_each_get_a_card_before_any_gets_a_second(
     # come first, then the longest-ago carded.
     assert order[20:30] == [f"PO-{i:02d}" for i in range(20, 30)]
     assert again == order[:5]
+
+
+def test_the_two_open_statuses_merge_and_a_cut_list_holds_back_only_its_own_orders() -> None:
+    receive = [_line("PO-R", "Kepler", "K", 2.0, 0.0, -6, status="To Receive")]
+    specs = _specs(to_receive=receive)
+    assert [c.fields["reference_name"] for c in _cards_of(specs)] == ["PO-1", "PO-R", "PO-2", "PO-3", "PO-9"]
+    # 1b cut while 1a isn't: 1a's orders still get their cards, 1b's don't.
+    specs = _specs(to_receive=receive, to_receive_cut=True)
+    assert [c.fields["reference_name"] for c in _cards_of(specs)] == ["PO-1", "PO-2", "PO-3", "PO-9"]
+    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    assert ld.ORDERS_CUT_LINE in notice.notes and "PO-R" in [dict(i.values)["Order"] for i in notice.items]
+    # 1a cut: its orders get none, 1b's do.
+    specs = _specs(to_receive=receive, orders_cut=True)
+    assert [c.fields["reference_name"] for c in _cards_of(specs)] == ["PO-R"]
+    # An order in both (its status changed between the calls) counts its lines once.
+    twice = _specs(orders=ORDERS[3:5], to_receive=[{**ORDERS[3], "status": "To Receive"}])
+    [notice] = [s for s in twice if isinstance(s, CardSpec)]
+    assert dict(notice.items[0].values)["Missing"] == "80 of DEMO-RLY-24; 10 of DEMO-ENC-64"
+
+
+def test_closed_lines_past_five_hundred_no_longer_hold_back_the_tasks(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _auto_checks(erp)
+    # 600 Closed short-received lines are never asked for: each read names
+    # its open status, so ERPNext returns only those orders, not cut.
+    closed = [_line(f"PO-C{i:03d}", "Vanta", "A", 4.0, 0.0, -10, status="Closed") for i in range(600)]
+    open_rows = ORDERS[3:5]
+    erp.replies.extend([_list(open_rows), _list([]), _report([])])
+    outcome = _run()
+    assert outcome.draft_cards == 1
+    for index in range(2):
+        assert erp.calls[index][1]["filters"]["status"] in ("To Receive and Bill", "To Receive")
+    # And were Closed lines returned anyway, the code still drops them.
+    assert ld.candidates({"rows": closed}, SETTINGS, TODAY) == []

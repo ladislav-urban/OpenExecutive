@@ -12325,21 +12325,26 @@ watch:
     (YYYY-Www), so an order is raised once a week while late; no
     reason_schema (no model call); card_noun "chase tasks"; settings
     company, min_days_late 2 (1-60), assign_to "" (an ERPNext user;
-    empty: the reviewer), skip_suppliers [] (0-50 names). Two reads (in
+    empty: the reviewer), skip_suppliers [] (0-50 names). Three reads (in
     watch_job_vectors.json with shape cases, and the shared
     watch_shape_vectors.json cases, matching oe_connector's
     watch_shape_vectors and watch_users.JOB_ACCESS["late-deliveries"]:
     read Purchase Order, Purchase Receipt, Supplier, Company; report
-    Supplier Delivery Record): list_records Purchase Order (name,
+    Supplier Delivery Record): reads 1a and 1b, list_records Purchase Order (name,
     supplier, status, transaction_date, schedule_date, per_received,
     grand_total, currency, items.item_code, items.qty,
     items.received_qty, items.schedule_date) with {company, docstatus 1,
-    per_received ["<", 100], schedule_date ["<", today]}, limit 500, a
-    row per order and line; run_report Supplier Delivery Record with
+    status "To Receive and Bill" (1a) or "To Receive" (1b), per_received
+    ["<", 100], schedule_date ["<", today]}, limit 500 each, a row per
+    order and line (one read of every status filled its 500 rows with
+    Closed and On Hold orders' unreceived lines and stopped every card);
+    merged in code by merged(): an order in both keeps 1a's rows, and the
+    orders read from a truncated list get no card (the other list's
+    still do); run_report Supplier Delivery Record with
     {company, from_date today - 365, to_date today}, no limit (the
     tool's default), derived and skipped when no order counts. No list
-    in a list: Closed, On Hold and Completed are dropped in code from
-    status. Read 1's call asks CALL_FIELDS, the shape's fields less the
+    in a list, so no status list: Closed, On Hold and Completed are
+    still dropped in code from status, as a belt. Read 1's call asks CALL_FIELDS, the shape's fields less the
     header's schedule_date (a subset, which the shape's top-level fields
     allow): frappe's child-field select keeps the bare column name, so
     asking both made the line's date win only by column order; now a
@@ -12363,15 +12368,15 @@ watch:
     po:<name>:<week> with supplier, order, days late, due, missing (3
     lines, then a count), value, status, record; count the new ones;
     notes for more than 10, read 1 cut, record cut); a DraftSpec ToDo
-    create per late order (fields description from TEMPLATE with the
+    create per late order not from a cut list (fields description from TEMPLATE with the
     supplier and the first late line's item through settled (runner.clean
     until stable, 140), allocated_to assign_to or the reviewer's
     normalized email (late_deliveries.assignee, read again at check),
     priority High when days > 7 else Medium, date today, reference_type
     Purchase Order, reference_name; expect reference "Purchase Order
     <name>" and the description; notice its row with KEPT_LINE, told
-    only when ERPNext kept it from the reviewer). No DraftSpec when read
-    1 was truncated, for a description fits_template refuses (the same
+    only when ERPNext kept it from the reviewer). No DraftSpec for an order
+    from a truncated read 1a or 1b, for a description fits_template refuses (the same
     gate check_fields applies: a name not nameable, an item code holding
     the template's words so the order's place is misread, a quantity past
     10 digits; the notice then carries UNTASKED_LINE), or for

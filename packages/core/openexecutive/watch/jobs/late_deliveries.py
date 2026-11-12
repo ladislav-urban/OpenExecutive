@@ -4,18 +4,22 @@ for the buyer.
 
 Each weekday at 07:15 company time it reads:
 
-1. **every submitted Purchase Order not fully received and due before
-   today** (``list_records``, ``per_received < 100``, ``schedule_date <
-   today``), with its lines' item, quantity, received quantity and date
-   (``items.*``: a row per order and line). A shape holds no list of
-   statuses, so code drops Closed, On Hold and Completed orders. The call
-   leaves out the order's own ``schedule_date`` (a call may ask fewer
-   fields than its shape lists): ERPNext returns a line's field under its
-   bare name, so a bare ``schedule_date`` is then only ever the line's;
+1. **every submitted Purchase Order still to receive, not fully received
+   and due before today** (``list_records``, ``per_received < 100``,
+   ``schedule_date < today``), with its lines' item, quantity, received
+   quantity and date (``items.*``: a row per order and line), in two reads
+   of one fixed status each: 1a "To Receive and Bill", 1b "To Receive". A
+   shape holds no list of statuses, and one read of every status filled
+   its 500 rows with Closed and On Hold orders' unreceived lines, so code
+   merges the two (and still drops Closed, On Hold and Completed, should
+   one come back). Each call leaves out the order's own ``schedule_date``
+   (a call may ask fewer fields than its shape lists): ERPNext returns a
+   line's field under its bare name, so a bare ``schedule_date`` is then
+   only ever the line's;
 2. **the suppliers' delivery record** over the last 12 months
    (``run_report`` Supplier Delivery Record, one row per supplier: lines
-   received, lines late, average days late). Derived from read 1 and
-   skipped when no order counts. The report takes one optional supplier,
+   received, lines late, average days late). Derived from reads 1a and 1b
+   and skipped when no order counts. The report takes one optional supplier,
    never a list, so it's one call for all.
 
 Neither reads Contact, a supplier's bank details or a person's hours.
@@ -43,8 +47,8 @@ What it leaves:
   the job's ``assign_to`` (an ERPNext user), else the reviewer; on the
   order; dated today; High when more than a week late, else Medium; its
   description a chase note from code's template only (``description``),
-  which the buyer sends from their own mail. No card when read 1 was cut
-  (an order's lines may be short), nor while an earlier week's card for
+  which the buyer sends from their own mail. No card for an order read
+  from a list that was cut (its lines may be short), nor while an earlier week's card for
   the same order still waits, nor when the order's name or an item's
   doesn't fit the template (the notice says so).
 
@@ -91,12 +95,24 @@ ORDER_FIELDS = [
 CALL_FIELDS = [f for f in ORDER_FIELDS if f != "schedule_date"]
 # Its reads' entries in oe_connector_watch_jobs, as oe_connector lists them
 # (tests/unit/watch_job_vectors.json pins them).
-ORDERS_SHAPE: Mapping[str, Any] = {
-    "doctype": ORDER,
-    "fields": ORDER_FIELDS,
-    "filters": {"company": "$company", "docstatus": 1, "per_received": ["<", 100], "schedule_date": ["<", "$date"]},
-    "limit": "$int",
-}
+# The open statuses read 1 reads, one fixed status a read (1a, 1b).
+TO_RECEIVE_AND_BILL, TO_RECEIVE = "To Receive and Bill", "To Receive"
+
+
+def _orders_shape(status: str) -> Mapping[str, Any]:
+    return {
+        "doctype": ORDER,
+        "fields": ORDER_FIELDS,
+        "filters": {
+            "company": "$company", "docstatus": 1, "status": status, "per_received": ["<", 100],
+            "schedule_date": ["<", "$date"],
+        },
+        "limit": "$int",
+    }
+
+
+ORDERS_SHAPE = _orders_shape(TO_RECEIVE_AND_BILL)
+TO_RECEIVE_SHAPE = _orders_shape(TO_RECEIVE)
 RECORD_SHAPE: Mapping[str, Any] = {
     "report_name": REPORT,
     "filters": {"company": "$company", "from_date": "$date", "to_date": "$date"},
@@ -142,7 +158,7 @@ KEPT_LINE = (
 )
 ORDERS_CUT_LINE = (
     "Not every order line could be read this run, so some late orders may be missing or shown short; "
-    "no tasks were prepared."
+    "no tasks were prepared for orders from the list that was cut."
 )
 RECORD_CUT_LINE = "Not every supplier's delivery record could be read this run; those are shown as not read."
 MORE_LINE = "{n} more late orders; the first {shown} are shown."
@@ -303,22 +319,46 @@ def ranked(found: Sequence[Late], carded: Mapping[str, int]) -> list[Late]:
 # --------------------------------------------------------------------------- #
 
 
-def _orders(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
-    return {
-        "doctype": ORDER,
-        "fields": list(CALL_FIELDS),
-        "filters": {
-            "company": settings["company"],
-            "docstatus": 1,
-            "per_received": ["<", 100],
-            "schedule_date": ["<", today.isoformat()],
-        },
-        "limit": READ_LIMIT,
-    }
+def _orders_of(status: str) -> Any:
+    def arguments(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
+        return {
+            "doctype": ORDER,
+            "fields": list(CALL_FIELDS),
+            "filters": {
+                "company": settings["company"],
+                "docstatus": 1,
+                "status": status,
+                "per_received": ["<", 100],
+                "schedule_date": ["<", today.isoformat()],
+            },
+            "limit": READ_LIMIT,
+        }
+
+    return arguments
+
+
+_orders = _orders_of(TO_RECEIVE_AND_BILL)
+_to_receive = _orders_of(TO_RECEIVE)
+
+
+def merged(first: Mapping[str, Any], second: Mapping[str, Any]) -> tuple[dict[str, Any], set[str]]:
+    """Reads 1a and 1b as one result, and the orders read from a list that
+    was cut (their lines may be short). An order in both (its status changed
+    between the calls) keeps 1a's rows only, so no line counts twice."""
+    rows_a, rows_b = _rows(first, required=True), _rows(second, required=True)
+    seen = {_name(r.get("name")) for r in rows_a}
+    rows = [*rows_a, *(r for r in rows_b if _name(r.get("name")) not in seen)]
+    cut: set[str] = set()
+    for result, part in ((first, rows_a), (second, rows_b)):
+        if result.get("truncated") is True:
+            cut |= {_name(r.get("name")) for r in part}
+    cut.discard("")
+    truncated = first.get("truncated") is True or second.get("truncated") is True
+    return {"rows": rows, "truncated": truncated}, cut
 
 
 def _record(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
-    if not prior or not candidates(prior[0], settings, today):
+    if len(prior) < 2 or not candidates(merged(prior[0], prior[1])[0], settings, today):
         return None
     return {
         "report_name": REPORT,
@@ -466,7 +506,8 @@ def build(
     else the reviewer's ERPNext user); ``on_card``: orders an earlier week's
     card still waits for (no second card); ``carded``: each order's latest
     earlier week's card (``ranked``)."""
-    orders_result, record_result = reads
+    first, second, record_result = reads
+    orders_result, cut = merged(first, second)
     found = ranked(candidates(orders_result, settings, today), carded or {})
     if not found:
         return []
@@ -482,10 +523,10 @@ def build(
 
     drafts: list[DraftSpec] = []
     untasked: set[str] = set()
-    # An order's lines may be short when read 1 was cut: no chase note then.
-    for late in () if orders_cut else found:
+    for late in found:
         name = late.order.name
-        if name in on_card:
+        # An order from a cut list may have lines short: no chase note then.
+        if name in on_card or name in cut:
             continue
         text = description(late, record(late))
         if not fits_template(text, name):
@@ -598,7 +639,7 @@ def _build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) 
     the ToDos are for, and the orders' earlier cards (``card_history``)."""
     from openexecutive.watch.runner import told
 
-    found = candidates(reads[0], settings, today)
+    found = candidates(merged(reads[0], reads[1])[0], settings, today)
     if not found:
         return []
     waiting, carded = card_history(found)
@@ -644,7 +685,8 @@ JOB: WatchJob = WatchJob(
     id=JOB_ID,
     title="Late deliveries",
     reads=(
-        WatchRead("list_records", ORDERS_SHAPE, _orders, "the late purchase orders"),
+        WatchRead("list_records", ORDERS_SHAPE, _orders, "the late purchase orders to receive and bill"),
+        WatchRead("list_records", TO_RECEIVE_SHAPE, _to_receive, "the late purchase orders to receive"),
         WatchRead("run_report", RECORD_SHAPE, _record, "the suppliers' delivery record"),
     ),
     build=_build,
