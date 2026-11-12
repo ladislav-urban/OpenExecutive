@@ -17,7 +17,7 @@ import json
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from openexecutive.guide.prebuilt import get_prebuilt
+from openexecutive.guide.prebuilt import get_named
 from openexecutive.guide.sections import GUIDE_SECTIONS, GuideSection
 
 READ_USER_GUIDE = "read_user_guide"
@@ -32,7 +32,7 @@ def section_markdown(section_id: str) -> str | None:
     """The text of one answerable guide section, or None."""
     if section_id not in {s.id for s in answerable_sections()}:
         return None
-    content = get_prebuilt(section_id)
+    content = get_named(section_id)
     markdown = (content or {}).get("markdown")
     return markdown if isinstance(markdown, str) and markdown else None
 

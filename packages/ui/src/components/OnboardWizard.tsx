@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useState } from "react";
 import { PROFILE_COPY } from "@/components/company-profile/profileCopy";
 import { profileWording } from "@/components/shell/navConfig";
@@ -95,7 +96,7 @@ export default function OnboardWizard({ onComplete }: OnboardWizardProps) {
         </div>
         <div>
           <h2 className="text-lg font-semibold text-fg">Profile complete</h2>
-          <p className="text-sm text-fg-muted mt-1">Redirecting you to the Executive...</p>
+          <p className="text-sm text-fg-muted mt-1">Redirecting you to <ProductName />…</p>
         </div>
       </div>
     );

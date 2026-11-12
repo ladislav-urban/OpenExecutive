@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useState } from "react";
 import {
   searchKnowledge,
@@ -79,7 +80,7 @@ export default function QueryPanel({ domains, onOpenFile }: QueryPanelProps) {
     <div className="flex flex-col gap-5 max-w-4xl">
       <div>
         <p className="text-[15px] text-fg-muted">
-          Test what the Executive would retrieve for a given question. Distances are
+          Test what <ProductName /> would retrieve for a given question. Distances are
           cosine — lower is closer.
         </p>
       </div>

@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
 
@@ -62,7 +63,7 @@ const ALL_SCOPES = [
   { value: "customer_credit", label: "Credit", hint: "Receives proposals involving credit or debt." },
   { value: "legal_sign", label: "Legal", hint: "Receives proposals with legal implications." },
   { value: "board_comms", label: "Board", hint: "Receives proposals before board communications." },
-  { value: "meeting_scheduling", label: "Meetings", hint: "Receives meetings the Executive wants to book." },
+  { value: "meeting_scheduling", label: "Meetings", hint: "Receives the meetings it books for you." },
   { value: "wildcard", label: "All (wildcard)", hint: "Receives anything no one else is scoped for — usually the principal." },
 ];
 
@@ -290,7 +291,7 @@ function AddPersonModal({ initialKind, canAddContacts, canBePrincipal, onCreated
     formId: "add_person",
     title: "Add person",
     description:
-      "Adds a human the Executive coordinates with — a team member (can sign in, approve and be chased) or a contact (someone outside the team the Executive emails only when you ask). Authority scopes determine which proposals route to a team member for approval.",
+      "Adds someone you work with — a team member (can sign in, approve and be chased) or a contact (someone outside the team it emails only when you ask). Authority scopes determine which proposals route to a team member for approval.",
     getFields: (): PageFormField[] => [
       { name: "full_name", label: "Full name", type: "text", value: form.full_name, required: true },
       ...(canAddContacts
@@ -473,7 +474,7 @@ function AddPersonModal({ initialKind, canAddContacts, canBePrincipal, onCreated
                   <div className="text-[15px] font-semibold">{k === "team" ? "Team member" : "Contact"}</div>
                   <div className="text-sm leading-snug mt-1 text-fg-muted">
                     {k === "team"
-                      ? "Works with you: can sign in, message the Executive and approve."
+                      ? "Works with you: can sign in, chat and approve."
                       : "Outside the team and private to you: emailed or invited only when you ask."}
                   </div>
                 </button>
@@ -616,13 +617,13 @@ function AddPersonModal({ initialKind, canAddContacts, canBePrincipal, onCreated
 const TAB_COPY: Record<PageTab, { label: string; blurb: string; empty: string; add: string }> = {
   team: {
     label: "Team",
-    blurb: "People who work with you. They can sign in, message the Executive and approve what their authority covers.",
+    blurb: "People who work with you. They can sign in, chat and approve what their authority covers.",
     empty: "No team members yet.",
     add: "Add person",
   },
   contacts: {
     label: "Contacts",
-    blurb: "Clients, contractors and advisors outside the team — private to you. The Executive emails or invites them only when you ask it to; they can't sign in or message it, and nobody else on the team sees them.",
+    blurb: "Clients, contractors and advisors outside the team — private to you. They're emailed or invited only when you ask; they can't sign in or chat, and nobody else on the team sees them.",
     empty: "No contacts yet.",
     add: "Add contact",
   },
@@ -917,7 +918,7 @@ export default function PeoplePage() {
           {hidden > 0 && activeTab === "team" && (
             <p className="text-sm text-fg-muted mt-5">
               {hidden === 1 ? "1 other team member is" : `${hidden} other team members are`} hidden while you
-              use Open Executive just for yourself. Switch to team mode in Settings to see them.
+              use <ProductName /> just for yourself. Switch to team mode in Settings to see them.
             </p>
           )}
           </div>
