@@ -973,6 +973,17 @@ class Settings(BaseSettings):
     erpnext_draft_doctypes: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["ToDo", "Material Request"], alias="ERPNEXT_DRAFT_DOCTYPES"
     )
+    # Phase 0 (S3, integrations/erpnext_changes.py): cards that change an
+    # existing unsubmitted document, and cards that add a comment, for the
+    # DocTypes listed (comma-separated), as oe_connector's
+    # oe_connector_update_doctypes / oe_connector_comment_doctypes list them.
+    # Each is intersected with this app's own allowlist; both empty (off).
+    erpnext_draft_update_doctypes: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="ERPNEXT_DRAFT_UPDATE_DOCTYPES"
+    )
+    erpnext_draft_comment_doctypes: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="ERPNEXT_DRAFT_COMMENT_DOCTYPES"
+    )
     # Phase 4b: a verified teammate may have drafts prepared too, for
     # themselves, in a conversation nobody else reads, as their own ERPNext
     # user (who may read ERPNext as themselves; erpnext_caller.caller_for).
@@ -1060,7 +1071,8 @@ class Settings(BaseSettings):
 
     @field_validator(
         "web_search_allowed_domains", "web_search_blocked_domains",
-        "research_specialists", "workflow_file_dirs", "erpnext_draft_doctypes", mode="before",
+        "research_specialists", "workflow_file_dirs", "erpnext_draft_doctypes",
+        "erpnext_draft_update_doctypes", "erpnext_draft_comment_doctypes", mode="before",
     )
     @classmethod
     def _parse_domain_list(cls, v: Any) -> list[str]:

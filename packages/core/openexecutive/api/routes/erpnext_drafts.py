@@ -77,6 +77,8 @@ class DraftCardOut(BaseModel):
     expires_at: str
     why: str
     doctype: str
+    # "create", "update" or "comment" (integrations.erpnext_changes).
+    operation: str = "create"
     fields: list[DraftFieldOut]
     lines: list[DraftLineOut]
     notes: list[str]
