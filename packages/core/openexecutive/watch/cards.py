@@ -85,7 +85,7 @@ CHECK_CODES = frozenset({
     "job-check-reviewer", "job-check-cap",
     "check_currency", "check_not_whole", "check_reviewer_sod", "check_amount_cap",
     "check_fill_currency", "check_fill_total", "check_fill_sod", "check_fill_assignee", "check_fill_collides",
-    "check_fill_sender",
+    "check_fill_sender", "check_already_open",
 })
 # What a run's notice says of the findings no card was left for, by code,
 # when the code says more than "ERPNext didn't accept them" (``{n}`` how
@@ -113,6 +113,7 @@ CHECK_LINES: dict[str, str] = {
     ),
     "check_fill_collides": "{n} {noun} weren't prepared: the supplier already has an invoice with that number.",
     "check_fill_sender": "{n} {noun} weren't prepared: the ERP can't trust the mail's sender to fill an invoice.",
+    "check_already_open": "{n} {noun} weren't prepared: a task for each is already open in the ERP.",
 }
 
 
@@ -289,7 +290,11 @@ async def _check(
         return "check_failed", {}
     checked = drafts._result(raw)
     if checked.get("ok") is not True:
-        return ("check_permission" if _permission(drafts._refusal_text(raw)) else "check_refused"), {}
+        said = drafts._refusal_text(raw)
+        if spec.doctype == "ToDo" and spec.operation == "create" and drafts.already_open(said):
+            # oe_connector's duplicate-ToDo guard: one is already open.
+            return "check_already_open", {}
+        return ("check_permission" if _permission(said) else "check_refused"), {}
     why = _echo_refusal(spec, fields, checked, email)
     if why is not None:
         return why, {}
@@ -498,7 +503,10 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
             ):
                 held.add(key)
         elif card.status in _HELD_STATUSES or (
-            card.status == STATUS_FAILED and final.get("closed_code") == drafts.CLOSED_NO_ANSWER
+            # Unanswered (ERPNext may have made it), or a ToDo already open
+            # in the ERP (that open one is the follow-up).
+            card.status == STATUS_FAILED
+            and final.get("closed_code") in (drafts.CLOSED_NO_ANSWER, drafts.CLOSED_ALREADY_OPEN)
         ):
             held.add(key)
     stale = seen - held

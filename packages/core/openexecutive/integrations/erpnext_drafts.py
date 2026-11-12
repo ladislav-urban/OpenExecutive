@@ -1017,6 +1017,9 @@ def earlier_cards(person_id: int, session_id: Any, *, leaving: int) -> list[dict
 # never the ERP's words; the note below reads them through _CLOSED_SAYS only.
 CLOSED_CHANGED = "changed_since_proposed"
 CLOSED_NO_ANSWER = "no_answer"
+# A job card's ToDo the ERP refused because one is already open for it
+# (ALREADY_OPEN_CODE): nothing new was made, and the open one is the follow-up.
+CLOSED_ALREADY_OPEN = "already_open"
 # How far back, and how many, the turn's note looks: a card's own lifetime.
 DECIDED_WINDOW = CARD_TTL
 DECIDED_MAX = 5
@@ -1034,6 +1037,9 @@ _CLOSED_SAYS: dict[str, str] = {
     CLOSED_NO_ANSWER: (
         "closed when they approved it: the approval didn't go through after several tries, "
         "and whether a draft was made isn't recorded: check in the ERP before asking again"
+    ),
+    CLOSED_ALREADY_OPEN: (
+        "closed when they approved it: a task for this was already open in the ERP, so nothing new was made"
     ),
 }
 _REPLACED_SAYS = "closed: replaced by a newer card because the ERP now reads the draft differently"
@@ -1354,6 +1360,23 @@ CONFIGURER_TEXT = (
     "the card is closed. An ERP operator records the job's configurer; a later "
     "run proposes it again while it's still due."
 )
+# oe_connector's duplicate-ToDo guard: a job card's ToDo is refused while an
+# Open ToDo already references the same document and is allocated to the
+# same user, with a ToolError that starts with this stable code (chat and
+# panel ToDos are never refused). Refused before its daily count and before
+# any insert, so nothing was made: the card closes as handled
+# (CLOSED_ALREADY_OPEN), never a retried failure. The MCP layer may put a
+# short "...: " before it, so a bounded prefix is allowed; nowhere else.
+ALREADY_OPEN_CODE = "todo_already_open:"
+_ALREADY_OPEN_RE = re.compile(r"(?:[\w .-]{0,80}:\s*)?" + re.escape(ALREADY_OPEN_CODE))
+ALREADY_OPEN_TEXT = "A task for this is already open in the ERP, so nothing new was made."
+
+
+def already_open(reason: str) -> bool:
+    """Whether ERPNext refused a job card's ToDo as already open
+    (``ALREADY_OPEN_CODE``). Matched by its code only; its text is never
+    shown."""
+    return isinstance(reason, str) and _ALREADY_OPEN_RE.match(reason) is not None
 
 
 def _job_title(payload: dict[str, Any]) -> str:
@@ -2371,6 +2394,18 @@ async def _carry_out(
                 "reason": filled[0], **_identities(payload),
             })
             raise ApproveRefused(409, filled[0], filled[1])
+    if wire is not None and doctype == "ToDo" and operation == "create" and already_open(reason):
+        # A ToDo for this is already open in the ERP: handled, not failed.
+        # No attempt is counted and nothing is retried; ERPNext's words are
+        # kept in the record only, never shown.
+        finish_execution(
+            instance.id, STATUS_FAILED,
+            final_payload={**payload, "last_error": reason, "closed_code": CLOSED_ALREADY_OPEN},
+        )
+        audit("erpnext_draft_already_open", f"Person {person.id}'s ERPNext ToDo was already open; its card closed", {
+            "person_id": person.id, "decision_id": instance.id, "doctype": doctype, **_identities(payload),
+        })
+        raise ApproveRefused(409, CLOSED_ALREADY_OPEN, ALREADY_OPEN_TEXT)
     if wire is not None and any(marker in reason for marker in CONFIGURER_MARKERS):
         # The site records another configurer for the job, or none: final.
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})

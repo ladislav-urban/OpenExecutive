@@ -11006,6 +11006,12 @@ integrations:
     last_error, attempts unchanged, closed_code changed_since_proposed),
     audits erpnext_draft_changed and answers 409 changed_since_proposed;
     asking again leaves a fresh card.
+    A watch job card's ToDo create refused with a ToolError starting
+    todo_already_open: (oe_connector's duplicate-ToDo guard: an Open ToDo
+    on the same document for the same user; chat and panel ToDos are
+    never refused; refused before its daily count and any insert): final
+    as handled, closed_code already_open, no attempt counted, no retry,
+    the person told ALREADY_OPEN_TEXT, never ERPNext's text.
     Any other failure:
     update_open_payload(while_executing=True) with last_error and attempts
     while the claim is still held, then release_claim, so a second tap
@@ -11836,7 +11842,8 @@ watch:
     was tried (payload tried, or attempts > 0 in the proposed or final
     payload), once it was approved, executed, reversed or rejected
     (dismissed by a person), or failed with the final payload's closed_code
-    no_answer; a never-tried waiting card that expired or code would now
+    no_answer or already_open (the ERP refused its ToDo as already open:
+    that ToDo is the follow-up); a never-tried waiting card that expired or code would now
     refuse is closed (expired / job_changed) with
     decision_ledger.close_externally(proposed_only=True), and one that
     turned executing meanwhile (the close returns False) holds;
@@ -12392,8 +12399,16 @@ watch:
     characters, at most 1000, allocated_to equal to assignee() now, and
     _todo's output unchanged. The chase note is text the buyer sends
     from their own mail: no mail path. Not done here: a ToDo still open
-    in ERPNext for the order isn't seen here (no read of ToDo); only
-    oe_connector's draft_check could refuse a second one. Known residual, as payment checks:
+    in ERPNext for the order isn't seen here (no read of ToDo):
+    oe_connector's duplicate-ToDo guard refuses a job card's ToDo while an
+    Open ToDo on the same document is allocated to the same user, with a
+    ToolError starting todo_already_open: (erpnext_drafts.already_open, a
+    bounded prefix allowed for the MCP layer's words). At the check:
+    cards.CHECK_LINES check_already_open, no card. At approval
+    (_carry_out, job cards' ToDo creates only): STATUS_FAILED with
+    closed_code already_open, no attempt counted, no retry,
+    ApproveRefused(409, already_open, ALREADY_OPEN_TEXT), our own words,
+    ERPNext's text kept in last_error only; _CLOSED_SAYS has the line. Known residual, as payment checks:
     a row reaches the reviewer's notice when its card's check doesn't run
     that run.
   reasons: |

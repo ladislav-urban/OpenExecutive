@@ -865,3 +865,67 @@ def test_closed_lines_past_five_hundred_no_longer_hold_back_the_tasks(
         assert erp.calls[index][1]["filters"]["status"] in ("To Receive and Bill", "To Receive")
     # And were Closed lines returned anyway, the code still drops them.
     assert ld.candidates({"rows": closed}, SETTINGS, TODAY) == []
+
+
+# --------------------------------------------------------------------------- #
+# oe_connector's duplicate-ToDo guard (todo_already_open:)
+# --------------------------------------------------------------------------- #
+
+ALREADY = "todo_already_open: ToDo 7f3a for Purchase Order PO-3 is still open for cara@co.example. " + CANARY
+
+
+def test_an_approval_refused_as_already_open_closes_the_card_as_handled(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], approvals: None,
+) -> None:
+    _one_card_run(erp)
+    [card] = _job_cards()
+    erp.replies.append(json.dumps({"error": ALREADY}))
+    fresh = get_decision_instance(card.id)
+    assert fresh is not None
+    with pytest.raises(drafts.ApproveRefused) as refused:
+        asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
+    assert (refused.value.status, refused.value.code) == (409, "already_open")
+    assert refused.value.message == drafts.ALREADY_OPEN_TEXT
+    assert CANARY not in refused.value.message and "todo_already_open" not in refused.value.message
+    done = get_decision_instance(card.id)
+    assert done is not None and done.status == "failed"
+    final = json.loads(done.final_payload_json or "{}")
+    assert final["closed_code"] == "already_open" and not final.get("attempts")
+    # One call: no retry.
+    assert len([c for c in erp.calls if c[0] == "erpnext__draft_todo"]) == 1
+    assert "already open in the ERP" in drafts._CLOSED_SAYS[drafts.CLOSED_ALREADY_OPEN]
+    # That week, its finding gets no new card.
+    erp.replies.extend([_list(ORDERS[3:5]), _list([]), _report([])])
+    second = _run(NEXT_DAY)
+    assert (second.draft_cards, second.checks, second.draft_repeats) == (0, 0, 1)
+
+
+def test_a_check_refused_as_already_open_leaves_no_card_and_says_so(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    erp.replies.extend([_list(ORDERS[3:5]), _list([]), _report([])])
+    erp.replies.append(json.dumps({"error": "Error executing tool draft_check: " + ALREADY}))
+    outcome = _run()
+    assert (outcome.draft_cards, outcome.checks) == (0, 1)
+    assert _job_cards() == []
+    [notice] = _alerts()
+    assert "1 chase tasks weren't prepared: a task for each is already open in the ERP." in notice.body
+    assert CANARY not in notice.body
+
+
+def test_a_refusal_without_the_code_keeps_the_old_retry(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], approvals: None,
+) -> None:
+    assert not drafts.already_open("The ToDo couldn't be saved: todo_already_open: x")
+    assert drafts.already_open("todo_already_open: x") and drafts.already_open("Error: todo_already_open: x")
+    _one_card_run(erp)
+    [card] = _job_cards()
+    erp.replies.append(json.dumps({"error": "Deadlock found when trying to get lock"}))
+    fresh = get_decision_instance(card.id)
+    assert fresh is not None
+    with pytest.raises(drafts.ApproveRefused) as refused:
+        asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
+    assert refused.value.code == "draft_failed"
+    again = get_decision_instance(card.id)
+    assert again is not None and again.status == "proposed"
+    assert drafts._payload(again)["attempts"] == 1
