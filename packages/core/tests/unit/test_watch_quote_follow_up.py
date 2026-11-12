@@ -61,21 +61,24 @@ def _in(days: int) -> str:
     return (TODAY + timedelta(days=days)).isoformat()
 
 
-def _q(name: str, customer: str, valid_in: int, total: float, *, status: str = "Open", to: str = "Customer",
+def _q(name: str, customer: str, valid_in: int, total: float, *, status: str = "Open",
        customer_name: str | None = None, quoted: int = -25, amended_from: str | None = None) -> dict[str, Any]:
     return {
-        "name": name, "party_name": customer, "quotation_to": to,
+        "name": name, "party_name": customer,
         "customer_name": customer if customer_name is None else customer_name,
         "transaction_date": _in(quoted), "valid_till": _in(valid_in), "grand_total": total, "currency": "EUR",
         "status": status, "order_type": "Sales", "amended_from": amended_from,
     }
 
 
+def _lead(name: str, valid_in: int, total: float, *, status: str = "Open") -> dict[str, Any]:
+    return {"name": name, "valid_till": _in(valid_in), "grand_total": total, "currency": "EUR", "status": status}
+
+
 # Lapsing: Orion (3 days left), Vanta (today), Big Co (5 days, the largest).
 # Lapsed: Kepler, 2 days ago, Expired. Not counted: Far Co (6 days left),
 # Old Co (lapsed 8 days ago), Lost Co (Lost), Ordered Co (an order names it,
 # though ERPNext still says Open). Revised: QTN-R1 amended into QTN-R1-1.
-# A lead's quotation, lapsing in 2 days, whose name is never shown.
 QUOTES = [
     _q("QTN-1", "Orion Switchgear", 3, 4000.0),
     _q("QTN-2", "Vanta Cable Mills", 0, 1500.0, status="Replied"),
@@ -87,8 +90,10 @@ QUOTES = [
     _q("QTN-8", "Ordered Co", 1, 9000.0),
     _q("QTN-R1", "Revised Co", 4, 1000.0),
     _q("QTN-R1-1", "Revised Co", 4, 900.0, amended_from="QTN-R1"),
-    _q("QTN-L1", "CRM-LEAD-0001", 2, 7000.0, to="Lead", customer_name=CANARY),
 ]
+# A lead's quotation, lapsing in 2 days (read 2). Were ERPNext to return a
+# name field anyway, it would never be shown.
+LEADS = [{**_lead("QTN-L1", 2, 7000.0), "party_name": "CRM-LEAD-0001", "customer_name": CANARY}]
 ORDERS = [
     {"name": "SO-1", "customer": "Ordered Co", "transaction_date": _in(-3), "prevdoc_docname": "QTN-8"},
     {"name": "SO-2", "customer": "Orion Switchgear", "transaction_date": _in(-30), "prevdoc_docname": None},
@@ -103,7 +108,9 @@ def _list(rows: list[dict[str, Any]], doctype: str = "Quotation", acting: Any = 
 
 
 def _reads(erp: FakeErpnext, **kw: Any) -> None:
-    erp.replies.extend([kw.get("quotes", _list(QUOTES)), kw.get("orders", _list(ORDERS, "Sales Order"))])
+    erp.replies.extend([
+        kw.get("quotes", _list(QUOTES)), kw.get("leads", _list(LEADS)), kw.get("orders", _list(ORDERS, "Sales Order")),
+    ])
 
 
 def _checked(fields: dict[str, Any]) -> str:
@@ -116,8 +123,12 @@ def _checked(fields: dict[str, Any]) -> str:
 
 
 def _results(quotes: list[dict[str, Any]] = QUOTES, orders: list[dict[str, Any]] = ORDERS,
-             **extra: Any) -> tuple[dict[str, Any], dict[str, Any]]:
+             leads: list[dict[str, Any]] | None = None,
+             **extra: Any) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    # The leads only with the full set of quotations, unless given.
+    shown = leads if leads is not None else (LEADS if quotes is QUOTES else [])
     return ({"rows": quotes, "truncated": extra.get("quotes_cut", False)},
+            {"rows": shown, "truncated": extra.get("leads_cut", False)},
             {"rows": orders, "truncated": extra.get("orders_cut", False)})
 
 
@@ -193,8 +204,17 @@ def test_read_one_is_every_quotation_valid_until_a_week_ago() -> None:
     args = qfu._quotes(SETTINGS, TODAY)
     assert isinstance(args, dict)
     assert registry.shape_mismatch(qfu.QUOTES_SHAPE, args, TODAY) == ""
-    assert args["filters"] == {"company": "Acme", "docstatus": 1, "valid_till": [">=", _in(-7)]}
+    assert args["filters"] == {"company": "Acme", "docstatus": 1, "quotation_to": "Customer",
+                               "valid_till": [">=", _in(-7)]}
     assert args["limit"] == qfu.READ_LIMIT
+    leads = qfu._leads(SETTINGS, TODAY)
+    assert isinstance(leads, dict) and registry.shape_mismatch(qfu.LEADS_SHAPE, leads, TODAY) == ""
+    assert leads["filters"]["quotation_to"] == "Lead"
+    assert not {"party_name", "customer_name", "contact_display", "contact_person"} & set(leads["fields"])
+    for bad in ("party_name", "customer_name", "contact_display"):
+        assert registry.shape_mismatch(qfu.LEADS_SHAPE, {**leads, "fields": ["name", bad]}, TODAY)
+    customer = {**leads, "filters": {**leads["filters"], "quotation_to": "Customer"}}
+    assert registry.shape_mismatch(qfu.LEADS_SHAPE, customer, TODAY)
 
 
 def test_read_two_asks_for_the_counted_customers_orders_since_their_oldest_quote() -> None:
@@ -207,7 +227,7 @@ def test_read_two_asks_for_the_counted_customers_orders_since_their_oldest_quote
                                           "Orion Switchgear", "Revised Co"]]
     assert filters["transaction_date"] == [">=", _in(-25)]
     # Nothing counts: skipped, never sent with an empty list.
-    assert qfu._orders(SETTINGS, TODAY, ({"rows": [QUOTES[4], QUOTES[10]]},)) is None
+    assert qfu._orders(SETTINGS, TODAY, ({"rows": [QUOTES[4]]},)) is None
     # More than 50 customers: the 50 most pressing, marked cut.
     many = [_q(f"QTN-M{i}", f"Cust {i:02d}", 1, 100.0 + i) for i in range(55)]
     cut = qfu._orders(SETTINGS, TODAY, ({"rows": many},))
@@ -246,7 +266,7 @@ def test_lapsing_versus_lapsed_by_date_and_status() -> None:
 def test_the_order_lapsed_first_then_value_by_closeness() -> None:
     found = qfu.candidates({"rows": QUOTES}, SETTINGS, TODAY)
     assert [(f.quote.name, f.state) for f in found] == [
-        ("QTN-4", "lapsed"), ("QTN-8", "lapsing"), ("QTN-3", "lapsing"), ("QTN-L1", "lapsing"),
+        ("QTN-4", "lapsed"), ("QTN-8", "lapsing"), ("QTN-3", "lapsing"),
         ("QTN-2", "lapsing"), ("QTN-1", "lapsing"), ("QTN-R1-1", "lapsing"),
     ]
     # min_amount drops the small ones.
@@ -293,8 +313,15 @@ def test_the_notice_names_customers_and_counts_leads_without_naming_them() -> No
                         [(i.key, i.summary, i.values) for i in s.items]) for s in specs], default=str)
     assert CANARY not in text and "CRM-LEAD-0001" not in text
     assert "CRM-LEAD-0001" not in json.dumps([dict(s.fields) for s in specs if isinstance(s, DraftSpec)])
-    [lead] = [q for q in qfu.quotes({"rows": QUOTES}) if not q.to_customer]
-    assert (lead.customer, lead.customer_name) == ("", "")
+    [lead] = qfu.quotes({"rows": LEADS}, leads=True)
+    assert (lead.customer, lead.customer_name, lead.amended_from) == ("", "", "")
+    # Each lead row counts once, a revision included (its amended_from isn't read).
+    two = [_lead("QTN-L2", 2, 10.0), _lead("QTN-L2-1", 2, 10.0)]
+    [notice] = [s for s in _specs(quotes=[QUOTES[0]], orders=[], leads=two) if isinstance(s, CardSpec)]
+    assert "2 more to leads, not named." in notice.notes
+    # Read 2 cut: said so.
+    [notice] = [s for s in _specs(leads_cut=True) if isinstance(s, CardSpec)]
+    assert qfu.LEADS_CUT_LINE in notice.notes
 
 
 def test_a_cut_read_is_noted_and_unchecked_orders_get_no_task() -> None:
@@ -359,7 +386,8 @@ def test_told_findings_are_left_out_and_a_lapsed_one_is_new_again() -> None:
     # Its card may still be due: cards are kept once by the card store, not here.
     assert "QTN-3" in [s.fields["reference_name"] for s in specs if isinstance(s, DraftSpec)]
     # Every finding told: no notice at all.
-    every = frozenset(f.key for f in qfu.candidates({"rows": QUOTES}, SETTINGS, TODAY))
+    every = frozenset(f.key for f in qfu.candidates({"rows": QUOTES}, SETTINGS, TODAY)) | frozenset(
+        f.key for f in qfu.candidates({"rows": LEADS}, SETTINGS, TODAY, leads=True))
     assert [s for s in _specs(told=every) if isinstance(s, CardSpec)] == []
     # The day after it lapses, QTN-3 is a new finding.
     later = TODAY + timedelta(days=6)
@@ -431,15 +459,17 @@ def test_a_run_leaves_the_notice_and_a_todo_per_quotation_for_the_reviewer(
     outcome = _run()
     assert (outcome.status, outcome.routed, outcome.draft_cards, outcome.checks) == ("done", "reviewer", 5, 5)
     tools = [name for name, _sent in erp.calls]
-    assert tools == ["erpnext__list_records"] * 2 + ["erpnext__draft_check"] * 5
-    for index in range(2):
+    assert tools == ["erpnext__list_records"] * 3 + ["erpnext__draft_check"] * 5
+    for index in range(3):
         claims = erp.claims(index)
         assert (claims["kind"], claims["sub"]) == ("watch", "quote-follow-up")
-    sent = {k: v for k, v in erp.calls[1][1].items() if k != ASSERTION_ARG}
+    lead_read = {k: v for k, v in erp.calls[1][1].items() if k != ASSERTION_ARG}
+    assert lead_read["fields"] == qfu.LEAD_FIELDS and lead_read["filters"]["quotation_to"] == "Lead"
+    sent = {k: v for k, v in erp.calls[2][1].items() if k != ASSERTION_ARG}
     assert sent["doctype"] == "Sales Order" and sent["filters"]["customer"][1][0] == "Kepler Fittings"
-    check = {k: v for k, v in erp.calls[2][1].items() if k != ASSERTION_ARG}
+    check = {k: v for k, v in erp.calls[3][1].items() if k != ASSERTION_ARG}
     assert check == {"operation": "create", "doctype": "ToDo", "fields": dict(expected[0].fields)}
-    assert (erp.claims(2)["sub"], erp.claims(2)["purpose"]) == (REVIEWER, "draft")
+    assert (erp.claims(3)["sub"], erp.claims(3)["purpose"]) == (REVIEWER, "draft")
     # The ToDos: Cara's to approve, assigned to her, keyed by quotation and state.
     made = sorted(_job_cards(), key=lambda c: c.id)
     assert [drafts._payload(c)["fields"]["reference_name"] for c in made] == [
@@ -476,12 +506,12 @@ def test_the_next_day_tells_nothing_again_and_leaves_no_second_card(
     _reads(erp, quotes=_list(same))
     outcome = _run(NEXT_DAY)
     assert (outcome.status, outcome.draft_cards, outcome.checks) == ("done", 0, 0)
-    assert len(erp.calls) == calls + 2
+    assert len(erp.calls) == calls + 3
     assert len(_alerts()) == 1
     # Once QTN-1 has lapsed, it is told and carded once more.
     lapsed_day = (TODAY + timedelta(days=3)).isoformat()
     rows = [_q("QTN-1", "Orion Switchgear", 2, 4000.0, status="Expired")]
-    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    erp.replies.extend([_list(rows), _list([]), _list([], "Sales Order")])
     later = qfu.build(_results(rows, []), SETTINGS, date.fromisoformat(lapsed_day), assignee=REVIEWER)
     erp.replies.extend(_checks_for([s for s in later if isinstance(s, DraftSpec)]))
     outcome = _run(lapsed_day)
@@ -584,7 +614,7 @@ def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
         return [s for s in built if isinstance(s, DraftSpec)]
 
     # Day 1: eight rows on the notice, five cards (the day's cap).
-    erp.replies.extend([_list(eight), _list([], "Sales Order")])
+    erp.replies.extend([_list(eight), _list([]), _list([], "Sales Order")])
     erp.replies.extend(_checks_for(specs(TODAY)[:5]))
     first = _run()
     assert (first.draft_cards, first.draft_capped) == (5, 3)
@@ -596,7 +626,7 @@ def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
     for card in _job_cards():
         mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
     # Day 2: the other three cards, no row told again, no dismissed card again.
-    erp.replies.extend([_list(eight), _list([], "Sales Order")])
+    erp.replies.extend([_list(eight), _list([]), _list([], "Sales Order")])
     erp.replies.extend(_checks_for(specs(date.fromisoformat(NEXT_DAY))[5:]))
     second = _run(NEXT_DAY)
     assert (second.draft_cards, second.checks) == (3, 3)
@@ -609,7 +639,7 @@ def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
     for card in _job_cards():
         mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
     day3 = (TODAY + timedelta(days=2)).isoformat()
-    erp.replies.extend([_list(eight), _list([], "Sales Order")])
+    erp.replies.extend([_list(eight), _list([]), _list([], "Sales Order")])
     third = _run(day3)
     assert (third.draft_cards, third.checks, third.draft_repeats) == (0, 0, 8)
 
@@ -623,11 +653,11 @@ def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
 def test_a_customer_id_the_slot_wont_take_leaves_its_quotation_unchecked(
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
 ) -> None:
-    odd = _q("QTN-Z", "Zero​Width Co", 2, 5000.0)
+    odd = _q("QTN-Z", "Zero\u200bWidth Co", 2, 5000.0)
     rows = [odd, QUOTES[0]]
     built = qfu._orders(SETTINGS, TODAY, ({"rows": rows},))
     assert isinstance(built, Derived) and built.arguments["filters"]["customer"] == ["in", ["Orion Switchgear"]]
-    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    erp.replies.extend([_list(rows), _list([]), _list([], "Sales Order")])
     [spec] = [s for s in qfu.build(_results(rows, []), SETTINGS, TODAY, assignee=REVIEWER)
               if isinstance(s, DraftSpec)]
     assert spec.fields["reference_name"] == "QTN-1"
@@ -641,7 +671,7 @@ def test_a_customer_id_the_slot_wont_take_leaves_its_quotation_unchecked(
 def _one_card_run(erp: FakeErpnext, day: str = DAY, rows: list[dict[str, Any]] | None = None,
                   assignee: str = REVIEWER) -> runner.RunOutcome:
     rows = rows if rows is not None else [QUOTES[0]]
-    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    erp.replies.extend([_list(rows), _list([]), _list([], "Sales Order")])
     specs = [s for s in qfu.build(_results(rows, []), SETTINGS, date.fromisoformat(day), assignee=assignee)
              if isinstance(s, DraftSpec)]
     erp.replies.extend(_checks_for(specs))
@@ -690,7 +720,7 @@ def test_an_approved_card_is_never_left_again(
     fresh = get_decision_instance(card.id)
     assert fresh is not None
     asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
-    erp.replies.extend([_list([QUOTES[0]]), _list([], "Sales Order")])
+    erp.replies.extend([_list([QUOTES[0]]), _list([]), _list([], "Sales Order")])
     second = _run(NEXT_DAY)
     assert (second.draft_cards, second.checks, second.draft_repeats) == (0, 0, 1)
 
@@ -733,7 +763,7 @@ def test_a_quotation_erpnext_keeps_from_the_reviewer_is_told_to_the_principal_on
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
 ) -> None:
     rows = [QUOTES[0], QUOTES[2]]
-    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    erp.replies.extend([_list(rows), _list([]), _list([], "Sales Order")])
     specs = [s for s in qfu.build(_results(rows, []), SETTINGS, TODAY, assignee=REVIEWER) if isinstance(s, DraftSpec)]
     assert [s.fields["reference_name"] for s in specs] == ["QTN-3", "QTN-1"]
     # ERPNext refuses Cara's check of QTN-3 for her own permissions.
@@ -750,7 +780,75 @@ def test_a_quotation_erpnext_keeps_from_the_reviewer_is_told_to_the_principal_on
     assert len(theirs) == 1 and "QTN-3" in theirs[0].body and qfu.KEPT_LINE in theirs[0].body
     assert "not permitted" not in theirs[0].body
     # Told once: the next run tells neither again.
-    erp.replies.extend([_list(rows), _list([], "Sales Order")])
+    erp.replies.extend([_list(rows), _list([]), _list([], "Sales Order")])
     erp.replies.append(json.dumps({"error": "You are not permitted to read Quotation QTN-3."}))
     _run(NEXT_DAY)
     assert len(_alerts()) == 2
+
+
+def test_an_unanswered_approval_holds_its_finding(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from openexecutive.memory.decision_ledger import (
+        STATUS_FAILED,
+        claim_for_execution,
+        finish_execution,
+    )
+
+    _one_card_run(erp)
+    [card] = _job_cards()
+    payload = drafts._payload(card)
+    assert claim_for_execution(card.id, resolver_person_id=team.cara)
+    # closed_code is only in the final payload.
+    assert finish_execution(card.id, STATUS_FAILED,
+                            final_payload={**payload, "attempts": 5, "closed_code": drafts.CLOSED_NO_ANSWER})
+    second = _one_card_run(erp, NEXT_DAY)
+    assert (second.draft_cards, second.checks, second.draft_repeats) == (0, 0, 1)
+
+
+def test_a_tried_card_that_then_expired_holds_its_finding(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _one_card_run(erp)
+    [card] = _job_cards()
+    tried = {**drafts._payload(card), "tried": True}
+    assert update_open_payload(card.id, tried, expected_json=card.proposed_payload_json)
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(seconds=-1))
+    second = _one_card_run(erp, NEXT_DAY)
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(days=3))
+    assert (second.draft_cards, second.checks) == (0, 0)
+    assert len(_job_cards()) == 1
+
+
+def test_a_card_that_turns_executing_before_its_close_is_left_alone(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.memory.decision_ledger import STATUS_EXECUTING, claim_for_execution
+
+    _one_card_run(erp)
+    [card] = _job_cards()
+    listing = drafts.job_cards
+
+    def racing(job_id: str, *, open_only: bool = True) -> list[Any]:
+        found = listing(job_id, open_only=open_only)
+        if not open_only:
+            # An approval claims it after the listing, before the close.
+            for each in found:
+                claim_for_execution(each.id, resolver_person_id=team.cara)
+        return found
+
+    monkeypatch.setattr(drafts, "job_cards", racing)
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(seconds=-1))
+    second = _one_card_run(erp, NEXT_DAY)
+    monkeypatch.setattr(drafts, "CARD_TTL", timedelta(days=3))
+    assert (second.draft_cards, second.checks) == (0, 0)
+    [still] = _job_cards()
+    assert still.status == STATUS_EXECUTING
+
+
+def test_a_name_with_a_space_gets_a_row_and_no_task() -> None:
+    assert qfu.nameable("QTN-1") and not qfu.nameable("QTN 1")
+    specs = _specs(quotes=[_q("QTN 1", "Orion", 2, 10.0)], orders=[])
+    assert [s for s in specs if isinstance(s, DraftSpec)] == []
+    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    assert [dict(i.values)["Quotation"] for i in notice.items] == ["QTN 1"]

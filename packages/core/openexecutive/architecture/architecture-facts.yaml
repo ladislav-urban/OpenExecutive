@@ -11830,11 +11830,16 @@ watch:
     everything again) and leave them out of the notice only (their
     DraftSpecs are still built); cards._once_held keeps a finding from a
     new card while its card waits for the current reviewer and check_fields
-    still builds it unchanged, or once it was approved, executed, reversed
-    or rejected (dismissed by a person), or failed with closed_code
-    no_answer; a waiting card that expired or code would now refuse is
-    closed (expired / job_changed), and closed_externally or other failed
-    cards don't hold, so the finding is carded again while due. A finding
+    still builds it unchanged, while it is executing, once its approval
+    was tried (payload tried, or attempts > 0 in the proposed or final
+    payload), once it was approved, executed, reversed or rejected
+    (dismissed by a person), or failed with the final payload's closed_code
+    no_answer; a never-tried waiting card that expired or code would now
+    refuse is closed (expired / job_changed) with
+    decision_ledger.close_externally(proposed_only=True), and one that
+    turned executing meanwhile (the close returns False) holds;
+    closed_externally or other failed cards don't hold, so the finding is
+    carded again while due. A finding
     job_cards' 5000-card listing no longer shows is held by a watch_told
     row card:<digest> (cards.carded_key, written when a new card is left,
     dropped by settings.forget_told when its card is seen not holding).
@@ -12264,12 +12269,16 @@ watch:
     watch.jobs.quote_follow_up: 07:30, weekdays 0-4, company time;
     card_cap_day 5; once True; no reason_schema (no model call); card_noun
     "follow-up tasks"; settings company, days_ahead 5 (1-30), min_amount 0
-    (0-1e9), assign_to "" (an ERPNext user; empty: the reviewer). Reads (in
-    watch_job_vectors.json, with shape cases): list_records Quotation
-    (name, party_name, quotation_to, customer_name, transaction_date,
-    valid_till, grand_total, currency, status, order_type, amended_from)
-    with {company, docstatus 1, valid_till [">=", today - 7]}, limit 500;
-    list_records Sales Order (name, customer, transaction_date,
+    (0-1e9), assign_to "" (an ERPNext user; empty: the reviewer). Three
+    reads (in watch_job_vectors.json, with shape cases, matching
+    oe_connector's): list_records Quotation (name, party_name,
+    customer_name, transaction_date, valid_till, grand_total, currency,
+    status, order_type, amended_from) with {company, docstatus 1,
+    quotation_to "Customer", valid_till [">=", today - 7]}, limit 500;
+    list_records Quotation (name, valid_till, grand_total, currency,
+    status) with {company, docstatus 1, quotation_to "Lead", valid_till
+    [">=", today - 7]}, limit 500 (no party, name or contact field; each
+    row counted once); list_records Sales Order (name, customer, transaction_date,
     items.prevdoc_docname) with {company, docstatus ["<", 2], customer
     ["in", the counted quotations' customers, most pressing first, at most
     50], transaction_date [">=", the oldest of their quotations, within
@@ -12281,9 +12290,11 @@ watch:
     amended_from is dropped (a revision counts once, as its latest); a
     Sales Order line's prevdoc_docname naming it or its amended_from
     closes it whatever its status; lapsed first, then grand_total / (1 +
-    |days|) descending, then name. quotation_to other than Customer: party
-    and customer_name dropped on reading, counted only ("N more to leads,
-    not named."), never carded. Outputs: one CardSpec "Quotations to
+    |days|) descending, then name. Lead quotations (read 2) are counted
+    only ("N more to leads, not named."; LEADS_CUT_LINE when read 2 is
+    cut), never named or carded. No read relies on list_records' titles.
+    Known residual, as payment checks: a row reaches the reviewer's notice
+    when its card's check doesn't run that run. Outputs: one CardSpec "Quotations to
     follow up" (key quotes:<company>:<day>, up to 10 rows keyed
     q:<name>:<lapsing|lapsed> with customer, quotation, value, quoted,
     valid till, days left / lapsed N days ago, status; count the new named
@@ -12297,7 +12308,8 @@ watch:
     reference "Quotation <name>" and the description), none when the
     customer was beyond the 50 asked, its id failed the $customers slot
     (registry._slot_holds, so it's never asked) or read 2 was truncated,
-    nor for a name not nameable (_DOC_RE and its own settled clean); the
+    nor for a name not nameable (_DOC_RE, no whitespace as the template's
+    \S needs, and its own settled clean); the
     ToDo's currency only as [A-Z]{3}. Each DraftSpec carries its row as
     notice with KEPT_LINE, told only when ERPNext kept it from the reviewer. check_fields:
     create ToDo only, exactly erpnext_drafts' six ToDo fields, reference a

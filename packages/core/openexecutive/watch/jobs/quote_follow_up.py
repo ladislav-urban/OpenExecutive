@@ -3,17 +3,23 @@ that lapsed this week with no order, each with whom to call.
 
 Each weekday at 07:30 company time it reads:
 
-1. **every submitted quotation valid until at least a week ago**
-   (``list_records``, ``valid_till >= today - LAPSED_DAYS``). One read: a
-   shape holds neither a list of statuses nor two bounds on one field, so
-   code sorts what is lapsing from what has lapsed;
-2. **the same customers' Sales Orders** since the oldest of those quotations
-   (``list_records``, ``customer in`` the quotations' customers, at most 50,
-   the most pressing first), with each order line's quotation
+1. **every submitted quotation to a Customer valid until at least a week
+   ago** (``list_records``, ``quotation_to`` Customer, ``valid_till >=
+   today - LAPSED_DAYS``). One read: a shape holds neither a list of
+   statuses nor two bounds on one field, so code sorts what is lapsing from
+   what has lapsed;
+2. **the same for quotations to a Lead**, with only their name, date,
+   value, currency and status: counted, never named (no party, name or
+   contact field is ever read for them);
+3. **the customers' Sales Orders** since the oldest of read 1's quotations
+   (``list_records``, ``customer in`` read 1's customers, at most 50, the
+   most pressing first), with each order line's quotation
    (``items.prevdoc_docname``). Derived from read 1 and skipped when no
    quotation to a customer counts.
 
-Its rules are code (``follow_ups``), unit-tested on fixed data:
+No read relies on ``list_records``' ``titles``.
+
+Its rules are code (``candidates``, ``build``), unit-tested on fixed data:
 
 - **Lapsing:** still open (Open, Replied or Partially Ordered) and valid
   until today or within ``days_ahead`` days.
@@ -25,15 +31,16 @@ Its rules are code (``follow_ups``), unit-tested on fixed data:
   revision counts once, as its latest.
 - **Order:** lapsed first, then by value × closeness to lapsing
   (``grand_total / (1 + days)``), then by name.
-- **Quotations to a Lead** (or anyone but a Customer) are counted, never
-  named: the job doesn't read Lead, and their names are never shown.
+- **Quotations to a Lead** (read 2) are counted, each row once (its
+  ``amended_from`` isn't read), never named or carded: the job doesn't read
+  Lead, nor any name field of those quotations.
 
 What it leaves:
 
 - **One notice, "Quotations to follow up":** up to ``NOTICE_MAX``, each
   with the customer, value, date quoted, valid till, days left (or "lapsed
   N days ago") and status, and code's count of those to leads. A note says
-  when read 1 or 2 was cut.
+  when a read was cut.
 - **A ToDo draft card per quotation to a customer**, for the job's
   reviewer: assigned to the job's ``assign_to`` (an ERPNext user), else the
   reviewer; on the quotation; dated today, or the day before it lapses when
@@ -45,6 +52,11 @@ A quotation is raised once while lapsing and once after it lapses, never
 daily (``WatchJob.once``, the finding key ``q:<name>:<lapsing|lapsed>``): a
 row a notice told isn't told again, and a card left once isn't left again.
 No model is called: every line is code's.
+
+A known residual, as in payment checks: a quotation's row reaches the
+reviewer's notice when its card's check doesn't run that run (the day's cap,
+a card already waiting), even if ERPNext would keep the quotation from them;
+only a check ERPNext refuses for their permissions takes the row off.
 """
 from __future__ import annotations
 
@@ -72,16 +84,24 @@ JOB_ID = "quote-follow-up"
 DOCTYPE = "ToDo"
 QUOTATION = "Quotation"
 QUOTE_FIELDS = [
-    "name", "party_name", "quotation_to", "customer_name", "transaction_date", "valid_till", "grand_total",
+    "name", "party_name", "customer_name", "transaction_date", "valid_till", "grand_total",
     "currency", "status", "order_type", "amended_from",
 ]
+# A lead's quotation: never a party, name or contact field.
+LEAD_FIELDS = ["name", "valid_till", "grand_total", "currency", "status"]
 ORDER_FIELDS = ["name", "customer", "transaction_date", "items.prevdoc_docname"]
 # Its reads' entries in oe_connector_watch_jobs, as oe_connector lists them
 # (tests/unit/watch_job_vectors.json pins them).
 QUOTES_SHAPE: Mapping[str, Any] = {
     "doctype": QUOTATION,
     "fields": QUOTE_FIELDS,
-    "filters": {"company": "$company", "docstatus": 1, "valid_till": [">=", "$date"]},
+    "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "$date"]},
+    "limit": "$int",
+}
+LEADS_SHAPE: Mapping[str, Any] = {
+    "doctype": QUOTATION,
+    "fields": LEAD_FIELDS,
+    "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "$date"]},
     "limit": "$int",
 }
 ORDERS_SHAPE: Mapping[str, Any] = {
@@ -128,6 +148,7 @@ KEPT_LINE = (
 )
 LEADS_LINE = "{n} more to leads, not named."
 QUOTES_CUT_LINE = "Not every quotation could be read this run, so some may not be shown."
+LEADS_CUT_LINE = "Not every quotation to a lead could be read this run, so the count of those may be short."
 ORDERS_CUT_LINE = (
     "Not every sales order could be read this run, so a quotation shown may already have an order; "
     "no tasks were prepared for those."
@@ -187,9 +208,10 @@ class Quote:
         return bool(self.customer)
 
 
-def quotes(result: Mapping[str, Any]) -> list[Quote]:
-    """The quotations in read 1's result. A quotation to anyone but a
-    Customer keeps no name: its party and customer name are dropped here."""
+def quotes(result: Mapping[str, Any], *, leads: bool = False) -> list[Quote]:
+    """The quotations in read 1's result (to customers), or with ``leads``
+    in read 2's: those keep no customer, name or revision, whatever a row
+    holds."""
     out: list[Quote] = []
     for row in _rows(result, required=True):
         name = _name(row.get("name"))
@@ -197,23 +219,23 @@ def quotes(result: Mapping[str, Any]) -> list[Quote]:
         total = _amount(row.get("grand_total"))
         if not name or valid_till is None or total is None:
             continue
-        to_customer = row.get("quotation_to") == "Customer"
-        customer = _name(row.get("party_name")) if to_customer else ""
-        if to_customer and not customer:
+        customer = "" if leads else _name(row.get("party_name"))
+        if not leads and not customer:
             continue
         currency, status = row.get("currency"), row.get("status")
         out.append(Quote(
             name=name, customer=customer,
-            customer_name=(_name(row.get("customer_name")) or customer) if to_customer else "",
-            quoted=_day(row.get("transaction_date")), valid_till=valid_till, grand_total=round(total, 2),
-            currency=currency if isinstance(currency, str) else "", status=status if isinstance(status, str) else "",
-            amended_from=_name(row.get("amended_from")),
+            customer_name="" if leads else (_name(row.get("customer_name")) or customer),
+            quoted=None if leads else _day(row.get("transaction_date")), valid_till=valid_till,
+            grand_total=round(total, 2), currency=currency if isinstance(currency, str) else "",
+            status=status if isinstance(status, str) else "",
+            amended_from="" if leads else _name(row.get("amended_from")),
         ))
     return out
 
 
 def ordered(result: Mapping[str, Any]) -> set[str]:
-    """The quotations a Sales Order line names (read 2). The list has a row
+    """The quotations a Sales Order line names (read 3). The list has a row
     per order and line. A skipped read is {} and none."""
     out: set[str] = set()
     for row in _rows(result, required=False):
@@ -257,12 +279,16 @@ class FollowUp:
         return self.quote.grand_total / (1 + abs(self.days))
 
 
-def candidates(result: Mapping[str, Any], settings: Settings, today: date) -> list[FollowUp]:
+def candidates(
+    result: Mapping[str, Any], settings: Settings, today: date, *, leads: bool = False,
+) -> list[FollowUp]:
     """Read 1's quotations that count by date, status, amount and revision,
-    in the job's order, before any order is checked."""
+    in the job's order, before any order is checked; with ``leads``, read
+    2's, each row counted once."""
     out: list[FollowUp] = []
     floor = int(settings["min_amount"])
-    for quote in latest(quotes(result)):
+    read = quotes(result, leads=leads)
+    for quote in (read if leads else latest(read)):
         found = state(quote, settings, today)
         if found is None or quote.grand_total < floor:
             continue
@@ -297,17 +323,25 @@ def customers_to_check(result: Mapping[str, Any], settings: Settings, today: dat
 # --------------------------------------------------------------------------- #
 
 
-def _quotes(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
-    return {
-        "doctype": QUOTATION,
-        "fields": list(QUOTE_FIELDS),
-        "filters": {
-            "company": settings["company"],
-            "docstatus": 1,
-            "valid_till": [">=", (today - timedelta(days=LAPSED_DAYS)).isoformat()],
-        },
-        "limit": READ_LIMIT,
-    }
+def _quotations(to: str, fields: list[str]) -> Any:
+    def arguments(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
+        return {
+            "doctype": QUOTATION,
+            "fields": list(fields),
+            "filters": {
+                "company": settings["company"],
+                "docstatus": 1,
+                "quotation_to": to,
+                "valid_till": [">=", (today - timedelta(days=LAPSED_DAYS)).isoformat()],
+            },
+            "limit": READ_LIMIT,
+        }
+
+    return arguments
+
+
+_quotes = _quotations("Customer", QUOTE_FIELDS)
+_leads = _quotations("Lead", LEAD_FIELDS)
 
 
 def _orders(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
@@ -376,7 +410,7 @@ def nameable(name: str) -> bool:
     ERPNext's name pattern, and its own clean."""
     from openexecutive.integrations.erpnext_changes import _DOC_RE
 
-    return _DOC_RE.fullmatch(name) is not None and settled(name) == name
+    return _DOC_RE.fullmatch(name) is not None and not any(c.isspace() for c in name) and settled(name) == name
 
 
 def description(quote: Quote) -> str:
@@ -422,7 +456,7 @@ def build(
     customer, figures from the reads only. ``told``: the finding keys a
     notice told before (left out of this one); ``assignee``: who the ToDos
     are for (``assign_to``, else the reviewer's ERPNext user)."""
-    quotes_result, orders_result = reads
+    quotes_result, leads_result, orders_result = reads
     found = candidates(quotes_result, settings, today)
     checked, cut, _oldest = customers_to_check(quotes_result, settings, today)
     asked = set(checked)
@@ -432,8 +466,8 @@ def build(
     def is_ordered(quote: Quote) -> bool:
         return quote.name in closed or bool(quote.amended_from and quote.amended_from in closed)
 
-    named = [f for f in found if f.quote.to_customer and not is_ordered(f.quote)]
-    leads = [f for f in found if not f.quote.to_customer]
+    named = [f for f in found if not is_ordered(f.quote)]
+    leads = candidates(leads_result, settings, today, leads=True) if leads_result else []
     if not named and not leads:
         return []
     # Orders not read for every customer: no task for those quotations.
@@ -452,6 +486,8 @@ def build(
         notes.append(LEADS_LINE.format(n=len(new_leads)))
     if quotes_result.get("truncated") is True:
         notes.append(QUOTES_CUT_LINE)
+    if leads_result.get("truncated") is True:
+        notes.append(LEADS_CUT_LINE)
     if unchecked & {f.quote.name for f in new}:
         notes.append(ORDERS_CUT_LINE)
     out: list[CardSpec | DraftSpec] = []
@@ -522,8 +558,9 @@ def _build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) 
     who the ToDos are for."""
     from openexecutive.watch.runner import told
 
-    quotes_result = reads[0]
-    keys = [f.key for f in candidates(quotes_result, settings, today)]
+    keys = [f.key for f in candidates(reads[0], settings, today)]
+    if reads[1]:
+        keys += [f.key for f in candidates(reads[1], settings, today, leads=True)]
     return build(reads, settings, today, told=told(JOB, keys), assignee=assignee(settings))
 
 
@@ -570,6 +607,7 @@ JOB: WatchJob = WatchJob(
     title="Quote follow-up",
     reads=(
         WatchRead("list_records", QUOTES_SHAPE, _quotes, "the quotations"),
+        WatchRead("list_records", LEADS_SHAPE, _leads, "the quotations to leads"),
         WatchRead("list_records", ORDERS_SHAPE, _orders, "the customers' sales orders"),
     ),
     build=_build,

@@ -440,9 +440,10 @@ _HELD_STATUSES = frozenset({
 def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec]) -> set[Any]:
     """The dedupe keys of a once job's findings that get no new card: a
     card still waiting for the current reviewer and still the job's own
-    (``check_fields`` builds it unchanged), one a person approved or
-    dismissed, or one whose approval went unanswered (ERPNext may have
-    made it). A card that expired, or that code closed or would refuse (the
+    (``check_fields`` builds it unchanged), one being approved, one whose
+    approval was tried at all or went unanswered (its final ``closed_code``
+    ``no_answer``: ERPNext may have made it), or one a person approved or
+    dismissed. A card that expired, or that code closed or would refuse (the
     job's assignee or reviewer changed, a configurer refusal), doesn't hold
     its finding: a waiting one is closed here, its ``card:`` record dropped,
     and the finding gets a new card while it's due. A finding the ledger's
@@ -457,6 +458,13 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
     from openexecutive.watch.runner import dedup_key
     from openexecutive.watch.settings import forget_told, told
 
+    def tried(card: Any, payload: Mapping[str, Any], final: Mapping[str, Any]) -> bool:
+        # An approval was tried: ERPNext may have made the draft.
+        attempts = [p.get("attempts") for p in (payload, final)]
+        return payload.get("tried") is True or final.get("tried") is True or any(
+            isinstance(a, int) and not isinstance(a, bool) and a > 0 for a in attempts
+        )
+
     assert job.check_fields is not None
     wanted = {dedup_key(job.id, s.key) for s in specs}
     held: set[Any] = set()
@@ -468,7 +476,8 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
             continue
         seen.add(key)
         fields = payload.get("fields")
-        if card.status == STATUS_EXECUTING:
+        final = _final(card)
+        if card.status == STATUS_EXECUTING or (card.status == STATUS_PROPOSED and tried(card, payload, final)):
             held.add(key)
         elif card.status == STATUS_PROPOSED:
             target = payload.get("name")
@@ -479,12 +488,14 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
                     target if isinstance(target, str) else "",
                 ) == fields
             )
-            if still:
+            # Closed from proposed only: one that turned executing meanwhile
+            # is an approval in flight, and holds its finding.
+            if still or not close_externally(
+                card.id, reason="expired" if not drafts.card_live(card) else "job_changed", proposed_only=True,
+            ):
                 held.add(key)
-            else:
-                close_externally(card.id, reason="expired" if not drafts.card_live(card) else "job_changed")
         elif card.status in _HELD_STATUSES or (
-            card.status == STATUS_FAILED and payload.get("closed_code") == drafts.CLOSED_NO_ANSWER
+            card.status == STATUS_FAILED and final.get("closed_code") == drafts.CLOSED_NO_ANSWER
         ):
             held.add(key)
     stale = seen - held
@@ -494,6 +505,18 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
     recorded = told(job.id, [carded_key(k) for k in unseen]) if unseen else set()
     held |= {k for k in unseen if carded_key(k) in recorded}
     return held
+
+
+def _final(card: Any) -> dict[str, Any]:
+    """A card's final payload (what its approval left: ``closed_code``,
+    ``attempts``), or {}."""
+    import json
+
+    try:
+        final = json.loads(getattr(card, "final_payload_json", None) or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return final if isinstance(final, dict) else {}
 
 
 def carded_key(key: str) -> str:

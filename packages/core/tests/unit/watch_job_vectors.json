@@ -55,17 +55,37 @@
     },
     {
       "today": "2026-11-10",
-      "shape": {"doctype": "Quotation", "fields": ["name", "party_name", "quotation_to", "customer_name", "transaction_date", "valid_till", "grand_total", "currency", "status", "order_type", "amended_from"], "filters": {"company": "$company", "docstatus": 1, "valid_till": [">=", "$date"]}, "limit": "$int"},
+      "shape": {"doctype": "Quotation", "fields": ["name", "party_name", "customer_name", "transaction_date", "valid_till", "grand_total", "currency", "status", "order_type", "amended_from"], "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "$date"]}, "limit": "$int"},
       "fits": [
-        {"doctype": "Quotation", "fields": ["name", "party_name", "quotation_to", "customer_name", "transaction_date", "valid_till", "grand_total", "currency", "status", "order_type", "amended_from"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": [">=", "2026-11-03"]}, "limit": 500},
-        {"doctype": "Quotation", "fields": ["name", "valid_till"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": [">=", "2026-11-03"]}, "limit": 1}
+        {"doctype": "Quotation", "fields": ["name", "party_name", "customer_name", "transaction_date", "valid_till", "grand_total", "currency", "status", "order_type", "amended_from"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name", "valid_till"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2026-11-03"]}, "limit": 500}
       ],
       "misfits": [
-        {"doctype": "Quotation", "fields": ["name", "contact_email"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": [">=", "2026-11-03"]}, "limit": 500},
-        {"doctype": "Lead", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": [">=", "2026-11-03"]}, "limit": 500},
-        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": ["<", "2026-11-03"]}, "limit": 500},
-        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": [">=", "2026-11-03"], "status": ["in", "Open"]}, "limit": 500},
-        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": [">=", "2025-01-01"]}, "limit": 500}
+        {"doctype": "Quotation", "fields": ["name", "contact_email"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name", "contact_display"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Lead", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": ["<", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2026-11-03"], "status": ["in", "Open"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2025-01-01"]}, "limit": 500}
+      ]
+    },
+    {
+      "today": "2026-11-10",
+      "shape": {"doctype": "Quotation", "fields": ["name", "valid_till", "grand_total", "currency", "status"], "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "$date"]}, "limit": "$int"},
+      "fits": [
+        {"doctype": "Quotation", "fields": ["name", "valid_till", "grand_total", "currency", "status"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name", "valid_till"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"]}, "limit": 500}
+      ],
+      "misfits": [
+        {"doctype": "Quotation", "fields": ["name", "party_name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name", "customer_name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name", "contact_display"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name", "transaction_date"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "2026-11-03"]}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"], "party_name": "CRM-LEAD-0001"}, "limit": 500},
+        {"doctype": "Quotation", "fields": ["name"], "filters": {"company": "Acme", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "2026-11-03"], "customer": ["in", ["Acme Retail"]]}, "limit": 500}
       ]
     },
     {
@@ -114,7 +134,8 @@
     "id": "quote-follow-up",
     "as_job_user": true,
     "reads": [
-      {"tool": "list_records", "doctype": "Quotation", "fields": ["name", "party_name", "quotation_to", "customer_name", "transaction_date", "valid_till", "grand_total", "currency", "status", "order_type", "amended_from"], "filters": {"company": "$company", "docstatus": 1, "valid_till": [">=", "$date"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Quotation", "fields": ["name", "party_name", "customer_name", "transaction_date", "valid_till", "grand_total", "currency", "status", "order_type", "amended_from"], "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "$date"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Quotation", "fields": ["name", "valid_till", "grand_total", "currency", "status"], "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "$date"]}, "limit": "$int"},
       {"tool": "list_records", "doctype": "Sales Order", "fields": ["name", "customer", "transaction_date", "items.prevdoc_docname"], "filters": {"company": "$company", "docstatus": ["<", 2], "customer": ["in", "$customers"], "transaction_date": [">=", "$date"]}, "limit": "$int"}
     ]
   },
