@@ -33,11 +33,16 @@ from openexecutive.config import get_settings
 # "credit" is a credit-limit raise (integrations.erpnext_credit): only ever
 # left from a credit-hold alert's tap, never proposed by the model, so
 # ``enabled("credit")`` lists nothing and ``check_change`` refuses it.
-OPERATIONS = ("create", "update", "comment", "credit")
+# "block" is ERPNext's Block Invoice on a submitted supplier invoice
+# (integrations.erpnext_block): only ever left by the payment-checks job's
+# code, so ``enabled("block")`` lists nothing either, and chat and ERPNext's
+# panel can never propose one.
+OPERATIONS = ("create", "update", "comment", "credit", "block")
 OPERATION_TOOLS: dict[str, str] = {
     "update": "erpnext__draft_update",
     "comment": "erpnext__draft_comment",
     "credit": "erpnext__draft_update",
+    "block": "erpnext__draft_block_invoice",
 }
 MAX_CHANGES = 40
 COMMENT_MAX = 2000
@@ -127,6 +132,8 @@ def comment_doctypes() -> tuple[str, ...]:
 
 
 def enabled(operation: str) -> tuple[str, ...]:
+    """The DocTypes a person may have a card of ``operation`` proposed on:
+    none for "credit" and "block", which only code leaves."""
     if operation == "update":
         return update_doctypes()
     if operation == "comment":

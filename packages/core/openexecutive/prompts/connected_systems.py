@@ -173,9 +173,9 @@ ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, 
 
 # Tools oe_connector serves and this install pins (erpnext_tool_pin), but
 # no turn may call: reading an attachment (S4) waits for intake's tool-less
-# extraction, a supplier's bank-change fact (S5) for the payment-check job,
-# and customers' payment records (phase 1) belong to the collections job,
-# which reads many customers' payment behaviour at once. The gateway refuses
+# extraction, a supplier's bank-change fact (S5) belongs to the
+# payment-checks job, and customers' payment records (phase 1) to the
+# collections job, which reads many customers' payment behaviour at once. The gateway refuses
 # them on every path but one: a watch job's own read of a tool
 # JOB_WITHHELD_EXCEPTIONS gives that job, under its watch_run marker with
 # exactly that tool bound. Tool search never shows them, and the model is
@@ -190,6 +190,9 @@ ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({
 # lists a withheld tool it doesn't own, so the two stay in step).
 JOB_WITHHELD_EXCEPTIONS: Mapping[str, frozenset[str]] = MappingProxyType({
     "collections": frozenset({"erpnext__customer_payment_record"}),
+    # Whether a supplier's bank details changed since its last payment: the
+    # payment-checks job's alone. Chat never reads it, whoever asks.
+    "payment-checks": frozenset({"erpnext__supplier_bank_changed"}),
 })
 
 # The tool ERPNext's panel uses to open what an answer talks about beside it

@@ -11408,13 +11408,17 @@ integrations:
     Withheld tools (connected_systems.ERPNEXT_WITHHELD_TOOLS, Nov 9, 2026):
     oe_connector serves, and this install pins, tools nothing here may call
     yet, erpnext__read_attachment (intake), erpnext__supplier_bank_changed
-    (the payment-check job) and erpnext__customer_payment_record (phase 1's
-    collections job; many customers' payment behaviour in one call, so never
-    offered to chat). call_tool refuses them first in its ERPNext
-    block, under every marker and on every turn, and _drop_blocked_tools
-    hides them, with the draft tools no card uses yet (Dunning, update,
-    comment, the invoice block), which _check_erpnext_draft refuses anyway. Each moves to a
-    marker-gated list when its own path exists, never to PINNED_ERPNEXT_TOOLS.
+    (phase 1's payment-checks job; never chat's, whoever asks) and
+    erpnext__customer_payment_record (phase 1's collections job; many
+    customers' payment behaviour in one call, so never offered to chat).
+    call_tool refuses them first in its ERPNext block, under every marker and
+    on every turn, but a watch job's own read (JOB_WITHHELD_EXCEPTIONS), and
+    _drop_blocked_tools hides them, with the draft tools outside
+    ERPNEXT_DRAFT_TOOLS (erpnext__draft_block_invoice, called only by the
+    payment-checks job's card executor), which _check_erpnext_draft refuses
+    outside their marker anyway. ERPNEXT_DRAFT_TOOLS stays a static set.
+    _is_undiscovered_refusal lets a withheld tool and the block tool be
+    discovered on their own call (each reaches it only through its gate).
 
     A2A for suppliers' agents (design "Next", item 3;
     integrations/erpnext_a2a.py, erpnext_a2a_agent.py). A supplier's own AI
@@ -11752,20 +11756,33 @@ watch:
     applies rules in code and leaves notices and draft cards; it never runs
     the Executive's tool loop, no model picks a read, and no model writes a
     figure or a card's field (a model writes only reason lines). Listed:
-    collections (watch.jobs.collections). Payment checks come in their own
-    PR.
+    collections (watch.jobs.collections) and payment checks
+    (watch.jobs.payment_checks).
   registry: |
     watch.registry: WatchJob(id, title, reads, build, schedule,
-    card_cap_day, default_settings, reason_schema=None). id is oe_connector's
+    card_cap_day, default_settings, reason_schema=None, ..., slots=(),
+    weekdays=all). id is oe_connector's
     watch.JOB_ID ([a-z0-9-]{1,40}), the key of oe_connector_watch_jobs and of
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same
     slot names ($company, $date within 400 days, $party, $parties and
-    $customers up to 50, $int 1-500; `fields` a most; objects exact keys);
+    $customers up to 50, $int 1-500; the top-level `fields` a most; any other
+    list the same length, element by element, so ["<=", "$date"] and
+    ["in", "$parties"]; a literal only the same JSON type and value, true
+    never 1, 1.0 never 1; objects exact keys), mirroring oe_connector's
+    watch._mismatch (ladislav-urban/oe_connector#536). shape_problem mirrors
+    watch._shape_problem: a $ string that isn't a slot, a list or object in a
+    list, a slot in a list other than [op, slot] (= != < <= > >= before a
+    single-value slot, in / not in before $parties or $customers), or a list
+    slot as a bare filter value makes the read unsound, and
+    WatchJob.__post_init__ refuses the job. tests/unit/watch_shape_vectors.json
+    is oe_connector's own file (shapes, matches, slot_oracle), run against
+    both; shape_mismatch takes a holds= oracle for it;
     READ_TOOLS is run_report and list_records; a withheld tool
     (connected_systems.ERPNEXT_WITHHELD_TOOLS) may be listed only by the job
     connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to
-    (customer_payment_record: collections), checked in
+    (customer_payment_record: collections; supplier_bank_changed:
+    payment-checks), checked in
     WatchJob.__post_init__, mirroring the gateway's one exception.
     Dependent reads: arguments(settings, today, prior), prior the earlier
     results without acting; None skips the read (an empty derived list:
@@ -11773,14 +11790,20 @@ watch:
     Derived(arguments, truncated) records a list cut to 50. build(results,
     settings, today) is pure code returning CardSpec(key, summary, values,
     facts, items, notes, count) notices and DraftSpec(key, operation,
-    doctype, fields, expect, title, reason_key, group) cards. WatchJob also
-    takes check_fields (the job's own builder of a card's fields, run before
-    each check and again at approval), setting_bounds (whole-number
-    settings outside 1-500) and card_noun. JOBS is a read-only mapping of
-    _LISTED (collections), imported at the module's end (watch.jobs imports
-    the registry first); the test job watch.jobs._example is put in by tests
-    only. tests/unit/watch_job_vectors.json pins the id pattern, the slots,
-    shapes, collections' four reads and one signed watch assertion against
+    doctype, fields, expect, title, reason_key, group, name, notice) cards
+    (name: the document a change or block is on; notice: the finding told
+    as a notice when no card can be left). WatchJob also takes check_fields
+    (operation, doctype, fields, name: the job's own builder of a card's
+    fields, run before each check and again at approval), setting_bounds
+    (whole-number settings outside 1-500), card_noun, slots (the times a
+    job runs each day, in order, the first its schedule; empty: once a day)
+    and weekdays (0 Monday to 6 Sunday); due_slots(now, weekday) gives the
+    keys ("HH:MM", "" for a daily job) due by now. JOBS is a read-only
+    mapping of _LISTED (collections, payment-checks), imported at the
+    module's end (watch.jobs imports the registry first); the test job
+    watch.jobs._example is put in by tests only.
+    tests/unit/watch_job_vectors.json pins the id pattern, the slots,
+    shapes, both jobs' reads and one signed watch assertion against
     oe_connector.
   settings: |
     watch.settings, table watch_jobs (job, enabled, settings JSON,
@@ -11828,28 +11851,49 @@ watch:
     result's top-level `acting` (a refused call has none).
   runner: |
     watch.runner.maybe_run, from scheduler.runner._maybe_run_watch_jobs each
-    tick: for each job on (master switch and row), past its hour in the
-    company's zone (get_user_timezone), claim(job, day) under BEGIN
-    IMMEDIATE in watch_runs (job, day, status running/done/failed,
-    started_at, attempts, cards, error, reads, failure_noticed); a running
-    row 30 minutes stale is taken again once (attempts 2), then failed
-    run_stalled. A DST-skipped hour still runs (past the hour, no row). One
-    asyncio task per run (unscoped audit rows), not a scheduled_actions row.
-    run_job runs under set_turn(turn_id=watch:<id>:<day>) and
+    tick: for each job on (master switch and row), on its weekdays, with a
+    slot due in the company's zone (get_user_timezone), claim(job, day,
+    slots=due) under BEGIN IMMEDIATE in watch_runs, keyed (job, day, slot)
+    (status running/done/failed/skipped, started_at, attempts, cards, error,
+    reads, failure_noticed, detail; slot "HH:MM", "" for a daily job). Only
+    the latest due slot is claimed; earlier slots with no row are inserted
+    skipped (attempts 0) in the same transaction, an earlier one still
+    running and fresh makes the claim wait (None), and an earlier one
+    running 30 minutes stale is failed run_overtaken, never retried. The
+    latest slot's running row 30 minutes stale is taken again once
+    (attempts 2) while it is still the latest, then failed run_stalled. A
+    DST-skipped hour still runs (past the slot, no row). settings.connect
+    migrates a (job, day)-keyed watch_runs once (_migrate_runs, under BEGIN
+    IMMEDIATE, re-checked inside): every row kept with slot "", a noticed
+    failure carried to watch_days. watch_days (job, day, cards,
+    failure_noticed, checks, notices; checks and notices added by
+    settings.connect's column migration): take_day_cards(job, day, n, cap), and take_day for any
+    DAY_COUNTS column, reads and adds in one BEGIN IMMEDIATE (negative n
+    gives back, never below 0), so the day's card cap holds across slots,
+    workers and restarts; take_failure_notice is true once
+    per job and calendar day. One asyncio task per run (unscoped audit
+    rows), not a scheduled_actions row. run_job(job, day, slot=) runs under
+    set_turn(turn_id=watch:<id>:<day>[:<slot>]) and
     _cost_budget(id) (HOOK: imports audit.cost_caps.bind_job by name, a
     no-op until S7's cost caps land). Reads: arguments from the job's code,
     shape-checked, then gateway.call_tool inside watch_run, 60 s each; an
     error result, non-JSON text, a timeout or a WatchRefused ends the run
-    with one failure notice a day (failure_noticed; a direct private alert
-    naming the read and REASONS[code], never ERPNext's text); quiet when the
-    job was turned off. acting is read from the top-level key only:
+    with one failure notice a job and calendar day (take_failure_notice; a
+    direct private alert naming the read and REASONS[code], never ERPNext's
+    text); quiet when the job was turned off. A refusal naming
+    oe_connector_bank_facts (ladislav-urban/oe_connector#534) is the code
+    bank_facts_off, whose notice says FAIL_LINES' "Supplier bank checks are
+    off in ERPNext's settings." (the refusal text is searched for the
+    setting's name only, never kept). acting is read from the top-level key only:
     as_job_user per read (kind watch, as_job_user is True, job equal, user
     exactly oe-watch-<id>@host, the same user across the run) stored in
     watch_runs.reads without the user's name; acting.job naming another job
     fails the run (acting_job_mismatch). watch_runs.detail (added by
     settings.connect's column migration) keeps codes and counts: routed,
     routed_principal, draft_cards, draft_repeats, draft_capped, checks,
-    check_refused. Each run starts erpnext_caller.begin_job_checks(job, day).
+    check_refused. Checks are capped per job and day in watch_days.checks
+    (erpnext_caller.job_check_cap, two runs' worth), so an hourly job's
+    slots share one bound and a restart never resets it.
   routing: |
     watch.cards.route(job, row, reads): the reviewer only when every made
     read (at least one; skipped reads count neither way) was as_job_user,
@@ -11872,29 +11916,45 @@ watch:
     exactly {operation, doctype, [name,] fields} with fields equal to
     job.check_fields' output (job-check-arguments; so never asked_by or
     configured_by), a person who isn't the job's current reviewer under that
-    email (active, team, not demo, not principal), and past card_cap_day +
-    JOB_CHECK_RETRIES (2) per (job, day). _marked refuses any draft marker
+    email (active, team, not demo, not principal), and past job_check_cap,
+    2 x (card_cap_day + JOB_CHECK_RETRIES (2)) per (job, day), taken from
+    watch_days.checks (settings.take_day) in one transaction before the
+    check and never given back, so a refused check still counts; a count
+    that can't be taken refuses (job-check-cap). _marked refuses any draft marker
     inside it. The gateway: any other tool under it is outside-job-check;
     _check_erpnext_draft refuses it under a session, a watch read, the
     brief, oversight, answer check or supplier markers, for any tool but
     draft_check, and re-reads the reviewer (job_check_refusal) at signing.
   cards: |
     watch.cards.leave_drafts, only for a reviewer-routed run (no check runs
-    for a principal-routed one) with drafts on and the DocType enabled: per
-    DraftSpec in order, skipped while erpnext_drafts.job_card_waiting(its
-    dedup key); capped at card_cap_day a day (cards already left that
-    run_day count), erpnext_drafts.JOB_OPEN_MAX (10) open per job and
-    OPEN_CARDS_MAX - JOB_HEADROOM (5) open for the reviewer. The check
-    (CHECK_TRIES 2 for one that doesn't answer) must echo doctype,
-    operation and DraftSpec.expect in its summary and give a fingerprint;
+    for a principal-routed one) with drafts on: a kind of card that is off
+    (a create DocType not listed, an update DocType not in
+    erpnext_changes.enabled("update"), a block while erpnext_block.unavailable)
+    is not proposed. Per DraftSpec in order, skipped (a repeat) while
+    erpnext_drafts.job_card_waiting(its dedup key) or when a card for it was
+    left that run_day already, whatever became of it; capped at
+    card_cap_day a day across slots (settings.take_day_cards before the
+    check, given back when no card is left), erpnext_drafts.JOB_OPEN_MAX
+    (10) open per job and OPEN_CARDS_MAX - JOB_HEADROOM (5) open for the
+    reviewer. The check (CHECK_TRIES 2 for one that doesn't answer; a
+    change or block sends the document's name) must read back the card: a
+    create its doctype, operation and DraftSpec.expect; an update
+    erpnext_changes.summary_refusal's reading and whose "yours" or
+    "assigned to you" (else check_not_theirs, counted with the permission
+    refusals); a block erpnext_block.echo_refusal's; and give a fingerprint.
     pin_from_check settles a Dunning's posting_date and check_fields must
     accept the result; then erpnext_drafts.leave_job_card. Each check is a
     private watch_job_check audit row (job, day, operation, person_id,
     result code). Refusals are counted (permission ones apart, read from
     the refusal in memory only) and told on the notice in code's words.
+    DraftOutcome.unproposed lists the findings no card was left for (none
+    waiting): the runner leaves each one's DraftSpec.notice, if it has one.
   job_cards: |
     erpnext_drafts.leave_job_card(job, run_day, operation, doctype, fields,
-    check, reviewer=, configured_by_person_id=, dedup_key=, why=, reason=)
+    check, reviewer=, configured_by_person_id=, dedup_key=, why=, reason=,
+    name=; name for a change or block, never a create; the view from
+    job_card_view: card_view, erpnext_changes.card_view or
+    erpnext_block.card_view)
     goes through propose (digest dedupe scoped "watch:<id>", fingerprint
     replacement, never changed in place) with extra source watch, job,
     run_day, asked_by_person_id, approver_person_id, configured_by_person_id,
@@ -11912,6 +11972,37 @@ watch:
     "job:<id>" and configured_by the configurer's current People email;
     draft_check never gets either. oe_connector's own "Separation of
     duties" refusal on a job card finishes it failed, 409.
+  block_card: |
+    integrations.erpnext_block: the payment-checks job's block card,
+    oe_connector's draft_block_invoice (ladislav-urban/oe_connector#530;
+    pinned in erpnext_tool_pin, TOOLS_DIGEST 932d4af0). Operation "block"
+    is in erpnext_changes.OPERATIONS with OPERATION_TOOLS["block"] =
+    erpnext__draft_block_invoice; erpnext_changes.enabled("block") is (),
+    so check_change refuses it and neither chat nor ERPNext's panel can
+    propose one. ERPNEXT_DRAFT_TOOLS stays static without it. Off three
+    ways (unavailable: block_setting_off, block_switch_off,
+    block_not_pinned): the job's block_submitted setting (default false),
+    ERPNEXT_BLOCK_INVOICE (default false) and pinned() (draft_block_invoice
+    in TOOL_DIGESTS and gateway.verified_erpnext_tools([...]) true). The
+    job's check: draft_check {operation: block, doctype, name, fields:
+    {duplicate_of, release_date}}, release_date the run's day + 14
+    (RELEASE_DAYS); echo_refusal needs the block of that invoice,
+    duplicate_of.name, the release date and the expected supplier and
+    company. approve: _job_approval first (separation of duties), then a
+    block branch before the generic enabled check: wire present and
+    approval_refusal (source watch, job payment-checks, Purchase Invoice,
+    all three switches now; else 409 block_off, nothing claimed); then
+    block_fields re-validates {duplicate_of, release_date} for the name
+    (release after the company's today, at most 90 days) and the
+    fingerprint. _carry_out sends {name, duplicate_of, release_date,
+    idempotency_key, asked_by job:payment-checks, configured_by,
+    expected_fingerprint}, never a doctype or a hold comment, and refuses
+    (releasing the claim) any block not the payment-checks job's. Success:
+    erpnext_block.made (ok, operation block, the same invoice). Final,
+    closing the card failed: CHANGED_SINCE_PROPOSED (CHANGED_TEXT), "Blocking
+    limit", "unblocked by a person", "a block comes only from the
+    payment-checks job's card" (FINAL) and oe_connector's separation of
+    duties (SOD_JOB_TEXT). Any other refusal leaves it waiting.
   collections: |
     watch.jobs.collections: 07:00 company time, card_cap_day 5, settings
     company, first_after_days 7, repeat_after_days 14, min_amount 0,
@@ -11931,6 +12022,42 @@ watch:
     {sales_invoice, dunning_type?}, key dunning:<invoice>:<type>, expect
     invoice, customer and company. check_fields: create Dunning only,
     exactly erpnext_drafts._dunning's output.
+  payment_checks: |
+    watch.jobs.payment_checks: slots 08:00-18:00 hourly, weekdays 0-4,
+    company time; card_cap_day 10 across the day's slots; settings company,
+    due_within_days 14 (1-400), block_submitted false. Reads (in
+    watch_job_vectors.json; both list filters in oe_connector's
+    watch_shape_vectors.json): list_records Purchase Invoice (name,
+    supplier, bill_no, bill_date, posting_date, grand_total, currency,
+    outstanding_amount, docstatus, on_hold, due_date) with {company,
+    docstatus ["<", 2], outstanding_amount [">", 0], due_date ["<=", today +
+    due_within_days]}; the same fields, {company, docstatus 1, supplier
+    ["in", the 50 soonest-due suppliers], posting_date [">=", today - 120]}
+    (derived, skipped when nothing is due); supplier_bank_changed
+    {suppliers} (derived, its job-only exception). Rules mirror
+    oe_connector's block_invoice._match: same currency and both bill
+    dates; normalized bill number (letters and digits, lower case, leading
+    zeros dropped), a real one (3+ chars, 2+ digits) with the same amount or
+    dates within 60 days, high; the same amount and bill date, medium; the
+    same amount within 3 days, low (a notice, never proposed). The copy: a
+    draft against a submitted invoice, or the later posted of two
+    submitted; only an unpaid copy not on hold among the invoices due.
+    Bank: has_bank_account and changed_after_last_payment true, and when
+    never paid only details changed within 30 days; None (payments
+    unreadable) isn't raised. Cards: a draft copy, an update DraftSpec
+    {set: {on_hold: 1, hold_comment}}, the comment the code template
+    "Possible duplicate of <other>: same bill number|same amount and date",
+    control characters out, one line, at most 280; a submitted copy, a block
+    DraftSpec when block_submitted, else a notice to use Block Invoice in
+    ERPNext; each DraftSpec carries its notice for when no card is left
+    (principal-routed, check refused or not theirs, capped, kind off). A
+    bank change is a notice with code's line "Confirm the change with the
+    supplier by phone, on a number you already have, before paying."
+    check_fields: update Purchase Invoice with exactly that set (the
+    comment matching the template, cleaned, naming another invoice), or
+    block via erpnext_block.block_fields. A finding is raised once a day:
+    a notice whose external_id <key>:<day> exists is a repeat
+    (runner._raised_today), as is a card left that run_day.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds
@@ -11956,8 +12083,9 @@ watch:
     runner.notice_body, a code preamble and wrap_untrusted(source erpnext,
     author watch:<id>) of the stripped, capped summary, values and the
     labelled reason. A run takes at most MAX_FINDINGS (200) findings from
-    build; card_cap_day counts attempts, not stored notices, so a notice
-    that fails to store never lets another through; a finding whose notice
+    build; card_cap_day counts attempts a day across the job's slots and
+    restarts (settings.take_day "notices" before each), not stored notices,
+    so a notice that fails to store never lets another through; a finding whose notice
     is still unread or read is skipped (repeats). Audit: one
     private watch_run row per run (status, reason code, counts, as_job_user
     list; never figures or text).

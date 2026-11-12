@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
+import sys
 from collections.abc import Iterator
 from datetime import UTC, datetime, time, timedelta
 from types import SimpleNamespace
@@ -151,14 +153,6 @@ def _save(by: int, **kw: Any) -> None:
     )
 
 
-@pytest.fixture(autouse=True)
-def fresh_checks() -> Iterator[None]:
-    """No check count carries over from another test (module state)."""
-    erpnext_caller._JOB_CHECKS.clear()
-    yield
-    erpnext_caller._JOB_CHECKS.clear()
-
-
 @pytest.fixture
 def team(roster: SimpleNamespace) -> SimpleNamespace:
     """The roster with Cara, the job's reviewer, and Dan, a teammate too."""
@@ -231,7 +225,7 @@ def test_collections_is_listed_with_its_shared_reads() -> None:
 
 
 def test_a_withheld_tool_is_listed_only_by_the_job_that_owns_it() -> None:
-    assert {"collections": frozenset({"erpnext__customer_payment_record"})} == JOB_WITHHELD_EXCEPTIONS
+    assert JOB_WITHHELD_EXCEPTIONS["collections"] == frozenset({"erpnext__customer_payment_record"})
     assert all(tools <= ERPNEXT_WITHHELD_TOOLS for tools in JOB_WITHHELD_EXCEPTIONS.values())
     record = WatchRead("customer_payment_record", collections.RECORD_SHAPE, collections._record, "r")
     for other in ("payment-checks", "example", "collection"):
@@ -830,15 +824,42 @@ def test_the_marker_is_for_the_jobs_current_reviewer_only(job_on: WatchJob, team
     assert _job_refused() == "job-check-job-off"
 
 
-def test_the_marker_is_capped_per_run(job_on: WatchJob) -> None:
-    erpnext_caller.begin_job_checks("collections", DAY)
-    for _n in range(JOB.card_cap_day + erpnext_caller.JOB_CHECK_RETRIES):
+def test_the_marker_is_capped_per_day(job_on: WatchJob) -> None:
+    # Every run and slot of the day shares one count: two runs' worth (a run
+    # and its one stale retry).
+    cap = erpnext_caller.job_check_cap(JOB)
+    assert cap == 2 * (JOB.card_cap_day + erpnext_caller.JOB_CHECK_RETRIES)
+    for _n in range(cap):
         with _marker():
             pass
     assert _job_refused() == "job-check-cap"
-    erpnext_caller.begin_job_checks("collections", "2026-11-11")
+    assert watch_settings.day_count("collections", DAY, "checks") == cap
     with _marker(day="2026-11-11"):
         pass
+
+
+def test_a_fresh_process_still_sees_the_days_check_count(job_on: WatchJob) -> None:
+    # The count is in watch_days, not in this process: after a restart (a new
+    # process, nothing held in memory) the day's checks so far still count,
+    # so a finding whose check was refused isn't checked again past the cap.
+    cap = erpnext_caller.job_check_cap(JOB)
+    for _n in range(cap - 1):
+        with _marker():
+            pass
+    assert not hasattr(erpnext_caller, "_JOB_CHECKS")
+    fresh = subprocess.run(
+        [sys.executable, "-c", (
+            "import sys; from pathlib import Path; from openexecutive.watch import settings; "
+            "p = Path(sys.argv[1]); "
+            "print(settings.day_count('collections', sys.argv[2], 'checks', path=p), "
+            "settings.take_day('collections', sys.argv[2], 'checks', 1, int(sys.argv[3]), path=p), "
+            "settings.take_day('collections', sys.argv[2], 'checks', 1, int(sys.argv[3]), path=p))"
+        ), str(watch_settings.db_path()), DAY, str(cap)],
+        capture_output=True, text=True, timeout=120, check=True,
+    )
+    # It saw the day's checks, took the last place, and was refused the next.
+    assert fresh.stdout.split() == [str(cap - 1), "1", "0"], fresh.stderr
+    assert _job_refused() == "job-check-cap"
 
 
 def test_the_gateway_refuses_the_check_at_call_time(

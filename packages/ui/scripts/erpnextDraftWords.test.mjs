@@ -67,6 +67,11 @@ test("a change or a comment says what it did, never 'submit the new draft'", asy
 test("a credit-limit raise card says what it raises and that the order is still a draft", async () => {
   const words = await import("../src/lib/erpnextDraftWords.ts");
   assert.equal(words.cardKind("Customer", "credit", true), "Raise a credit limit");
+  assert.equal(words.cardKind("Purchase Invoice", "block", true), "Hold a submitted Purchase Invoice");
+  assert.equal(words.jobCardKind("Purchase Invoice", "block", "Payment checks"),
+    "Hold a submitted Purchase Invoice from the Payment checks job");
+  assert.match(words.changeMadeLine("block", "Purchase Invoice", "PINV-2", false), /on hold in the ERP, until someone unblocks it/);
+  assert.doesNotMatch(words.changeMadeLine("block", "Purchase Invoice", "PINV-2", false), /unsubmitted|submit it/);
   assert.equal(words.cardKind("Customer", "credit", false), "Raise a credit limit");
   assert.equal(
     words.creditMadeLine("Harbor Electric Co-op", "Aurora Components", "31,000.00 USD", false),

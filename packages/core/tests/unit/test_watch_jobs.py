@@ -195,13 +195,13 @@ def _job(job_id: str = "capped", *, specs: int = 3, cap: int = 1, reason: bool =
 # --------------------------------------------------------------------------- #
 
 
-def test_jobs_are_code_only_and_phase_1_lists_collections() -> None:
-    from openexecutive.watch.jobs import collections
+def test_jobs_are_code_only_and_phase_1_lists_its_two() -> None:
+    from openexecutive.watch.jobs import collections, payment_checks
 
     assert isinstance(registry.JOBS, MappingProxyType)
     with pytest.raises(TypeError):
         registry.JOBS["x"] = _example.JOB  # type: ignore[index]
-    assert registry._LISTED == (collections.JOB,)
+    assert registry._LISTED == (collections.JOB, payment_checks.JOB)
     # The test job is put in by the tests alone.
     assert _example.JOB_ID not in registry.JOBS
     assert not [n for n in dir(registry) if n.lower().startswith(("register", "add_", "load"))]
@@ -332,7 +332,7 @@ def test_without_the_key_the_gateway_refuses_a_watch_read(
 def test_the_marker_is_bound_to_a_registered_enabled_job_its_tools_and_shapes(
     example: WatchJob, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
-    assert _refused(job_id="payment-checks") == "watch-unknown-job"
+    assert _refused(job_id="payment-check") == "watch-unknown-job"
     # Listed, but off until the principal turns it on.
     assert _refused(job_id="collections") == "watch-job-off"
     assert _refused(job_id="Bad Id") == "watch-unknown-job"
@@ -663,6 +663,28 @@ def test_the_cap_counts_attempts_and_the_findings_are_bounded(
     assert (bounded.findings, bounded.cards, bounded.capped) == (runner.MAX_FINDINGS, 1, runner.MAX_FINDINGS - 1)
 
 
+def test_the_notice_cap_is_per_day_across_the_jobs_slots(
+    erp: FakeErpnext, roster: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    # card_cap_day is a day's notices, not each run's: a later slot the same
+    # day (or a run after a restart) finds the day's attempts used.
+    job = _job("slotted", specs=3, cap=2)
+    monkeypatch.setitem(registry._JOBS, job.id, job)
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    _enable(job, roster.principal)
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    first = _run(job)
+    assert (first.cards, first.capped, first.repeats) == (2, 1, 0)
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    later = asyncio.run(runner.run_job(job, DAY, slot="13:00"))
+    assert (later.cards, later.capped, later.repeats) == (0, 1, 2)
+    assert watch_settings.day_count(job.id, DAY, "notices") == 2
+    assert len(_alerts()) == 2
+    # The next day has its own.
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=None))
+    assert _run(job, "2026-11-11").cards == 1
+
+
 def test_an_injected_customer_name_changes_no_figure_and_no_count(
     example: WatchJob, erp: FakeErpnext, triage: list[Any], model: SimpleNamespace,  # noqa: F811
 ) -> None:
@@ -896,7 +918,7 @@ def test_the_principal_configures_a_job_and_it_is_recorded(
     monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
     listed = client.get("/watch/jobs").json()
     assert listed["master_switch"] is True
-    assert [j["id"] for j in listed["jobs"]] == ["collections", "example"]
+    assert [j["id"] for j in listed["jobs"]] == ["collections", "example", "payment-checks"]
     response = client.put("/watch/jobs/example", json={
         "enabled": False, "settings": {"company": "Bolt Industries", "limit": 50}, "reviewer_person_id": roster.teammate,
     })
@@ -987,7 +1009,7 @@ def test_the_api_adds_no_job_and_rejects_unknown_fields(
     client: TestClient, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
-    assert client.put("/watch/jobs/payment-checks", json={"enabled": True}).status_code == 404
+    assert client.put("/watch/jobs/payment-check", json={"enabled": True}).status_code == 404
     assert client.post("/watch/jobs", json={"id": "x"}).status_code == 405
     assert client.put("/watch/jobs/example", json={"enabled": True, "reads": []}).status_code == 422
     assert client.put("/watch/jobs/example", json={"reviewer_person_id": 9999}).status_code == 400

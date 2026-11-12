@@ -78,7 +78,8 @@ and the digest of its exact arguments:
   with nobody watching (``DraftCall.unattended``). Its arguments must be
   exactly what the job's ``check_fields`` builds; it is refused under a
   session or any other marker (a watch read's too), without the caller key,
-  and past the run's cap (the job's ``card_cap_day`` plus 2 retries); the
+  and past the day's cap (two runs' worth of the job's ``card_cap_day``
+  plus 2 retries, counted in ``watch_days`` so a restart never resets it); the
   gateway re-reads the reviewer from People when it signs, and refuses the
   call under a session or a watch read, or for any tool but ``draft_check``.
 
@@ -321,18 +322,28 @@ class JobCheckRefused(Exception):
         self.reason = reason
 
 
-# Checks made by each job's run, by (job, day): bounded by its cap.
-_JOB_CHECKS: dict[tuple[str, str], int] = {}
 # A run's checks beyond its card cap, for a retry of a check that didn't answer.
 JOB_CHECK_RETRIES = 2
 DRAFT_CHECK_KEYS = frozenset({"operation", "doctype", "name", "fields"})
 
 
-def begin_job_checks(job_id: str, day: str) -> None:
-    """A run starts its count of checks (``watch.runner``, at each run)."""
-    for key in [k for k in _JOB_CHECKS if k[0] == job_id]:
-        del _JOB_CHECKS[key]
-    _JOB_CHECKS[(job_id, day)] = 0
+def job_check_cap(job: Any) -> int:
+    """A job's checks a day, per job and day across its slots, restarts and
+    workers (``watch_days.checks``): two runs' worth (a run and its one stale
+    retry), each its card cap and JOB_CHECK_RETRIES."""
+    return 2 * (int(job.card_cap_day) + JOB_CHECK_RETRIES)
+
+
+def _take_job_check(job: Any, day: str) -> bool:
+    """Count one of the job's checks for ``day`` in ``watch_days``, in one
+    transaction; False past its cap or when the count can't be taken."""
+    from openexecutive.watch.settings import take_day
+
+    try:
+        return take_day(job.id, day, "checks", 1, job_check_cap(job)) == 1
+    except Exception:
+        logger.warning("erpnext_caller: couldn't count job %s's check — refusing", job.id, exc_info=True)
+        return False
 
 
 def _reviewer_refusal(job_id: str, person_id: int | None, email: str) -> str | None:
@@ -374,7 +385,8 @@ def draft_check_for_job(
     are ``{operation, doctype, [name,] fields}`` with the fields exactly as
     the job's ``check_fields`` builds them (never ``asked_by`` or
     ``configured_by``: draft_check takes neither), unless the person is the
-    job's current reviewer under that email, and past the run's cap."""
+    job's current reviewer under that email, and past the day's cap
+    (``job_check_cap``, counted in ``watch_days``)."""
     from openexecutive.orchestrator.schedule_tools import current_session
     from openexecutive.watch import registry
     from openexecutive.watch.settings import job_enabled
@@ -400,7 +412,8 @@ def draft_check_for_job(
         set(arguments) - DRAFT_CHECK_KEYS or not {"operation", "doctype", "fields"} <= set(arguments)
         or not isinstance(operation, str) or not isinstance(doctype, str) or not isinstance(fields, dict)
         or ("name" in arguments) == (operation == "create")
-        or job.check_fields(operation, doctype, fields) != fields
+        or ("name" in arguments and not isinstance(arguments["name"], str))
+        or job.check_fields(operation, doctype, fields, str(arguments.get("name") or "")) != fields
     ):
         raise JobCheckRefused("job-check-arguments")
     asker = email.strip().lower()
@@ -409,10 +422,10 @@ def draft_check_for_job(
     refused = _reviewer_refusal(job.id, person_id, asker)
     if refused is not None:
         raise JobCheckRefused(refused)
-    made = _JOB_CHECKS.get((job.id, day), 0)
-    if made >= job.card_cap_day + JOB_CHECK_RETRIES:
+    # A day's checks, counted in the database: a restart never resets it, and
+    # a check refused (its card's place given back) still counts.
+    if not _take_job_check(job, day):
         raise JobCheckRefused("job-check-cap")
-    _JOB_CHECKS[(job.id, day)] = made + 1
     token = _draft_call.set(DraftCall(
         DRAFT_CHECK_TOOL, arguments_digest(arguments), ErpnextCaller("user", asker),
         unattended=True, job=job.id, person_id=person_id,

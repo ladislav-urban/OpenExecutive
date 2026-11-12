@@ -73,6 +73,15 @@
       {"tool": "customer_payment_record", "company": "$company", "customers": "$customers"}
     ]
   },
+  "payment_checks_job": {
+    "id": "payment-checks",
+    "as_job_user": true,
+    "reads": [
+      {"tool": "list_records", "doctype": "Purchase Invoice", "fields": ["name", "supplier", "bill_no", "bill_date", "posting_date", "grand_total", "currency", "outstanding_amount", "docstatus", "on_hold", "due_date"], "filters": {"company": "$company", "docstatus": ["<", 2], "outstanding_amount": [">", 0], "due_date": ["<=", "$date"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Purchase Invoice", "fields": ["name", "supplier", "bill_no", "bill_date", "posting_date", "grand_total", "currency", "outstanding_amount", "docstatus", "on_hold", "due_date"], "filters": {"company": "$company", "docstatus": 1, "supplier": ["in", "$parties"], "posting_date": [">=", "$date"]}, "limit": "$int"},
+      {"tool": "supplier_bank_changed", "suppliers": "$parties"}
+    ]
+  },
   "example_job": {
     "id": "example",
     "reads": [

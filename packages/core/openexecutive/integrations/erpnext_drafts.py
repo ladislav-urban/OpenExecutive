@@ -68,7 +68,11 @@ says: whoever set the job up (``configured_by_person_id``) never approves its
 cards, and a card whose configurer is gone is refused too
 (``SOD_JOB_TEXT``, closed as ``sod_refused``). The write tool then gets
 ``asked_by: "job:<id>"`` and ``configured_by``, the configurer's current
-email, so oe_connector applies its own rule as well.
+email, so oe_connector applies its own rule as well. A job's card may change
+an existing document (the payment-checks job's hold on a draft invoice,
+``draft_update``) or, only from that job, put ERPNext's own Block Invoice on
+a submitted one (``integrations.erpnext_block``, checked again at approval:
+the job's setting, ``ERPNEXT_BLOCK_INVOICE`` and the pin).
 """
 from __future__ import annotations
 
@@ -208,7 +212,8 @@ class DraftCard:
     asked_in: str = ""
     # "create" for a new draft; "update" or "comment" for a card that
     # changes or comments on an existing document (erpnext_changes); "credit"
-    # for a credit-limit raise (erpnext_credit).
+    # for a credit-limit raise (erpnext_credit); "block" for a hold on a
+    # submitted supplier invoice (erpnext_block).
     operation: str = "create"
     # A credit-limit raise ERPNext reads differently now than when the card
     # was left (erpnext_credit.recheck, GET /erpnext/drafts only): approving
@@ -1307,7 +1312,8 @@ def cards(person: Any) -> list[DraftCard]:
             last_error=words(str(payload.get("last_error") or "")),
             asked_in=str(payload.get("asked_in")) if payload.get("asked_in") in (ASKED_IN_PANEL, ASKED_IN_DESK) else "",
             operation=(
-                str(payload.get("operation")) if payload.get("operation") in ("update", "comment", "credit") else "create"
+                str(payload.get("operation")) if payload.get("operation") in ("update", "comment", "credit", "block")
+                else "create"
             ),
             job_title=_job_title(payload),
             why_now=_one_line(payload.get("reason"), JOB_REASON_MAX) if payload.get("source") == JOB_SOURCE else "",
@@ -1384,9 +1390,26 @@ def job_room(job_id: str, reviewer_id: int) -> str | None:
     return None
 
 
+def job_card_view(operation: str, doctype: str, name: str | None, fields: dict[str, Any], check: dict[str, Any]) -> dict[str, Any]:
+    """A job's card's view, code's reading of ERPNext's check: a new draft's
+    (``card_view``), a change's (``erpnext_changes.card_view``) or a block's
+    (``erpnext_block.card_view``)."""
+    if operation == "block":
+        from openexecutive.integrations.erpnext_block import card_view as block_view
+
+        return block_view(check.get("summary"))
+    if operation in ("update", "comment"):
+        from openexecutive.integrations.erpnext_changes import card_view as change_view
+
+        summary = check.get("summary")
+        return change_view(operation, doctype, str(name or ""), summary if isinstance(summary, dict) else {})
+    return card_view(doctype, check.get("summary"), fields)
+
+
 def leave_job_card(
     job: Any, run_day: str, operation: str, doctype: str, fields: dict[str, Any], check: dict[str, Any],
     *, reviewer: Any, configured_by_person_id: int, dedup_key: str, why: str, reason: str = "",
+    name: str | None = None,
 ) -> tuple[int, bool]:
     """Leave ``reviewer`` the card ``job``'s run found, through ``propose``
     (so a waiting card for the same finding is that card, a changed
@@ -1395,17 +1418,20 @@ def leave_job_card(
     as the reviewer) settled pinned; the view is code's reading of ``check``.
     ``why`` is the code-built title; ``reason`` the reason step's line (a
     model's), shown as "Why now" and never in the title, key or fields.
-    Returns the decision id and whether it is new."""
+    ``name``: the document a change or a block is on. Returns the decision
+    id and whether it is new."""
     from openexecutive.delegation.gmail import normalize_email
 
     email = normalize_email(reviewer.email or "")
     fingerprint = fingerprint_of(check)
     if fingerprint is None or "@" not in email:
         raise ValueError("a job's card needs ERPNext's fingerprint and its reviewer's email")
-    view = card_view(doctype, check.get("summary"), fields)
+    if (operation == "create") != (name is None):
+        raise ValueError("a new draft has no name; a change or a block names its document")
+    view = job_card_view(operation, doctype, name, fields, check)
     decision_id, new, _view = propose(
         reviewer, doctype, fields, view, why, asked_by=email, session_id=None,
-        fingerprint=fingerprint, operation=operation, scope=f"{JOB_SOURCE}:{job.id}",
+        fingerprint=fingerprint, operation=operation, name=name, scope=f"{JOB_SOURCE}:{job.id}",
         extra={
             "source": JOB_SOURCE,
             "job": job.id,
@@ -1478,8 +1504,11 @@ def _job_approval(instance: Any, payload: dict[str, Any], person: Any) -> dict[s
             "Nothing was made.",
         )
     fields = payload.get("fields")
-    again = job.check_fields(str(payload.get("operation", "create")), str(payload.get("doctype")), fields) \
-        if isinstance(fields, dict) else "malformed"
+    target = payload.get("name")
+    again = job.check_fields(
+        str(payload.get("operation", "create")), str(payload.get("doctype")), fields,
+        target if isinstance(target, str) else "",
+    ) if isinstance(fields, dict) else "malformed"
     if isinstance(again, str) or again != fields or fingerprint_of(payload) is None:
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it.")
     if payload.get("doctype") == "Dunning" and not fields.get("posting_date"):
@@ -1701,7 +1730,9 @@ async def handle_propose(tool_input: dict[str, Any]) -> str:
 
 
 def _noun(operation: str) -> str:
-    return {"update": "change", "comment": "comment", "credit": "credit-limit raise"}.get(operation, "draft")
+    return {"update": "change", "comment": "comment", "credit": "credit-limit raise", "block": "hold"}.get(
+        operation, "draft",
+    )
 
 
 def _after_approval(operation: str) -> str:
@@ -1952,6 +1983,15 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         from openexecutive.integrations import erpnext_credit
 
         erpnext_credit.approval_refusal(instance, payload, person)
+    elif operation == "block":
+        # A hold on a submitted invoice (erpnext_block): only the
+        # payment-checks job's card, and only while the job's setting, this
+        # server's switch and the pin all hold, checked again now.
+        from openexecutive.integrations import erpnext_block
+
+        if wire is None:
+            raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it.")
+        await erpnext_block.approval_refusal(payload)
     elif operation == "create" and payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
         raise ApproveRefused(409, "drafts_off", f"ERP {payload['doctype']} drafts are turned off here.")
     elif operation != "create" and payload.get("doctype") not in erpnext_changes.enabled(operation):
@@ -1975,6 +2015,13 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
             or erpnext_credit._doc_name(target) is None else again_credit
         )
         if not (isinstance(payload.get("fingerprint"), str) and _FINGERPRINT_RE.fullmatch(payload["fingerprint"])):
+            rechecked = "no fingerprint"
+    elif operation == "block":
+        from openexecutive.integrations import erpnext_block
+
+        tool = erpnext_changes.OPERATION_TOOLS[operation]
+        rechecked = erpnext_block.block_fields(fields, target) if doctype == erpnext_block.DOCTYPE else "malformed"
+        if fingerprint_of(payload) is None:
             rechecked = "no fingerprint"
     else:
         tool = erpnext_changes.OPERATION_TOOLS[operation]
@@ -2041,12 +2088,22 @@ async def _carry_out(
 
     doctype = payload["doctype"]
     operation = payload.get("operation", "create")
+    if operation == "block" and (
+        wire is None or payload.get("source") != JOB_SOURCE or payload.get("job") != "payment-checks"
+    ):
+        # A block is only ever the payment-checks job's card (approve checked
+        # it before the claim; this keeps the executor to it on its own).
+        release_claim(instance.id)
+        raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it.")
     asked_by = payload.get("asked_by") if isinstance(payload.get("asked_by"), str) else email
     arguments = {**fields, "idempotency_key": key, "asked_by": asked_by}
     if wire is not None:
         # Only the write tool gets these: draft_check takes neither.
         arguments = {**arguments, "asked_by": wire["asked_by"], "configured_by": wire["configured_by"]}
-    if operation != "create":
+    if operation == "block":
+        # draft_block_invoice takes the invoice's name, never a doctype.
+        arguments = {"name": payload["name"], **arguments}
+    elif operation != "create":
         # The document it changes or comments on, as the card named it.
         arguments = {"doctype": doctype, "name": payload["name"], **arguments}
     # Made only if ERPNext still builds the draft the card showed. A card
@@ -2070,7 +2127,11 @@ async def _carry_out(
     result = _result(raw)
     name = result.get("name")
     changed: dict[str, Any] | None = None
-    if operation != "create":
+    if operation == "block":
+        from openexecutive.integrations.erpnext_block import made as block_made
+
+        changed = block_made(payload["name"], result)
+    elif operation != "create":
         from openexecutive.integrations.erpnext_changes import made
 
         # A credit raise is draft_update's: its success is an update's.
@@ -2133,6 +2194,21 @@ async def _carry_out(
             })
             code = "changed_since_proposed" if final_text == erpnext_credit.CHANGED_TEXT else "separation_of_duties"
             raise ApproveRefused(409, code, final_text)
+    if operation == "block":
+        from openexecutive.integrations import erpnext_block
+
+        # A block's own final refusals (a limit, a person's unblock, not from
+        # the job's card): approving again would refuse again.
+        final = erpnext_block.final_refusal(reason)
+        if final is None and CHANGED_SINCE_PROPOSED in reason:
+            final = ("changed_since_proposed", erpnext_block.CHANGED_TEXT)
+        if final is not None:
+            finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})
+            audit("erpnext_draft_changed", f"Person {person.id}'s ERPNext hold wasn't made and its card closed", {
+                "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "operation": operation,
+                "reason": final[0], **_identities(payload),
+            })
+            raise ApproveRefused(409, final[0], final[1])
     if wire is not None and SOD_REFUSED in reason:
         # oe_connector's own separation of duties: final, as ours is.
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})

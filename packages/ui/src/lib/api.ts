@@ -3067,7 +3067,8 @@ export interface ErpnextDraftCard {
   // for a change or a comment the document's DocType.
   doctype: string;
   // "create" for a new draft; "update" or "comment" on an existing document;
-  // "credit" for a credit-limit raise.
+  // "credit" for a credit-limit raise; "block" for a hold on a submitted
+  // supplier invoice (a watch job's card only).
   operation?: string;
   fields: ErpnextDraftField[];
   lines: ErpnextDraftLine[];
@@ -3094,7 +3095,7 @@ export interface ErpnextDraftCreated {
   url?: string;
   already_created: boolean;
   // "update" or "comment" when the card changed or commented on a document;
-  // "credit" for a raised credit limit.
+  // "credit" for a raised credit limit; "block" for a held invoice.
   operation?: string;
   // A raised credit limit: the company and the new limit, formatted.
   credit?: { company: string; limit: string };
