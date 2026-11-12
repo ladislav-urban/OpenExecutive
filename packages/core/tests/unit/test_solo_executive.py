@@ -63,7 +63,7 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # the records changed is said as such, never "Earlier I ...".
 # And: a figure or date that now differs from an earlier answer is said, with
 # both, whatever the cause (erpnext_084, erpnext_095).
-TEAM_PERSONA_SHA256 = "5d3f52a393a246ec6cd7384f60b9ca88aa9721c8caa7cd04a46692c3b777398f"
+TEAM_PERSONA_SHA256 = "e143870e4ed965b83afb130d75a7add3bd3467635fb278ed50d24d2482b8e04e"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",
