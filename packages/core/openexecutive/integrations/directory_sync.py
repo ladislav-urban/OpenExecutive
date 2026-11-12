@@ -954,10 +954,18 @@ def admit_one(
             # A suspended one stays so; an archived one doesn't count.
             return AdmitResult("exists", linked.id)
         if store.address_holder(norm) is not None:
-            # Read again: a sign-in of the same person at the same moment may
-            # have admitted them between the two reads (the run's _add writes
-            # the Person and its subject together), and they then exist.
-            again = store.find_person_by_directory_subject(subject)
+            # A sign-in of the same person at the same moment may be admitting
+            # them now. _add writes the Person (its address) and then its
+            # subject as two commits, both under _run_lock, so read the subject
+            # again under that lock, never between the two: then they exist.
+            # The same short wait as _admit_write, else busy (the caller asks
+            # again).
+            if not _run_lock.acquire(timeout=ADMIT_LOCK_WAIT_S):
+                return AdmitResult("busy")
+            try:
+                again = store.find_person_by_directory_subject(subject)
+            finally:
+                _run_lock.release()
             if again is not None:
                 return AdmitResult("exists", again.id)
             return AdmitResult("address_held")

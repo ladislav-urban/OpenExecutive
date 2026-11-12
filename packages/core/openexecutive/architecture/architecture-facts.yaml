@@ -8312,7 +8312,10 @@ integrations:
     subject -> exists (untouched, a suspended one stays so); anyone holding
     the email, alias included -> address_held, unless the subject reads as
     linked on a second look (a concurrent admit of the same person) ->
-    exists. None of these reads the
+    exists. That second look waits for _run_lock (ADMIT_LOCK_WAIT_S, else
+    busy): _add writes the Person, then links its subject, as two commits
+    under that lock, so the look never falls between them. None of these
+    reads the
     provider or is audited. Then the per-subject limit (30 s; the map pruned
     and capped at 10,000, refusing at the cap rather than evicting), a
     process-wide slot of one admit (busy at once), the global cap (20 a
