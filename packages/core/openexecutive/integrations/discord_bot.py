@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from openexecutive.orchestrator.people_tools import audit_rows_on_senders_turn
+from openexecutive.utils.product_name import product_name
 
 if TYPE_CHECKING:
     pass
@@ -1170,7 +1171,7 @@ def create_discord_bot():
     # Slash commands
     # ------------------------------------------------------------------ #
 
-    @bot.tree.command(name="ask", description="Ask the Executive anything")
+    @bot.tree.command(name="ask", description=f"Ask {product_name()} anything"[:100])
     @app_commands.describe(prompt="Your question or request")
     async def slash_ask(interaction: discord.Interaction, prompt: str) -> None:
         # Roster gate BEFORE defer. If we deferred first and then no

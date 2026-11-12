@@ -16,6 +16,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -439,7 +440,7 @@ def _assemble_doc(ctx: _CCCtx) -> str:
         _ensure_heading(ctx.postmortem, "## Post-Incident Comms"),
         "",
         "---",
-        "*Drafted by Open Executive. EVERY external message must be "
+        f"*Drafted by {product_name()}. EVERY external message must be "
         "reviewed by outside counsel before it leaves the building. "
         "Treat this as a starting structure, not a script.*",
     ]

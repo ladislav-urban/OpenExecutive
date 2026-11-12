@@ -5,14 +5,17 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
+
+from openexecutive.utils.product_name import product_name
 
 console = Console()
 
 
 @click.group()
 def cli() -> None:
-    """Open Executive — your AI-powered virtual executive team."""
+    """Your AI-powered virtual executive team."""
     pass
 
 
@@ -85,7 +88,7 @@ async def _chat() -> None:
     )
     executive = Executive()
 
-    console.print("[bold]Open Executive[/bold] — type 'exit' to quit\n")
+    console.print(f"[bold]{escape(product_name())}[/bold] — type 'exit' to quit\n")
 
     while True:
         try:
@@ -415,7 +418,7 @@ async def _onedrive_folder(link: str) -> None:
     except httpx.HTTPStatusError as exc:
         console.print(
             f"[red]Microsoft answered {exc.response.status_code}.[/red] Check the link, "
-            "and that the folder is shared with the Executive's Microsoft account."
+            "and that the folder is shared with this app's Microsoft account."
         )
         return
     if item is None or not item.is_folder:
@@ -717,7 +720,7 @@ async def _onboard() -> None:
         process_answer,
     )
 
-    console.print("[bold]Open Executive Onboarding[/bold]\n")
+    console.print(f"[bold]{escape(product_name())} onboarding[/bold]\n")
     console.print("This wizard will set up your company profile. Type 'skip' to skip optional questions.\n")
 
     # A solo workspace skips the team steps (see onboarding.wizard).
