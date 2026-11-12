@@ -27,7 +27,7 @@ import { EmptyState, formatDate } from "./shared";
 // approval (on by default).
 
 const EMPTY =
-  "No corrections yet — when you correct a figure or a fact in chat, the Executive keeps it here and uses it everywhere.";
+  "No corrections yet — when you correct a figure or a fact in chat, it's kept here and used everywhere.";
 
 const KIND_LABEL: Record<StandingFact["kind"], string> = {
   fact: "Fact",

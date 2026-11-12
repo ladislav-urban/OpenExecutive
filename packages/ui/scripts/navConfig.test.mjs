@@ -204,7 +204,8 @@ test("the Settings hub: one tile per page, each with its own route", () => {
   assert.deepEqual(
     SETTINGS_PAGES.map((p) => `${p.label} → ${p.href}`),
     [
-      "Your Executive → /settings/executive",
+      // The product's own page, named where it renders (lib/productName.ts).
+      "{product} → /settings/executive",
       "Notifications → /settings/notifications",
       "About you → /settings/memory",
       "Workspace → /settings/workspace",
@@ -250,7 +251,7 @@ test("every Settings page sits in a known group, and the hub lists the groups in
   assert.deepEqual(
     groupSettingsPages(SETTINGS_PAGES).map(({ group, pages }) => [group.label, pages.map((p) => p.label)]),
     [
-      ["You and your Executive", ["Your Executive", "Notifications", "About you"]],
+      ["You and {product}", ["{product}", "Notifications", "About you"]],
       ["Company", ["Workspace"]],
       ["More", ["Advanced", "About"]],
     ],

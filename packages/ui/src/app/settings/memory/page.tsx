@@ -1,5 +1,6 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import AboutYouCard from "@/components/settings/AboutYouCard";
 import { CompanyRetentionCard, KeepTrackCard, ShareWorkStyleCard } from "@/components/settings/HistorySettings";
 import SettingsSubpage from "@/components/settings/SettingsSubpage";
@@ -10,9 +11,10 @@ import SettingsSubpage from "@/components/settings/SettingsSubpage";
 // team, then Always in the loop: their own "Keep track
 // of what happens" switch, and how long notes last for everyone.
 export default function MemorySettingsPage() {
+  const product = useProductName();
   return (
     <SettingsSubpage
-      title="What the Executive knows about you"
+      title={`What ${product} knows about you`}
       description="What it has learned from talking with you, and the private notes it keeps of what you tell it. Each person sees only their own."
     >
       <div className="space-y-4">

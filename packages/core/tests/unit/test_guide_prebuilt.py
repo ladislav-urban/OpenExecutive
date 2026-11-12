@@ -75,9 +75,11 @@ def test_get_prebuilt_rejects_path_traversal() -> None:
 
 # ── the product's name (OE_PRODUCT_NAME) ────────────────────────────────────
 
-# On-screen labels are quoted as the screen says them ("**Settings → Your
-# Executive**"); everything else names the product by PRODUCT_WORD.
-_QUOTED = re.compile(r"(`[^`\n]*`|\]\([^)\s]*\)|\*\*[^*\n]+\*\*|(?<![*\w])\*[^*\n]+\*(?![*\w]))")
+# Code and link targets keep their words; everything else, the on-screen
+# labels the guide quotes among them, names the product by PRODUCT_WORD.
+_QUOTED = re.compile(r"(`[^`\n]*`|\]\([^)\s]*\))")
+# A job title, not the product: Workspace's role option.
+_ROLE_OPTION = "Executive inside an organisation"
 
 
 @pytest.fixture
@@ -135,13 +137,13 @@ def _prose(markdown: str) -> str:
 
 
 def test_the_guide_names_the_product_one_way() -> None:
-    # Never "the Executive" or "Open Executive" in the guide's own words, so
-    # every section follows OE_PRODUCT_NAME, here and in oe_connector's help
-    # pages copied from these files.
+    # Never "the Executive" or "Open Executive" in the guide, in its own words
+    # or in the on-screen labels it quotes, so every section follows
+    # OE_PRODUCT_NAME, here and in oe_connector's help pages copied from it.
     for spec in GUIDE_SECTIONS:
         data = prebuilt.get_prebuilt(spec.id)
         assert data is not None
-        prose = _prose(data["markdown"])
+        prose = _prose(data["markdown"]).replace(_ROLE_OPTION, "")
         found = re.findall(r".{0,30}(?:\bExecutive\b|Open Executive).{0,10}", prose)
         assert not found, f"{spec.id}: {found}"
         assert "Executive" not in data["title"] and "Executive" not in spec.sub, spec.id

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import ArmingState, { READY_RING } from "@/components/embed/ArmingState";
 import { buttonClass } from "@/components/ui/Button";
 import { ownPageFor, type CardAction } from "@/lib/cardActions";
+import { withProduct } from "@/lib/productName";
 import { hostReturn, withReturn } from "@/lib/signinReturn";
 import { SeenGate, tracksVisibility, watchPanel, type Watch } from "@/lib/seen";
 
@@ -112,7 +113,7 @@ export default function FrameConfirm({
         <h2 id="frame-confirm-title" className="text-base font-semibold text-fg">
           Are you sure?
         </h2>
-        <p className="mt-2 text-sm text-fg">{action.what}</p>
+        <p className="mt-2 text-sm text-fg">{withProduct(action.what, productName)}</p>
         {!supported && (
           <p className="mt-2 text-xs text-fg-subtle">
             This page is shown inside another one, and this browser can&rsquo;t tell whether this question is really

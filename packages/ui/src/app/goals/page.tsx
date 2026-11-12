@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useMemo, useState } from "react";
 
 import { AddGoalForm, GoalRow, GoalStatusPill, goalStatusLabel } from "@/components/goals/GoalEditor";
@@ -60,7 +61,7 @@ export default function GoalsPage() {
             <div className="min-w-0">
               <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">Goals</h1>
               <p className="text-[15px] text-fg-muted mt-2">
-                What you&apos;re working towards, grouped by {unit}. Tell the Executive how a goal is
+                What you&apos;re working towards, grouped by {unit}. Tell <ProductName /> how a goal is
                 going in chat and it updates the goal for you.
               </p>
             </div>

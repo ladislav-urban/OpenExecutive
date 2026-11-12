@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import BrandMark from "@/components/BrandMark";
+import { useProductName } from "@/components/embed/EmbedProvider";
 import Icon, { IconName } from "@/components/Icon";
 import UserBadge from "@/components/UserBadge";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
@@ -18,6 +19,7 @@ import {
 import { getBadges } from "@/lib/api";
 import { reviewBadgeFrom } from "@/lib/badges";
 import { NEW_CHAT_PATH } from "@/lib/chatRoutes";
+import { DEFAULT_PRODUCT_NAME } from "@/lib/productName";
 
 /**
  * Wiring the chat home passes in. The chat home (`/`, `/chats/new`,
@@ -60,6 +62,7 @@ export default function AppSidebar({
   home,
 }: AppSidebarProps) {
   const { mode, role } = useWorkspace();
+  const product = useProductName();
   const [reviewBadge, setReviewBadge] = useState(0);
 
   // Knowledge base badge: items waiting in its review queue (GET /badges).
@@ -91,11 +94,14 @@ export default function AppSidebar({
           ariaLabel="Back to home"
           className="flex items-center gap-2.5 min-w-0 text-left text-fg cursor-pointer hover:opacity-80 transition-opacity"
         >
-          <span className="flex-shrink-0">
-            <BrandMark size="sm" />
-          </span>
+          {/* This app's own mark only under its own name, as on the sign-in page. */}
+          {product === DEFAULT_PRODUCT_NAME && (
+            <span className="flex-shrink-0">
+              <BrandMark size="sm" />
+            </span>
+          )}
           <span className="min-w-0">
-            <span className="block font-display text-[17px] font-extrabold tracking-tight truncate">Open Executive</span>
+            <span className="block font-display text-[17px] font-extrabold tracking-tight truncate">{product}</span>
             {companyName && (
               <span className="block text-xs text-fg-muted truncate">{companyName}</span>
             )}

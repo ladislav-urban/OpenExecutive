@@ -70,7 +70,7 @@ export default function CompanyProfilePage() {
           formId: "company_profile",
           title: "Company profile",
           description:
-            "The structured company profile the Executive grounds every answer in. " +
+            "The structured company profile every answer is grounded in. " +
             "Applied values open the matching section in edit mode; the user saves per section.",
           getFields: (): PageFormField[] => {
             const flat = snapshotProfile(profile);

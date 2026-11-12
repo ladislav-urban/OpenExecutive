@@ -1,5 +1,6 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
 import Message from "./Message";
@@ -125,6 +126,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
   const { data: session } = useSession();
   const firstName = session?.user?.name?.trim().split(/\s+/)[0];
   const executiveName = useExecutiveName();
+  const product = useProductName();
 
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? []);
   const [input, setInput] = useState(initialInput ?? "");
@@ -1329,7 +1331,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
                   isLoading
                     ? WORKING_PLACEHOLDER
                     : blockedBy
-                      ? `The Executive is answering ${blockedBy}…`
+                      ? `${product} is answering ${blockedBy}…`
                       : followup ?? DEFAULT_PLACEHOLDER
                 }
                 rows={1}
@@ -1400,7 +1402,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
               </button>
             )}
             <InfoTip align="right">
-              Your Executive routes your question to the right specialist
+              {product} routes your question to the right specialist
               behind the scenes — you don&apos;t pick which one.
             </InfoTip>
           </p>

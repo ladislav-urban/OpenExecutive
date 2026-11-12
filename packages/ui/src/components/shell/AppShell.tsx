@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { AskOEProvider, useAskOE } from "@/components/askoe/AskOEContext";
 import AskOEPanel from "@/components/askoe/AskOEPanel";
 import EmbeddedShell from "@/components/embed/EmbeddedShell";
-import { useEmbed } from "@/components/embed/EmbedProvider";
+import { useEmbed, useProductName } from "@/components/embed/EmbedProvider";
 import Icon from "@/components/Icon";
 import PausedBanner from "@/components/executive/PausedBanner";
 import AppSidebar from "@/components/shell/AppSidebar";
@@ -25,6 +25,7 @@ import { useFirstRunRedirect } from "@/components/onboard/useFirstRunRedirect";
 import HubTabs from "@/components/ui/HubTabs";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import { isChatHomePath } from "@/lib/chatRoutes";
+import { PRODUCT, withProduct } from "@/lib/productName";
 
 // Routes that own their full layout and should not be wrapped by the
 // shell — sign-in, the onboarding wizard (full-screen flow), and the
@@ -63,7 +64,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   watchlist: "Watch list",
   settings: "Settings",
   status: "Setup status",
-  executive: "Your Executive",
+  executive: PRODUCT,
   "act-as-me": "Act as me",
   delegate: "Delegate",
   "what-it-may-do": "What it may do",
@@ -79,8 +80,8 @@ const SEGMENT_LABELS: Record<string, string> = {
   cards: "Card",
 };
 
-function labelFor(segment: string): string {
-  return SEGMENT_LABELS[segment] ?? segment;
+function labelFor(segment: string, product: string): string {
+  return withProduct(SEGMENT_LABELS[segment] ?? segment, product);
 }
 
 function isExempt(pathname: string): boolean {
@@ -123,6 +124,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const { mode, role } = useWorkspace();
   const redirecting = useFirstRunGate(pathname);
   const { embedded } = useEmbed();
+  const product = useProductName();
   const cardReturn = useCardReturn(pathname);
 
   // In a host's frame (components/embed/EmbedProvider.tsx): the host has its
@@ -136,7 +138,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <PageCrumbProvider>
           <EmbeddedShell
             pathname={pathname}
-            title={top ? labelFor(top) : "Home"}
+            title={top ? labelFor(top, product) : "Home"}
             hub={hubForPath(pathname, { mode, roleKind: role.role_kind })}
             bare={isExempt(pathname) || redirecting}
           >
@@ -219,6 +221,7 @@ function TopBar({
   onOpenDrawer: () => void;
 }) {
   const { mode, role } = useWorkspace();
+  const product = useProductName();
   const profileLabel = PROFILE_NAV[profileWording(mode, role.role_kind)].label;
   // A page showing one record names it in place of the id in the URL.
   const pageLabel = usePageCrumbLabel("/" + segments.join("/"));
@@ -238,7 +241,7 @@ function TopBar({
           ? pageLabel
           : idx === 0 && segment === "company-profile"
             ? profileLabel
-            : labelFor(segment),
+            : labelFor(segment, product),
     };
   });
   // The Advanced pages (Agent Council, Audit log, ...) live at their own
@@ -260,7 +263,7 @@ function TopBar({
         </button>
         <nav aria-label="Breadcrumb" className="flex items-center gap-1.5 min-w-0">
           {crumbs.length === 0 ? (
-            <span className="font-display text-[15px] font-extrabold tracking-tight text-fg">Open Executive</span>
+            <span className="font-display text-[15px] font-extrabold tracking-tight text-fg">{product}</span>
           ) : (
             crumbs.map((c, i) => {
               const isLast = i === crumbs.length - 1;

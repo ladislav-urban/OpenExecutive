@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useSession } from "next-auth/react";
 import { ProfileSections } from "@/components/company-profile/ProfileSections";
@@ -180,7 +181,7 @@ export default function OnboardDraftReview({
         <div className="bg-surface-elevated border border-line rounded-xl p-5">
           <h2 className="text-sm font-semibold text-fg">You</h2>
           <p className="text-xs text-fg-muted mt-1 mb-3">
-            The Executive reports to you. Add clients, partners and anyone else you work
+            <ProductName /> reports to you. Add clients, partners and anyone else you work
             with later, on the People page.
           </p>
           <div className="flex flex-col sm:flex-row gap-2">

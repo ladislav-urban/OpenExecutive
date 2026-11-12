@@ -215,7 +215,7 @@ export function WritesCard({
   const sending = sendOf(settings) !== "off";
   const needsMailbox = !connected && current === "off" ? "Connect your mailbox first." : null;
   const steps: Step<WriteStep>[] = [
-    { value: "off", label: "Off", line: "The Executive only writes as itself." },
+    { value: "off", label: "Off", line: "It only writes as itself." },
     {
       value: "when_asked",
       label: "When I ask",

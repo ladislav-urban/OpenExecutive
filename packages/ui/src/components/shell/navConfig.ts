@@ -4,6 +4,11 @@ import type { Feature } from "@/components/FeatureName";
 import type { IconName } from "@/components/Icon";
 import type { RoleKind, WorkspaceMode } from "@/lib/api";
 
+// lib/productName.ts's PRODUCT token, written out (this file imports types
+// only): a label naming the product, filled in where it renders
+// (withProduct / useNamed).
+const PRODUCT = "{product}";
+
 // Single source of truth for the app's navigation. The one sidebar
 // (`components/shell/AppSidebar.tsx`, rendered by both the chat home and
 // the AppShell) and the mobile bottom bar build their menus from here.
@@ -100,7 +105,7 @@ function profileItem(wording: ProfileWording, isOnboarded: boolean): NavItem {
 }
 
 const PEOPLE_DESCRIPTION =
-  "Your roster — who the Executive coordinates with and their approval scopes.";
+  "Your roster — the people you work with and their approval scopes.";
 
 const GOALS_ITEM: NavItem = {
   href: "/goals",
@@ -138,7 +143,7 @@ function youTabs(isOnboarded: boolean, roleKind: RoleKind | null): NavItem[] {
       href: "/people",
       label: "People",
       icon: "users",
-      description: "The people the Executive knows about — clients, partners, anyone you work with.",
+      description: "Clients, partners and anyone else you work with.",
     },
     profileItem(profileWording("solo", roleKind), isOnboarded),
   ];
@@ -244,7 +249,7 @@ export function buildHubs({
     key: "delegate",
     label: "Delegate",
     icon: "check-circle",
-    description: "What your Executive does as you, and on its own: Act as me, Handle it for me, Take the lead.",
+    description: "What it does as you, and on its own: Act as me, Handle it for me, Take the lead.",
     tabs: DELEGATE_TABS,
   };
   return [work, people, delegate];
@@ -262,7 +267,7 @@ export const PULSE_NAV_ITEM: NavItem = {
   label: "Pulse",
   icon: "activity",
   description:
-    "The Executive's memory and heartbeat — what it knows and the rhythm it runs on.",
+    "Its memory and heartbeat — what it knows and the rhythm it runs on.",
 };
 
 /** A main-menu entry. A hub's entry is active on any of its tabs. */
@@ -307,7 +312,7 @@ export function buildDestinations({
       icon: "book",
       badge: reviewBadge,
       description:
-        "Upload company documents so the Executive can ground its answers in your context, and approve what it relies on.",
+        "Upload company documents so answers are grounded in your context, and approve what they rely on.",
     },
     { key: "pulse", ...PULSE_NAV_ITEM },
   ];
@@ -337,7 +342,7 @@ export const GUIDE_NAV_ITEM: NavItem = {
 // Descriptions for the two chat-home actions that aren't NavItems (they
 // toggle modes rather than navigate). Shared by MOBILE_PRIMARY, the rail
 // (AppShell), and the chat-home sidebar so the copy lives once.
-export const NEW_CHAT_DESCRIPTION = "Start a fresh conversation with the Executive.";
+export const NEW_CHAT_DESCRIPTION = "Start a fresh conversation.";
 export const BRIEFING_DESCRIPTION =
   "Land on a daily brief of what's happened and what needs you.";
 
@@ -372,7 +377,7 @@ export const ADVANCED_ITEMS: AdvancedItem[] = [
     icon: "users",
     group: "configure",
     description:
-      "Choose how thorough answers are, and change each agent's model, instructions and the Executive's voice.",
+      "Choose how thorough answers are, and change each agent's model, instructions and the voice it answers in.",
   },
   {
     href: "/audit",
@@ -380,7 +385,7 @@ export const ADVANCED_ITEMS: AdvancedItem[] = [
     icon: "doc-search",
     group: "diagnose",
     description:
-      "A searchable record of everything the Executive did: each chat, each question it passed to an expert, each tool it used and each scheduled job.",
+      "A searchable record of every chat, each question passed to an expert, each tool used and each scheduled job.",
   },
   {
     href: "/audit/usage",
@@ -411,7 +416,7 @@ export const ADVANCED_ITEMS: AdvancedItem[] = [
     icon: "bolt",
     group: "configure",
     description:
-      "Tools the Executive built when it didn't have the one it needed: turn each on or off, see its runs, or go back a version.",
+      "Tools built for a job no existing tool could do: turn each on or off, see its runs, or go back a version.",
   },
   {
     href: "/demo",
@@ -466,7 +471,7 @@ export interface SettingsGroupDef {
 }
 
 export const SETTINGS_GROUPS: SettingsGroupDef[] = [
-  { id: "you", label: "You and your Executive" },
+  { id: "you", label: `You and ${PRODUCT}` },
   { id: "company", label: "Company" },
   { id: "more", label: "More" },
 ];
@@ -487,7 +492,7 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
   {
     id: "executive",
     group: "you",
-    label: "Your Executive",
+    label: PRODUCT,
     href: "/settings/executive",
     icon: "cog",
     description: "Pause it, what it does without asking you, and the voice it answers in.",
@@ -508,7 +513,7 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
     label: "About you",
     href: "/settings/memory",
     icon: "user",
-    description: "What the Executive has learned about you, and the private notes it keeps.",
+    description: "What it has learned about you, and the private notes it keeps.",
     hashes: ["memory"],
   },
   {

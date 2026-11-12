@@ -94,7 +94,7 @@ export function useReplyCards() {
 
 // What the Replies-waiting cards are, for the Needs you header's tip.
 export const REPLIES_WAITING_TIP =
-  "Mail that needs you, with a first reply the Executive wrote in your voice. Tap an answer " +
+  "Mail that needs you, with a first reply written in your voice. Tap an answer " +
   "under Decide before sending to write it in, or tap Edit to change it yourself. Nothing is " +
   "sent until you tap Send. If you keep replies " +
   "in your Drafts too, Dismiss deletes that draft unless you changed it in your mailbox. " +

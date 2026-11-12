@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
@@ -500,7 +501,7 @@ export default function DepartmentDetailPage() {
                       </div>
                       {mode === "solo" ? (
                         <div className="text-sm text-fg-muted mt-0.5">
-                          Paused while you use Open Executive just for yourself.
+                          Paused while you use <ProductName /> just for yourself.
                         </div>
                       ) : (
                         formatNextCheckIn(dept.next_check_in_at, effectiveTimezone) && (
@@ -653,7 +654,7 @@ export default function DepartmentDetailPage() {
                           ))}
                         </select>
                         <span className={HINT_CLS}>
-                          The Executive surfaces this person as the department owner in routing decisions.
+                          <ProductName /> surfaces this person as the department owner in routing decisions.
                         </span>
                       </label>
                       <fieldset className="space-y-2">
@@ -691,7 +692,7 @@ export default function DepartmentDetailPage() {
                         <p className={HINT_CLS}>
                           This covers the department&apos;s check-ins, scheduled messages and alerts, and what its team
                           members ask for in chat; Operations also covers meetings people ask for. It doesn&apos;t cover
-                          what the Executive does on its own under Take the lead: Always asks first holds that.
+                          what <ProductName /> does on its own under Take the lead: Always asks first holds that.
                         </p>
                       </fieldset>
 
@@ -735,7 +736,7 @@ export default function DepartmentDetailPage() {
                   {settingsTab === "channels" && (
                     <>
                       <p className={SECTION_INTRO_CLS}>
-                        The Executive posts this department&apos;s updates in these rooms. Leave one empty and it
+                        <ProductName /> posts this department&apos;s updates in these rooms. Leave one empty and it
                         messages the department head instead. A suggested room is only saved when you press Save.
                       </p>
                       <div className="space-y-5">
@@ -777,7 +778,7 @@ export default function DepartmentDetailPage() {
                     <>
                       <p className={SECTION_INTRO_CLS}>
                         Vendors, competitors or tickers this department cares about, one per line. Named here,
-                        the Executive will start watching their status pages, filings and feeds on its own and
+                        <ProductName /> will start watching their status pages, filings and feeds on its own and
                         route what it finds to this department and its head.
                       </p>
                       <label className={LABEL_CLS}>

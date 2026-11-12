@@ -38,7 +38,7 @@ export default function ReviewStatusPill({
       className="inline-flex items-center gap-1.5 text-sm font-medium text-fg-muted"
       title={
         trusted
-          ? "Ships with Open Executive. Available to the Executive, but nobody here has reviewed it."
+          ? "Built in. Available to use, but nobody here has reviewed it."
           : undefined
       }
     >

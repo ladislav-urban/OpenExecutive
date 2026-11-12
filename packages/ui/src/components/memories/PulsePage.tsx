@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -26,15 +27,15 @@ import { ValueScreen } from "./ValueSection";
 const SCREENS: Record<Exclude<PulseView, "overview">, { title: string; description: string }> = {
   value: {
     title: "Done for you",
-    description: "What the Executive did for you, counted from the record.",
+    description: "What it did for you, counted from the record.",
   },
   schedule: {
     title: "Schedule",
-    description: "Everything the Executive will do on its own, soonest first.",
+    description: "Everything it will do on its own, soonest first.",
   },
   activity: {
     title: "Activity",
-    description: "What the Executive did on its own, newest first.",
+    description: "What it did on its own, newest first.",
   },
   decisions: {
     title: "Decisions",
@@ -110,7 +111,7 @@ function Overview() {
       <header>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">Pulse</h1>
         <p className="text-[15px] text-fg-muted mt-1.5 max-w-2xl">
-          What your Executive does on its own, and what it remembers.
+          What <ProductName /> does on its own, and what it remembers.
         </p>
       </header>
       <HeartbeatCard pulse={pulse} />

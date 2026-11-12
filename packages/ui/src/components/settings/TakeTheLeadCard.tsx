@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useState } from "react";
 
 import { MeetingAskFirstRow } from "@/components/settings/WorkspaceCard";
@@ -61,7 +62,7 @@ export default function TakeTheLeadCard() {
     return (
       <SettingsCard title="Take the lead">
         <p className="text-sm text-fg-muted">
-          Only the account owner can turn this on. When it&apos;s on, the Executive acts on what it finds without
+          Only the account owner can turn this on. When it&apos;s on, <ProductName /> acts on what it finds without
           asking first.
         </p>
       </SettingsCard>
@@ -234,7 +235,7 @@ export default function TakeTheLeadCard() {
         <div>
           <h3 className="text-[15px] font-semibold text-fg">Company rules</h3>
           <p className="mt-1 mb-3 text-sm text-fg-muted">
-            Anything matching one of these always waits for a yes, for the Executive and for everyone&apos;s Take the
+            Anything matching one of these always waits for a yes, for <ProductName /> and for everyone&apos;s Take the
             lead as you.
           </p>
           <LeadRulesEditor

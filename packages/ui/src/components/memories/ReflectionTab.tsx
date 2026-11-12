@@ -36,7 +36,7 @@ import { EmptyState, formatDate, formatRunAt } from "./shared";
 // Nothing here notifies anyone: it is a record, opened on purpose.
 
 const EMPTY =
-  "Nothing yet. After a chat goes quiet, the Executive grades its own answers; the ones that fell short show up here.";
+  "Nothing yet. After a chat goes quiet, it grades its own answers; the ones that fell short show up here.";
 
 const KIND_LABEL: Record<ReflectionMiss["kind"], string> = {
   company: "Something to learn",

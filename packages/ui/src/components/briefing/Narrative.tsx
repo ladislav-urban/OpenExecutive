@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
@@ -48,7 +49,7 @@ export default function NarrativeBody({
     <>
       {intro && (
       <PanelIntro>
-        The Executive&apos;s read on {solo ? "your work" : "the company"} right now — what came in today, what&apos;s
+        <ProductName />&apos;s read on {solo ? "your work" : "the company"} right now — what came in today, what&apos;s
         stuck, what&apos;s next on your calendar, plus proposals and at-risk goals. Rewritten as the picture changes.
         {onContinue && " Tap a point to talk it through."}
       </PanelIntro>

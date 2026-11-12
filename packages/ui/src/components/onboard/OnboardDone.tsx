@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import ExecEmailRow from "@/components/onboard/ExecEmailRow";
@@ -66,7 +67,7 @@ export default function OnboardDone({ solo, onDone }: Props) {
       <div className="text-4xl leading-none text-emerald-400" aria-hidden>
         ✓
       </div>
-      <h1 className="mt-3 text-2xl font-bold tracking-tight text-fg">Your Executive is ready</h1>
+      <h1 className="mt-3 text-2xl font-bold tracking-tight text-fg"><ProductName /> is ready</h1>
       <p className="text-sm text-fg-muted mt-1">{knowsLine} Everything stays editable in Settings.</p>
 
       <form

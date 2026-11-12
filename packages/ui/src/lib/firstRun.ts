@@ -5,6 +5,10 @@
 
 import type { SetupCheck } from "@/lib/setupStatus";
 
+// lib/productName.ts's PRODUCT token, written out (this file imports types
+// only): a title naming the product, filled in where it renders.
+const PRODUCT = "{product}";
+
 // Browser-side memory of a setup in progress. The interview itself is kept
 // on the server (GET /onboard/interview/{id}); the browser only keeps which
 // one is theirs, the description typed before Continue, and that they chose
@@ -168,7 +172,7 @@ export function gettingStartedItems(input: ChecklistInput): ChecklistItem[] {
       title: "Profile set up",
       detail: input.profileLoaded
         ? `${input.companyName?.trim() || "Saved"} · you are the owner`
-        : "A few lines about your work; the Executive fills in the rest.",
+        : "A few lines about your work; it fills in the rest.",
       done: input.profileLoaded,
       optional: false,
       href: FIRST_RUN_LINKS.setup,
@@ -176,7 +180,7 @@ export function gettingStartedItems(input: ChecklistInput): ChecklistItem[] {
     },
     {
       id: "ask",
-      title: "Ask your Executive something",
+      title: `Ask ${PRODUCT} something`,
       detail: input.hasAsked ? "First conversation saved" : `Try “${ASK_SUGGESTION}”`,
       done: input.hasAsked,
       optional: false,
@@ -186,7 +190,7 @@ export function gettingStartedItems(input: ChecklistInput): ChecklistItem[] {
     },
     {
       id: "exec_mailbox",
-      title: "Give your Executive its own email",
+      title: `Give ${PRODUCT} its own email`,
       detail: "A Google or Microsoft account just for it. Powers the morning brief.",
       done: execMail === "ok",
       optional: false,
@@ -210,7 +214,7 @@ export function gettingStartedItems(input: ChecklistInput): ChecklistItem[] {
       detail:
         input.teamSize > 1
           ? `${input.teamSize} people on the People page`
-          : "Who the Executive works with, and who reports to whom.",
+          : "Who you work with, and who reports to whom.",
       done: input.teamSize > 1,
       optional: false,
       href: FIRST_RUN_LINKS.people,

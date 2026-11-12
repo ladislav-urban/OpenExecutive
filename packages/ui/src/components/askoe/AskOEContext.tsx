@@ -95,7 +95,7 @@ function resolveRouteMeta(pathname: string): { guideId: string | null; title: st
     }
   }
   const first = pathname.split("/").filter(Boolean)[0] ?? "";
-  return { guideId: null, title: first || "Open Executive" };
+  return { guideId: null, title: first || "Home" };
 }
 
 // ---------------------------------------------------------------------------

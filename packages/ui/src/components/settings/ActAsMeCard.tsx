@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import Icon from "@/components/Icon";
@@ -156,7 +157,7 @@ export default function ActAsMeCard({
     return (
       <SettingsCard>
         <p className="text-[15px] text-fg-muted leading-relaxed">
-          Act as me isn&apos;t available to you here. The owner of this Open Executive can turn it
+          Act as me isn&apos;t available to you here. The owner of this install can turn it
           on for team members.
         </p>
       </SettingsCard>
@@ -202,7 +203,7 @@ export default function ActAsMeCard({
             {settings.gmail.status === "not_configured" && (
               <div>
                 <p className="text-sm text-fg-muted leading-relaxed">
-                  For Gmail, on a computer with a browser, with the Executive&apos;s Google OAuth
+                  For Gmail, on a computer with a browser, with <ProductName />&apos;s Google OAuth
                   client exported, run this and sign in as yourself, then put the file it writes
                   where the API reads it (see the Act as me section of .env.example):
                 </p>
@@ -210,7 +211,7 @@ export default function ActAsMeCard({
                 {settings.gmail.outlook_connect_command && (
                   <>
                     <p className="mt-3 text-sm text-fg-muted leading-relaxed">
-                      For Outlook, with the Executive&apos;s Microsoft 365 app exported, run this
+                      For Outlook, with <ProductName />&apos;s Microsoft 365 app exported, run this
                       instead and sign in as yourself with the code it prints:
                     </p>
                     <pre className={pre}>{settings.gmail.outlook_connect_command}</pre>
@@ -714,7 +715,7 @@ function VoiceSection({ connected, outlook = false }: { connected: boolean; outl
       description={
         hasStyle
           ? "Drafts written as you follow this."
-          : "Tell the Executive how you write, or let it learn from your sent mail. Drafts written as you follow it."
+          : "Say how you write, or let it learn from your sent mail. Drafts written as you follow it."
       }
     >
       {hasStyle && (

@@ -5,7 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import FrameConfirm from "@/components/embed/FrameConfirm";
 import { CardActionNotConfirmed, frameActionFor, type CardAction } from "@/lib/cardActions";
 import HOST_LIST from "@/lib/host-list.json";
-import { DEFAULT_PRODUCT_NAME } from "@/lib/productName";
+import { DEFAULT_PRODUCT_NAME, withProduct } from "@/lib/productName";
 import {
   acceptsEvent,
   embedRequested,
@@ -64,6 +64,12 @@ const ProductNameContext = createContext<string>(DEFAULT_PRODUCT_NAME);
 
 export function useProductName(): string {
   return useContext(ProductNameContext);
+}
+
+/** Copy with the product's name for its PRODUCT token (lib/productName.ts). */
+export function useNamed(): (text: string) => string {
+  const product = useContext(ProductNameContext);
+  return (text: string) => withProduct(text, product);
 }
 
 /** Whether this install is one product to the person: it has a name of its

@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import DelegatePage from "@/components/delegate/DelegatePage";
 import AdvancedFold from "@/components/settings/AdvancedFold";
 import HandleItCard, { useDelegation } from "@/components/settings/HandleItCard";
@@ -22,7 +23,7 @@ export default function HandleItPage() {
         <SettingsCard>
           <p className="text-[15px] text-fg-muted leading-relaxed">
             Handle it for me sends replies through Act as me, which isn&apos;t available to you here. The owner of this
-            Open Executive can turn it on for team members.
+            <ProductName /> can turn it on for team members.
           </p>
         </SettingsCard>
       ) : (

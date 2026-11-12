@@ -305,7 +305,7 @@ export async function transcribeRecording(recording: Blob, filename: string): Pr
   try {
     res = await fetch(`${API_BASE}/chat/transcribe`, { method: "POST", body: form });
   } catch {
-    throw new Error("Couldn't reach Open Executive to hear it. Try again.");
+    throw new Error("Couldn't reach the server to hear it. Try again.");
   }
   if (!res.ok) {
     let detail = "Couldn't hear it. Try again.";
@@ -1819,14 +1819,14 @@ export async function pauseExecutive(reason?: string): Promise<ExecutiveStatus> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason: reason?.trim() || null }),
   });
-  if (!res.ok) throw new Error("Failed to pause the Executive");
+  if (!res.ok) throw new Error("Failed to pause");
   return res.json();
 }
 
 export async function resumeExecutive(): Promise<ExecutiveStatus> {
   const res = await fetch(`${API_BASE}/executive/resume`, { method: "POST" });
-  if (res.status === 403) throw new Error("Only the principal can resume the Executive.");
-  if (!res.ok) throw new Error("Failed to resume the Executive");
+  if (res.status === 403) throw new Error("Only the principal can resume it.");
+  if (!res.ok) throw new Error("Failed to resume");
   return res.json();
 }
 

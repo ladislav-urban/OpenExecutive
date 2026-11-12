@@ -251,7 +251,7 @@ def test_exec_email() -> None:
     sample = check_exec_email(make_snap(make_settings(EXEC_EMAIL_ADDRESS="exec@example.com")))
     assert sample.state == "warn" and "sample address" in sample.summary
     real = check_exec_email(make_snap())
-    assert (real.state, real.summary) == ("ok", "The Executive sends email as exec@acme.io.")
+    assert (real.state, real.summary) == ("ok", "Open Executive sends email as exec@acme.io.")
 
 
 def test_is_example_email() -> None:

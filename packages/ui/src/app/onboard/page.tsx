@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import OnboardWizard from "@/components/OnboardWizard";
@@ -241,7 +242,7 @@ function OnboardFlow() {
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-16 w-full">
       <div className="mb-8">
-        <h1 className="text-xl font-semibold text-fg">Set up your Executive</h1>
+        <h1 className="text-xl font-semibold text-fg">Set up <ProductName /></h1>
         <p className="text-sm text-fg-muted mt-1">
           A few minutes now, and every answer you get afterwards is grounded in
           your {mode === "solo" ? "work" : "company"} rather than a generic one.
@@ -280,7 +281,7 @@ function OnboardFlow() {
 function VoiceStep({ onDone }: { onDone: () => void }) {
   return (
     <div className="max-w-3xl mx-auto px-4 sm:px-6 py-16 w-full">
-      <h1 className="text-xl font-semibold text-fg">How should your Executive sound?</h1>
+      <h1 className="text-xl font-semibold text-fg">How should <ProductName /> sound?</h1>
       <p className="text-sm text-fg-muted mt-1">
         The advice is the same; this sets the tone it comes in. You can change it later in
         Settings.

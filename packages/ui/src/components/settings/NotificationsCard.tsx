@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
@@ -128,7 +129,7 @@ export default function NotificationsCard() {
         {current.quiet_hours.enabled && (
           <div className="space-y-4">
             <p className="text-[15px] text-fg-muted leading-relaxed">
-              What the Executive would send you on its own (nudges, check-ins on your work, alerts) waits
+              What <ProductName /> would send you on its own (nudges, check-ins on your work, alerts) waits
               until your quiet hours end. Replies when you message it still come straight away.
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -206,7 +207,7 @@ export default function NotificationsCard() {
       <SettingsCard
         title="How things reach you"
         titleId="delivery-label"
-        description="For what the Executive sends you on its own: nudges, check-ins on your work and alerts."
+        description="For what it sends you on its own: nudges, check-ins on your work and alerts."
       >
         <div role="radiogroup" aria-labelledby="delivery-label" className="flex flex-col gap-2">
           {(["instant", "digest"] as Delivery[]).map((d) => {
@@ -257,7 +258,7 @@ export default function NotificationsCard() {
         <p className="text-[15px] text-fg-muted">
           Your morning brief and end-of-day digest still come at their usual times. They&apos;re under{" "}
           <Link href="/settings/executive" className="font-medium text-accent underline-offset-2 hover:underline">
-            Your Executive
+            <ProductName />
           </Link>
           .
         </p>

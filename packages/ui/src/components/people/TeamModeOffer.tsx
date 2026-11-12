@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useState } from "react";
 
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
@@ -38,7 +39,7 @@ export function TeamModeOffer({ name, onDone }: { name: string; onDone: () => vo
         </h2>
         <p className="text-sm text-fg-muted mb-4">
           {name} is now on your team. Team mode turns on departments, check-ins and the team
-          pages, so the Executive can work with them. If you keep using Open Executive just for
+          pages, so <ProductName /> can work with them. If you keep using <ProductName /> just for
           yourself, {name} stays on your team but you won&apos;t see the team features.
         </p>
         {err && <p className="text-xs text-rose-300 mb-3">{err}</p>}

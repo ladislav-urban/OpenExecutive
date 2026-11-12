@@ -22,8 +22,8 @@ _STORE = PrebuiltDocStore(Path(__file__).parent / "prebuilt")
 # The guide names the product "OpenExecutive" and is shown under the install's
 # own name (OE_PRODUCT_NAME), as oe_connector's help pages copied from these
 # files are. Code spans and link targets keep the guide's words, so a command,
-# a setting or a URL stays right. On-screen labels ("Settings → Your
-# Executive") are quoted as the screen says them.
+# a setting or a URL stays right. The on-screen labels it quotes ("Settings →
+# OpenExecutive", "Pause OpenExecutive") name the product too, as the UI does.
 PRODUCT_WORD = "OpenExecutive"
 # Kept as written: fenced code blocks, code spans (on one line or across
 # lines), link targets (with a title or in angle brackets), autolinks, bare

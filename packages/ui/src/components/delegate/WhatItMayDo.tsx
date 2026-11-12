@@ -1,5 +1,8 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
+import { PRODUCT } from "@/lib/productName";
+import { useNamed } from "@/components/embed/EmbedProvider";
 import Link from "next/link";
 import { useEffect, useId, useState } from "react";
 
@@ -16,7 +19,7 @@ import { SENDS_HREF, WRITES_HREF } from "@/lib/reach";
 
 const TAB_LABELS: Record<MayDoSection["key"], string> = {
   as_you: "As you",
-  executive: "As the Executive",
+  executive: `As ${PRODUCT}`,
   departments: "Departments",
 };
 
@@ -32,7 +35,7 @@ function settingHref(setting: string): { href: string; label: string } | null {
   if (setting === "act_as_me") return { href: WRITES_HREF, label: "Act as me" };
   if (setting === "handle_it") return { href: SENDS_HREF, label: "Handle it for me" };
   if (setting === "take_the_lead") return { href: "/delegate/take-the-lead", label: "Take the lead" };
-  if (setting === "pause") return { href: "/settings/executive", label: "Your Executive" };
+  if (setting === "pause") return { href: "/settings/executive", label: PRODUCT };
   if (setting.startsWith("department:")) {
     const slug = setting.slice("department:".length);
     return { href: `/departments/${encodeURIComponent(slug)}`, label: "Department settings" };
@@ -50,6 +53,7 @@ function Outcome({ outcome, then }: { outcome: MayDoOutcome; then: string }) {
 }
 
 function Row({ row }: { row: MayDoRow }) {
+  const named = useNamed();
   const link = settingHref(row.setting);
   return (
     <li className="grid gap-1.5 px-4 py-3.5 sm:grid-cols-[minmax(0,1.1fr)_11rem_minmax(0,1.3fr)] sm:gap-4">
@@ -74,7 +78,7 @@ function Row({ row }: { row: MayDoRow }) {
           <>
             {" "}
             <Link href={link.href} className="font-medium text-accent underline-offset-2 hover:underline">
-              {link.label}
+              {named(link.label)}
             </Link>
           </>
         )}
@@ -131,6 +135,7 @@ export default function WhatItMayDoView() {
   const [state, setState] = useState<"loading" | "ready" | "hidden" | "error">("loading");
   const [active, setActive] = useState<MayDoSection["key"]>("as_you");
   const idBase = useId();
+  const named = useNamed();
 
   useEffect(() => {
     const controller = new AbortController();
@@ -171,7 +176,7 @@ export default function WhatItMayDoView() {
     <div className="space-y-5">
       {data.paused && (
         <p className="rounded-xl border border-line bg-surface-overlay px-4 py-3 text-sm text-fg leading-relaxed">
-          The Executive is paused, so nothing below runs on its own until it resumes. What you send or approve
+          <ProductName /> is paused, so nothing below runs on its own until it resumes. What you send or approve
           yourself still goes.{" "}
           <Link href="/settings/executive" className="font-medium text-accent underline-offset-2 hover:underline">
             Resume
@@ -185,7 +190,7 @@ export default function WhatItMayDoView() {
         onChange={setActive}
         tabs={sections.map((s) => ({
           id: s.key,
-          label: TAB_LABELS[s.key],
+          label: named(TAB_LABELS[s.key]),
           badge: s.available ? s.goes : null,
         }))}
       />
