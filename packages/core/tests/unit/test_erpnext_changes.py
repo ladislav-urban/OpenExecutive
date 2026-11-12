@@ -128,6 +128,77 @@ def test_a_summary_for_another_document_or_owner_leaves_no_card(erp: FakeErpnext
         assert "error" in _propose(_owner_turn(roster, "change it"), _ask("update", UPDATE))
 
 
+@pytest.mark.parametrize(("said", "kept"), [
+    ("Pay \u202eetoN\u202c now", "Pay etoN now"),      # a right-to-left override, and its end
+    ("app\u200broved", "approved"),                     # a zero-width space
+    ("\ufeffHold\u2060 it", "Hold it"),                # a BOM and a word joiner
+    ("ＰＯ 12", "PO 12"),                      # full-width letters
+    ("ﬁnal", "final"),                             # a ligature
+])
+def test_what_a_card_writes_is_what_it_shows(said: str, kept: str) -> None:
+    # The card shows text made plain; the value stored and sent is that same
+    # text, so no hidden or folded character reaches ERPNext unseen.
+    _, comment = changes.check_change("comment", "Purchase Invoice", "X-1", {"text": said})  # type: ignore[misc]
+    assert comment == {"text": kept}
+    _, update = changes.check_change(  # type: ignore[misc]
+        "update", "Purchase Invoice", "X-1", {"set": {"remarks": said}},
+    )
+    assert update == {"set": {"remarks": kept}}
+    assert changes._text_whole(update["set"]["remarks"]) == update["set"]["remarks"]
+    assert changes._change_shown("remarks", "old", update["set"]["remarks"]) == f"old → {kept}"
+
+
+def test_text_of_hidden_characters_only_is_refused() -> None:
+    for said in ("\u200b\u200b", "\u202e\u202c", "\ufeff"):
+        assert isinstance(changes.check_change("comment", "Purchase Invoice", "X-1", {"text": said}), str)
+        assert isinstance(changes.check_change("update", "Purchase Invoice", "X-1", {"set": {"remarks": said}}), str)
+
+
+def test_what_is_stored_is_shown_the_same_when_checked_again() -> None:
+    # A zero-width space before a combining mark composes only once it's
+    # gone: plain() folds again after its drops, so approval's re-check
+    # reads the stored value back unchanged.
+    from openexecutive.utils.prompt_blocks import plain
+
+    for said in ("Cafe\u200b\u0301 invoice", "e\u2065\u0301", "a\u2028b\u2029c", "ok\u2065hidden"):
+        once = plain(said)
+        assert plain(once) == once, said
+    assert plain("ok\u2065hidden") == "okhidden"
+    assert plain("a\u2028b\u2029c") == "a\nb\nc"
+    _, first = changes.check_change("comment", "Purchase Invoice", "X-1", {"text": "Cafe\u200b\u0301 invoice"})  # type: ignore[misc]
+    _, again = changes.check_change("comment", "Purchase Invoice", "X-1", first)  # type: ignore[misc]
+    assert first == again == {"text": "Caf\u00e9 invoice"}
+    # A tab before a combining mark too (control characters go before the fold).
+    for field in ("remarks", "cost_center"):
+        _, upd = changes.check_change(  # type: ignore[misc]
+            "update", "Purchase Invoice", "X-1", {"set": {field: "Cafe\t\u0301 invoice"}},
+        )
+        _, upd_again = changes.check_change("update", "Purchase Invoice", "X-1", upd)  # type: ignore[misc]
+        assert upd == upd_again == {"set": {field: "Caf\u00e9 invoice"}}
+
+
+def test_a_link_field_is_stored_on_one_line_as_shown() -> None:
+    _, fields = changes.check_change(  # type: ignore[misc]
+        "update", "Purchase Invoice", "X-1", {"set": {"cost_center": "Marketing  -\n DC"}},
+    )
+    assert fields == {"set": {"cost_center": "Marketing - DC"}}
+    assert changes._change_shown("cost_center", "Main - DC", "Marketing - DC") == "Main - DC \u2192 Marketing - DC"
+
+
+@pytest.mark.parametrize("name", ["ACC-PINV-\u202e1200", "Acme\u200b Ltd", "A\ufeffB", "A\u2066B\u2069", "\uff21CME"])
+def test_a_name_with_a_hidden_or_folded_character_is_refused(name: str) -> None:
+    for operation, fields in (("comment", {"text": "hi"}), ("update", {"set": {"remarks": "hi"}})):
+        assert isinstance(changes.check_change(operation, "Purchase Invoice", name, fields), str)
+
+
+@pytest.mark.parametrize("day", ["\uff12\uff10\uff12\uff16-11-12", "2026-11-1\u09ea", "\u0662026-11-12"])
+def test_a_date_is_ascii_digits_only(day: str) -> None:
+    assert isinstance(
+        changes.check_change("update", "Purchase Invoice", "X-1", {"set": {"due_date": day}}), str,
+    )
+    assert not drafts._DATE_RE.fullmatch(day)
+
+
 def test_approving_an_update_sends_exactly_the_stored_change(
     erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
 ) -> None:

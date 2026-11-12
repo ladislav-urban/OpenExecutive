@@ -123,7 +123,7 @@ _ROW_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ._-]{0,139}")
 # no control characters and no leading or trailing space ("Smith & Sons",
 # "Müller GmbH", "ACC/2026/001").
 _DOC_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^\x00-\x1f\x7f-\x9f\s])?")
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # oe_connector's _CONTROL: control characters, tab included, newline kept.
 _CONTROL = re.compile(r"[\x00-\x09\x0b-\x1f\x7f]")
 
@@ -148,12 +148,27 @@ def enabled(operation: str) -> tuple[str, ...]:
     return ()
 
 
+def _as_shown(value: str) -> str:
+    """Text as the card shows it and as it is stored and sent: made plain
+    (``prompt_blocks.plain``: compatibility forms folded by NFKC, and
+    invisible, format and bidi characters dropped), control characters out
+    (newlines kept), trimmed. The card shows exactly this, so nothing hidden
+    reaches ERPNext that the approver didn't see: a right-to-left override
+    or a zero-width space that the card would drop is never written either."""
+    from openexecutive.utils.prompt_blocks import plain
+
+    # Control characters out first, then made plain: plain() folds last, so
+    # a tab deleted after it would leave a letter and a combining mark that
+    # compose only when the value is checked again at approval.
+    return plain(_CONTROL.sub("", value)).strip()
+
+
 def comment_text(value: Any) -> str:
-    """A comment's text as oe_connector stores it: control characters out
-    (newlines kept), trimmed. Raises ``ValueError``."""
+    """A comment's text as it is shown, stored and sent (``_as_shown``).
+    Raises ``ValueError``."""
     if not isinstance(value, str):
         raise ValueError("`text` is the comment, as plain text.")
-    cleaned = _CONTROL.sub("", value).strip()
+    cleaned = _as_shown(value)
     if not cleaned:
         raise ValueError("`text` is empty.")
     if len(cleaned) > COMMENT_MAX:
@@ -177,7 +192,14 @@ def _value(field: str, value: Any, where: str) -> Any:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"`{where}` is text.")
     cap = _TEXT_CAPS.get(field, 140)
-    text = _CONTROL.sub("", value).strip()
+    text = _as_shown(value)
+    if field not in _TEXT_CAPS:
+        # A link (cost center, project, unit, account) is shown on one line:
+        # stored and sent that way too, so two spaces or a line break can't
+        # name a look-alike record the card doesn't show.
+        text = " ".join(text.split())
+    if not text:
+        raise ValueError(f"`{where}` is text.")
     if len(text) > cap:
         raise ValueError(f"`{where}` is longer than {cap} characters.")
     return text
@@ -195,7 +217,9 @@ def check_change(operation: str, doctype: Any, name: Any, fields: Any) -> tuple[
         what = "changed" if operation == "update" else "commented on"
         return (f"Nothing can be {what} here." if not allowed
                 else f"`doctype` must be one of {', '.join(allowed)} to be {what}.")
-    if not isinstance(name, str) or not _DOC_RE.fullmatch(name.strip()):
+    if not isinstance(name, str) or not _DOC_RE.fullmatch(name.strip()) or _as_shown(name) != name.strip():
+        # Never a name with a hidden or folded character (a bidi override, a
+        # zero-width space): it would read as another document's on the card.
         return "`name` is the document's name, as ERPNext shows it."
     if not isinstance(fields, dict):
         return "`fields` must be an object."
@@ -290,11 +314,9 @@ def _shown(value: Any) -> str:
 
 def _text_whole(value: Any) -> str:
     """A text value as the card shows it: whole, newlines kept, made plain
-    (nothing hidden), never cut. ``summary_refusal`` leaves no card with a
-    value longer than TEXT_SHOWN, so nothing here needs cutting."""
-    from openexecutive.utils.prompt_blocks import plain
-
-    return _CONTROL.sub("", plain(str(value if value is not None else ""))).strip()
+    (nothing hidden, ``_as_shown``), never cut. ``summary_refusal`` leaves no
+    card with a value longer than TEXT_SHOWN, so nothing here needs cutting."""
+    return _as_shown(str(value if value is not None else ""))
 
 
 def _change_shown(field: str, before: Any, after: Any) -> str:

@@ -10776,7 +10776,11 @@ integrations:
     SENSITIVE_DOCTYPES for comments). check_change mirrors oe_connector's
     field rules (header and line allowlists, kinds, at most 40 changes; a
     comment's text at most 2,000 characters, control characters out as
-    oe_connector strips them). draft_check runs with {doctype, name,
+    oe_connector strips them). Every text value (a comment, an update's
+    text fields) is stored and sent as the card shows it (_as_shown:
+    prompt_blocks.plain, so NFKC-folded and with invisible, format and
+    bidi characters dropped), so nothing hidden reaches ERPNext unseen;
+    text of hidden characters only is refused. draft_check runs with {doctype, name,
     operation, fields} under its marker; a card needs a sound fingerprint,
     and summary_refusal leaves none unless ERPNext read back the same
     operation and document, a known owner ("yours" or "assigned to you"), at
