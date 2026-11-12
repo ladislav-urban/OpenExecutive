@@ -174,7 +174,11 @@ export function frameActionFor(
   url: string,
   body: unknown,
   hostCalls: readonly HostCall[],
+  product: string = PRODUCT,
 ): CardAction | null {
+  // The name goes into this app's own copy before a person's words or a
+  // path do, so neither is rewritten on screen.
+  const named = (copy: string) => copy.split(PRODUCT).join(product);
   const verb = method.toUpperCase();
   if (READS.has(verb)) return null;
   const card = cardActionFor(verb, url, body);
@@ -187,7 +191,7 @@ export function frameActionFor(
       verb: "change",
       decisionId: null,
       what:
-        `Send ${words ? `"${words}"` : "this message"} to ${PRODUCT} as you. ` +
+        `Send ${words ? `"${words}"` : "this message"} to ${product} as you. ` +
         "It can act on it: send, schedule or change things.",
       // Always: a message sent after a Yes (a queued one, Try again) may
       // carry words that weren't typed here.
@@ -196,11 +200,11 @@ export function frameActionFor(
     };
   }
   if (onHostList(hostCalls, verb, path)) return null;
-  const named = NAMED_CHANGES.find(([re]) => re.test(path));
+  const change = NAMED_CHANGES.find(([re]) => re.test(path));
   return {
     verb: "change",
     decisionId: null,
-    what: `${named ? named[1] : `Make this change in ${PRODUCT}, as you.`} (${verb} ${path.slice(0, 120)})`,
+    what: `${named(change ? change[1] : `Make this change in ${PRODUCT}, as you.`)} (${verb} ${path.slice(0, 120)})`,
     card: false,
     page: null,
   };

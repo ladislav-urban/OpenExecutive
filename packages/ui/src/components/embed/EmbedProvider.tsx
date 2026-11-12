@@ -180,7 +180,7 @@ export default function EmbedProvider({
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      const action = frameActionFor(method, url, init?.body, HOST_CALLS);
+      const action = frameActionFor(method, url, init?.body, HOST_CALLS, productName);
       // A pass is used up by the next change, whichever it is; reads leave it.
       const pass = action ? passing.current : null;
       if (action) passing.current = null;
@@ -193,7 +193,7 @@ export default function EmbedProvider({
       window.fetch = original;
       for (const type of INPUT_EVENTS) window.removeEventListener(type, onInput, true);
     };
-  }, []);
+  }, [productName]);
 
   const passOnce = useCallback<PassOnce>((method, url) => {
     passing.current = { method: method.toUpperCase(), url, until: Date.now() + PASS_ONCE_MS };

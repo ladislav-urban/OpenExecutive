@@ -94,7 +94,7 @@ test("a send's message, from JSON or a form", () => {
 test("the frame checks every request, in any frame, and asks inside it", () => {
   const provider = read("../src/components/embed/EmbedProvider.tsx");
   assert.match(provider, /if \(window\.top === window\.self\) return;/);
-  assert.match(provider, /const action = frameActionFor\(method, url, init\?\.body, HOST_CALLS\);/);
+  assert.match(provider, /const action = frameActionFor\(method, url, init\?\.body, HOST_CALLS, productName\);/);
   assert.match(provider, /action\.card \|\| Date\.now\(\) - lastInput\.current < AFTER_INPUT_MS/);
   // A drop or a paste is input too (a page over the frame can put its own
   // file in a drag), and so is a Yes: what it sets off next asks again.
@@ -113,6 +113,11 @@ test("the frame checks every request, in any frame, and asks inside it", () => {
 test("without v2, each action is answered on this app's own page, top level", () => {
   assert.equal(ownPageFor(cardActionFor("POST", "/api/backend/decisions/7/approve"), "/chats/x", "?embed=1"), "/cards/7");
   assert.equal(ownPageFor(cardActionFor("POST", "/api/backend/alerts/3/approve"), "/", ""), "/cards/alert/3");
+  const own = frameActionFor("POST", "/api/backend/chat", '{"message":"tell {product} to wire"}', CALLS, "Northwind");
+  assert.equal(own.what.split(".")[0], 'Send "tell {product} to wire" to Northwind as you');
+  const change = frameActionFor("POST", "/api/backend/executive/pause/{product}", "{}", CALLS, "Northwind");
+  assert.match(change.what, /^Make this change in Northwind, as you\. \(POST \/executive\/pause\/%7Bproduct%7D\)$/);
+  assert.equal(frameActionFor("POST", "/api/backend/executive/pause", "{}", CALLS, "Northwind").what, "Pause or resume Northwind. (POST /executive/pause)");
   const send = frameActionFor("POST", "/api/backend/chat", '{"message":"hi"}', CALLS);
   assert.equal(ownPageFor(send, "/chats/abc", "?embed=1&tab=2"), "/chats/abc?tab=2");
   assert.equal(ownPageFor(send, "/chats/abc", "?embed=1"), "/chats/abc");

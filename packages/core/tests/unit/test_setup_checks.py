@@ -843,7 +843,7 @@ async def test_run_checks_keeps_order_and_contains_a_crash(
     company = checks[list(LABELS).index("company")]
     assert (company.state, company.summary) == ("error", "This check couldn't run.")
     assert check_logs == ["setup status: the company check crashed (RuntimeError)"]
-    assert all(c.label == LABELS[c.id] for c in checks)
+    assert all(c.label == setup_checks._label(c.id) for c in checks)
 
 
 @pytest.fixture

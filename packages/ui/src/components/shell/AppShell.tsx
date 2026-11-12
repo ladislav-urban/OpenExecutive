@@ -81,7 +81,8 @@ const SEGMENT_LABELS: Record<string, string> = {
 };
 
 function labelFor(segment: string, product: string): string {
-  return withProduct(SEGMENT_LABELS[segment] ?? segment, product);
+  // Own keys only: "constructor" or "toString" is a slug like any other.
+  return withProduct(Object.hasOwn(SEGMENT_LABELS, segment) ? SEGMENT_LABELS[segment] : segment, product);
 }
 
 function isExempt(pathname: string): boolean {
