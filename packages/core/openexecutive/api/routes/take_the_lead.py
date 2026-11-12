@@ -30,6 +30,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, ConfigDict
 
 from openexecutive.api import caller as api_caller
+from openexecutive.utils.product_name import product_name
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +229,7 @@ def update_take_the_lead(request: Request, body: LeadUpdate) -> LeadOut:
     )
     if after != current:
         _audit(
-            f"Take the lead as the Executive {'in training' if after.enabled and after.training else 'on' if after.enabled else 'off'}",
+            f"Take the lead as {product_name()} {'in training' if after.enabled and after.training else 'on' if after.enabled else 'off'}",
             {"scope": "executive", "enabled": after.enabled, "training": after.training, "ask_first": after.ask_first},
         )
     return _out(principal)

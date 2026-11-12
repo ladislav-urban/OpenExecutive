@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -180,13 +181,13 @@ function retentionPhrase(days: number | null): string {
 function HistoryEmpty({ state }: { state: HistoryState }) {
   if (state.reply_notes) {
     return (
-      <EmptyState message="No notes yet. They're added when you tell the Executive what you promised, agreed or decided." />
+      <EmptyState message="No notes yet. They're added when you say in chat what you promised, agreed or decided." />
     );
   }
   return (
     <div className="text-center py-14 px-4 text-fg-muted text-[15px] leading-relaxed">
       <p>
-        Keep track of what happens is off. When it&apos;s on, the Executive keeps private notes of what
+        Keep track of what happens is off. When it&apos;s on, <ProductName /> keeps private notes of what
         you tell it, so it can remind you later.
       </p>
       {state.can_keep_notes && (
@@ -326,7 +327,7 @@ function CorrectPanel({
             )}
           </div>
           <p className="text-xs text-fg-subtle">
-            The Executive uses your version from now on. Your words stay as you wrote them.
+            <ProductName /> uses your version from now on. Your words stay as you wrote them.
           </p>
         </div>
       )}

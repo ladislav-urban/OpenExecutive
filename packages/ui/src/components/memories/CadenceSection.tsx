@@ -1,5 +1,8 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
+import { PRODUCT } from "@/lib/productName";
+import { useNamed } from "@/components/embed/EmbedProvider";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -217,7 +220,7 @@ export function writeUpLabel(item: ActivityItem): string {
 // Take the lead and Handle it for me rows say whose name it acted in.
 export function actingAs(item: ActivityItem): string | null {
   if (item.kind === "sent_as_you") return "As you";
-  if (item.kind === "took_the_lead") return "As the Executive";
+  if (item.kind === "took_the_lead") return `As ${PRODUCT}`;
   return null;
 }
 
@@ -227,6 +230,7 @@ export function actingAs(item: ActivityItem): string | null {
 const ACTIVITY_POLL_INTERVAL_MS = 20_000;
 
 export function RecentActivity() {
+  const named = useNamed();
   const [items, setItems] = useState<ActivityItem[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -272,7 +276,7 @@ export function RecentActivity() {
   if (items.length === 0) {
     return (
       <div className="rounded-2xl border border-line bg-surface-elevated">
-        <EmptyState message="Nothing yet. Actions the Executive takes on its own show up here as they happen." />
+        <EmptyState message={named(`Nothing yet. Actions ${PRODUCT} takes on its own show up here as they happen.`)} />
       </div>
     );
   }
@@ -311,7 +315,7 @@ export function RecentActivity() {
                         feature={it.kind === "sent_as_you" ? "handle_it" : "take_the_lead"}
                         className="text-xs"
                       />
-                      <span className="text-xs font-semibold text-fg-muted">{actingAs(it)}</span>
+                      <span className="text-xs font-semibold text-fg-muted">{named(actingAs(it) ?? "")}</span>
                     </>
                   )}
                   {verb && <span className="text-sm text-fg-muted">{verb}</span>}
@@ -484,7 +488,7 @@ function SystemPulse({ actions }: { actions: ScheduledAction[] }) {
         icon="activity"
         tag="Internal · continuous"
         tagTone="muted"
-        subtitle="Background scans that run every few minutes to keep the Executive aware of change. Nothing here is sent to you — findings surface later as proposals or nudges."
+        subtitle="Background scans that run every few minutes to keep it aware of change. Nothing here is sent to you — findings surface later as proposals or nudges."
       />
       <div className="divide-y divide-line">
         {shown.map((a) => (
@@ -564,7 +568,7 @@ export function FollowUpsCard() {
   if (followups.length === 0) {
     return (
       <div className="rounded-2xl border border-line bg-surface-elevated">
-        <EmptyState message="No follow-ups scheduled. When the Executive commits to come back to you, it shows up here." />
+        <EmptyState message="No follow-ups scheduled. When it commits to come back to you, it shows up here." />
       </div>
     );
   }
@@ -575,7 +579,7 @@ export function FollowUpsCard() {
         title="Follow-ups"
         count={followups.length}
         icon="flag"
-        subtitle="One-off commitments the Executive scheduled for you."
+        subtitle="One-off commitments it scheduled for you."
       />
       <div className="divide-y divide-line">
         {followups.map((a) => (

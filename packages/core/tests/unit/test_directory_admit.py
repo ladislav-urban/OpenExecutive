@@ -796,12 +796,89 @@ def test_admitted_between_the_two_reads_is_exists_never_address_held(
     assert len(everyone()) == 1
 
 
+def test_an_admit_between_the_person_and_its_subject_is_exists_never_address_held(
+    kc: Keycloak, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Sign-in A admits the person: _add writes the Person (its address), then
+    # links its subject, as two commits under _person_write_lock. Sign-in B reads in
+    # between: no link yet, the address held. It waits for the lock and reads
+    # again, so it answers exists, never address_held (the flaky concurrent
+    # admits on ladislav-urban/OpenExecutive#206). Held open by events, so
+    # every run takes this order.
+    subject = kc.user(60)
+    person_written = threading.Event()
+    b_read_the_address = threading.Event()
+    real_link = people_store.link_directory
+    real_holder = people_store.address_holder
+
+    def link_after_b_read(*args: Any, **kwargs: Any) -> Any:
+        person_written.set()
+        assert b_read_the_address.wait(10)
+        return real_link(*args, **kwargs)
+
+    def holder_then_signal(*args: Any, **kwargs: Any) -> Any:
+        found = real_holder(*args, **kwargs)
+        if threading.current_thread().name == "b" and found is not None:
+            b_read_the_address.set()
+        return found
+
+    monkeypatch.setattr(people_store, "link_directory", link_after_b_read)
+    monkeypatch.setattr(people_store, "address_holder", holder_then_signal)
+    monkeypatch.setattr(directory_sync, "ADMIT_LOCK_WAIT_S", 10.0)
+    out: dict[str, directory_sync.AdmitResult] = {}
+
+    def a() -> None:
+        out["a"] = admit(kc, subject, "user60@example.com")
+
+    def b() -> None:
+        assert person_written.wait(10)
+        out["b"] = admit(kc, subject, "user60@example.com")
+
+    threads = [threading.Thread(target=a, name="a"), threading.Thread(target=b, name="b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert b_read_the_address.is_set()
+    assert out["a"].admitted
+    assert (out["b"].code, out["b"].person_id) == ("exists", out["a"].person_id)
+    assert len(everyone()) == 1
+
+
 def test_an_address_another_person_holds_stays_address_held(kc: Keycloak) -> None:
     first = admit(kc, kc.user(59), "user59@example.com")
     assert first.admitted
     # Another directory subject signing in with that same address.
     other = admit(kc, kc.user(159), "user59@example.com")
     assert other.code == "address_held" and len(everyone()) == 1
+
+
+def test_a_held_address_never_waits_on_a_run(kc: Keycloak, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The second look waits only on the Person writes' own lock, never on
+    # _run_lock, which a run holds across its provider reads: a held address
+    # still answers at once while a run is going (the security review).
+    monkeypatch.setattr(directory_sync, "ADMIT_LOCK_WAIT_S", 5.0)
+    assert admit(kc, kc.user(61), "user61@example.com").admitted
+    assert directory_sync._run_lock.acquire(blocking=False)
+    try:
+        start = time.monotonic()
+        assert admit(kc, kc.user(161), "user61@example.com").code == "address_held"
+        assert time.monotonic() - start < 2
+    finally:
+        directory_sync._run_lock.release()
+
+
+def test_a_held_address_while_a_person_is_written_too_long_is_busy(
+    kc: Keycloak, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(directory_sync, "ADMIT_LOCK_WAIT_S", 0.05)
+    assert admit(kc, kc.user(62), "user62@example.com").admitted
+    assert directory_sync._person_write_lock.acquire(blocking=False)
+    try:
+        assert admit(kc, kc.user(162), "user62@example.com").code == "busy"
+    finally:
+        directory_sync._person_write_lock.release()
+    assert len(everyone()) == 1
 
 
 def test_concurrent_admits_of_different_people_never_interleave(kc: Keycloak) -> None:

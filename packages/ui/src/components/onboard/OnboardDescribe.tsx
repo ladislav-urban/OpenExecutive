@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useState } from "react";
 import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import { recall, remember, STORAGE_KEYS } from "@/lib/firstRun";
@@ -133,7 +134,7 @@ export default function OnboardDescribe({ onReady, onLater }: DescribeProps) {
 
   return (
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-12 sm:py-16 w-full">
-      <h1 className="text-xl font-semibold text-fg">Set up your Executive</h1>
+      <h1 className="text-xl font-semibold text-fg">Set up <ProductName /></h1>
       <p className="text-sm text-fg-muted mt-1">
         Tell me about your work in your own words. I&apos;ll work out the rest and ask a few
         quick questions about anything that&apos;s missing.
