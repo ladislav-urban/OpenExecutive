@@ -121,7 +121,7 @@ export function openDraftLabel(doctype: string, _named: boolean): string {
 /** What the draft cards are, for the Needs you header's tip. */
 export function draftsTip(_named: boolean): string {
   return (
-    "Drafts you asked the Executive to prepare. Each shows exactly what will be " +
+    "Drafts you asked for. Each shows exactly what will be " +
     "written, and the ERP has already checked it. Nothing is created until you tap Approve, and then only an " +
     "unsubmitted draft, as your own ERP user, for you to review and submit in the ERP. " +
     "Only you see these."

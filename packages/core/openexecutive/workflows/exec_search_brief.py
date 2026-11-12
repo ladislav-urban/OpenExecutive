@@ -17,6 +17,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -473,7 +474,7 @@ def _assemble_brief(ctx: _ESCtx) -> str:
         _ensure_heading(ctx.dealbreakers, "## Deal-Breakers"),
         "",
         "---",
-        "*Drafted by Open Executive. Review with the hiring manager and "
+        f"*Drafted by {product_name()}. Review with the hiring manager and "
         "the executive search partner before kicking off the search.*",
     ]
     return "\n".join(parts).strip() + "\n"

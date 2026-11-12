@@ -1,5 +1,6 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import Link from "next/link";
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
@@ -45,6 +46,7 @@ function artifactBadge(format: ProposalItem["artifact_format"]): string {
 // hooks) so ProposalCard stays a layout function.
 function buildProposalLifecycle(
   proposal: ProposalItem,
+  product: string,
   ageShown: boolean,
 ): {
   reviewLine: React.ReactNode;
@@ -80,7 +82,7 @@ function buildProposalLifecycle(
   if ((proposal.superseded_count ?? 0) > 0)
     chips.push({ label: `${proposal.superseded_count} folded in`, tone: "neutral" });
   if (verdict === "changed" && !proposal.review_note)
-    chips.push({ label: "Updated by the Executive", tone: "sky" });
+    chips.push({ label: `Updated by ${product}`, tone: "sky" });
   if (verdict === "drafted") chips.push({ label: "Draft ready in your queue", tone: "amber" });
   const lifecycleRow = chips.length > 0 ? (
     <div className="flex flex-wrap gap-1.5">
@@ -161,6 +163,7 @@ export default function ProposalCard({
   // item stands out.
   emphasized?: boolean;
 }) {
+  const product = useProductName();
   // Local edit-mode state. Entering edit mode replaces the body with a
   // textarea pre-filled with the proposal body; the action row becomes
   // Cancel / Send approval. Send approval pipes the edited text up through
@@ -344,7 +347,7 @@ export default function ProposalCard({
     (t) => t !== "artifact" && !t.startsWith("failed_run:") && !t.startsWith("private:") && !t.startsWith("research_run:"),
   );
   const ageShown = status != null && status.label.endsWith(" old");
-  const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal, ageShown);
+  const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal, product, ageShown);
   const surfacedNote = proposal.surfaced_reason ? (
     <p className="text-sm text-fg-muted leading-snug">{proposal.surfaced_reason}</p>
   ) : null;

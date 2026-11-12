@@ -17,6 +17,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -421,7 +422,7 @@ def _assemble_memo(ctx: _PricingCtx) -> str:
         _ensure_heading(ctx.risks, "## Risks & Decision Criteria"),
         "",
         "---",
-        "*Drafted by Open Executive. Review with the CFO, head of sales, "
+        f"*Drafted by {product_name()}. Review with the CFO, head of sales, "
         "and customer success before locking the launch date.*",
     ]
     return "\n".join(parts).strip() + "\n"

@@ -292,7 +292,7 @@ def test_an_all_clear_day_has_no_phrases() -> None:
 def test_the_summary_leads_with_needs_you_then_handled() -> None:
     parts = hr.summary(**{**ZERO, "needs_you": 3, "handled": 12, "in_flight": 7, "dept_at_risk": 1})
     assert [p.text for p in parts] == [
-        "3 wait for your decision", "The Executive handled 12 on its own", "1 department at risk", "7 under way",
+        "3 wait for your decision", "Open Executive handled 12 on its own", "1 department at risk", "7 under way",
     ]
     assert [p.count for p in parts] == [3, 12, 1, 7]
     assert parts[0].target.model_dump(exclude_none=True) == {"kind": "needs_you"}
@@ -335,7 +335,7 @@ def test_team_tiles() -> None:
         ("people", "1", "1 to reply · 1 overdue", "rose"),
         ("team", "2", "with teammates", None),
         ("inFlight", "1", "next in 8h", None),
-        ("handled", "3", "by the Executive", "emerald"),
+        ("handled", "3", "by Open Executive", "emerald"),
         ("monitoring", "1", "signal", None),
         ("clients", "2", "parked clients", None),
     ]

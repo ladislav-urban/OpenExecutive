@@ -76,6 +76,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from openexecutive.api import caller as api_caller
+from openexecutive.utils.product_name import product_name
 
 logger = logging.getLogger(__name__)
 
@@ -87,7 +88,7 @@ SpecialistKey = Literal[
 ]
 
 _INSTRUCTIONS = (
-    "Open Executive as an MCP server: a company's executive context and a "
+    f"{product_name()} as an MCP server: a company's executive context and a "
     "council of specialist analysts, answered as the person signed in.\n\n"
     "Resources (read-only): the company profile, today's briefing and recent "
     "activity, the people roster, department state, and episodic memory (past "
@@ -97,9 +98,9 @@ _INSTRUCTIONS = (
     "in company knowledge), `search_knowledge` (retrieval over the curated "
     "business knowledge base and company documents), `list_workflows` (the "
     "catalog of multi-step executive workflows), and `ask_executive` (one "
-    "synthesized answer from the Executive). None of them sends, posts, books "
+    "synthesized answer). None of them sends, posts, books "
     "or changes anything, except `ask_executive` when this server allows it to "
-    "act: then it makes changes inside Open Executive and leaves messages and "
+    f"act: then it makes changes inside {product_name()} and leaves messages and "
     "meetings on cards the person approves (or that go on their own under "
     "their Handle it for me)."
 )
@@ -420,7 +421,7 @@ _READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
 async def consult_specialist(
     specialist: SpecialistKey, query: str, context: str = ""
 ) -> str:
-    """Consult one of Open Executive's specialist executives for domain analysis.
+    """Consult one of the specialist executives for domain analysis.
 
     Each specialist runs its own knowledge retrieval and returns a grounded,
     domain-expert read. Specialists: cso (strategy/M&A/OKRs), cfo (finance/unit
@@ -451,7 +452,7 @@ async def consult_specialist(
 
 @mcp.tool(title="Search knowledge", annotations=_READ_ONLY)
 async def search_knowledge(query: str) -> str:
-    """Search Open Executive's curated business knowledge base and indexed company docs.
+    """Search the curated business knowledge base and indexed company docs.
 
     Returns the most relevant retrieved chunks, each prefixed with its
     ``[source]``. No LLM call: raw retrieval to cite or reason over.
@@ -476,7 +477,7 @@ async def list_workflows() -> str:
 
 
 @mcp.tool(
-    title="Ask the Executive",
+    title=f"Ask {product_name()}",
     annotations=ToolAnnotations(
         readOnlyHint=False,
         destructiveHint=False,
@@ -485,22 +486,22 @@ async def list_workflows() -> str:
     ),
 )
 async def ask_executive(message: str) -> str:
-    """Ask the Executive a question and get one synthesized, cross-domain answer.
+    """Ask a question and get one synthesized, cross-domain answer.
 
-    The Executive answers as it would in Open Executive for the person signed
+    It answers as it would in this app's own chat for the person signed
     in, drawing on the specialists, company knowledge and memory. By default
     it reads and advises only: it does not send, post, book or change
     anything. When this server allows it to act, it can also make changes
-    inside Open Executive for that person (alerts, open loops, follow-ups,
+    inside this app for that person (alerts, open loops, follow-ups,
     the watch list, goals, decisions, remembered facts and the company
     profile, as their own permissions allow; never the People list), and it leaves a message
     or a meeting on a card for them to approve, which goes on its own only
     when their Handle it for me covers it. It never runs scripts or
     workflows, connects servers or changes the install. The conversation is
-    recorded in Open Executive's memory. Non-streaming.
+    recorded in this app's memory. Non-streaming.
 
     Args:
-        message: The question for the Executive.
+        message: The question to answer.
     """
     try:
         return await _ask_executive(message)
