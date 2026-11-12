@@ -828,8 +828,13 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
 
 def has_digit(line: str) -> bool:
     """Whether ``line`` holds any digit at all: an ASCII or other Unicode
-    decimal digit, or a superscript, subscript or circled one."""
-    return any(ch.isdigit() or ch.isdecimal() or unicodedata.digit(ch, None) is not None for ch in line)
+    decimal digit, a superscript, subscript or circled one, or any other
+    character with a numeric value (dingbat numbers, CJK numerals)."""
+    return any(
+        ch.isdigit() or ch.isdecimal() or unicodedata.digit(ch, None) is not None
+        or unicodedata.numeric(ch, None) is not None
+        for ch in line
+    )
 
 
 def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
@@ -837,7 +842,8 @@ def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
     (``ReasonSchema.no_digits``): the notice's own lines carry every figure,
     so the model's line may only say in words what they mean. Returns the
     lines kept and how many were dropped. Numbers written as words ("zero
-    days") are a known residual."""
+    days"), Roman numerals and letters that look like digits are a known
+    residual."""
     kept = {key: line for key, line in reasons.items() if not has_digit(line)}
     return kept, len(reasons) - len(kept)
 

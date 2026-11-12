@@ -565,7 +565,8 @@ def test_the_cut_note_names_both_reasons() -> None:
 BYPASSES = [
     "Northgate is 0 days late.", "It is late by7 days.", "USD1200 over.", "Over by 1,2 thousand.", "About 12e2 hours.",
     "\u221212 days.", "\u9045\u308c12\u65e5\u3002", "Late \uff11\uff12 days.", "Late \u0661\u0662 days.",
-    "Over by \u00b2 weeks.", "Task \u2460 is late.", "Hours\u2082 over.",
+    "Over by \u00b2 weeks.", "Task \u2460 is late.", "Hours\u2082 over.", "\u277f days late", "\u4e03 days late",
+    "\u246b weeks.", "\u3248 days.",
 ]
 
 
@@ -610,3 +611,29 @@ def test_a_line_another_projects_update_steered_into_a_figure_is_dropped(
     assert f"Schedule: 12 days late, due {_in(-12)}" in body
     dropped = [r.getMessage() for r in caplog.records if "dropped" in r.getMessage()]
     assert dropped == ["watch: job project-status dropped 1 reason line(s) holding a digit"]
+
+
+def test_a_less_than_sign_in_whole_prose_is_kept() -> None:
+    sentence = "Progress < expected, we need two more weeks and a decision on the pump."
+    # Whole, but for the "<" itself, which every notice value's cleaning drops.
+    assert ps.quoted(sentence) == sentence.replace("< ", "")
+
+
+def test_a_long_tag_leaves_no_fragment() -> None:
+    image = '<img src="data:image/png;base64,' + "A" * 900 + '">'
+    link = '<a href="https://example.com/' + "p" * 700 + '">the plan</a>'
+    for text in (f"<p>Before {image} after.</p>", f"<p>See {link} today.</p>"):
+        said = ps.quoted(text)
+        assert "img" not in said and "src" not in said and "data" not in said and "href" not in said
+        assert "AAAA" not in said and "pppp" not in said
+    assert ps.quoted(f"<p>Before {image} after.</p>") == "Before after."
+    assert ps.quoted(f"<p>See {link} today.</p>") == "See the plan today."
+
+
+def test_an_update_whose_text_is_all_markup_says_so_in_codes_words() -> None:
+    markup = [_update("U1", "PROJ-0001", "<p><br></p>" * 300)]
+    [row] = _notice(projects=[PROJECTS[2]], tasks=[], updates=markup).items
+    assert _values(row)["Update"] == ps.UNSHOWN_UPDATE and "The team wrote" not in _values(row)
+    assert row.facts == {}
+    [row] = _notice(projects=[PROJECTS[2]], tasks=[], updates=[]).items
+    assert _values(row)["Update"] == ps.NO_UPDATE

@@ -12470,7 +12470,12 @@ watch:
     join cut at STATUS_RAW_MAX 1200 as read, tags dropped, html.unescape,
     then settled (runner.clean until stable) at QUOTE_MAX 300, ending
     CUT_MARK "..." when cut there or when the raw text passed
-    STATUS_RAW_MAX (rows kept to one past it, so the cut is seen). Late-task lines lead with the count ("8, 3
+    STATUS_RAW_MAX (rows kept to one past it, so the cut is seen). _TAG
+    takes a tag up to STATUS_RAW_MAX long (a pasted data-URI image leaves
+    no fragment); _OPEN_TAG drops a tag the raw cut left open, only when
+    it cut ("a < b" in whole prose stays). An update this week whose text
+    quotes as nothing shows UNSHOWN_UPDATE "An update was posted; its text
+    couldn't be shown", not "No status update this week", and no facts. Late-task lines lead with the count ("8, 3
     not shown: ..."), subjects shortened to 36; held lines lead with the
     count and oldest due date, titles shortened to 100; MORE_HELD_LINE past
     10 on hold; PROJECTS_CUT_LINE names both the 50 cap and a name the slot
@@ -12512,11 +12517,13 @@ watch:
     collections doesn't), runner.without_digits drops a line holding any
     digit (runner.has_digit: str.isdigit / isdecimal / unicodedata.digit,
     so ASCII, other scripts', full-width, superscript, subscript and
-    circled digits), logging a count only; the notice's own lines carry
+    circled digits, and any character with unicodedata.numeric: dingbat
+    numbers, CJK numerals), logging a count only; the notice's own lines carry
     every figure. Matching numbers against the finding's facts was
     bypassable ("0" being another fact's value, "by7", "USD1200", "1,2",
     "12e2", a minus sign, digits glued to CJK). Numbers written as words
-    remain a known residual. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
+    remain a known residual, as do Roman numerals and letters that look
+    like digits. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
     limit before plain() (NFKC) and CLEAN_FLAT_FACTOR 2 x limit after,
     before _MARKDOWN_RE and the backtracking _URL_RE (a 4000-char U+33D8
     update took 7.7 s to clean before).
