@@ -91,6 +91,40 @@ def test_dates_ids_periods_and_list_numbers_are_not_figures() -> None:
     assert find_figures(text) == []
 
 
+def test_dates_written_with_a_month_are_not_figures() -> None:
+    text = (
+        "Due Thursday 12 November 2026, the 3rd of Dec, November 30, 2026, Nov 4 and in March 2026; "
+        "May 1,200 units ship."
+    )
+    assert [f.text for f in find_figures(text)] == ["1,200"]
+
+
+@pytest.mark.parametrize("month", [1, 2, 11])
+def test_the_turns_own_date_never_sources_a_figure(monkeypatch: pytest.MonkeyPatch, month: int) -> None:
+    # The turn's date goes in as text it read (the chat's <current_time>, the
+    # brief's NOW line). On the 12th, "Payables stand at 12.00 USD" passed as
+    # sourced by "Thursday 12 November 2026" alone: every day of the month,
+    # the day, the year, the hour and the minute must source nothing.
+    import calendar
+    from datetime import UTC, datetime
+    from zoneinfo import ZoneInfo
+
+    from openexecutive.memory import workspace_settings
+    from openexecutive.orchestrator.executive import _current_time_block
+    from openexecutive.workflows import morning_brief
+
+    monkeypatch.setattr(workspace_settings, "get_user_timezone", lambda *_a: ZoneInfo("Europe/Prague"))
+    monkeypatch.setattr("openexecutive.briefing.reader.principal_reader", lambda: None)
+    for day in range(1, calendar.monthrange(2026, month)[1] + 1):
+        now = datetime(2026, month, day, 13, 7, tzinfo=UTC)
+        label, _reader = morning_brief._now_and_reader(now)
+        texts = [_current_time_block(now), f"NOW: {label}"]
+        src = sources_for([], texts=texts)
+        for value in (day, month, 2026, 14, 7):
+            figures = check_figures(f"Payables stand at {value}.00 USD today.", src)
+            assert [f.status for f in figures] == ["unconfirmed"], (texts, value)
+
+
 def test_amounts_percentages_scaled_and_counted_numbers_are_figures() -> None:
     text = "Revenue was $1.2M, up 12% on USD 1,071,000, from 14 orders; margin 3.5 points; 2.4k units."
     assert [f.text for f in find_figures(text)] == ["$1.2M", "12%", "USD 1,071,000", "14", "3.5", "2.4k"]
