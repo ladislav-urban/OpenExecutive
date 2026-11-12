@@ -91,7 +91,7 @@ def test_a_long_detail_is_cut_to_a_line() -> None:
     ("reason", "detail", "problem", "fix_has"),
     [
         ("gateway_down", "the MCP gateway failed to start (3 attempts): RuntimeError: boom",
-         "the Executive's mail connection wasn't running (the MCP gateway failed to start (3 attempts): "
+         "the mail connection wasn't running (the MCP gateway failed to start (3 attempts): "
          "RuntimeError: boom)", "retrying on its own"),
         ("send_failed", "email: invalid_grant: Token has been expired or revoked",
          "every way of sending it failed (email: invalid_grant: Token has been expired or revoked)",
@@ -152,7 +152,7 @@ def test_the_notice_blames_the_gateway_not_the_owner(notice_client: Any) -> None
     brief_state.record_delivery_outcome(MORNING, reason="gateway_down", channel=None, detail="stale")
     body = client.get("/today/brief-delivery").json()
     assert body["problem"] == (
-        "the Executive's mail connection wasn't running "
+        "the mail connection wasn't running "
         "(the MCP gateway failed to start (2 attempts): RuntimeError: boom)"
     )
     assert "retrying on its own" in body["fix"]
@@ -404,7 +404,7 @@ def test_the_brief_light_blames_the_gateway(tmp_path: Path, monkeypatch: pytest.
     check = check_brief(_snap(settings, brief_email_ready=False))
     assert check.state == "error"
     assert check.summary == (
-        "Not sent by email: the Executive's mail connection wasn't running "
+        "Not sent by email: the mail connection wasn't running "
         "(the MCP gateway failed to start (1 attempt))."
     )
 

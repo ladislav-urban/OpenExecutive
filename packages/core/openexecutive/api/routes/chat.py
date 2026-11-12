@@ -1331,7 +1331,7 @@ async def _chat_turn(
         ):
             raise HTTPException(
                 status_code=409,
-                detail="This conversation was started in Open Executive. Continue it there.",
+                detail="This conversation was started in the web app. Continue it there.",
             )
     except BaseException:
         _release_stop(client_turn_id, turn_id)

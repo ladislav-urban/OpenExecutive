@@ -380,7 +380,7 @@ async def approve_alert(
 
     def _turn_finished(answered: bool) -> None:
         if answered:
-            _finished(alert, approval, approvals.STATUS_DONE, "The Executive did it in a new chat.")
+            _finished(alert, approval, approvals.STATUS_DONE, "Done in a new chat.")
         else:
             _finished(
                 alert, approval, approvals.STATUS_FAILED,

@@ -113,8 +113,8 @@ STATUS_MESSAGES: dict[str, str] = {
     ),
     "no_email": "Your People entry has no email address. Add it on the People page first.",
     "shared_mailbox": (
-        "Your address is the Executive's own mailbox, so it can't write as you from "
-        "it. Give the Executive a Google account of its own first."
+        "Your address is the one this app sends from, so it can't write as you from "
+        "it. Give this app a Google account of its own first."
     ),
     "error": "Couldn't reach your mailbox just now. Try again in a moment.",
 }

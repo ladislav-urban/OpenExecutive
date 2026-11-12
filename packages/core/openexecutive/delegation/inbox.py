@@ -200,7 +200,7 @@ STATUS_MESSAGES: dict[str, str] = {
     "needs_reconnect": "Paused: connect your mailbox again.",
     "mismatch": "Paused: the connected mailbox isn't the address on your People entry.",
     "no_email": "Paused: your People entry has no email address.",
-    "shared_mailbox": "Paused: your address is the Executive's own mailbox.",
+    "shared_mailbox": "Paused: your address is the one this app sends from.",
 }
 
 

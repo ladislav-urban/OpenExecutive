@@ -335,7 +335,7 @@ async def _send_checked(
         )
     if exec_address and exec_address in recipients:
         raise SendRefused(
-            409, "executive_recipient", "The draft is addressed to the Executive's own mailbox. Change it in your mailbox.",
+            409, "executive_recipient", "The draft is addressed to the mailbox this app sends from. Change it in your mailbox.",
         )
     if draft.message.from_addr not in own:
         raise SendRefused(409, "not_from_you", "The draft isn't from one of your own addresses. Check it in your mailbox.")
