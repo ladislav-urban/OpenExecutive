@@ -130,7 +130,7 @@ export function ShareWorkStyleCard() {
     <SettingsCard
       title="Share my work style with the team"
       titleId="share-work-style-label"
-      description="When this is on, the Executive shares how you work with your teammates: what you've told it and what it has learned about your role, your focus, how you like updates and your working style. It answers when they ask, and uses it to help them work with you. Off by default."
+      description="When this is on, it shares how you work with your teammates: what you've told it and what it has learned about your role, your focus, how you like updates and your working style. It answers when they ask, and uses it to help them work with you. Off by default."
       action={
         <Switch
           checked={on}
@@ -185,7 +185,7 @@ export function CompanyRetentionCard() {
       ) : (
         <p className="text-[15px] text-fg">
           {company === null ? "Notes are kept until they're forgotten." : `Notes last ${retentionLabel(company)}.`}{" "}
-          <span className="text-fg-muted">The owner of this Open Executive sets this.</span>
+          <span className="text-fg-muted">The owner of this install sets this.</span>
         </p>
       )}
       <p className="mt-3 text-sm text-fg-muted">

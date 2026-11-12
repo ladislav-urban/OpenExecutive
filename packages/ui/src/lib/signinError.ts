@@ -14,7 +14,7 @@ export function describeError(code: string, reason?: string | null): string {
       }
       return "That account can’t sign in here: it isn’t on the allow-list for this workspace, or its email isn’t verified. Ask an admin to add you.";
     case "CredentialsSignin":
-      return "Open only works in a browser on the computer running Open Executive, at http://localhost:3000.";
+      return "Open only works in a browser on the computer running this app, at http://localhost:3000.";
     case "Configuration":
       return "Authentication is misconfigured. Contact the administrator.";
     default:

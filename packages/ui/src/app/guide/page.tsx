@@ -1,5 +1,6 @@
 'use client';
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import DynamicSection from '@/components/architecture/DynamicSection';
@@ -141,7 +142,7 @@ export default function GuidePage() {
       <main className="flex-1 min-h-0 min-w-0 overflow-y-auto">
         <div className="max-w-4xl mx-auto px-4 py-6 sm:px-8 sm:py-10 space-y-12 sm:space-y-20">
           <div>
-            <h1 className="text-2xl font-bold text-fg">Open Executive — User Guide</h1>
+            <h1 className="text-2xl font-bold text-fg"><ProductName /> — User Guide</h1>
             <p className="mt-2 text-sm text-fg-muted">
               A quick tour of every feature: what it is, and what it does for you. Not a manual —
               just enough to know where to go and why. For the technical internals, see the

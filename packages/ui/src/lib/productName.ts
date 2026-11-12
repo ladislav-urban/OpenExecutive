@@ -18,3 +18,13 @@ export function productName(raw: string | null | undefined): string {
   if (!name || name.length > MAX_PRODUCT_NAME || !PLAIN_RE.test(name)) return DEFAULT_PRODUCT_NAME;
   return name;
 }
+
+// Where copy names the product: "{product} is answering…", "Pause {product}".
+// Data and shared copy write the token, and what renders it writes the name in
+// (withProduct, or useNamed in a component). Never "the Executive".
+export const PRODUCT = "{product}";
+
+/** `text` with the product's name for each PRODUCT token. */
+export function withProduct(text: string, product: string): string {
+  return text.split(PRODUCT).join(product);
+}

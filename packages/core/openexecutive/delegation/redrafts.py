@@ -213,7 +213,7 @@ async def clear_after_send(
             except Exception:
                 logger.info("redrafts: couldn't retire draft row %s", row.id, exc_info=True)
         if outcomes:
-            _audit(person_id, f"Removed drafts the Executive sent itself for person {person_id}", outcomes)
+            _audit(person_id, f"Removed drafts this app sent itself for person {person_id}", outcomes)
             deleted += outcomes.count("deleted")
     return deleted
 

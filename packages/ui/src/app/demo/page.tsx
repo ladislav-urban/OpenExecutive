@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
@@ -266,7 +267,7 @@ export default function DemoPage() {
         <div className="min-w-0">
           <h1 className="text-xl font-semibold text-fg">Company Simulator</h1>
           <p className="text-xs text-fg-muted mt-1">
-            Put the Executive in a real-world scenario. Load a simulated company — full profile, documents, and memory — and test how it reasons, prioritizes, and decides before you trust it with your own.
+            Put <ProductName /> in a real-world scenario. Load a simulated company — full profile, documents, and memory — and test how it reasons, prioritizes, and decides before you trust it with your own.
           </p>
         </div>
         <button
@@ -301,7 +302,7 @@ export default function DemoPage() {
                   Create a company with AI
                 </h2>
                 <p className="text-xs text-fg-muted mt-1 leading-relaxed">
-                  Describe a company and scenario. The Executive will generate a
+                  Describe a company and scenario. <ProductName /> will generate a
                   full fixture — profile, team, departments, history, and docs —
                   for you to review before saving.
                 </p>

@@ -63,13 +63,13 @@ _EMAIL_RE = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 
 # The step's report says so, and a step that also has the gateway's mail
 # tools can fall back on its own.
-_FALL_BACK = " Use the Executive's own email for this instead, if this step has a tool for it."
+_FALL_BACK = " Use this app's own email for this instead, if this step has a tool for it."
 
 _WHAT = (
     "Pass `to` (and optionally `cc`) and `intent`: the points, figures and dates "
     "the email should carry, from this run's results. The tool writes the subject "
     "and the words. Works only when they connected their own mailbox under Act as "
-    "me; otherwise use the Executive's own email."
+    "me; otherwise use this app's own email."
 )
 DRAFT_DESCRIPTION = (
     "Write an email AS the person who created this workflow, in their own voice, "

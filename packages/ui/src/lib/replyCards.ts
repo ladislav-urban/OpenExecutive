@@ -22,12 +22,12 @@ const FLAG_TEXT: Record<string, string> = {
   sender_unverified: "Gmail couldn't confirm this came from that address. Check it before you reply.",
   thread_moved_on: "A newer message arrived in this thread after the draft was written.",
   others_on_thread: "Others were on this email.",
-  executive_on_thread: "The Executive was on this email too.",
+  executive_on_thread: "This app's own address was on this email too.",
   reply_to_ignored: "The email asked for replies to go elsewhere. The draft goes to the sender.",
   mailing_list: "This came through a mailing list.",
   removed_link: "A link was taken out of the draft.",
   removed_address: "An email address was taken out of the draft.",
-  names_the_executive: "The draft mentions the Executive by name.",
+  names_the_executive: "The draft mentions this app by name.",
   shortened: "The draft was cut to length.",
 };
 

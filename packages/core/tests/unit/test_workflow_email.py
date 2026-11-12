@@ -162,7 +162,7 @@ def test_refused_with_the_fallback_when_act_as_me_is_off(people, composed) -> No
 
     result = _run(INPUT, mailbox, creator=owner_id)
 
-    assert "Act as me" in result["error"] and "Executive's own email" in result["error"]
+    assert "Act as me" in result["error"] and "this app's own email" in result["error"]
     assert mailbox.drafts == [] and composed == []
 
 
@@ -227,7 +227,7 @@ def test_a_composer_failure_is_an_error_not_a_raise(on, monkeypatch: pytest.Monk
 
     result = _run(INPUT, mailbox, creator=on, send=True)
 
-    assert "Executive's own email" in result["error"]
+    assert "this app's own email" in result["error"]
     assert mailbox.drafts == [] and caps._IN_FLIGHT.get(on, 0) == 0 and workflow_email._SENDING == {}
 
 
@@ -289,7 +289,7 @@ def test_never_sends_to_the_executive(on, composed, monkeypatch: pytest.MonkeyPa
 
     result = _run({**INPUT, "to": ["exec@co.example"]}, mailbox, creator=on, send=True)
 
-    assert "Executive" in result["error"] and mailbox.sent == []
+    assert "this app sends from" in result["error"] and mailbox.sent == []
 
 
 def test_an_unconfirmed_send_says_not_to_retry(on, composed) -> None:
