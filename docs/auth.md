@@ -36,6 +36,13 @@ make sure the owner's entry has an email. Only the owner can change the People l
 
 Membership is re-checked on every request the middleware gates, not just at sign-in, so a
 roster removal takes effect within the cache window rather than waiting out the 24h JWT.
+Two things read the roster before the 5 minutes are up. An SSO sign-in that the directory
+sync has just let in (see "Following your identity provider's directory") reads it fresh. And
+the middleware, which keeps a cache of its own, reads it again before revoking an SSO session
+that signed in after its cached copy was read, so a person just let in isn't sent back to
+the sign-in page. While the API answers that's one read per session (requests arriving together
+share it); while it doesn't, the session is let through as roster-unknown and the next request
+reads again. A person removed from the roster is still revoked on the next request.
 
 If the roster fetch fails, `ALLOWED_EMAILS` users are unaffected (their check never
 consults the roster). Roster-only users with an existing session keep working â€” the UI
@@ -303,6 +310,29 @@ members and keeps People in step. It never writes to the provider.
   (`directory_subject_mismatch`). Not you: the principal is never from the
   directory, so your Google or `ALLOWED_EMAILS` sign-in keeps working when the
   provider is wrong.
+- **Someone just approved signs in at once.** A member added to the group
+  would otherwise wait for the next run (and the sign-in's 5-minute roster
+  cache). So when the roster refuses an SSO sign-in while the sync is on,
+  sign-in asks the API to look that one person up in the provider
+  (`POST /auth/directory-admit`, from the web app's server only). If the
+  provider says they are an active member of the group (or a subgroup) with
+  that verified email, the API creates their Person exactly as the next run
+  would, a demo person when they are in the demo group, and sign-in reads the
+  roster fresh and decides again with the same rules, the identity check
+  included. Nothing else: it never links, restores, suspends or changes
+  anyone, an address someone already holds is left to the run, and Google,
+  local login and `ALLOWED_EMAILS` never ask. It is limited to one lookup
+  per person every 30 seconds and 20 a minute in all, and gives up after
+  about 4 seconds; then the sign-in is refused as before. When they aren't
+  in the group yet (or the API is busy), the sign-in page says "We're still
+  setting up your access. Try again in a few minutes." Each lookup that
+  reached the provider is audited as `directory_admit`, with its answer,
+  the email's domain and a hash of the identity; a refused sign-in's
+  `auth_login` row carries the answer as `admit`. It needs the web app to
+  know the sync is on: set `DIRECTORY_SYNC_ENABLED` on the UI too (the
+  compose file passes it through). Identities linked through a provider's
+  federation (Keycloak ids starting `f:`) aren't looked up; they wait for
+  the run.
 - **When an identity is re-created** (the user deleted and added again, or
   the whole realm rebuilt), the old link points at an id that's gone: the
   person is suspended and their new identity shows as a conflict, and a
@@ -316,7 +346,7 @@ refuses to start with settings it can't trust):
 
 | Variable | Value |
 |---|---|
-| `DIRECTORY_SYNC_ENABLED` | `true` |
+| `DIRECTORY_SYNC_ENABLED` | `true`. Set it on the UI as well, so a just-approved member is let in at sign-in (above) |
 | `DIRECTORY_SYNC_ISSUER` | The realm's issuer, exactly as `AUTH_OIDC_ISSUER` (no trailing slash on either), so the sync follows the provider people sign in with |
 | `DIRECTORY_SYNC_ADMIN_URL` | Where Keycloak's admin API answers, e.g. `http://keycloak:8180` on the compose network (the public host serves no `/admin/`). Plain http only to this machine, a private address or a compose service |
 | `DIRECTORY_SYNC_CLIENT_ID` / `_SECRET` | A confidential client with only a service account and the `realm-management` roles `view-users` and `query-groups` (default id `openexecutive-directory`). Write the secret into `.env` with an editor, never on a command line |
@@ -847,8 +877,9 @@ Rules: comma-separated, case-insensitive, whitespace around entries is stripped,
 
 **With the directory on** (see "Following your identity provider's
 directory"), add and remove people **in your identity provider first**: a
-member of the group gets a Person within 5 minutes, and taking them out
-suspends theirs and signs them out within one run.
+member of the group gets a Person when they first sign in, or within 5
+minutes, and taking them out suspends theirs and signs them out within one
+run.
 
 **Remove a user.** Archive or delete their Person **and** drop them from
 `ALLOWED_EMAILS`. Removing only one leaves the other still granting access. The roster
@@ -887,6 +918,8 @@ If `AUTH_GOOGLE_SECRET` is leaked, regenerate in Google Cloud Console (Clients â
 | `redirect_uri_mismatch` | The Authorized redirect URI in Google Console doesn't exactly match `<origin>/api/auth/callback/google`. Wait 5 min for Google to propagate after edits |
 | Browser tries to load `0.0.0.0` after sign-in | `AUTH_URL` not set on the UI |
 | `AccessDenied` page after Google or SSO login | Email is in neither `ALLOWED_EMAILS` nor the People roster (the two are unioned), or the provider didn't mark it verified (audit `reason`: `email_not_verified`; for SSO see [the table above](#sso-sign-in-openid-connect)). Check the `auth_login` audit row's `source`: `no_match` = checked against both lists and genuinely not on either; `env_only_roster_unavailable` = the roster fetch failed and the email isn't in the env list |
+| "We're still setting up your access" after SSO sign-in | The directory sync looked them up and they aren't an active member of `DIRECTORY_SYNC_GROUP` yet (or the lookup was busy or rate limited). The `auth_login` row's `admit` says which; the `directory_admit` row has the API's side. Add them to the group, or wait a minute and try again |
+| SSO sign-in of a just-approved member is refused without that message | The `auth_login` row's `admit` says why: `address_held` (someone on People already has the email: link them with `openexecutive directory-link`), `inactive` (disabled or email not verified in the provider), `email_mismatch`, `error` (the provider couldn't be read). No `admit` at all: `DIRECTORY_SYNC_ENABLED` isn't set on the UI |
 | A removed teammate can still sign in | Their email is still in `ALLOWED_EMAILS`. The roster is additive, so archiving the Person alone doesn't revoke access |
 | API returns `401` for every request | UI and API have different `BACKEND_SHARED_SECRET` values (very common after rotating in two separate terminal sessions) |
 | API refuses to start with `RuntimeError: BACKEND_SHARED_SECRET is required` | `OE_PUBLIC_DEPLOYMENT` is set and the secret is missing. Set it; the next restart will boot |

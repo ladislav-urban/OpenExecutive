@@ -37,7 +37,10 @@ which the gateway passes a draft tool, signed as the approver with
 ``purpose: "draft"``. oe_connector inserts it as their ERPNext user, with
 ``docstatus = 0``, keyed by the card (``idempotency_key``), so a retried
 approval returns the same draft. On failure the card waits again with the
-reason (``last_error``), up to ``ATTEMPTS_MAX`` tries.
+reason (``last_error``), up to ``ATTEMPTS_MAX`` tries. A card an approval
+closes keeps our own code for why (``closed_code``), and the conversation's
+later turns are told what became of its cards in fixed words, never the ERP's
+(``decided_cards_note``, in the user turn).
 
 **Only what the card showed.** ``draft_check`` returns a fingerprint of the
 draft it read; the card keeps it and the approval sends it back
@@ -62,6 +65,7 @@ import logging
 import re
 import uuid
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -101,13 +105,13 @@ QTY_MAX = 1_000_000
 RATE_MAX = 1_000_000_000
 # On a card asked for in ERPNext's panel, whose word named the person.
 PANEL_NOTE = (
-    "Asked for in ERPNext's panel. Approve it only if you asked for it there; "
+    "Asked for in the ERP's panel. Approve it only if you asked for it there; "
     "otherwise dismiss it."
 )
 # On a card asked for from ERPNext's desk (114.a): signed in, but the turn's
 # words came through another app's page, which a script there may have written.
 DESK_NOTE = (
-    "Asked for from ERPNext's desk. Approve it only if you asked for it there; "
+    "Asked for from the ERP's desk. Approve it only if you asked for it there; "
     "otherwise dismiss it."
 )
 # Where a card was asked for, when not in this app's own chat.
@@ -673,7 +677,7 @@ def card_view(doctype: str, summary: Any, fields: dict[str, Any]) -> dict[str, A
         unpriced = got.get("unpriced_items")
         if isinstance(unpriced, list) and unpriced:
             names = ", ".join(_one_line(u, NAME_MAX) for u in unpriced[:MAX_LINES])
-            notes.append(f"No valuation or last purchase rate in ERPNext, so not in the estimate: {names}")
+            notes.append(f"No valuation or last purchase rate in the ERP, so not in the estimate: {names}")
     return {"fields": shown, "lines": lines, "notes": notes}
 
 
@@ -788,7 +792,7 @@ def _priced_view(
             "again."
         )
         if len(checked) > MAX_LINES:
-            notes.append(f"And {len(checked) - MAX_LINES} more lines, as ERPNext lists them.")
+            notes.append(f"And {len(checked) - MAX_LINES} more lines, as the ERP lists them.")
     else:
         priced_by_erpnext: list[str] = []
         unmatched: list[str] = []
@@ -809,16 +813,16 @@ def _priced_view(
             elif "rate" not in row and _number(match.get("rate")) is not None:
                 priced_by_erpnext.append(name)
             elif "rate" in row and _number(match.get("rate")) not in (None, _number(row["rate"])):
-                notes.append(f"ERPNext's pricing rules made {name}'s rate {_money(match.get('rate'))}.")
+                notes.append(f"The ERP's pricing rules made {name}'s rate {_money(match.get('rate'))}.")
         if priced_by_erpnext:
             notes.append(
-                f"Rates from ERPNext's price list at the check, for {', '.join(priced_by_erpnext)}; "
+                f"Rates from the ERP's price list at the check, for {', '.join(priced_by_erpnext)}; "
                 "if they change before you approve, nothing is made and you're asked to look again."
             )
         if unmatched:
             notes.append(
-                f"ERPNext's check didn't give figures for {', '.join(unmatched)}; its rate is "
-                "ERPNext's to set (a pricing rule can change a stated one), so check it in ERPNext."
+                f"The ERP's check didn't give figures for {', '.join(unmatched)}; its rate is "
+                "the ERP's to set (a pricing rule can change a stated one), so check it in the ERP."
             )
     currency = _currency(got.get("currency"))
     company_currency = _currency(got.get("company_currency"))
@@ -962,6 +966,293 @@ def earlier_cards(person_id: int, session_id: Any, *, leaving: int) -> list[dict
     return out
 
 
+# ---------------------------------------------------------------------------
+# What became of this conversation's cards, for its later turns
+# ---------------------------------------------------------------------------
+
+# Why a card closed on approval, as stored in its final payload. Our own codes,
+# never the ERP's words; the note below reads them through _CLOSED_SAYS only.
+CLOSED_CHANGED = "changed_since_proposed"
+CLOSED_NO_ANSWER = "no_answer"
+# How far back, and how many, the turn's note looks: a card's own lifetime.
+DECIDED_WINDOW = CARD_TTL
+DECIDED_MAX = 5
+# A draft's name as the note shows it: tighter than _DOC_NAME_RE (no spaces,
+# shorter), and still the ERP's text, so it is wrapped as untrusted.
+_SHOWN_NAME_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,59}")
+_CLOSED_SAYS: dict[str, str] = {
+    CLOSED_CHANGED: (
+        "closed when they approved it: it changed in the ERP after the card was left "
+        "(a price, a rate or a source document), so nothing was made"
+    ),
+    # Every other final failure: a refusal and a timeout can look alike
+    # (both may come back as plain error text), so nothing here says that
+    # nothing was made.
+    CLOSED_NO_ANSWER: (
+        "closed when they approved it: the approval didn't go through after several tries, "
+        "and whether a draft was made isn't recorded: check in the ERP before asking again"
+    ),
+}
+_REPLACED_SAYS = "closed: replaced by a newer card because the ERP now reads the draft differently"
+_UNKNOWN_CLOSE_SAYS = "closed; the reason wasn't recorded; don't guess one"
+# A dismissed or expired card someone had already tried to approve: that try
+# may have made the draft, so it never says nothing was made.
+_TRIED_SAYS = "an approval of it was tried; check in the ERP whether a draft was made"
+_OUTCOME_SAYS: dict[str, str] = {
+    "approved": "approved: an unsubmitted draft was made",
+    "dismissed": "dismissed: nothing was made",
+    "expired": "expired before it was approved: nothing was made",
+}
+DECIDED_CARDS_NOTE = (
+    "Draft cards left in this conversation that are no longer waiting, oldest first, "
+    "as the records stand now. Mention one only when they ask about it or it bears on "
+    "their question. Speak of each as it stands here, and give no reason a line doesn't "
+    "give. When a card closed because the records changed in the ERP after it was left, "
+    "that is not your error: say what changed and what it means now, never \"Earlier I …\", "
+    "and offer to ask again for a card with the draft as it is now."
+)
+
+
+@dataclass(frozen=True)
+class DecidedCard:
+    """A card that is no longer waiting, as the turn's note shows it."""
+
+    doctype: str
+    # action_chips.card_outcome's word: approved, dismissed, closed or expired.
+    outcome: str
+    decided_at: datetime
+    # Matched against _CLOSED_SAYS only, never shown.
+    closed_code: str = ""
+    # Closed by a later proposal that read the draft differently.
+    replaced: bool = False
+    # The draft's name in the ERP once approved, as the ERP gave it.
+    name: str = ""
+    # Dismissed or expired after an approval of it was tried (or while one
+    # was under way), so a draft may exist.
+    tried: bool = False
+
+
+# The cards an eval scenario's turn is told about, in place of the ledger
+# (evals.scenarios.scenario_decided_cards). Never set outside the eval runners.
+decided_cards_override: ContextVar[tuple[DecidedCard, ...] | None] = ContextVar(
+    "decided_cards_override", default=None,
+)
+
+
+def _decided(card: Any) -> DecidedCard | None:
+    """``card`` as the note shows it, or None while it still waits or when
+    its time can't be read. An expired card counts from when it expired, not
+    from when it was tidied, so tidying it late never makes it news."""
+    from openexecutive.memory.decision_ledger import STATUS_CLOSED_EXTERNALLY, STATUS_EXECUTING
+    from openexecutive.orchestrator.action_chips import card_outcome
+
+    outcome = card_outcome(card)
+    if outcome == "waiting":
+        return None
+    if outcome == "expired":
+        created = _created_at(card)
+        decided_at = created + CARD_TTL if created is not None else None
+    else:
+        try:
+            decided_at = datetime.fromisoformat(str(card.resolved_at))
+        except (TypeError, ValueError):
+            decided_at = None
+        if decided_at is not None and decided_at.tzinfo is None:
+            decided_at = decided_at.replace(tzinfo=UTC)
+    if decided_at is None:
+        return None
+    try:
+        final = json.loads(card.final_payload_json or "{}")
+    except (TypeError, ValueError):
+        final = {}
+    final = final if isinstance(final, dict) else {}
+    code = final.get("closed_code")
+    name = ""
+    if outcome == "approved":
+        made = final.get("created")
+        given = made.get("name") if isinstance(made, dict) else None
+        name = given if isinstance(given, str) and _SHOWN_NAME_RE.fullmatch(given) else ""
+    attempts = _payload(card).get("attempts")
+    tried = outcome in ("dismissed", "expired") and (
+        card.status == STATUS_EXECUTING
+        or _payload(card).get("tried") is True
+        or (isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 0)
+    )
+    return DecidedCard(
+        doctype=str(_payload(card).get("doctype") or ""),
+        outcome=outcome,
+        decided_at=decided_at,
+        closed_code=code if isinstance(code, str) else "",
+        replaced=(
+            outcome == "closed" and card.status == STATUS_CLOSED_EXTERNALLY
+            and card.reversal_reason == "changed"
+        ),
+        name=name,
+        tried=tried,
+    )
+
+
+def decided_cards(person_id: int, session_id: str, *, now: datetime | None = None) -> list[DecidedCard]:
+    """``person_id``'s cards left in conversation ``session_id`` that were
+    decided within ``DECIDED_WINDOW``: the newest ``DECIDED_MAX``, oldest
+    first. Reads the ledger only; it never tidies (``open_cards``)."""
+    from openexecutive.memory.decision_ledger import list_session_instances
+
+    at = now or datetime.now(UTC)
+    found = list_session_instances(DECISION_CLASS, session_id, approver_person_id=person_id, limit=1000)
+    decided = [
+        d for d in (_decided(c) for c in found)
+        if d is not None and at - d.decided_at <= DECIDED_WINDOW
+    ]
+    return sorted(decided, key=lambda d: d.decided_at)[-DECIDED_MAX:]
+
+
+def conversation_has_cards(session_id: str) -> bool:
+    """Whether conversation ``session_id`` left any draft card: its turns
+    read the ERP to leave one, and a later turn may be told what became of
+    it (``decided_cards_note``). Raises if the ledger can't be read."""
+    from openexecutive.memory.decision_ledger import list_session_instances
+
+    return bool(list_session_instances(DECISION_CLASS, session_id, limit=1))
+
+
+def decided_says(card: DecidedCard) -> str:
+    """What the note says became of ``card``: our fixed words only."""
+    if card.outcome == "closed":
+        if card.replaced:
+            return _REPLACED_SAYS
+        return _CLOSED_SAYS.get(card.closed_code, _UNKNOWN_CLOSE_SAYS)
+    if card.tried and card.outcome in ("dismissed", "expired"):
+        return f"{card.outcome}: {_TRIED_SAYS}"
+    return _OUTCOME_SAYS.get(card.outcome, _UNKNOWN_CLOSE_SAYS)
+
+
+def render_decided_cards(found: list[DecidedCard] | tuple[DecidedCard, ...]) -> str:
+    """The note's body: the instruction line, then a line per card in our
+    own words, each approved draft's name after it in an untrusted block.
+    "" for no cards."""
+    from openexecutive.memory.workspace_settings import get_user_timezone
+    from openexecutive.orchestrator.content_trust import wrap_untrusted
+    from openexecutive.prompts.connected_systems import in_product_reply
+
+    if not found:
+        return ""
+    try:
+        zone: Any = get_user_timezone()
+    except Exception:
+        zone = UTC
+    lines = [in_product_reply(DECIDED_CARDS_NOTE)]
+    for card in found:
+        label = f"{card.doctype} draft" if card.doctype in DRAFT_TOOLS else "A draft"
+        when = card.decided_at.astimezone(zone).strftime("%a %d %b %H:%M")
+        says = decided_says(card)
+        name = card.name if card.outcome == "approved" and _SHOWN_NAME_RE.fullmatch(card.name) else ""
+        if name:
+            says += "; its name in the ERP follows"
+        lines.append(in_product_reply(f"- {label}, {when}: {says}."))
+        if name:
+            lines.append(wrap_untrusted(name, source="erpnext"))
+    return "\n".join(lines)
+
+
+def _note_person(session: Any, person_id: int | None) -> int | None:
+    """Whose cards the turn's note may show, or None for no note. ERPNext's
+    panel: the team member its signed email names (``erpnext_panel._person_for``),
+    whose own conversation it is (never on a turn of the web chat). Anywhere
+    else: the turn's ``person_id``, only in a conversation nobody else reads,
+    and for a teammate only on a surface that verified them. Never an unattended run or an
+    email turn."""
+    from openexecutive.memory.history_chat import private_chat
+    from openexecutive.orchestrator.schedule_tools import erpnext_panel_turn
+
+    if session is None or getattr(session, "unattended", False) is True:
+        return None
+    if (
+        str(getattr(session, "origin_channel", "") or "") == "email"
+        or getattr(session, "email_from", None)
+        or getattr(session, "private_to_principal", False) is True
+    ):
+        return None
+    # A turn of this app's own web chat is never the panel's, whatever
+    # email it carries.
+    if erpnext_panel_turn(session) and getattr(session, "from_web_chat", False) is not True:
+        from openexecutive.integrations.erpnext_panel import _person_for
+
+        person = _person_for(str(session.erpnext_panel_email).strip().lower())
+        return int(person.id) if person is not None else None
+    from openexecutive.orchestrator.schedule_tools import host_turn
+
+    if host_turn(session):
+        # ERPNext's desk: whoever the ERP is asked as on such a turn
+        # (erpnext_caller._host_caller: signed in, a team member, a private
+        # conversation), and only them. The page names no one.
+        from openexecutive.orchestrator import erpnext_caller
+
+        try:
+            erpnext_caller._host_caller(session)
+        except erpnext_caller.CallerRefused:
+            return None
+        pid = getattr(session, "caller_person_id", None)
+        return pid if isinstance(pid, int) and not isinstance(pid, bool) else None
+    if getattr(session, "shared_chat", False) is not False or not private_chat(session):
+        return None
+    if not isinstance(person_id, int) or isinstance(person_id, bool):
+        return None
+    from openexecutive.people.store import get_person
+
+    person = get_person(person_id)
+    if person is None or not person.active:
+        return None
+    if person.is_principal:
+        # The principal's cards only on a surface that proved it is them, as
+        # leaving one needs (principal_speaking): a chat id alone isn't proof.
+        from openexecutive.orchestrator.content_trust import principal_speaking
+
+        return person_id if principal_speaking(session) else None
+    # A teammate's cards hold what the ERP read as them: only when this
+    # surface verified it is them, as GET /erpnext/drafts holds them.
+    from openexecutive.orchestrator.people_tools import teammate_on_verified_surface
+
+    teammate = teammate_on_verified_surface(session)
+    if teammate is None or teammate.id != person_id:
+        return None
+    if getattr(session, "from_web_chat", False) is True:
+        # The web chat counts its caller as verified even unsigned; the
+        # drafts route shows a teammate's cards only under signed sign-ins.
+        from openexecutive.api.caller import signing_on
+
+        if not signing_on():
+            return None
+    return person_id
+
+
+def decided_cards_note(session: Any, person_id: int | None) -> str:
+    """The body of the turn's ``<decided_cards>`` block (user turn only):
+    what became of the cards this conversation left for the turn's own
+    person, so a reply can say why one closed rather than guess. "" when
+    there are none, the turn may not see them, or anything fails: it never
+    blocks a turn. A note marks the conversation as one that read the ERP."""
+    try:
+        override = decided_cards_override.get()
+        if override is not None:
+            found: list[DecidedCard] | tuple[DecidedCard, ...] = override
+        else:
+            session_id = getattr(session, "session_id", None)
+            if not isinstance(session_id, str) or not session_id:
+                return ""
+            who = _note_person(session, person_id)
+            if who is None:
+                return ""
+            found = decided_cards(who, session_id)
+        note = render_decided_cards(found)
+    except Exception:
+        logger.warning("erpnext_drafts: couldn't read this conversation's decided cards", exc_info=True)
+        return ""
+    if note and session is not None:
+        session.read_erpnext = True
+    return note
+
+
 def cards(person: Any) -> list[DraftCard]:
     """``person``'s waiting draft cards, for ``GET /erpnext/drafts``. What the
     card says in words (its reason, notes and last error) is in the product's
@@ -1024,7 +1315,7 @@ async def _call(tool: str, arguments: dict[str, Any]) -> str:
 
     gateway = get_active_gateway()
     if gateway is None:
-        return _error("ERPNext isn't connected right now.")
+        return _error("The ERP isn't connected right now.")
     return await asyncio.wait_for(
         gateway.call_tool({"name": tool, "arguments": arguments}), timeout=CALL_TIMEOUT_S
     )
@@ -1416,7 +1707,11 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     stored. Returns what was made. Raises ``ApproveRefused``."""
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.delegation.verified import NOT_YOURS, caller_refusal
-    from openexecutive.memory.decision_ledger import claim_for_execution
+    from openexecutive.memory.decision_ledger import (
+        claim_for_execution,
+        release_claim,
+        update_open_payload,
+    )
     from openexecutive.people.store import get_person
 
     payload = _payload(instance)
@@ -1436,19 +1731,19 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     # A teammate's card waits on teammates still being let in: turned off,
     # their cards stay but can't be carried out.
     if not person.is_principal and not (teammates_on() and person.kind == "team"):
-        raise ApproveRefused(409, "principal_only", "For now only the account owner can approve ERPNext drafts.")
+        raise ApproveRefused(409, "principal_only", "For now only the account owner can approve ERP drafts.")
     if not drafts_on():
-        raise ApproveRefused(409, "drafts_off", "ERPNext drafts are turned off here, or ERPNext isn't connected.")
+        raise ApproveRefused(409, "drafts_off", "ERP drafts are turned off here, or the ERP isn't connected.")
     from openexecutive.integrations import erpnext_changes
 
     operation = payload.get("operation", "create")
     if operation not in erpnext_changes.OPERATIONS:
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it and ask again.")
     if operation == "create" and payload.get("doctype") in DRAFT_TOOLS and payload.get("doctype") not in enabled_doctypes():
-        raise ApproveRefused(409, "drafts_off", f"ERPNext {payload['doctype']} drafts are turned off here.")
+        raise ApproveRefused(409, "drafts_off", f"ERP {payload['doctype']} drafts are turned off here.")
     if operation != "create" and payload.get("doctype") not in erpnext_changes.enabled(operation):
         what = "changes" if operation == "update" else "comments"
-        raise ApproveRefused(409, "drafts_off", f"ERPNext {what} on {payload.get('doctype')} are turned off here.")
+        raise ApproveRefused(409, "drafts_off", f"ERP {what} on {payload.get('doctype')} are turned off here.")
     if not _live(instance, datetime.now(UTC)):
         raise ApproveRefused(409, "expired", "This card is more than three days old. Ask again if it's still needed.")
     doctype, fields, key = payload.get("doctype"), payload.get("fields"), payload.get("card_key")
@@ -1470,7 +1765,7 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
     ):
         raise ApproveRefused(409, "malformed", "This card can't be carried out. Dismiss it and ask again.")
     if "@" not in email:
-        raise ApproveRefused(409, "no_email", "Your People entry has no email, so ERPNext can't tell who you are.")
+        raise ApproveRefused(409, "no_email", "Your People entry has no email, so the ERP can't tell who you are.")
     # The card was checked as the person who asked: if their People email
     # changed since, it may now name someone else, so it isn't theirs to make.
     asked_by = payload.get("asked_by")
@@ -1480,14 +1775,30 @@ async def approve(instance: Any, *, caller: Any, resolver: int | None) -> dict[s
         raise ApproveRefused(409, "already_handled", "This card was already handled.")
     _APPROVING.add(instance.id)
     try:
-        return await _carry_out(instance, payload, person, email, tool, rechecked, key)
+        # Marked before the call, while the claim is held: if the call never
+        # comes back (a restart releases the claim), the card still says an
+        # approval was tried, so the note never says nothing was made. No
+        # mark, no call: the card waits again and the person approves anew.
+        stored = instance.proposed_payload_json
+        if payload.get("tried") is not True:
+            marked = {**payload, "tried": True}
+            try:
+                ok = update_open_payload(instance.id, marked, expected_json=stored, while_executing=True)
+            except Exception:
+                logger.warning("erpnext_drafts: marking card %d as tried failed", instance.id, exc_info=True)
+                ok = False
+            if not ok:
+                release_claim(instance.id)
+                raise ApproveRefused(409, "busy", "This card changed a moment ago. Approve it again.")
+            payload, stored = marked, json.dumps(marked)
+        return await _carry_out(instance, payload, person, email, tool, rechecked, key, stored)
     finally:
         _APPROVING.discard(instance.id)
 
 
 async def _carry_out(
     instance: Any, payload: dict[str, Any], person: Any, email: str,
-    tool: str, fields: dict[str, Any], key: str,
+    tool: str, fields: dict[str, Any], key: str, stored: str,
 ) -> dict[str, Any]:
     """``approve`` once it holds the claim: the one ERPNext call, then the
     card finished, or back to waiting with why. Raises ``ApproveRefused``."""
@@ -1518,7 +1829,7 @@ async def _carry_out(
             raw = await _call(tool, arguments)
     except Exception as exc:
         logger.warning("erpnext_drafts: the draft call for card %d failed (%s)", instance.id, type(exc).__name__)
-        raw = _error("ERPNext didn't answer in time; it may or may not have made the draft.")
+        raw = _error("The ERP didn't answer in time; it may or may not have made the draft.")
     except BaseException:
         # Cancelled mid-call (the request went away, the API is stopping):
         # the card waits again rather than staying claimed. Approving again
@@ -1568,13 +1879,16 @@ async def _carry_out(
     if CHANGED_SINCE_PROPOSED in reason or (doctype == "Dunning" and _DUNNING_STALE in reason):
         # Nothing was made, and approving again would refuse again: the card
         # is closed, and asking again leaves one with the draft as it is now.
-        finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})
+        finish_execution(
+            instance.id, STATUS_FAILED,
+            final_payload={**payload, "last_error": reason, "closed_code": CLOSED_CHANGED},
+        )
         audit("erpnext_draft_changed", f"Person {person.id}'s ERPNext {doctype} draft changed since its card", {
             "person_id": person.id, "decision_id": instance.id, "doctype": doctype,
         })
         raise ApproveRefused(
             409, "changed_since_proposed",
-            "This draft changed in ERPNext since the card was left (a source document, a price or a "
+            "This draft changed in the ERP since the card was left (a source document, a price or a "
             "rate), so nothing was made and the card is closed. Ask for it again to see it as it is now.",
         )
     attempts = int(payload.get("attempts") or 0) + 1
@@ -1582,21 +1896,27 @@ async def _carry_out(
         "person_id": person.id, "decision_id": instance.id, "doctype": doctype, "attempts": attempts,
     })
     if attempts >= ATTEMPTS_MAX:
-        finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "attempts": attempts, "last_error": reason})
-        raise ApproveRefused(502, "draft_failed", f"ERPNext didn't make the draft: {reason} This card has been tried {attempts} times, so it is closed.")
+        # Our own code for why it closed, for the conversation's later turns
+        # (decided_cards_note). A refusal and a timeout can't be told apart
+        # by the answer's shape, so every such close is no_answer.
+        finish_execution(
+            instance.id, STATUS_FAILED,
+            final_payload={**payload, "attempts": attempts, "last_error": reason, "closed_code": CLOSED_NO_ANSWER},
+        )
+        raise ApproveRefused(502, "draft_failed", f"The ERP didn't make the draft: {reason} This card has been tried {attempts} times, so it is closed.")
     # Back to waiting, with the reason: approving again sends the same card
     # key, so ERPNext returns the draft if it was made after all. The reason
     # and count are written while the claim is still held, then released, so
     # a second tap can't claim it in between and the count is never lost.
     if not update_open_payload(
         instance.id, {**payload, "attempts": attempts, "last_error": reason},
-        expected_json=instance.proposed_payload_json, while_executing=True,
+        expected_json=stored, while_executing=True,
     ):
         logger.warning("erpnext_drafts: couldn't note card %d's failed attempt", instance.id)
     release_claim(instance.id)
     raise ApproveRefused(
         502, "draft_failed",
-        f"ERPNext didn't make the draft: {reason} You can approve it again; it won't make a second one.",
+        f"The ERP didn't make the draft: {reason} You can approve it again; it won't make a second one.",
     )
 
 

@@ -12,6 +12,19 @@ from pydantic import BaseModel, ConfigDict, Field
 # namespaced token, so no tag the triage model invents can collide with it.
 PRIVATE_ALERT_TAG = "private:principal"
 
+# Stamped on every alert a research run raises (``alerts/pipeline.py``), so a
+# demo reset can keep that run's alerts (``monitoring/research/carry.py``).
+# Bookkeeping, never a topic: hidden from cards and from triage.
+RESEARCH_RUN_TAG_PREFIX = "research_run:"
+
+
+def run_tag(run_id: str) -> str:
+    return f"{RESEARCH_RUN_TAG_PREFIX}{run_id}"
+
+
+def is_run_tag(tag: object) -> bool:
+    return str(tag).startswith(RESEARCH_RUN_TAG_PREFIX)
+
 
 def is_private_alert(alert: object) -> bool:
     """Whether ``alert`` (an Alert, ProposalItem or anything with
