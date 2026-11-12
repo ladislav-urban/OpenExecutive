@@ -18,8 +18,9 @@ description: 'Cash outlook step 2 (oe_connector''s help/try-cash-outlook.md) in 
 query: What if Metro pays as late as it usually does?
 expected_report_filters:
   Accounts Receivable:
-  - party_type
-  - party
+    party_type: Customer
+    party:
+    - Metro Transit Works
 forbidden_tool_calls:
 - propose_erpnext_draft
 forbidden_reply_words:

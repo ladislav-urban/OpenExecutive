@@ -290,19 +290,56 @@ def test_a_report_must_open_with_its_expected_filter_names(monkeypatch: pytest.M
         assert done["scores"]["views"]["reports_unmet"] == ["Accounts Receivable"]
 
 
+def test_a_report_must_open_with_its_expected_filter_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = {
+        "id": "r", "query": "q", "surface": "erpnext_panel",
+        "expected_report_filters": {
+            "Accounts Receivable": {"party_type": "Customer", "party": ["Metro Transit Works"]},
+        },
+    }
+    by_party = {
+        "kind": "report", "report_name": "Accounts Receivable",
+        "filters": {"company": "C", "party_type": "Customer", "party": ["Metro Transit Works", "Cedar & Pine"]},
+    }
+    done = _done(monkeypatch, scenario, [_CHART, by_party])
+    assert done["passed"] is True and done["scores"]["views"]["reports_unmet"] == []
+
+    # A supplier's view, no party, a party as a plain string, another party,
+    # or no party filter at all: each fails.
+    for filters in (
+        {"party_type": "Supplier", "party": ["Metro Transit Works"]},
+        {"party_type": "Customer", "party": []},
+        {"party_type": "Customer", "party": "Metro Transit Works"},
+        {"party_type": "Customer", "party": ["Cedar & Pine"]},
+        {"party_type": "Customer"},
+    ):
+        done = _done(monkeypatch, scenario, [{**by_party, "filters": filters}])
+        assert done["passed"] is False, filters
+        assert done["scores"]["views"]["reports_unmet"] == ["Accounts Receivable"]
+
+
 def test_expected_report_filters_name_reports_and_filters_and_only_for_a_panel_scenario() -> None:
     good = "expected_report_filters:\n  Accounts Receivable:\n  - party\n"
     validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{good}")
+    valued = "expected_report_filters:\n  Accounts Receivable:\n    party_type: Customer\n    party:\n    - Metro\n"
+    validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{valued}")
     with pytest.raises(ValueError, match="expected_report_filters"):
         validate_scenario_yaml(f"id: x\nquery: q\n{good}")
-    for bad in ("expected_report_filters: party\n", "expected_report_filters:\n  Accounts Receivable: party\n"):
+    for bad in (
+        "expected_report_filters: party\n",
+        "expected_report_filters:\n  Accounts Receivable: party\n",
+        "expected_report_filters:\n  Accounts Receivable:\n    party: 3\n",
+        "expected_report_filters:\n  Accounts Receivable:\n    party: []\n",
+    ):
         with pytest.raises(ValueError, match="expected_report_filters"):
             validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{bad}")
 
 
 def test_the_cash_outlook_follow_up_opens_receivables_by_party() -> None:
     found = next(s for s in load_scenarios() if s["id"] == "erpnext_094")
-    assert found["expected_report_filters"] == {"Accounts Receivable": ["party_type", "party"]}
+    assert found["expected_report_filters"] == {
+        "Accounts Receivable": {"party_type": "Customer", "party": ["Metro Transit Works"]},
+    }
     assert scenario_surface(found) == "erpnext_panel"
 
 
