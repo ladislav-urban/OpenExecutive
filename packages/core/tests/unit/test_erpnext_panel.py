@@ -572,6 +572,16 @@ def test_both_panel_blocks_show_the_place_that_fits() -> None:
         assert "{'kind': 'workspace', 'workspace': 'Stock'}" in block
 
 
+def test_both_panel_blocks_give_ar_and_ap_their_party_filters() -> None:
+    # Accounts Receivable and Payable take party_type with a list of party
+    # names; 'customer' and 'supplier' aren't among their filters, so a view
+    # filtered on them doesn't show the one party asked about.
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert "'party_type' ('Customer'/'Supplier') with 'party' (a list of names)" in block
+        assert "never 'customer' or 'supplier'" in block
+        assert "check its filters with erpnext__describe_report first" in block
+
+
 def test_both_panel_blocks_show_a_trend_or_a_breakdown_as_a_chart() -> None:
     # Workstream D (oe_connector's docs/panel-d-plan.md): the `chart` kind,
     # with the plan's example, and where it doesn't fit.

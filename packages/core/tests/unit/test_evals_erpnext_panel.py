@@ -266,6 +266,46 @@ def test_view_kinds_are_a_list_of_names_and_only_for_a_panel_scenario() -> None:
         validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{key}:\n  - chart\n")
 
 
+def test_a_report_must_open_with_its_expected_filter_names(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = {
+        "id": "r", "query": "q", "surface": "erpnext_panel",
+        "expected_report_filters": {"Accounts Receivable": ["party_type", "party"]},
+    }
+    by_party = {
+        "kind": "report", "report_name": "Accounts Receivable",
+        "filters": {"company": "C", "party_type": "Customer", "party": ["Metro Transit Works"]},
+    }
+    done = _done(monkeypatch, scenario, [_CHART, by_party])
+    assert done["passed"] is True and done["scores"]["views"]["reports_unmet"] == []
+
+    # The report without the party filters, another report with them, or
+    # nothing opened (oe_connector refused a 'customer' filter): each fails.
+    for views in (
+        [{"kind": "report", "report_name": "Accounts Receivable", "filters": {"company": "C"}}],
+        [{**by_party, "report_name": "Accounts Payable"}],
+        [],
+    ):
+        done = _done(monkeypatch, scenario, views)
+        assert done["passed"] is False
+        assert done["scores"]["views"]["reports_unmet"] == ["Accounts Receivable"]
+
+
+def test_expected_report_filters_name_reports_and_filters_and_only_for_a_panel_scenario() -> None:
+    good = "expected_report_filters:\n  Accounts Receivable:\n  - party\n"
+    validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{good}")
+    with pytest.raises(ValueError, match="expected_report_filters"):
+        validate_scenario_yaml(f"id: x\nquery: q\n{good}")
+    for bad in ("expected_report_filters: party\n", "expected_report_filters:\n  Accounts Receivable: party\n"):
+        with pytest.raises(ValueError, match="expected_report_filters"):
+            validate_scenario_yaml(f"id: x\nquery: q\nsurface: erpnext_panel\n{bad}")
+
+
+def test_the_cash_outlook_follow_up_opens_receivables_by_party() -> None:
+    found = next(s for s in load_scenarios() if s["id"] == "erpnext_094")
+    assert found["expected_report_filters"] == {"Accounts Receivable": ["party_type", "party"]}
+    assert scenario_surface(found) == "erpnext_panel"
+
+
 def test_the_chart_scenarios_ship_with_their_view_kinds() -> None:
     found = {s["id"]: s for s in load_scenarios() if s["id"] in ("erpnext_054", "erpnext_055")}
     assert found["erpnext_054"]["expected_view_kinds"] == ["chart"]
