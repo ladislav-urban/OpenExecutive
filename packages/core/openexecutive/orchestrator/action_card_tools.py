@@ -49,8 +49,15 @@ PROPOSE_ACTIONS_TOOL: dict[str, Any] = {
         "Kinds: `invite` (title, start, end as local date-times, attendee_person_ids "
         "from the roster, optional description), `message` (person_id from the "
         "roster, text exactly as it will be sent), `add_contact` (full_name, email, "
-        "optional role; the owner's cards only). Tell them the card is waiting; "
-        "never say it is done."
+        "optional role; the owner's cards only), `drive_files` (rename and/or move "
+        "Google Drive files: `files` with each file_id and its new name, and "
+        "`move_to`, a folder id, to move them; up to 25 files; the owner's cards "
+        "only), for a rename or move they asked for that the Drive tools refused, "
+        "`save_files` (save files into a Drive folder people outside the team can "
+        "open, when save_file says it needs a card: `folder`, the folder id, and "
+        "`files`, each with the file's handle as `file` and the `name` to save "
+        "under; one action a folder; the owner's cards only). "
+        "Tell them the card is waiting; never say it is done."
     ),
     "input_schema": {
         "type": "object",
@@ -65,7 +72,7 @@ PROPOSE_ACTIONS_TOOL: dict[str, Any] = {
                 "items": {
                     "type": "object",
                     "properties": {
-                        "kind": {"type": "string", "enum": ["invite", "message", "add_contact"]},
+                        "kind": {"type": "string", "enum": ["invite", "message", "add_contact", "drive_files", "save_files"]},
                         "title": {"type": "string"},
                         "start": {"type": "string", "description": "Local date and time, e.g. 2026-10-10T14:00."},
                         "end": {"type": "string", "description": "Local date and time, e.g. 2026-10-10T14:30."},
@@ -76,6 +83,23 @@ PROPOSE_ACTIONS_TOOL: dict[str, Any] = {
                         "full_name": {"type": "string"},
                         "email": {"type": "string"},
                         "role": {"type": "string"},
+                        "files": {
+                            "type": "array",
+                            "maxItems": 25,
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "file_id": {"type": "string", "description": "drive_files: the Drive file's id."},
+                                    "file": {"type": "string", "description": "save_files: the file's handle."},
+                                    "name": {
+                                        "type": "string",
+                                        "description": "drive_files: the new name; leave out to only move it. save_files: the name to save under.",
+                                    },
+                                },
+                            },
+                        },
+                        "move_to": {"type": "string", "description": "Drive folder id to move the files into."},
+                        "folder": {"type": "string", "description": "save_files: the Drive folder id to save into."},
                     },
                     "required": ["kind"],
                 },
@@ -144,6 +168,11 @@ async def handle_propose_actions(tool_input: dict[str, Any]) -> str:
     checked = action_cards.check(tool_input.get("actions"), person, now=datetime.now(UTC))
     if isinstance(checked, str):
         return _error(checked)
+    unshown = await action_cards.describe_drive_files(checked)
+    if unshown is None:
+        unshown = await action_cards.describe_save_files(checked, getattr(session, "session_id", None))
+    if unshown is not None:
+        return _error(unshown)
     via = (rows_via() or "an AI app") if ai_app else None
     try:
         if len(action_cards.open_cards(person.id)) >= action_cards.OPEN_CARDS_MAX:

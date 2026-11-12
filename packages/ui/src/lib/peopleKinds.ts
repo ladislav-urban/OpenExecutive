@@ -53,6 +53,16 @@ export function defaultKindForTab(tab: PeopleTab): PersonKind {
   return tab === "contacts" ? "contact" : "team";
 }
 
+/**
+ * "This is me — Primary" is only for the first setup: once someone on the
+ * list is the principal, nobody else can be, so the add form doesn't offer
+ * it (not even to the principal, who is already on the list). Not offered
+ * while the list is still loading either.
+ */
+export function canClaimPrincipal(people: Pick<Person, "is_principal">[], loading: boolean): boolean {
+  return !loading && !people.some((p) => p.is_principal);
+}
+
 /** The principal is always on the team, whatever the form says. */
 export function effectiveKind(kind: PersonKind, isPrincipal: boolean): PersonKind {
   return isPrincipal ? "team" : kind;
@@ -60,10 +70,10 @@ export function effectiveKind(kind: PersonKind, isPrincipal: boolean): PersonKin
 
 /**
  * Adding someone to the team while using Open Executive just for yourself
- * means there is a team now: offer to switch the workspace to team mode.
- * Never for the principal's own entry or for a contact.
+ * means there is a team now: the workspace switches to team mode on its own,
+ * without asking. Never for the principal's own entry or for a contact.
  */
-export function shouldOfferTeamMode(mode: WorkspaceMode, kind: PersonKind, isPrincipal: boolean): boolean {
+export function shouldSwitchToTeam(mode: WorkspaceMode, kind: PersonKind, isPrincipal: boolean): boolean {
   return mode === "solo" && effectiveKind(kind, isPrincipal) === "team" && !isPrincipal;
 }
 

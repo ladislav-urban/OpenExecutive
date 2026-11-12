@@ -13,6 +13,7 @@ import OverflowMenu, { type OverflowItem } from "@/components/ui/OverflowMenu";
 import type { HomeCardAction, PersonBriefItem, ProposalItem } from "@/lib/api";
 import { ageLabel, daysUntil, proposalStatusChip } from "@/lib/briefingSummary";
 
+import CardAsk from "./CardAsk";
 import HeldActionCard from "./HeldActionCard";
 import LeadTrainingCard from "./LeadTrainingCard";
 import { Chip, TONE_TEXT, type ContinueHandler } from "./shared";
@@ -43,7 +44,11 @@ function artifactBadge(format: ProposalItem["artifact_format"]): string {
 // the chip row (age, seen ×N, why-now / due, likely-stale, folded-in,
 // draft-ready) and the muted "Reviewed <ago>" footer. A pure builder (no
 // hooks) so ProposalCard stays a layout function.
-function buildProposalLifecycle(proposal: ProposalItem, product: string): {
+function buildProposalLifecycle(
+  proposal: ProposalItem,
+  product: string,
+  ageShown: boolean,
+): {
   reviewLine: React.ReactNode;
   lifecycleRow: React.ReactNode;
   reviewedFooter: React.ReactNode;
@@ -61,7 +66,8 @@ function buildProposalLifecycle(proposal: ProposalItem, product: string): {
     </p>
   ) : null;
   const chips: { label: string; tone: "neutral" | "amber" | "sky"; title?: string }[] = [];
-  if (age) chips.push({ label: age, tone: "neutral", title: `Raised ${new Date(proposal.created_at).toLocaleString()}` });
+  // The status chip already reads "2m old" when nothing is due.
+  if (age && !ageShown) chips.push({ label: age, tone: "neutral", title: `Raised ${new Date(proposal.created_at).toLocaleString()}` });
   if ((proposal.occurrence_count ?? 1) > 1)
     chips.push({
       label: `seen ×${proposal.occurrence_count}`,
@@ -105,6 +111,15 @@ interface CardAction {
   danger?: boolean;
 }
 
+// What the card needs from its reader (ProposalItem.needs), as the chip at
+// its top says it.
+const NEEDS_CHIP: Record<string, { label: string; tone: "sky" | "amber" | "emerald" | "neutral" }> = {
+  answer: { label: "Needs your answer", tone: "sky" },
+  choice: { label: "Pick one", tone: "amber" },
+  ok: { label: "Needs your OK", tone: "emerald" },
+  fyi: { label: "For you to know", tone: "neutral" },
+};
+
 // A card in "Needs you" (and in the Across-the-team panel). Closed, it shows
 // the proposal, one status chip and who it is routed to, with one primary
 // button (the recommended move, or Approve) beside Discuss; the rest sit in
@@ -122,6 +137,7 @@ export default function ProposalCard({
   onSnooze,
   onRerun,
   onApproveWithEdits,
+  onAnswer,
   busy = false,
   defaultBodyExpanded = false,
   emphasized = false,
@@ -136,6 +152,9 @@ export default function ProposalCard({
   // Queue a failed scheduled run again (cards with `failed_run_id`).
   onRerun?: (p: ProposalItem) => void;
   onApproveWithEdits?: (p: ProposalItem, editedBody: string) => void;
+  // Answer a card that asks something (needs "answer" or
+  // "choice"); rejects with the reason when it couldn't be sent.
+  onAnswer?: (p: ProposalItem, answer: string) => Promise<void>;
   busy?: boolean;
   // Show the whole body while closed (no clamp) — the first card in the
   // queue, so its full text reads without a click.
@@ -166,7 +185,7 @@ export default function ProposalCard({
     );
   }
   // A Take the lead card from training is answered on its own card too:
-  // Approve, Approve + allow, Edit and Decline (LeadTrainingCard).
+  // Approve (with the "on its own next time" tick), Edit and Decline (LeadTrainingCard).
   if (proposal.card_kind === "lead_training") {
     return <LeadTrainingCard proposal={proposal} emphasized={emphasized} onResolved={() => onDismiss?.(proposal)} />;
   }
@@ -269,7 +288,16 @@ export default function ProposalCard({
 
   // What the card offers (GET /today's `actions`): the primary, Discuss,
   // then the ⋯ menu in order. Each needs the handler that carries it out.
-  const offered = proposal.actions ?? [];
+  // A card that asks something (needs "answer" or "choice") is answered on
+  // the card, and one that's for them to know ("fyi") has nothing to
+  // approve: Approve is left out of what Home's rules offer, and Dismiss
+  // reads "Got it" and leads.
+  const needs = proposal.needs ?? "";
+  const asks = (needs === "answer" || needs === "choice") && Boolean(onAnswer);
+  const noApprove = needs === "answer" || needs === "choice" || needs === "fyi";
+  const offered = (proposal.actions ?? []).filter(
+    (a) => !(noApprove && (a.key === "approve" || a.key === "approve_with_edits")),
+  );
   const asCardAction = (a: HomeCardAction): CardAction | null => {
     switch (a.key) {
       case "approve":
@@ -277,7 +305,9 @@ export default function ProposalCard({
       case "approve_with_edits":
         return onApproveWithEdits ? { label: a.label, onSelect: startEditing } : null;
       case "dismiss":
-        return onDismiss ? { label: a.label, onSelect: () => onDismiss(proposal) } : null;
+        return onDismiss
+          ? { label: needs === "fyi" ? "Got it" : a.label, onSelect: () => onDismiss(proposal) }
+          : null;
       case "snooze": {
         const until = a.until;
         return onSnooze && until
@@ -298,7 +328,11 @@ export default function ProposalCard({
         return a.href ? { label: a.label, href: a.href, external: a.external } : null;
     }
   };
-  const primaryOffer = offered.find((a) => a.primary);
+  const primaryOffer = asks
+    ? undefined
+    : needs === "fyi"
+      ? offered.find((a) => a.key === "dismiss")
+      : offered.find((a) => a.primary);
   const primary = primaryOffer ? asCardAction(primaryOffer) : null;
   const discuss = offered.find((a) => a.key === "discuss");
   const menu = offered
@@ -308,8 +342,12 @@ export default function ProposalCard({
   const showActions = Boolean(onApprove || onDismiss || onApproveWithEdits);
 
   const status = isMonitoring ? null : proposalStatusChip(proposal);
-  const visibleTags = proposal.topic_tags.filter((t) => t !== "artifact" && !t.startsWith("failed_run:") && !t.startsWith("research_run:"));
-  const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal, product);
+  // "private:" tags only route the card; they mean nothing to the reader.
+  const visibleTags = proposal.topic_tags.filter(
+    (t) => t !== "artifact" && !t.startsWith("failed_run:") && !t.startsWith("private:") && !t.startsWith("research_run:"),
+  );
+  const ageShown = status != null && status.label.endsWith(" old");
+  const { reviewLine, lifecycleRow, reviewedFooter } = buildProposalLifecycle(proposal, product, ageShown);
   const surfacedNote = proposal.surfaced_reason ? (
     <p className="text-sm text-fg-muted leading-snug">{proposal.surfaced_reason}</p>
   ) : null;
@@ -327,8 +365,14 @@ export default function ProposalCard({
       isLongBody,
   );
 
+  const needsChip = NEEDS_CHIP[needs];
   const header = (
     <>
+      {needsChip && !isArtifact && (
+        <div className="mb-1.5">
+          <Chip tone={needsChip.tone}>{needsChip.label}</Chip>
+        </div>
+      )}
       {isArtifact && (
         <div className="mb-1.5">
           <Chip tone="amber">{artifactBadge(proposal.artifact_format)}</Chip>
@@ -426,6 +470,15 @@ export default function ProposalCard({
           )}
           {reviewedFooter}
         </div>
+      )}
+
+      {asks && onAnswer && (
+        <CardAsk
+          alertId={proposal.alert_id}
+          question={proposal.question ?? ""}
+          choices={needs === "choice" ? (proposal.choices ?? []) : []}
+          onAnswer={(answer) => onAnswer(proposal, answer)}
+        />
       )}
 
       {showActions && (

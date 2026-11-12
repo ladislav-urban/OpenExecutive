@@ -21,7 +21,7 @@ const FLAG_TEXT: Record<string, string> = {
   send_failed: "Sending didn't go through last time, so nothing was sent. Try again, or send it from Gmail.",
   sender_unverified: "Gmail couldn't confirm this came from that address. Check it before you reply.",
   thread_moved_on: "A newer message arrived in this thread after the draft was written.",
-  others_on_thread: "Others were on this email. The draft goes to the sender only.",
+  others_on_thread: "Others were on this email.",
   executive_on_thread: "This app's own address was on this email too.",
   reply_to_ignored: "The email asked for replies to go elsewhere. The draft goes to the sender.",
   mailing_list: "This came through a mailing list.",
@@ -41,6 +41,26 @@ export function replyFlagLines(flags: readonly string[]): string[] {
   return FLAG_ORDER.filter((f) => seen.has(f)).map((f) => FLAG_TEXT[f]);
 }
 
+/** The Reply to choice on a card: the sender's button and the everyone
+ * button, with which is picked now. Null when there is no choice (a
+ * follow-up, or nobody else was on the email). */
+export function replyToChoice(card: {
+  from_name: string;
+  from_email: string;
+  draft_to: readonly string[];
+  reply_others?: readonly string[];
+  source?: string;
+}): { sender: string; everyone: string; toEveryone: boolean } | null {
+  const others = card.reply_others ?? [];
+  if (card.source === "follow_up" || others.length === 0) return null;
+  const first = card.from_name.trim().split(/\s+/)[0] || card.from_email;
+  return {
+    sender: `${first} only`,
+    everyone: `Everyone (${others.length + 1})`,
+    toEveryone: card.draft_to.length > 1,
+  };
+}
+
 /** "Dana Park <dana@…>" as the card's From line; the address alone when
  * there is no name. */
 export function senderLine(card: { from_name: string; from_email: string }): string {
@@ -58,6 +78,24 @@ export function senderShort(card: { from_name: string; from_email: string; sende
   const at = card.from_email.lastIndexOf("@");
   if (!name || card.sender_verified !== true || at < 0) return senderLine(card);
   return `${name} · @${card.from_email.slice(at + 1)}`;
+}
+
+// How much of what they wrote stands in for the summary on an older card.
+const GIST_FALLBACK_CHARS = 160;
+
+/** The line or two a closed card shows: the Executive's summary, or on a card
+ * drafted before it, the start of what they wrote on one line. */
+export function cardGist(card: { gist?: string; they_wrote: string }): string {
+  const gist = (card.gist ?? "").trim();
+  if (gist) return gist;
+  const words = card.they_wrote.split(/\s+/).filter(Boolean).join(" ");
+  if (words.length <= GIST_FALLBACK_CHARS) return words;
+  return `${words.slice(0, GIST_FALLBACK_CHARS).replace(/\s+\S*$/, "")}…`;
+}
+
+/** "1 to decide" / "3 to decide", or "" when nothing is left. */
+export function toDecideLabel(left: number): string {
+  return left > 0 ? `${left} to decide` : "";
 }
 
 /** Whether a draft is long enough to show clamped, with a Show full draft toggle. */

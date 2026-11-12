@@ -30,13 +30,14 @@ from openexecutive.api.models import (
 from openexecutive.audit import log_event as audit_log
 from openexecutive.audit import principal_turn_rows, rows_for_person
 from openexecutive.integrations.attachments import build_attachment_output
+from openexecutive.orchestrator import outside_content
+from openexecutive.orchestrator.action_chips import drop_replaced
 from openexecutive.orchestrator.answer_sources import TurnSources
 from openexecutive.orchestrator.debug_events import DebugCollector
 from openexecutive.orchestrator.turn_inbox import TurnInbox
 from openexecutive.people import demo as people_demo
 from openexecutive.prompts.connected_systems import in_product_reply, product_reply_stream
 from openexecutive.workflows import turn_files
-from openexecutive.workflows.python_job import available as python_job_available
 from openexecutive.workflows.turn_files import bind as bind_turn_files
 
 # Per-file size cap. Mirrors `_DEFAULT_MAX_BYTES` in
@@ -209,10 +210,11 @@ def _stop_owner_key(request: Request, caller_person_id: int | None) -> str:
     return f"{key}|host" if api_caller.from_host(request) else key
 
 
-# Conversations a host origin's page has written in, as this process saw it
-# happen: the stored mark (session_store.host_wrote) can fail to write, and a
-# turn running alongside must be held all the same. The API runs as one
-# process.
+# Conversations a host origin's page has written in whose stored mark
+# (session_store.host_wrote) hasn't been written yet, or failed to write: a
+# turn running alongside must be held all the same. An id leaves once its mark
+# is stored, so a host page starting many chats doesn't grow it. The API runs
+# as one process.
 _host_sessions: set[str] = set()
 
 
@@ -480,6 +482,18 @@ def _add_to_turn(client_turn_id: str, owner: str, message_id: str, text: str) ->
     if entry is None or entry.owner != owner or entry.inbox is None:
         return None
     if entry.event.is_set() or not entry.inbox.add(message_id, text):
+        return None
+    return entry.turn_id
+
+
+def _hand_over_turn(client_turn_id: str, owner: str) -> str | None:
+    """Ask a running turn to stop and hand over what it has. Returns its
+    server `turn_id`, or None (no such live turn, not yours, already stopped
+    or finished: indistinguishable, as for `_request_stop`)."""
+    entry = _active_stops.get(client_turn_id)
+    if entry is None or entry.owner != owner or entry.inbox is None:
+        return None
+    if entry.event.is_set() or not entry.inbox.request_hand_over():
         return None
     return entry.turn_id
 
@@ -1156,6 +1170,7 @@ async def _chat_turn(
     erpnext_page: ErpnextPage | None = None,
     card_id: int | None = None,
     host_slot: host_limit.HostSlot | None = None,
+    background: bool = False,
 ) -> StreamingResponse:
     """Shared streaming-chat handler for both the JSON and multipart routes.
 
@@ -1227,10 +1242,6 @@ async def _chat_turn(
     principal_turn = is_principal_on_verified_surface(
         SimpleNamespace(from_web_chat=True, caller_person_id=caller_person_id)
     )
-    # Only a principal's turn can run a Python job, so only there are the
-    # uploads kept for the turn; anyone else's are dropped here.
-    if turn_files and not (principal_turn and python_job_available()):
-        turn_files = None
     # A client-supplied id must be the caller's own chat; any other id the
     # turn can't use is swapped for a fresh chat before the stop switch arms.
     requested_id = _clean_session_id(session_id)
@@ -1333,6 +1344,13 @@ async def _chat_turn(
                 status_code=409,
                 detail="This conversation was started in the web app. Continue it there.",
             )
+        if turn_files:
+            # Kept for the conversation, so a later message can still attach,
+            # split or save them (orchestrator/file_refs.py, file:<name>).
+            # Inside the guard: a cancelled write must release the turn too.
+            from openexecutive.orchestrator import conversation_files
+
+            await asyncio.to_thread(conversation_files.keep, session.session_id, turn_files)
     except BaseException:
         _release_stop(client_turn_id, turn_id)
         if lock_key is not None:
@@ -1485,7 +1503,10 @@ async def _chat_turn(
         try:
             from openexecutive.memory.session_store import mark_host_wrote
 
-            mark_host_wrote(session.session_id)
+            if mark_host_wrote(session.session_id):
+                # Stored: the mark holds the chat now, so the id leaves
+                # this process's own list and it doesn't grow.
+                _host_sessions.discard(session.session_id)
         except Exception:
             logger.exception("chat.host_mark_failed session_id=%s", session.session_id)
     if session.host_page and is_first_turn:
@@ -1734,9 +1755,13 @@ async def _chat_turn(
         timed_out = False
         client_disconnected = False
         stopped = False
+        # Broadcast to pages that have the chat open: a shared chat's others,
+        # and the owner watching a turn run on the server with no page of its
+        # own (``start_background_turn``: an approved card's Watch).
+        live_turn = session.shared_chat or background
 
         try:
-            if session.shared_chat:
+            if live_turn:
                 chat_live.turn_started(
                     session.session_id,
                     turn_key=live_key,
@@ -1984,7 +2009,7 @@ async def _chat_turn(
                                 "content": full_response,
                                 "session_id": session.session_id,
                             }
-                            if session.shared_chat:
+                            if live_turn:
                                 chat_live.turn_event(session.session_id, live_key, replaced_evt)
                             yield f"data: {json.dumps(replaced_evt)}\n\n"
                             continue
@@ -2003,7 +2028,7 @@ async def _chat_turn(
                                 "content": text,
                                 "session_id": session.session_id,
                             }
-                            if session.shared_chat:
+                            if live_turn:
                                 chat_live.turn_event(session.session_id, live_key, text_evt)
                             yield f"data: {json.dumps(text_evt)}\n\n"
                         if item == Executive._THINKING:
@@ -2011,14 +2036,16 @@ async def _chat_turn(
                                 "type": "thinking",
                                 "session_id": session.session_id,
                             }
-                            if session.shared_chat:
+                            if live_turn:
                                 chat_live.turn_event(session.session_id, live_key, live_evt)
                             yield f"data: {json.dumps(live_evt)}\n\n"
                         elif not is_text:
                             if isinstance(item, dict) and item.get("type") == "action_taken":
-                                action_chips.append(item)
+                                # A draft written again in this reply replaces
+                                # the earlier one's chip and card.
+                                action_chips[:] = drop_replaced([*action_chips, item])
                             if (
-                                session.shared_chat
+                                live_turn
                                 and isinstance(item, dict)
                                 and item.get("type") in _LIVE_STEPS
                             ):
@@ -2063,7 +2090,7 @@ async def _chat_turn(
                 if not client_disconnected:
                     chunk_count += 1
                     tail_evt = {"type": "chunk", "content": tail, "session_id": session.session_id}
-                    if session.shared_chat:
+                    if live_turn:
                         chat_live.turn_event(session.session_id, live_key, tail_evt)
                     yield f"data: {json.dumps(tail_evt)}\n\n"
 
@@ -2082,7 +2109,7 @@ async def _chat_turn(
                         "content": full_response,
                         "session_id": session.session_id,
                     }
-                    if session.shared_chat:
+                    if live_turn:
                         chat_live.turn_event(session.session_id, live_key, replaced_evt)
                     yield f"data: {json.dumps(replaced_evt)}\n\n"
 
@@ -2174,6 +2201,21 @@ async def _chat_turn(
                 sources_evt = {"type": "sources", "session_id": session.session_id, **answer_sources}
                 yield f"data: {json.dumps(sources_evt)}\n\n"
 
+            # What the turn held for an outside read, for Approve / Not now
+            # buttons under the reply (Approve sends the person's go).
+            held_steps = outside_content.pending_held(session) if not (stopped or timed_out) else ()
+            if held_steps:
+                held_evt = {"type": "held_steps", "session_id": session.session_id, "steps": list(held_steps)}
+                yield f"data: {json.dumps(held_evt)}\n\n"
+            # What the content check flagged this turn, in plain words
+            # (orchestrator.content_scan): sent only with held steps, as the
+            # reason on their card. A flag that held nothing changed nothing
+            # the person sees, so it stays in the audit log alone.
+            flags = outside_content.pending_flags(session) if held_steps else ()
+            if flags:
+                flags_evt = {"type": "flags", "session_id": session.session_id, "flags": list(flags)}
+                yield f"data: {json.dumps(flags_evt)}\n\n"
+
             if stopped:
                 # Not an `error` event — a stop is a user decision, not a
                 # failure.
@@ -2263,7 +2305,7 @@ async def _chat_turn(
                 # conversation running past the lock's deadline mustn't
                 # inherit it from the cached session.
                 session.host_page = False
-            if session.shared_chat:
+            if live_turn:
                 # Saved by now (every path persists before it ends): the
                 # other pages read the chat again.
                 chat_live.turn_ended(session.session_id, live_key)
@@ -2400,6 +2442,7 @@ async def start_background_turn(
             attachment_blocks=None,
             request=_StaysConnected(request.scope, request.receive),
             memory_text=memory_text,
+            background=True,
         )
     except BaseException:
         _release_background_slot(owner)
@@ -2457,6 +2500,31 @@ async def chat_stop(body: StopChatRequest, request: Request) -> dict[str, str]:
         raise HTTPException(status_code=404, detail="No in-flight turn with that id")
     logger.info("chat.stop_requested turn_id=%s", stopped_turn_id)
     return {"status": "stopping", "turn_id": stopped_turn_id}
+
+
+@router.post("/chat/hand-over")
+async def chat_hand_over(body: StopChatRequest, request: Request) -> dict[str, str]:
+    """Stop an in-flight /chat turn's work and have it hand over what it has.
+
+    The person will finish the task themselves (I'll finish it). The turn
+    takes the request at its next step, says so with a `handing_over` event,
+    runs no more tools and writes up what it found and did as its reply. A
+    request that lands while the final answer is already being written
+    changes nothing: that answer is the hand-over. 404 as for /chat/stop.
+    """
+    client_turn_id = _clean_client_turn_id(body.client_turn_id)
+    turn_id = (
+        _hand_over_turn(
+            client_turn_id,
+            _stop_owner_key(request, _resolve_caller_person_id(request)),
+        )
+        if client_turn_id
+        else None
+    )
+    if turn_id is None:
+        raise HTTPException(status_code=404, detail="No in-flight turn with that id")
+    logger.info("chat.hand_over_requested turn_id=%s", turn_id)
+    return {"status": "handing_over", "turn_id": turn_id}
 
 
 @router.post("/chat/add")
@@ -2566,6 +2634,9 @@ async def _upload_turn(
             extra_text, blocks = await build_attachment_output(
                 filename, data, upload.content_type or "", inbound=False,
             )
+            # The upload is bound and kept by this route itself; don't leave
+            # it offered for a chat app's turn (turn_files.offer).
+            turn_files.take_offered()
         except Exception:
             logger.exception("chat_upload: processing failed for %s", filename)
             text_parts.append(f"(Could not process {filename})")

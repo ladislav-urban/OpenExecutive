@@ -10,7 +10,7 @@ import type { Hub } from "@/components/shell/navConfig";
 import { usePageCrumbLabel } from "@/components/shell/PageCrumb";
 import HubTabs from "@/components/ui/HubTabs";
 import { getBadges } from "@/lib/api";
-import { badgeMessage, embedRequested, isNativePath, openMessage, queryWithoutEmbed, routeMessage } from "@/lib/embed";
+import { badgeMessage, embedRequested, hintWarning, isNativePath, openMessage, queryWithoutEmbed, routeMessage } from "@/lib/embed";
 
 // The page in a host's frame (embedded mode, lib/embed.ts): no sidebar, top
 // bar, bottom bar or Ask OE panel (the host has its own), but the hub's tabs,
@@ -98,13 +98,13 @@ export default function EmbeddedShell({
 
 // The host says who is using it (`userHint`, display only). When that isn't
 // who is signed in here, say so: the next person at a shared computer must
-// not work on as the last one without knowing.
+// not work on as the last one without knowing (lib/embed.ts, hintWarning).
 function UserHintWarning() {
   const { init } = useEmbed();
   const { data } = useSession();
-  const signedIn = data?.user?.email?.toLowerCase() ?? "";
-  const hint = init?.userHint ?? "";
-  if (!hint || !signedIn || hint === signedIn) return null;
+  const warning = hintWarning(init?.userHint, data?.user?.email);
+  if (!warning) return null;
+  const { hint, signedIn } = warning;
   return (
     <div
       role="alert"

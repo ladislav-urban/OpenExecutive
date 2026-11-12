@@ -44,8 +44,8 @@ GUIDE_SECTIONS: list[GuideSection] = [
     ),
     GuideSection(
         id="pulse",
-        title="Pulse (Memory)",
-        sub="The running memory — decisions made, initiatives in flight, advice gathered, corrections kept.",
+        title="Memory",
+        sub="What it knows about you and the company, what you taught it, what it worked out, and what it does on its own.",
     ),
     GuideSection(
         id="review",

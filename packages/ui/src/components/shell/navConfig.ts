@@ -53,6 +53,13 @@ interface BuildOpts {
    * but the principal).
    */
   roleKind?: RoleKind | null;
+  /**
+   * Whether any department exists. A team's Departments tab shows only then:
+   * goals stand on their own, so a team may never need one (it is reached
+   * from the Goals page's "Add a department"). Defaults to true, so a caller
+   * that doesn't know keeps the tab.
+   */
+  hasDepartments?: boolean;
 }
 
 // What the profile at /company-profile is called. A team's is its company.
@@ -116,19 +123,24 @@ const GOALS_ITEM: NavItem = {
 
 // The Company hub's tabs in a team: who's on it, what you're aiming for,
 // how it's organised, and the profile.
-function companyTabs(isOnboarded: boolean): NavItem[] {
+function companyTabs(isOnboarded: boolean, hasDepartments: boolean): NavItem[] {
   return [
     { href: "/people", label: "People", icon: "users", description: PEOPLE_DESCRIPTION },
     {
       ...GOALS_ITEM,
-      description: "Every department's goals in one place — add, update and close them.",
+      description: "Every goal in one place, by owner, department or status — add, update and close them.",
     },
-    {
-      href: "/departments",
-      label: "Departments",
-      icon: "grid",
-      description: "Your departments, their goals, how much each may decide on its own, and the expert behind each.",
-    },
+    ...(hasDepartments
+      ? [
+          {
+            href: "/departments",
+            label: "Departments",
+            icon: "grid",
+            description:
+              "Your departments, their goals, how much each may decide on its own, and the expert behind each.",
+          } satisfies NavItem,
+        ]
+      : []),
     profileItem("company", isOnboarded),
   ];
 }
@@ -170,17 +182,11 @@ const WORK_TABS: NavItem[] = [
   },
 ];
 
-// The Delegate hub's tabs: what it may do without asking (one read-only
-// page over all of them), then what the Executive does as you (Act as me,
-// Handle it for me) and on its own (Take the lead). Each of those is a named
-// feature, so its tab shows the brand label.
+// The Delegate hub's tabs: what the Executive does as you (Act as me,
+// Handle it for me) and on its own (Take the lead). Each is a named feature,
+// so its tab shows the brand label. What it does for you sits beside each
+// tab (DelegatePage).
 const DELEGATE_TABS: NavItem[] = [
-  {
-    href: "/delegate/what-it-may-do",
-    label: "What it may do",
-    icon: "eye",
-    description: "Everything that goes out without asking you, and the setting that allows it.",
-  },
   {
     href: "/delegate/act-as-me",
     label: "Act as me",
@@ -221,6 +227,7 @@ export function buildHubs({
   isOnboarded = true,
   mode = "team",
   roleKind = null,
+  hasDepartments = true,
 }: BuildOpts = {}): Hub[] {
   const work: Hub = {
     key: "work",
@@ -243,7 +250,7 @@ export function buildHubs({
           label: "Company",
           icon: "building",
           description: "People, goals, departments and the company profile.",
-          tabs: companyTabs(isOnboarded),
+          tabs: companyTabs(isOnboarded, hasDepartments),
         };
   const delegate: Hub = {
     key: "delegate",
@@ -257,17 +264,20 @@ export function buildHubs({
 
 // The hub a page belongs to, or null for a page that isn't in one.
 export function hubForPath(pathname: string, opts: BuildOpts = {}): Hub | null {
+  // On the Departments pages the tab shows even before the first department
+  // exists: that is where it gets added.
+  const withTab = isNavActive("/departments", pathname) ? { ...opts, hasDepartments: true } : opts;
   return (
-    buildHubs(opts).find((hub) => hub.tabs.some((tab) => isNavActive(tab.href, pathname))) ?? null
+    buildHubs(withTab).find((hub) => hub.tabs.some((tab) => isNavActive(tab.href, pathname))) ?? null
   );
 }
 
 export const PULSE_NAV_ITEM: NavItem = {
   href: "/memories",
-  label: "Pulse",
+  label: "Memory",
   icon: "activity",
   description:
-    "Its memory and heartbeat — what it knows and the rhythm it runs on.",
+    "What it knows and where it came from, and what it does on its own.",
 };
 
 /** A main-menu entry. A hub's entry is active on any of its tabs. */
@@ -285,8 +295,9 @@ export function buildDestinations({
   reviewBadge = 0,
   mode = "team",
   roleKind = null,
+  hasDepartments = true,
 }: BuildOpts = {}): Destination[] {
-  const hubs = buildHubs({ isOnboarded, mode, roleKind });
+  const hubs = buildHubs({ isOnboarded, mode, roleKind, hasDepartments });
   const hubEntry = (hub: Hub): Destination => ({
     key: hub.key,
     href: hub.tabs[0].href,
@@ -513,7 +524,7 @@ export const SETTINGS_PAGES: SettingsPageDef[] = [
     label: "About you",
     href: "/settings/memory",
     icon: "user",
-    description: "What it has learned about you, and the private notes it keeps.",
+    description: "Whether it keeps notes of what you say, what you share with the team, and how long notes last.",
     hashes: ["memory"],
   },
   {

@@ -95,6 +95,9 @@ def test_a_standing_rules_front_matter_is_not_indexed(tmp_path: Path) -> None:
         def add_documents(self, *, texts: list[str], **_kw: Any) -> None:
             self.texts.extend(texts)
 
+        def delete_documents(self, *_a: Any, **_kw: Any) -> None:
+            pass
+
     doc = tmp_path / "rules.md"
     doc.write_text(OWNERS, encoding="utf-8")
     store = Store()
