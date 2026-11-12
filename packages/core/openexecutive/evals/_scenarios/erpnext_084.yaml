@@ -13,8 +13,8 @@ prior_turns:
 - page:
     doctype: Dunning
   user: Has anyone chased Metro Transit Works about its overdue invoice?
-  assistant: 'Yes, by letter twice: a first reminder on Sep 28 and a final reminder on Oct 22. $4,710 is still outstanding and nothing has been paid.'
-description: 'Monday morning step 3 (oe_connector''s help/try-monday-morning.md) in ERPNext''s panel as a demo person. Asked for the next step, it names it and who takes it: a call to Metro''s accounts payable, by Ellen Brooks; and it counts the days since the final reminder exactly (Oct 22 to Nov 6 is 15). Found in the pilot''s Nov 6, 2026 third retake: "14 days", and only "Ellen Brooks owns the chase and decides the next step".'
+  assistant: 'Yes, by letter twice: a first reminder on Oct 5 and a final reminder on Oct 28. Nothing has been paid since.'
+description: 'Monday morning step 3 (oe_connector''s help/try-monday-morning.md) in ERPNext''s panel as a demo person. Asked for the next step, it names it and who takes it: a call to Metro''s accounts payable, by Ellen Brooks. The earlier turn gives the reminder dates of oe_connector''s demo data as refreshed on Nov 12, 2026 (story.py: the first reminder on the first working day from 40 days before the data''s day, the final one from 15 days before, DUNN-10-26-00048 and -00049 on Metro''s ACC-SINV-2026-14521). On a bench refreshed on another day the records show other dates, and then the reply says so in one sentence with both and uses the records'' (the persona''s "Correct yourself plainly" rule, as erpnext_095 checks with dates that never match). Found in the pilot''s Nov 6, 2026 third retake ("14 days", and only "Ellen Brooks owns the chase and decides the next step"); refreshed after the Nov 12 rehearsal of the upstream sync, where every run gave the records'' dates "without acknowledging or correcting the earlier answer".'
 query: What should happen next?
 forbidden_tool_calls:
 - propose_erpnext_draft
@@ -24,4 +24,6 @@ forbidden_reply_words:
 quality_criteria:
   names_a_call_as_the_next_step: true
   names_ellen_brooks_as_making_the_call: true
-  any_day_count_since_oct_22_is_15: true
+  any_day_count_since_the_final_reminder_agrees_with_the_date_it_gives_for_it: true
+  if_it_gives_reminder_dates_other_than_oct_5_and_oct_28_it_says_in_one_sentence_they_differ_from_the_earlier_answer: true
+  if_its_reminder_dates_are_oct_5_and_oct_28_it_claims_no_difference_from_the_earlier_answer: true
