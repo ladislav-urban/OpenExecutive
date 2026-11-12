@@ -141,12 +141,24 @@ def enabled(operation: str) -> tuple[str, ...]:
     return ()
 
 
+def _as_shown(value: str) -> str:
+    """Text as the card shows it and as it is stored and sent: made plain
+    (``prompt_blocks.plain``: compatibility forms folded by NFKC, and
+    invisible, format and bidi characters dropped), control characters out
+    (newlines kept), trimmed. The card shows exactly this, so nothing hidden
+    reaches ERPNext that the approver didn't see: a right-to-left override
+    or a zero-width space that the card would drop is never written either."""
+    from openexecutive.utils.prompt_blocks import plain
+
+    return _CONTROL.sub("", plain(value)).strip()
+
+
 def comment_text(value: Any) -> str:
-    """A comment's text as oe_connector stores it: control characters out
-    (newlines kept), trimmed. Raises ``ValueError``."""
+    """A comment's text as it is shown, stored and sent (``_as_shown``).
+    Raises ``ValueError``."""
     if not isinstance(value, str):
         raise ValueError("`text` is the comment, as plain text.")
-    cleaned = _CONTROL.sub("", value).strip()
+    cleaned = _as_shown(value)
     if not cleaned:
         raise ValueError("`text` is empty.")
     if len(cleaned) > COMMENT_MAX:
@@ -170,7 +182,9 @@ def _value(field: str, value: Any, where: str) -> Any:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"`{where}` is text.")
     cap = _TEXT_CAPS.get(field, 140)
-    text = _CONTROL.sub("", value).strip()
+    text = _as_shown(value)
+    if not text:
+        raise ValueError(f"`{where}` is text.")
     if len(text) > cap:
         raise ValueError(f"`{where}` is longer than {cap} characters.")
     return text
@@ -283,11 +297,9 @@ def _shown(value: Any) -> str:
 
 def _text_whole(value: Any) -> str:
     """A text value as the card shows it: whole, newlines kept, made plain
-    (nothing hidden), never cut. ``summary_refusal`` leaves no card with a
-    value longer than TEXT_SHOWN, so nothing here needs cutting."""
-    from openexecutive.utils.prompt_blocks import plain
-
-    return _CONTROL.sub("", plain(str(value if value is not None else ""))).strip()
+    (nothing hidden, ``_as_shown``), never cut. ``summary_refusal`` leaves no
+    card with a value longer than TEXT_SHOWN, so nothing here needs cutting."""
+    return _as_shown(str(value if value is not None else ""))
 
 
 def _change_shown(field: str, before: Any, after: Any) -> str:

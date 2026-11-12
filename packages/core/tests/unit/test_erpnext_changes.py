@@ -128,6 +128,32 @@ def test_a_summary_for_another_document_or_owner_leaves_no_card(erp: FakeErpnext
         assert "error" in _propose(_owner_turn(roster, "change it"), _ask("update", UPDATE))
 
 
+@pytest.mark.parametrize(("said", "kept"), [
+    ("Pay ‮etoN‬ now", "Pay etoN now"),      # a right-to-left override, and its end
+    ("app​roved", "approved"),                     # a zero-width space
+    ("﻿Hold⁠ it", "Hold it"),                # a BOM and a word joiner
+    ("ＰＯ 12", "PO 12"),                      # full-width letters
+    ("ﬁnal", "final"),                             # a ligature
+])
+def test_what_a_card_writes_is_what_it_shows(said: str, kept: str) -> None:
+    # The card shows text made plain; the value stored and sent is that same
+    # text, so no hidden or folded character reaches ERPNext unseen.
+    _, comment = changes.check_change("comment", "Purchase Invoice", "X-1", {"text": said})  # type: ignore[misc]
+    assert comment == {"text": kept}
+    _, update = changes.check_change(  # type: ignore[misc]
+        "update", "Purchase Invoice", "X-1", {"set": {"remarks": said}},
+    )
+    assert update == {"set": {"remarks": kept}}
+    assert changes._text_whole(update["set"]["remarks"]) == update["set"]["remarks"]
+    assert changes._change_shown("remarks", "old", update["set"]["remarks"]) == f"old → {kept}"
+
+
+def test_text_of_hidden_characters_only_is_refused() -> None:
+    for said in ("​​", "‮‬", "﻿"):
+        assert isinstance(changes.check_change("comment", "Purchase Invoice", "X-1", {"text": said}), str)
+        assert isinstance(changes.check_change("update", "Purchase Invoice", "X-1", {"set": {"remarks": said}}), str)
+
+
 def test_approving_an_update_sends_exactly_the_stored_change(
     erp: FakeErpnext, roster: SimpleNamespace, signed: dict[str, Any],
 ) -> None:
