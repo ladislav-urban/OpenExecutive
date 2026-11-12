@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
@@ -330,7 +331,7 @@ export default function ArtifactsPage() {
   const emptyMessage =
     view === "archived"
       ? "Nothing archived. Documents you archive will collect here, ready to restore."
-      : "No documents yet. Reports and memos the Executive produces will collect here.";
+      : "No documents yet. Reports and memos it produces will collect here.";
 
   return (
     <div className="flex flex-col h-full bg-surface text-fg">
@@ -342,7 +343,7 @@ export default function ArtifactsPage() {
                 {view === "archived" ? "Archived documents" : "Your documents"}
               </h1>
               <p className="text-[15px] text-fg-muted">
-                Every deliverable the Executive has produced for you — memos, web
+                Every deliverable <ProductName /> has produced for you — memos, web
                 pages, Word documents, spreadsheets and links into your connected
                 apps, alongside your workflow outputs and the team&apos;s scheduled
                 ones. Documents from your chats are yours alone; no one else

@@ -5,21 +5,24 @@ from pathlib import Path
 
 import click
 from rich.console import Console
+from rich.markup import escape
 from rich.prompt import Prompt
+
+from openexecutive.utils.product_name import product_name
 
 console = Console()
 
 
 @click.group()
 def cli() -> None:
-    """Open Executive — your AI-powered virtual executive team."""
+    """Your AI-powered virtual executive team."""
     pass
 
 
 @cli.command()
 @click.argument("question")
 def ask(question: str) -> None:
-    """Ask the Executive a single question."""
+    """Ask a single question."""
     asyncio.run(_ask(question))
 
 
@@ -61,7 +64,7 @@ async def _ask(question: str) -> None:
 
 @cli.command()
 def chat() -> None:
-    """Start an interactive chat session with the Executive."""
+    """Start an interactive chat session."""
     asyncio.run(_chat())
 
 
@@ -85,7 +88,7 @@ async def _chat() -> None:
     )
     executive = Executive()
 
-    console.print("[bold]Open Executive[/bold] — type 'exit' to quit\n")
+    console.print(f"[bold]{escape(product_name())}[/bold] — type 'exit' to quit\n")
 
     while True:
         try:
@@ -384,8 +387,8 @@ async def _purge_onedrive(key: str | None, stale: bool, purge_all: bool) -> None
 @click.argument("link")
 def onedrive_folder(link: str) -> None:
     """Turn a OneDrive or SharePoint folder sharing link into the
-    <drive id>/<item id> entry ONEDRIVE_SYNC_FOLDERS takes. Reads as the
-    Executive's Microsoft 365 sign-in, so the folder must be shared with it."""
+    <drive id>/<item id> entry ONEDRIVE_SYNC_FOLDERS takes. Reads as this
+    app's Microsoft 365 sign-in, so the folder must be shared with it."""
     asyncio.run(_onedrive_folder(link))
 
 
@@ -415,7 +418,7 @@ async def _onedrive_folder(link: str) -> None:
     except httpx.HTTPStatusError as exc:
         console.print(
             f"[red]Microsoft answered {exc.response.status_code}.[/red] Check the link, "
-            "and that the folder is shared with the Executive's Microsoft account."
+            "and that the folder is shared with this app's Microsoft account."
         )
         return
     if item is None or not item.is_folder:
@@ -524,7 +527,7 @@ def principal_command(email: str, name: str | None, role: str | None) -> None:
 
 @cli.command("draft-seals")
 def draft_seals_command() -> None:
-    """Print the seals OpenExecutive recorded for the ERPNext drafts it made,
+    """Print the seals this app recorded for the ERPNext drafts it made,
     as JSON for oe_connector's `oe-connector-verify-drafts --expect`. Reads
     this install's decision ledger only. Exits 1 when it holds none, so an
     empty or wrong ledger is never a pass."""
@@ -717,7 +720,7 @@ async def _onboard() -> None:
         process_answer,
     )
 
-    console.print("[bold]Open Executive Onboarding[/bold]\n")
+    console.print(f"[bold]{escape(product_name())} onboarding[/bold]\n")
     console.print("This wizard will set up your company profile. Type 'skip' to skip optional questions.\n")
 
     # A solo workspace skips the team steps (see onboarding.wizard).

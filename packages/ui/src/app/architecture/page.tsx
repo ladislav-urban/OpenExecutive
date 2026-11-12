@@ -1,5 +1,6 @@
 'use client';
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useRef, useState } from 'react';
 
 import DynamicSection from '@/components/architecture/DynamicSection';
@@ -12,11 +13,11 @@ const SECTIONS = [
   // "Without the Jargon" — plain-language landing cluster for non-engineers.
   { id: 'nojargon_what_it_is', label: 'Without the Jargon: What It Is', sub: 'The 90-second version. A virtual executive with a council of specialists.' },
   { id: 'nojargon_authority', label: 'Without the Jargon: How It Decides To Act', sub: 'Three modes — act on its own, propose for approval, or escalate to you.' },
-  { id: 'nojargon_proactive', label: "Without the Jargon: When You're Not Watching", sub: "Morning brief, check-ins, nudges — Open Executive doesn't wait to be asked." },
+  { id: 'nojargon_proactive', label: "Without the Jargon: When You're Not Watching", sub: "Morning brief, check-ins, nudges — it doesn't wait to be asked." },
   { id: 'nojargon_org', label: 'Without the Jargon: Who Approves What', sub: 'Departments, heads, and approval tags — how proposals find the right person.' },
   { id: 'overview', label: 'System Overview', sub: 'High-level topology: clients, API, orchestrator, specialist agents, knowledge layer.' },
   { id: 'lifecycle', label: 'Request Lifecycle', sub: 'Full round-trip of a single chat message, including tool-use loop and parallel specialist calls.' },
-  { id: 'agents', label: 'Agent Council', sub: 'The Executive orchestrator and its specialist sub-agents — roles, models, and domains.' },
+  { id: 'agents', label: 'Agent Council', sub: 'The orchestrator and its specialist sub-agents — roles, models, and domains.' },
   { id: 'caching', label: 'Prompt Caching', sub: 'How the system prompt is partitioned for Anthropic prompt caching, and what breaks the cache.' },
   { id: 'rag', label: 'Knowledge & RAG', sub: 'ChromaDB collections, per-specialist domain filtering, and where retrieved context is injected.' },
   { id: 'review', label: 'SME Knowledge Review', sub: 'The pending-review queue, priority ordering, and how rejected/approved items affect retrieval.' },
@@ -32,10 +33,10 @@ const SECTIONS = [
   { id: 'external_monitoring', label: 'External Monitoring', sub: 'Polls the watchlist (vendor status pages, RSS / Atom feeds, stock tickers) and routes qualifying signals through the same alert pipeline as inbound email / Slack. Watchlist editable from chat.' },
   { id: 'today', label: 'Today / Morning Brief', sub: 'The /today route — per-department goal health, a roster with awaiting-action counts, and proposals routed to a person.' },
   { id: 'api', label: 'API Reference', sub: 'The FastAPI HTTP surface — endpoints grouped by router.' },
-  { id: 'mcp_server', label: 'MCP Server', sub: 'Open Executive exposed as an MCP server — company context as resources and the specialist council as tools, over Streamable-HTTP at /mcp for external agents.' },
+  { id: 'mcp_server', label: 'MCP Server', sub: 'Exposed as an MCP server — company context as resources and the specialist council as tools, over Streamable-HTTP at /mcp for external agents.' },
   { id: 'user_guide', label: 'User Guide Surface', sub: "The /guide page — plain-language, per-feature overviews served from static prebuilt JSON, sharing this page's loader and renderer but separate from this technical reference." },
   { id: 'clients', label: 'Client Companies (Slots)', sub: 'Multi-client mode for fractional executives: named save files of the full company context, one active at a time, with save-back switching and per-client MCP tool configs.' },
-  { id: 'delegation', label: 'Act as Me (Delegation)', sub: "The one place the Executive writes as a person instead of itself: drafts in the principal's own Gmail, in their voice, offered only on their own verified turn and never sent." },
+  { id: 'delegation', label: 'Act as Me (Delegation)', sub: "The one place it writes as a person instead of itself: drafts in the principal's own Gmail, in their voice, offered only on their own verified turn and never sent." },
   { id: 'watch', label: 'Watch Jobs', sub: 'Unattended ERPNext runs defined in code: once a day each, a fixed set of reads signed as the job, rules in code, and private notices for the principal.' },
 ];
 
@@ -168,9 +169,9 @@ export default function ArchitecturePage() {
         <div className="max-w-4xl mx-auto px-4 py-6 sm:px-8 sm:py-10 space-y-12 sm:space-y-20">
           <div className="space-y-4">
             <div>
-              <h1 className="text-2xl font-bold text-fg">Open Executive — Architecture</h1>
+              <h1 className="text-2xl font-bold text-fg"><ProductName /> — Architecture</h1>
               <p className="mt-2 text-sm text-fg-muted">
-                A reference map of how Open Executive is built — the components, data flow, and invariants of the running system, from the Executive orchestrator and its specialist council to the knowledge, memory, scheduling, and integration layers.
+                A reference map of how <ProductName /> is built — the components, data flow, and invariants of the running system, from the orchestrator and its specialist council to the knowledge, memory, scheduling, and integration layers.
               </p>
             </div>
             <DiagramLegend />

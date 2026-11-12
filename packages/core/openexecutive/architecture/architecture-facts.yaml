@@ -5573,7 +5573,9 @@ chat:
     (oe_connector, hidden, CODE_ONLY_TOOLS; the gateway runs it only inside
     erpnext_caller.answer_check_run, which runs nothing else) gives the
     number format and numeric fields; figure_check (check 1, no model)
-    finds each figure's source; answer_review (check 2, ROUTING_MODEL) sees
+    finds each figure's source (a date or time is neither: _DATE_RES masks
+    numeric dates and dates with a month's name, so the turn's own
+    <current_time> or the brief's NOW line never sources a figure); answer_review (check 2, ROUTING_MODEL) sees
     only flagged ones and code works out every operation it names from
     ERPNext's own numbers; answer_correct writes known values in by code,
     calls the turn's model once (tools=[], constant prompt, draft as
@@ -8256,6 +8258,24 @@ user_guide:
     required-key validation live in the store. The UI reuses the
     architecture `DynamicSection` component via a `basePath` prop
     ("architecture" default, "guide" for the guide).
+  product_name: |
+    The guide's own words name the product one way, "OpenExecutive"
+    (guide.prebuilt.PRODUCT_WORD). GET /guide/sections/{id} and the
+    read_user_guide tool serve a section through guide.prebuilt.get_named,
+    which writes the install's name (OE_PRODUCT_NAME via
+    utils.product_name; "Open Executive" when unset) in its place outside
+    code spans and link targets, the same split oe_connector's help_page.named
+    uses when oe-connector-sync-guide copies these files into ERPNext's Help.
+    The on-screen labels it quotes name the product too ("Settings ->
+    OpenExecutive", "Pause OpenExecutive"), as the UI does: the UI writes
+    OE_PRODUCT_NAME wherever it names the system (useProductName,
+    <ProductName />, or a "{product}" token in shared copy filled in by
+    withProduct / useNamed, lib/productName.ts), and neutral wording where a
+    name reads badly. Paths, ids, API fields and stream events are unchanged.
+    test_guide_prebuilt fails a section that says "Executive" or "Open
+    Executive" outside code and links (the role option "Executive inside an
+    organisation" aside); scripts/productName.test.mjs fails a UI string that
+    does.
   maintenance: |
     When a user-facing feature is added or materially changed, add/update
     the matching `guide/prebuilt/<id>.json` plus its registry entry in
@@ -8788,7 +8808,12 @@ integrations:
     subject -> exists (untouched, a suspended one stays so); anyone holding
     the email, alias included -> address_held, unless the subject reads as
     linked on a second look (a concurrent admit of the same person) ->
-    exists. None of these reads the
+    exists. That second look waits for _person_write_lock (ADMIT_LOCK_WAIT_S,
+    else busy, noted as refused): _add writes the Person, then links its
+    subject, as two commits under that lock, so the look never falls between
+    them. The lock is held for those writes only, never across a run's
+    provider reads, so a sign-in never waits on a run or makes one skip.
+    None of these reads the
     provider or is audited. Then the per-subject limit (30 s; the map pruned
     and capped at 10,000, refusing at the cap rather than evicting), a
     process-wide slot of one admit (busy at once), the global cap (20 a
@@ -10751,7 +10776,11 @@ integrations:
     SENSITIVE_DOCTYPES for comments). check_change mirrors oe_connector's
     field rules (header and line allowlists, kinds, at most 40 changes; a
     comment's text at most 2,000 characters, control characters out as
-    oe_connector strips them). draft_check runs with {doctype, name,
+    oe_connector strips them). Every text value (a comment, an update's
+    text fields) is stored and sent as the card shows it (_as_shown:
+    prompt_blocks.plain, so NFKC-folded and with invisible, format and
+    bidi characters dropped), so nothing hidden reaches ERPNext unseen;
+    text of hidden characters only is refused. draft_check runs with {doctype, name,
     operation, fields} under its marker; a card needs a sound fingerprint,
     and summary_refusal leaves none unless ERPNext read back the same
     operation and document, a known owner ("yours" or "assigned to you"), at
@@ -11060,7 +11089,12 @@ integrations:
     erpnext). last_error and the ERP's words never reach it. Its instruction
     line says to mention a card only when asked or relevant and that a card
     closed because the records changed is not the model's error (the
-    persona's "Correct yourself plainly, once" is for its own errors only).
+    persona's "Correct yourself plainly, once" is for its own errors only;
+    either way, a figure or date for the same thing (record, period,
+    filters) now differing from an earlier answer to the same person is
+    said in one sentence with both, never switched quietly; another
+    thing or a rounding that agrees is no difference: erpnext_084,
+    erpnext_095, and erpnext_096 as the control).
     Any failure leaves the note out. A note sets Session.read_erpnext, and
     audit.erpnext_reads.conversation_read_erpnext (behind
     executive._conversation_read_erpnext) also answers yes for a session
@@ -11355,7 +11389,11 @@ integrations:
     `chart` kind (one DocType's count, sum or average over a Date field or
     grouped by a Link or Select field, drawn on its read-only
     dynocortex-chart page as the person), a report that draws its own chart
-    stays the report, and a single figure gets no chart. OpenExecutive never
+    stays the report, and a single figure gets no chart. Accounts Receivable
+    and Accounts Payable take one party as party_type with party (a list of
+    names), never 'customer' or 'supplier' (oe_connector's views.check refuses
+    a filter the report doesn't declare); any other report's filters are
+    checked with erpnext__describe_report first. OpenExecutive never
     reads `kind`: oe_connector's views.check is the one authority on kinds
     and caps a chart spec at 2,000 characters, under MAX_VIEW_JSON, so the
     model gets a tool error rather than a view dropped here. The show tool's
@@ -11364,7 +11402,10 @@ integrations:
     expected_view_kinds / forbidden_view_kinds: the runner collects the
     turn's views as the route does (collect_views) and
     evals.scenarios.view_kinds_check fails the scenario deterministically
-    (erpnext_054 opens a chart, erpnext_055 none). The response
+    (erpnext_054 opens a chart, erpnext_055 none). expected_report_filters
+    (report name -> filter names) fails it unless an accepted view of that
+    report carries those filters (erpnext_094: Accounts Receivable by
+    party_type and party). The response
     adds `views` and `call` when there are any. They are data: oe_connector's
     panel.ask checks each view again as the signed-in ERPNext user and builds
     every desk route itself. Off the panel, the gateway refuses

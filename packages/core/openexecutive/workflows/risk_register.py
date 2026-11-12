@@ -16,6 +16,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -402,7 +403,7 @@ def _assemble_doc(ctx: _RRCtx) -> str:
         _ensure_heading(ctx.ranking, "## Ranking & Ownership"),
         "",
         "---",
-        "*Drafted by Open Executive. Review with leadership, sharpen, "
+        f"*Drafted by {product_name()}. Review with leadership, sharpen, "
         "and confirm owners. Revisit quarterly; the register loses "
         "value the moment it's filed and forgotten.*",
     ]

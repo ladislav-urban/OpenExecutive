@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -424,7 +425,7 @@ export default function WatchDetailPage() {
                 <>
                   <dt className="text-fg-muted">Added by</dt>
                   <dd className="text-fg">
-                    The Executive
+                    <ProductName />
                     {policyEntity(item) ? ` · about ${policyEntity(item)}` : ""}
                     {item.route_to_department
                       ? ` · for ${departmentTitles[item.route_to_department] ?? item.route_to_department}`

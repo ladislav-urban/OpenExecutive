@@ -2,6 +2,8 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "next-auth/react";
+
+import { useProductName } from "@/components/embed/EmbedProvider";
 import {
   getExecutiveStatus,
   pauseExecutive,
@@ -116,11 +118,13 @@ export function useExecutiveStatus(): ExecutiveStatusContextValue {
   return ctx;
 }
 
-/** The Executive's name for the label over its replies; "Executive" until the
- *  status loads, or outside the provider. */
+/** The name over its replies: EXEC_DISPLAY_NAME when the install gives one,
+ *  else the product's name (OE_PRODUCT_NAME), also until the status loads or
+ *  outside the provider. */
 export function useExecutiveName(): string {
   const ctx = useContext(ExecutiveStatusContext);
-  return ctx?.status?.name?.trim() || "Executive";
+  const product = useProductName();
+  return ctx?.status?.name?.trim() || product;
 }
 
 /** "3:42 PM" today, "Mon 3:42 PM" otherwise. */

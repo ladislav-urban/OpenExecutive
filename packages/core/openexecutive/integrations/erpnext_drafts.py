@@ -146,7 +146,7 @@ ASKED_IN_DESK = "erpnext_desk"
 # What the card shows of any one ERPNext value, and of a failure.
 SHOWN_MAX = 300
 
-_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+_DATE_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 # oe_connector's own key rule (drafts._KEY_RE).
 _KEY_RE = re.compile(r"[A-Za-z0-9_:.-]{8,140}")
 # A draft's name as ERPNext gives it (MAT-MR-2026-00012, a ToDo's hash).
