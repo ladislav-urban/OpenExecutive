@@ -606,7 +606,8 @@ def test_a_failed_attempt_is_noted_before_the_card_is_released(
     erp.replies.append(json.dumps({"error": "ERPNext is down"}))
     with pytest.raises(drafts.ApproveRefused):
         _approve(card)
-    assert order == ["note", "release"]
+    # The tried mark at the claim, then the failure noted, then the release.
+    assert order == ["note", "note", "release"]
     waiting = get_decision_instance(card.id)
     assert waiting is not None and json.loads(waiting.proposed_payload_json)["attempts"] == 1
 

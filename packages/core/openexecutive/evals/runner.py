@@ -80,6 +80,7 @@ from openexecutive.evals.scenarios import (
     forbidden_words_in,
     load_scenarios,
     routing_check,
+    scenario_decided_cards,
     scenario_delegation,
     scenario_inbox,
     scenario_principal_role,
@@ -671,26 +672,35 @@ def _make_chat_runner(
                     views_ctx = (
                         collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
                     )
-                    with views_ctx:
-                        response = await scenario_executive.chat(
-                            user_message=query,
-                            session=session,
-                            channel_context_block=channel_block,
-                            # chat() sets the turn's speaker from this, as the chat
-                            # route passes the signed-in person: a `speaker`
-                            # scenario's caller, else None.
-                            person_id=surface.get("caller_person_id"),
-                            debug_collector=collector,
-                            # A scenario may supply the <peer_memory> body itself.
-                            # Evals run with no person_id, so the Honcho prefetch
-                            # never fires; this is the only way to exercise how the
-                            # Executive USES peer memory. None keeps chat()'s default.
-                            peer_memory_context=scenario.get("peer_memory_context"),
-                            # Likewise the <standing_facts> body (memory/facts.py):
-                            # the scenario's own lines under the shared header, or
-                            # none — an eval never reads the install's facts.
-                            standing_facts=scenario_standing_facts(scenario),
-                        )
+                    # The draft cards its conversation left, as the turn's
+                    # note is told them: never written to the ledger, and
+                    # forgotten once the turn is done.
+                    from openexecutive.integrations.erpnext_drafts import decided_cards_override
+
+                    cards_token = decided_cards_override.set(scenario_decided_cards(scenario))
+                    try:
+                        with views_ctx:
+                            response = await scenario_executive.chat(
+                                user_message=query,
+                                session=session,
+                                channel_context_block=channel_block,
+                                # chat() sets the turn's speaker from this, as the chat
+                                # route passes the signed-in person: a `speaker`
+                                # scenario's caller, else None.
+                                person_id=surface.get("caller_person_id"),
+                                debug_collector=collector,
+                                # A scenario may supply the <peer_memory> body itself.
+                                # Evals run with no person_id, so the Honcho prefetch
+                                # never fires; this is the only way to exercise how the
+                                # Executive USES peer memory. None keeps chat()'s default.
+                                peer_memory_context=scenario.get("peer_memory_context"),
+                                # Likewise the <standing_facts> body (memory/facts.py):
+                                # the scenario's own lines under the shared header, or
+                                # none — an eval never reads the install's facts.
+                                standing_facts=scenario_standing_facts(scenario),
+                            )
+                    finally:
+                        decided_cards_override.reset(cards_token)
                     if delegation is not None:
                         drafts = [asdict(d) for d in delegation.gmail.drafts]
                         scores = await judge_chat(scenario, response, drafts=drafts)
