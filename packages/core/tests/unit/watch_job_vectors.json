@@ -1,7 +1,7 @@
 {
   "about": "Watch-job vectors shared with oe_connector (its watch.py and caller.py): the job id pattern, the slot names, phase 1's job ids and their ERP users, argument shapes with calls that fit or don't, and one signed watch assertion. Checked by packages/core/tests/unit/test_watch_jobs.py. The assertion is signed with the phase 2 vector key (VECTOR_PRIVATE_KEY in test_erpnext_caller.py), which is public: never use it for anything real.",
   "job_id_pattern": "[a-z0-9-]{1,40}",
-  "slots": ["$company", "$date", "$party", "$parties", "$customers", "$int"],
+  "slots": ["$company", "$date", "$party", "$parties", "$customers", "$int", "$bank_line", "$mail_draft", "$mail_file"],
   "limits": {"date_range_days": 400, "max_list": 50, "max_int": 500},
   "phase1_jobs": ["collections", "payment-checks"],
   "job_user": "oe-watch-{job}@{site}",

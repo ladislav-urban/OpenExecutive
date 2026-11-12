@@ -171,7 +171,28 @@ _CURRENCY_CODES = _ISO_4217 - _NOT_CURRENCY
 
 _SCALE_RE = r"(?:thousand|millions?|billions?|bn|mn|[kKMmB])(?![A-Za-z])"
 _WORD_RE = re.compile(r"[A-Za-z][A-Za-z'’-]*")
+# A month written as a word, as the app writes the turn's date into context
+# ("Thursday 12 November 2026, 14:05") and replies write due dates ("Nov 4").
+# Capitalised only, so "may" in a sentence is never a month.
+_MONTH_WORD = (
+    r"(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?"
+    r"|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?(?![A-Za-z])"
+)
+# Never a day or year that a percent, a scale or a currency follows: "Nov 30%",
+# "Nov 30k" and "4 June 2500 USD" are figures, and stay checked.
+_NOT_A_FIGURE = (
+    r"(?![ \t]*(?:%|[A-Z]{3}\b|[" + _CURRENCY_SYMBOLS + r"]|" + _SCALE_RE + r"))"
+)
+_DAY = r"\d{1,2}(?:st|nd|rd|th)?"
+_YEAR = r"(?:19|20)\d{2}(?!\d)" + _NOT_A_FIGURE
+_YEAR_AFTER = r"(?:,?[ \t]+" + _YEAR + r")?"
 _DATE_RES = (
+    # "12 November 2026", "12th of Nov": the day and the year beside a month.
+    re.compile(r"(?<![\d.,])" + _DAY + r"(?:[ \t]+of)?[ \t]+" + _MONTH_WORD + _YEAR_AFTER),
+    # "November 12, 2026", "Nov 4"; never "May 1,200 units".
+    re.compile(r"(?<![A-Za-z])" + _MONTH_WORD + r"[ \t]+" + _DAY + r"(?![\d]|[.,]\d)" + _NOT_A_FIGURE + _YEAR_AFTER),
+    # "November 2026".
+    re.compile(r"(?<![A-Za-z])" + _MONTH_WORD + r"[ \t]+" + _YEAR),
     re.compile(r"(?<![\d.,])\d{4}-\d{1,2}-\d{1,2}(?![\d])"),
     re.compile(r"(?<![\d.,])\d{1,2}[/.]\d{1,2}[/.]\d{2,4}(?![\d])"),
     re.compile(r"(?<![\d.,])\d{4}/\d{1,2}/\d{1,2}(?![\d])"),
