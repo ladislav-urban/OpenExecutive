@@ -12169,7 +12169,7 @@ watch:
     draft_fill.fills refuses the same. Or, on a demo installation only
     (demo_simulated, ladislav-urban/oe_connector#564): sender_checked
     "demo-simulated" with sender_policy "not checked: simulated" and
-    sender_from set, and the draft's company exactly DEMO_RESET_COMPANY
+    sender_from a reserved .example address, and the draft's company exactly DEMO_RESET_COMPANY
     (stripped, case-sensitive; empty means never), read again at every
     check, approval included. Elsewhere it is a notice (gate_reason), never
     a card. slice_of takes the simulated value and policy only together.

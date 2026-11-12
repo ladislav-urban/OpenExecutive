@@ -186,7 +186,7 @@ def company_today() -> date:
 def demo_simulated(facts: Mapping[str, Any]) -> bool:
     """Whether ``facts`` are the demo's simulated supplier mail on this demo
     installation: ``demo-simulated`` with its unchecked policy and a
-    confirmed From, and the draft's company exactly this server's
+    reserved ``.example`` From (RFC 2606, never a real domain), and the draft's company exactly this server's
     ``DEMO_RESET_COMPANY`` (set only on a demo installation), read now. No
     other setting turns it on."""
     from openexecutive.config import get_settings
