@@ -1021,6 +1021,12 @@ class Settings(BaseSettings):
     # draft_match_bank_line pinned, and the accounts listed in
     # oe_connector_bank_matching on the site.
     erpnext_bank_match: bool = Field(False, alias="ERPNEXT_BANK_MATCH")
+    # The invoice-capture job's fill card (integrations/erpnext_fill.py):
+    # ERPNext's own mapper fills a supplier's mailed draft Purchase Invoice
+    # from the order or receipt it bills, approved by the draft's assignee.
+    # Off by default; it also needs oe_connector's draft_fill_purchase_invoice
+    # pinned, and the job listed in oe_connector_watch_jobs on the site.
+    erpnext_invoice_fill: bool = Field(False, alias="ERPNEXT_INVOICE_FILL")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools

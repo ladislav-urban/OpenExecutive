@@ -84,6 +84,8 @@ CHECK_CODES = frozenset({
     "key-malformed", "job-check-unknown-job", "job-check-job-off", "job-check-arguments",
     "job-check-reviewer", "job-check-cap",
     "check_currency", "check_not_whole", "check_reviewer_sod", "check_amount_cap",
+    "check_fill_currency", "check_fill_total", "check_fill_sod", "check_fill_assignee", "check_fill_collides",
+    "check_fill_sender",
 })
 # What a run's notice says of the findings no card was left for, by code,
 # when the code says more than "ERPNext didn't accept them" (``{n}`` how
@@ -96,6 +98,21 @@ CHECK_LINES: dict[str, str] = {
         "statement's importer or a voucher's creator."
     ),
     "check_amount_cap": "{n} {noun} weren't prepared: today's matching limit is reached.",
+    "check_fill_currency": "{n} {noun} weren't prepared: the invoice is in another currency than the company's.",
+    "check_fill_total": (
+        "{n} {noun} weren't prepared: the order or receipt wouldn't bill the total on the supplier's invoice."
+    ),
+    "check_fill_sod": (
+        "{n} {noun} weren't prepared: they need a different reviewer, since the ERP names the reviewer as a "
+        "creator of the order or receipt they bill."
+    ),
+    "check_fill_assignee": (
+        "{n} {noun} weren't prepared: only the person the mail pull assigned a draft to approves its fill, "
+        "and that isn't the reviewer. An ERP operator points the Purchase Invoice assignment rule at the "
+        "job's reviewer, or the drafts are filled by hand."
+    ),
+    "check_fill_collides": "{n} {noun} weren't prepared: the supplier already has an invoice with that number.",
+    "check_fill_sender": "{n} {noun} weren't prepared: the ERP can't trust the mail's sender to fill an invoice.",
 }
 
 
@@ -225,6 +242,10 @@ def _echo_refusal(
         from openexecutive.integrations import erpnext_match
 
         return erpnext_match.echo_refusal(spec.name, fields, checked, dict(spec.expect), email)
+    if spec.operation == "fill":
+        from openexecutive.integrations import erpnext_fill
+
+        return erpnext_fill.echo_refusal(spec.name, fields, checked, dict(spec.expect), email)
     if checked.get("doctype") != spec.doctype or checked.get("operation", "create") != spec.operation:
         return "check_mismatch"
     if not isinstance(summary, dict) or any(summary.get(k) != v for k, v in spec.expect.items()):
@@ -300,6 +321,13 @@ async def _kinds_off(job: registry.WatchJob, row: Any, specs: Sequence[registry.
             on = (
                 job.id == erpnext_match.JOB_ID and doctype == erpnext_match.DOCTYPE
                 and await erpnext_match.unavailable() is None
+            )
+        elif operation == "fill":
+            from openexecutive.integrations import erpnext_fill
+
+            on = (
+                job.id == erpnext_fill.JOB_ID and doctype == erpnext_fill.DOCTYPE
+                and await erpnext_fill.unavailable() is None
             )
         else:
             on = doctype in erpnext_changes.enabled(operation)
@@ -431,7 +459,7 @@ async def _leave_one(
             out.check_refused += 1
         if code in ("check_permission", "check_not_theirs"):
             out.permission_refused += 1
-        if code in ("check_permission", "check_not_theirs", "check_reviewer_sod"):
+        if code in ("check_permission", "check_not_theirs", "check_reviewer_sod", "check_fill_sod"):
             out.kept_from_reviewer.add(spec.key)
         out.unproposed.append(spec)
         return False
@@ -440,13 +468,16 @@ async def _leave_one(
         return False
     kept: dict[str, Any] | None = None
     amount = 0.0
-    if spec.operation == "match":
-        from openexecutive.integrations import erpnext_match
+    if spec.operation in ("match", "fill"):
+        from openexecutive.integrations import erpnext_fill, erpnext_match
         from openexecutive.watch.settings import take_day_amount
 
-        kept = erpnext_match.slice_of(checked.get("summary"))
-        cap = erpnext_match.amount_cap(job)
-        found = erpnext_match.card_amount(checked)
+        # A bank match's or an invoice fill's slice of the check, kept for
+        # approval, and its amount against the day's cap.
+        money = erpnext_match if spec.operation == "match" else erpnext_fill
+        kept = money.slice_of(checked.get("summary"))
+        cap = money.amount_cap(job)
+        found = money.card_amount(checked)
         if kept is None or cap is None or found is None:
             out.unproposed.append(spec)
             return False

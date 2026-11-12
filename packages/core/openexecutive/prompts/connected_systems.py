@@ -172,9 +172,8 @@ ERPNEXT_CONFIRM_TOOL = "erpnext__confirm_figure"
 ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, ERPNEXT_CONFIRM_TOOL})
 
 # Tools oe_connector serves and this install pins (erpnext_tool_pin), but
-# no turn may call: reading an attachment (S4) waits for intake's tool-less
-# extraction, as the mailed invoices to fill wait for the invoice-capture
-# job, a supplier's bank-change fact (S5) belongs to the
+# no turn may call: reading an attachment (S4) and the mailed invoices to
+# fill belong to the invoice-capture job (phase 2), a supplier's bank-change fact (S5) belongs to the
 # payment-checks job, customers' payment records (phase 1) to the
 # collections job, which reads many customers' payment behaviour at once,
 # and bank lines and their candidate vouchers (phase 2) to the bank-matching
@@ -202,6 +201,9 @@ JOB_WITHHELD_EXCEPTIONS: Mapping[str, frozenset[str]] = MappingProxyType({
     # A listed account's unreconciled bank lines and ERPNext's candidate
     # vouchers for one: the bank-matching job's alone.
     "bank-matching": frozenset({"erpnext__bank_line_candidates", "erpnext__bank_lines_to_match"}),
+    # The drafts a supplier's mail made, and each one's PDF: the
+    # invoice-capture job's alone (oe_connector refuses both to anyone else).
+    "invoice-capture": frozenset({"erpnext__mail_invoices_to_fill", "erpnext__read_attachment"}),
 })
 
 # The tool ERPNext's panel uses to open what an answer talks about beside it

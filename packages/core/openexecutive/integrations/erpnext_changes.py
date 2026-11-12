@@ -38,14 +38,18 @@ from openexecutive.config import get_settings
 # code, so ``enabled("block")`` lists nothing either, and chat and ERPNext's
 # panel can never propose one. "match" reconciles a bank line with its
 # vouchers (integrations.erpnext_match): only ever left by the bank-matching
-# job's code, and ``enabled("match")`` lists nothing too.
-OPERATIONS = ("create", "update", "comment", "credit", "block", "match")
+# job's code, and ``enabled("match")`` lists nothing too. "fill" fills a
+# supplier's mailed draft Purchase Invoice from its order or receipt
+# (integrations.erpnext_fill): only ever left by the invoice-capture job's
+# code, so ``enabled("fill")`` lists nothing as well.
+OPERATIONS = ("create", "update", "comment", "credit", "block", "match", "fill")
 OPERATION_TOOLS: dict[str, str] = {
     "update": "erpnext__draft_update",
     "comment": "erpnext__draft_comment",
     "credit": "erpnext__draft_update",
     "block": "erpnext__draft_block_invoice",
     "match": "erpnext__draft_match_bank_line",
+    "fill": "erpnext__draft_fill_purchase_invoice",
 }
 MAX_CHANGES = 40
 COMMENT_MAX = 2000
@@ -136,7 +140,7 @@ def comment_doctypes() -> tuple[str, ...]:
 
 def enabled(operation: str) -> tuple[str, ...]:
     """The DocTypes a person may have a card of ``operation`` proposed on:
-    none for "credit", "block" and "match", which only code leaves."""
+    none for "credit", "block", "match" and "fill", which only code leaves."""
     if operation == "update":
         return update_doctypes()
     if operation == "comment":

@@ -17,7 +17,8 @@ There is no way to add a job at run time: no settings row, chat turn or API
 names one. ``JOBS`` is read-only and holds what this module lists in
 ``_LISTED``: phase 1's collections job (``watch.jobs.collections``) and its
 payment-checks job (``watch.jobs.payment_checks``), and phase 2's
-bank-matching job (``watch.jobs.bank_matching``). The test job,
+bank-matching job (``watch.jobs.bank_matching``) and invoice-capture job
+(``watch.jobs.invoice_capture``). The test job,
 ``watch.jobs._example``, is put in by the tests alone.
 
 A read may also be **repeated** (``WatchRead.repeat``): its ``arguments``
@@ -62,13 +63,21 @@ from typing import Any
 # oe_connector's watch.JOB_ID: the key in oe_connector_watch_jobs, and the
 # `sub` of a watch assertion.
 JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
-SLOTS: tuple[str, ...] = ("$company", "$date", "$party", "$parties", "$customers", "$int", "$bank_line")
+SLOTS: tuple[str, ...] = (
+    "$company", "$date", "$party", "$parties", "$customers", "$int", "$bank_line", "$mail_draft", "$mail_file",
+)
 LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers")
 # Slots this side only: a value oe_connector's listing holds as a literal,
 # one read per value (an operator lists bank matching's
 # ``bank_lines_to_match`` once per Bank Account). Checked here as a name;
 # oe_connector checks the literal and its own list of accounts.
 LOCAL_SLOTS: tuple[str, ...] = ("$bank_account",)
+# Slots that only mean something together, as a read_attachment read's
+# top-level name and file, beside "doctype": "Purchase Invoice" (the
+# invoice-capture job's mailed draft and its mail's one file; oe_connector's
+# watch.MAIL_SLOTS). Anywhere else, or on another tool, the read is unsound.
+MAIL_SLOTS: Mapping[str, str] = MappingProxyType({"$mail_draft": "name", "$mail_file": "file"})
+MAIL_TOOL = "read_attachment"
 # The operators a slot may follow inside a list: a single value's, or a list
 # slot's (in, not in). Never like, where a name's % or _ would widen the read.
 VALUE_OPERATORS: tuple[str, ...] = ("=", "!=", "<", "<=", ">", ">=")
@@ -141,6 +150,11 @@ class WatchRead:
     # A repeated read: at most this many calls a run (1 to MAX_REPEAT), its
     # arguments ``Repeated``. 0: one call.
     repeat: int = 0
+    # A repeated read whose one call may be refused without ending the run
+    # (one supplier's unreadable PDF): that item's result is
+    # ``{"unread": True}``, which the job's rules treat as "needs a person",
+    # never a card. Only on a repeated read.
+    may_fail: bool = False
 
     @property
     def gateway_tool(self) -> str:
@@ -312,7 +326,7 @@ class WatchJob:
                 raise ValueError(f"a job may not list {read.tool!r}")
             if not isinstance(read.shape, Mapping) or not read.label or not read.label.isprintable():
                 raise ValueError("each read has a shape and a label")
-            unsound = shape_problem(read.shape)
+            unsound = shape_problem(read.shape) or mail_tool_problem(read.tool, read.shape)
             if unsound:
                 raise ValueError(f"a read's shape is unsound: {unsound}")
             if (
@@ -320,6 +334,8 @@ class WatchJob:
                 or not 0 <= read.repeat <= MAX_REPEAT
             ):
                 raise ValueError(f"a read repeats at most {MAX_REPEAT} times")
+            if not isinstance(read.may_fail, bool) or (read.may_fail and not read.repeat):
+                raise ValueError("only a repeated read's call may fail on its own")
         if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
             raise ValueError("a job's card cap is 1 to 50 a day")
         for key, bound in self.setting_bounds.items():
@@ -393,7 +409,7 @@ def _slot_holds(slot: str, value: Any, today: date) -> bool:
         return abs((day - today).days) <= DATE_RANGE_DAYS
     if slot in ("$company", "$party"):
         return isinstance(value, str) and _text_ok(value)
-    if slot in ("$bank_line", "$bank_account"):
+    if slot in ("$bank_line", "$bank_account", "$mail_draft", "$mail_file"):
         return isinstance(value, str) and _text_ok(value) and _NAME_RE.fullmatch(value) is not None
     if slot in ("$parties", "$customers"):
         return (
@@ -413,12 +429,46 @@ def _is_scalar(value: Any) -> bool:
     return value is None or isinstance(value, str | int | float | bool)
 
 
+def mail_problem(shape: Any) -> str:
+    """A read with a mail slot names a Purchase Invoice as ``$mail_draft``
+    and ``$mail_file`` beside it, both at top level (oe_connector's
+    ``watch._mail_problem``), or why not."""
+    if not isinstance(shape, Mapping):
+        return ""
+    if not any(isinstance(v, str) and v in MAIL_SLOTS for v in shape.values()):
+        return ""
+    if (
+        shape.get("name") != "$mail_draft" or shape.get("file") != "$mail_file"
+        or shape.get("doctype") != "Purchase Invoice"
+    ):
+        return 'a mail slot needs "doctype": "Purchase Invoice", "name": "$mail_draft" and "file": "$mail_file"'
+    return ""
+
+
+def mail_tool_problem(tool: str, shape: Any) -> str:
+    """The mail slots open a mail's PDF to read_attachment, never a draft's
+    contents to another tool (oe_connector's ``watch._mail_tool_problem``)."""
+    if (
+        isinstance(shape, Mapping) and any(isinstance(v, str) and v in MAIL_SLOTS for v in shape.values())
+        and tool != MAIL_TOOL
+    ):
+        return "the mail slots are only for read_attachment"
+    return ""
+
+
 def shape_problem(shape: Any, where: str = "", in_filters: bool = False) -> str:
     """Why a read's shape is unsound (oe_connector's ``watch._shape_problem``),
-    or "" when it is sound. An unsound read leaves its job out on both sides."""
+    or "" when it is sound. An unsound read leaves its job out on both sides.
+    A read's tool is checked apart (``mail_tool_problem``)."""
+    if not where and isinstance(shape, Mapping):
+        why = mail_problem(shape)
+        if why:
+            return why
     if isinstance(shape, str) and shape.startswith("$"):
         if shape not in SLOTS and shape not in LOCAL_SLOTS:
             return f"{where or 'value'}: {shape} isn't a slot"
+        if shape in MAIL_SLOTS and where != MAIL_SLOTS[shape]:
+            return f"{where or 'value'}: {shape} stands only as the read's {MAIL_SLOTS[shape]}"
         if in_filters and shape in LIST_SLOTS:
             return f'{where}: a list slot in a filter goes in ["in", {shape}]'
         return ""
@@ -441,6 +491,8 @@ def shape_problem(shape: Any, where: str = "", in_filters: bool = False) -> str:
         unknown = [e for e in slots if e not in SLOTS]
         if unknown:
             return f"{where}: {unknown[0]} isn't a slot"
+        if any(e in MAIL_SLOTS for e in slots):
+            return f"{where}: a mail slot never goes in a list"
         if len(shape) != 2 or shape[1] not in SLOTS:
             return f"{where}: a slot in a list only as [operator, slot]"
         operator, slot = shape
@@ -548,8 +600,11 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
 # Imported here, once everything a job module uses is defined.
 from openexecutive.watch.jobs import bank_matching as _bank_matching  # noqa: E402
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
+from openexecutive.watch.jobs import invoice_capture as _invoice_capture  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
 
-_LISTED: tuple[WatchJob, ...] = (_collections.JOB, _payment_checks.JOB, _bank_matching.JOB)
+_LISTED: tuple[WatchJob, ...] = (
+    _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB,
+)
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

@@ -7,7 +7,9 @@
   "$parties": [["Sup A", "Sup B"], ["Sup A"]],
   "$customers": [["Cust A"]],
   "$int": [50],
-  "$bank_line": ["ACC-BTN-2026-00001"]
+  "$bank_line": ["ACC-BTN-2026-00001"],
+  "$mail_draft": ["ACC-PINV-2026-00001"],
+  "$mail_file": ["f1a2b3c4d5"]
  },
  "shapes": [
   {"note": "the collections report", "read": {"report_name": "Accounts Receivable", "filters": {"company": "$company", "report_date": "$date", "ageing_based_on": "Due Date"}}, "valid": true},
@@ -31,7 +33,14 @@
   {"note": "a nested fields key follows the list rules, not the fields rule", "read": {"filters": {"fields": ["like", "$party"]}}, "valid": false},
   {"note": "a bank line slot as a top-level argument", "read": {"bank_transaction": "$bank_line"}, "valid": true},
   {"note": "a bank line slot after =", "read": {"filters": {"name": ["=", "$bank_line"]}}, "valid": true},
-  {"note": "a bank line slot after in, which takes list slots only", "read": {"filters": {"name": ["in", "$bank_line"]}}, "valid": false}
+  {"note": "a bank line slot after in, which takes list slots only", "read": {"filters": {"name": ["in", "$bank_line"]}}, "valid": false},
+  {"note": "invoice capture: the mail's attachment (only for read_attachment)", "tool": "read_attachment", "read": {"doctype": "Purchase Invoice", "name": "$mail_draft", "file": "$mail_file"}, "valid": true},
+  {"note": "a mail file without its draft", "read": {"doctype": "Purchase Invoice", "name": "ACC-PINV-1", "file": "$mail_file"}, "valid": false},
+  {"note": "a mail draft without its file", "read": {"doctype": "Purchase Invoice", "name": "$mail_draft"}, "valid": false},
+  {"note": "a mail draft without a doctype", "read": {"name": "$mail_draft", "file": "$mail_file"}, "valid": false},
+  {"note": "a mail draft of another doctype", "read": {"doctype": "Sales Invoice", "name": "$mail_draft"}, "valid": false},
+  {"note": "a mail slot in a filter", "read": {"doctype": "Purchase Invoice", "filters": {"name": ["=", "$mail_draft"]}}, "valid": false},
+  {"note": "a mail draft as the file", "read": {"doctype": "Purchase Invoice", "name": "$mail_draft", "file": "$mail_draft"}, "valid": false}
  ],
  "matches": [
   {"note": "read 1 as listed", "read": {"filters": {"company": "$company", "docstatus": ["<", 2], "outstanding_amount": [">", 0], "due_date": ["<=", "$date"]}}, "arguments": {"filters": {"company": "Acme Ltd", "docstatus": ["<", 2], "outstanding_amount": [">", 0], "due_date": ["<=", "2026-11-10"]}}, "ok": true},
@@ -56,5 +65,8 @@
   {"note": "a top-level list slot", "read": {"company": "$company", "customers": "$customers"}, "arguments": {"company": "Acme Ltd", "customers": ["Cust A"]}, "ok": true},
   {"note": "a bank line the oracle holds", "read": {"bank_transaction": "$bank_line"}, "arguments": {"bank_transaction": "ACC-BTN-2026-00001"}, "ok": true},
   {"note": "a bank line the oracle doesn't hold", "read": {"bank_transaction": "$bank_line"}, "arguments": {"bank_transaction": "ACC-BTN-2026-00002"}, "ok": false}
+,
+  {"note": "the mail's attachment as listed", "read": {"doctype": "Purchase Invoice", "name": "$mail_draft", "file": "$mail_file"}, "arguments": {"doctype": "Purchase Invoice", "name": "ACC-PINV-2026-00001", "file": "f1a2b3c4d5"}, "ok": true},
+  {"note": "a draft the slot oracle does not hold (ERPNext alone checks that the file is its mail's)", "read": {"doctype": "Purchase Invoice", "name": "$mail_draft", "file": "$mail_file"}, "arguments": {"doctype": "Purchase Invoice", "name": "ACC-PINV-2026-00002", "file": "f1a2b3c4d5"}, "ok": false}
  ]
 }

@@ -309,7 +309,7 @@ export function ErpnextDraftCardItem({
                   created?.already_created ?? false,
                 )
               : card.operation === "update" || card.operation === "comment" || card.operation === "block"
-                  || card.operation === "match"
+                  || card.operation === "match" || card.operation === "fill"
                 ? changeMadeLine(card.operation, card.doctype, created?.name ?? "", created?.already_created ?? false)
                 : draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
           </p>
