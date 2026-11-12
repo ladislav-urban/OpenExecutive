@@ -800,7 +800,7 @@ def test_an_admit_between_the_person_and_its_subject_is_exists_never_address_hel
     kc: Keycloak, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Sign-in A admits the person: _add writes the Person (its address), then
-    # links its subject, as two commits under _run_lock. Sign-in B reads in
+    # links its subject, as two commits under _person_write_lock. Sign-in B reads in
     # between: no link yet, the address held. It waits for the lock and reads
     # again, so it answers exists, never address_held (the flaky concurrent
     # admits on ladislav-urban/OpenExecutive#206). Held open by events, so
