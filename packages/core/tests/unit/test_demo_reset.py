@@ -538,3 +538,192 @@ def test_a_demo_persons_panel_conversations_go_with_theirs(env: SimpleNamespace)
     with sqlite3.connect(str(env.db)) as conn:
         left = {r[0] for r in conn.execute("SELECT session_id FROM sessions")}
     assert left == {"own-chat"}
+
+
+# ── The last research run carried over a reset of the same company ─────────
+
+RUN_TS = "2026-11-01T06:00:00.000000Z"
+
+
+def _alert(
+    db: Path, headline: str, tags: list[str], *, routed: int | None = None, source: str = "research",
+) -> int:
+    from datetime import UTC, datetime
+
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.execute(
+            "INSERT INTO alerts (external_id, source, severity, headline, body, topic_tags, dedup_key, status,"
+            " created_at, routed_to_person_id) VALUES (?, ?, 'medium', ?, 'b', ?, ?, 'unread', ?, ?)",
+            (headline, source, headline, json.dumps(tags), headline, datetime.now(UTC).isoformat(), routed),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def _watch(db: Path, slug: str, config: dict[str, Any], *, routed: int | None = None) -> int:
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.execute(
+            "INSERT INTO watchlist (slug, signal_type, target, config_json, created_at, baselined_at,"
+            " last_polled_at, route_to_person_id, origin, mode)"
+            " VALUES (?, 'rss', 'https://example.com/feed', ?, 'now', 'then', 'then', ?, 'research', 'active')",
+            (slug, json.dumps(config), routed),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def _ran_rows(db: Path) -> list[dict[str, Any]]:
+    with sqlite3.connect(str(db)) as conn:
+        rows = conn.execute(
+            "SELECT details_json FROM audit_log WHERE event_type = 'watchlist_research_periodic_ran' ORDER BY id"
+        ).fetchall()
+    return [json.loads(r[0]) for r in rows]
+
+
+@pytest.fixture
+def research(env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """A demo already holding this company, its fictional roster and one
+    periodic research run (``R1``) that raised one alert and added one watch."""
+    from openexecutive.alerts.approvals import ensure_schema
+    from openexecutive.audit import logger as audit_logger
+    from openexecutive.audit.logger import AuditLogger
+    from openexecutive.memory.company_profile import CompanyProfile
+    from openexecutive.monitoring.research import scheduler
+
+    log = AuditLogger(env.db)
+    monkeypatch.setattr(audit_logger, "_default_logger", log)
+    monkeypatch.setattr(scheduler, "compute_research_state_hash", lambda db_path=None: "post-reset")
+    CompanyProfile(name=COMPANY).save_to_yaml(env.settings.company_profile_path)
+    _person("Pat Principal", principal=True)
+    dana = _person("Dana Reyes")  # yesterday's fictional roster
+    log.log(
+        "watchlist_research_periodic_ran", "ran", actor="scheduler",
+        details={"state_hash": "h", "trigger": "cold_start", "run_id": "R1", "findings": 3, "usage": {"calls": 7}},
+    )
+    research_alert = _alert(env.db, "Competitor cut prices", ["pricing", "research_run:R1"], routed=dana)
+    chat_alert = _alert(env.db, "Raised in a chat meanwhile", ["sales"])
+    with sqlite3.connect(str(env.db)) as conn:
+        conn.execute("UPDATE audit_log SET ts = ? WHERE event_type = 'watchlist_research_periodic_ran'", (RUN_TS,))
+        ensure_schema(conn)
+        conn.execute("INSERT INTO alert_held_actions (alert_id, action_id) VALUES (?, 999)", (research_alert,))
+    watch = _watch(env.db, "competitor-prices", {"_policy": {"run_id": "R1"}}, routed=dana)
+    _watch(env.db, "older-run-watch", {"_policy": {"entity": "x"}})
+    return SimpleNamespace(alert=research_alert, chat_alert=chat_alert, watch=watch, dana=dana)
+
+
+async def test_a_reset_keeps_the_last_research_run(env: SimpleNamespace, research: SimpleNamespace) -> None:
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    assert summary["research_carried"] == {"alerts": 1, "watch_rows": 1, "live_alerts": 1}
+    new_dana = _count(env.db, "SELECT id FROM people WHERE full_name = 'Dana Reyes'")
+    assert new_dana != research.dana
+    # The run's alert, with its id, routed to the re-seeded person of that name.
+    assert _count(env.db, "SELECT routed_to_person_id FROM alerts WHERE id = ?", research.alert) == new_dana
+    # Nothing else: not an alert raised by a chat, not another run's watch.
+    assert _count(env.db, "SELECT COUNT(*) FROM alerts WHERE id = ?", research.chat_alert) == 0
+    assert _count(env.db, "SELECT COUNT(*) FROM watchlist") == 1
+    # The watch row is back, re-baselined, so no signal is carried.
+    with sqlite3.connect(str(env.db)) as conn:
+        row = conn.execute("SELECT id, baselined_at, last_polled_at, route_to_person_id FROM watchlist").fetchone()
+    assert row == (research.watch, None, None, new_dana)
+    # Its held action pointed at a replaced scheduled action.
+    assert _count(env.db, "SELECT COUNT(*) FROM alert_held_actions") == 0
+    # One run row: the real run's time and id, the post-reset fingerprint, no usage.
+    (ran,) = _ran_rows(env.db)
+    assert ran["trigger"] == "demo_reset_carry" and ran["run_id"] == "R1" and ran["run_ts"] == RUN_TS
+    assert ran["state_hash"] == "post-reset" and ran["carried"] is True and "usage" not in ran
+    # The run's research artifact stays indexed with it.
+    assert "delete_documents" not in _FakeStore.calls
+
+
+async def test_chained_resets_keep_the_real_run_time(env: SimpleNamespace, research: SimpleNamespace) -> None:
+    from datetime import datetime, timedelta
+
+    from openexecutive.monitoring.research import scheduler
+
+    await dr.demo_reset(_bundle(env.tmp), env.settings)
+    (env.tmp / "bundle").rename(env.tmp / "first")
+    await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    (ran,) = _ran_rows(env.db)
+    assert ran["run_ts"] == RUN_TS and ran["run_id"] == "R1"
+    last_hash, last_ts = scheduler._last_successful_research_run()
+    assert (last_hash, last_ts) == ("post-reset", RUN_TS)
+    real = datetime.fromisoformat(RUN_TS)
+    # The floor counts from the real run, not from either reset.
+    assert not scheduler._research_run_is_stale(last_ts, real + timedelta(hours=167))
+    assert scheduler._research_run_is_stale(last_ts, real + timedelta(hours=168))
+    assert _count(env.db, "SELECT COUNT(*) FROM alerts WHERE id = ?", research.alert) == 1
+
+
+async def test_another_company_installed_clears(env: SimpleNamespace, research: SimpleNamespace) -> None:
+    """A fixture of another company loaded (and researched) during the day:
+    its research never rides into the demo company."""
+    from openexecutive.memory.company_profile import CompanyProfile
+
+    CompanyProfile(name="Other Company Ltd").save_to_yaml(env.settings.company_profile_path)
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert summary["research_carried"] is None
+    assert _ran_rows(env.db) == []
+    assert _count(env.db, "SELECT COUNT(*) FROM alerts WHERE id = ?", research.alert) == 0
+    assert _count(env.db, "SELECT COUNT(*) FROM watchlist") == 0
+
+
+async def test_no_live_alert_clears_even_with_watch_rows(env: SimpleNamespace, research: SimpleNamespace) -> None:
+    with sqlite3.connect(str(env.db)) as conn:
+        conn.execute("UPDATE alerts SET status = 'dismissed' WHERE id = ?", (research.alert,))
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert summary["research_carried"] is None
+    assert _ran_rows(env.db) == []  # the next tick is a cold start
+    assert _count(env.db, "SELECT COUNT(*) FROM watchlist") == 0
+
+
+async def test_an_alert_that_cannot_land_clears(env: SimpleNamespace, research: SimpleNamespace) -> None:
+    """The bundle seeds a row on the same (source, external_id): it wins, the
+    carried alert doesn't land, so nothing is carried."""
+    memory = {
+        "decisions": [], "initiatives": [], "advice_given": [],
+        "alerts": [{"headline": "Bundle's own", "source": "research", "external_id": "Competitor cut prices"}],
+    }
+    summary = await dr.demo_reset(_bundle(env.tmp, **{"memory.json": memory}), env.settings)
+    assert summary["research_carried"] is None
+    assert _ran_rows(env.db) == []
+    assert _count(env.db, "SELECT COUNT(*) FROM alerts WHERE headline = 'Bundle''s own'") == 1
+    assert _count(env.db, "SELECT COUNT(*) FROM alerts WHERE id = ?", research.alert) == 0
+    assert _count(env.db, "SELECT COUNT(*) FROM watchlist") == 0
+
+
+async def test_a_failing_carry_clears_and_the_reset_succeeds(
+    env: SimpleNamespace, research: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.monitoring.research import scheduler
+
+    def _boom(db_path: Any = None) -> str:
+        raise RuntimeError("fingerprint failed")
+
+    monkeypatch.setattr(scheduler, "compute_research_state_hash", _boom)
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert summary["research_carried"] is None
+    assert _ran_rows(env.db) == []
+    assert _count(env.db, "SELECT COUNT(*) FROM alerts WHERE id = ?", research.alert) == 0
+    assert _count(env.db, "SELECT COUNT(*) FROM watchlist") == 0
+    assert env.audited == ["demo_reset"]
+
+
+async def test_a_failing_snapshot_clears(
+    env: SimpleNamespace, research: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.monitoring.research import carry
+
+    def _boom(*a: Any, **k: Any) -> None:
+        raise RuntimeError("snapshot failed")
+
+    monkeypatch.setattr(carry, "snapshot_last_research", _boom)
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert summary["research_carried"] is None
+    assert _ran_rows(env.db) == []
+    assert "delete_documents" in _FakeStore.calls
+
+
+async def test_a_fixture_load_never_carries(env: SimpleNamespace, research: SimpleNamespace) -> None:
+    summary = await fixture_loader._apply_state_from_source(_bundle(env.tmp), env.settings)
+    assert summary["research_carried"] is None
+    assert _ran_rows(env.db) == []

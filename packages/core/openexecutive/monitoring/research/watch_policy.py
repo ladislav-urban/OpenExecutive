@@ -45,6 +45,7 @@ from typing import Any, NamedTuple
 
 from openexecutive.alerts.models import AlertSeverity
 from openexecutive.audit import log_event as audit_log
+from openexecutive.audit.usage import get_research_run_id
 from openexecutive.monitoring import store as ms
 from openexecutive.monitoring.models import (
     DECLINE_KIND_EXPIRED,
@@ -1215,6 +1216,11 @@ def apply_proposals(
         cadence, floor, trigger = quiet_defaults(proposal, ctx.priority_terms)
         config = dict(proposal.config)
         config["_policy"] = _policy_stamp(decision, proposal, finding, supported)
+        # The research run that added it, so a demo reset keeps this run's
+        # watch rows only (``research/carry.py``).
+        research_run = get_research_run_id()
+        if research_run:
+            config["_policy"]["run_id"] = research_run
         is_direct = decision.tier == TIER_DIRECT
         # A department-grounded watch is the department's: its alerts go to
         # the head (as of now — the head at insert time; a later head change

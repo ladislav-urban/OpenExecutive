@@ -5,8 +5,9 @@ reads each figure the reply gives (an amount, a percentage, a scaled number, a
 quantity of something) and looks for where it came from, among:
 
 - **ERPNext's values**: a JSON number in an ``erpnext__*`` result of the turn,
-  or a numeric string in a field or report column whose type is numeric. A
-  number written inside a text field (a remark, a description) never counts:
+  or a numeric string in a field or report column whose type is numeric (a
+  child table's, read through a dotted field such as ``parameters.rating``),
+  or in a rating field ("4"). A number written inside a text field (a remark, a description) never counts:
   customers and suppliers write those too.
 - **A simple combination of them**: a column's sum, average or count, the same
   for the rows that share one value of another column ("the overdue ones"),
@@ -257,6 +258,16 @@ class Figure:
     # The value it was matched to, when one was (a source value or a combination).
     matched: float | None = None
     how: str = ""
+    # The word right after it ("days" in "62.5 days"), lowercased, or "".
+    unit: str = ""
+
+    @property
+    def not_money(self) -> bool:
+        """Whether it plainly isn't an amount of money: a count of records,
+        or a number of days, hours, stars or units, with no currency mark."""
+        if self.currency_text or self.percent:
+            return False
+        return bool(self.count) or self.unit in _NOT_MONEY_UNITS
 
     @property
     def flagged(self) -> bool:
@@ -418,6 +429,11 @@ _TIME_UNITS = frozenset({
     "second", "seconds", "minute", "minutes", "min", "mins", "hour", "hours", "hr", "hrs",
     "day", "days", "week", "weeks", "month", "months", "year", "years", "yr", "yrs",
 })
+# Words after a figure that make it something other than money ("62.5 days",
+# "4.5 stars", "120 units"): never corrected to a money column's value.
+_NOT_MONEY_UNITS = _TIME_UNITS | frozenset({
+    "star", "stars", "out", "unit", "units", "pcs", "pieces", "piece", "kg", "km", "times", "points",
+})
 
 
 def _cells(line: str) -> list[str]:
@@ -545,6 +561,7 @@ def find_figures(text: str, fmt: NumberFormat = PLAIN, *, everything: bool = Fal
                     else ""
                 ),
                 currency_text=(pre.strip() or post.strip()) if (pre.strip() or post.strip()) else "",
+                unit=_word_after(text, end),
             )
         )
     if not everything:
@@ -582,7 +599,7 @@ def _word_figures(text: str, masked: list[tuple[int, int]], found: list[Figure])
                 start=start, end=end, text=m.group(1), num=m.group(1), pre="", post="",
                 readings=((float(_NUMBER_WORDS[m.group(1).lower()]), 0),), scale=1.0, scale_text="",
                 percent=False, fmt=PLAIN, multiple=multiple,
-                count="" if multiple else _counts_records(text, end),
+                count="" if multiple else _counts_records(text, end), unit=following,
             )
         )
     return out
@@ -674,6 +691,26 @@ def _number(value: Any, numeric_field: bool) -> float | None:
     return got if math.isfinite(got) else None
 
 
+# A field whose name holds one of these words, and none of the others, holds
+# money; so does a report's Currency column.
+_MONEY_WORDS = frozenset({
+    "amount", "amt", "price", "cost", "costs", "outstanding", "balance", "paid", "debit", "credit", "revenue",
+    "income", "expense", "expenses", "profit", "salary", "valuation", "fee", "fees", "total", "budget",
+    "actual", "variance",
+})
+_NOT_MONEY_WORDS = frozenset({
+    "qty", "quantity", "count", "days", "day", "hours", "hour", "weight", "percent", "percentage", "pct",
+    "rating", "score", "age", "weeks", "months", "years", "rate", "ratio", "units", "conversion",
+})
+
+
+def _is_money_key(key: str, currency_fields: frozenset[str]) -> bool:
+    if key in currency_fields:
+        return True
+    words = set(re.split(r"[^a-z]+", key.lower()))
+    return bool(words & _MONEY_WORDS) and not words & _NOT_MONEY_WORDS
+
+
 def _aggregate_names(arguments: dict[str, Any]) -> frozenset[str]:
     """list_records' own names for its aggregates: ``as``, else
     ``<function>_<field>`` or ``count`` (oe_connector's records.py)."""
@@ -709,6 +746,14 @@ class _Reader:
         # with what they count: the field and its result's DocType.
         self.counts: list[tuple[float, str]] = []
         self._doctype = ""
+        # Values seen in money columns, and in any other numeric column.
+        self.money: set[float] = set()
+        self.other: set[float] = set()
+        self._currency_fields: frozenset[str] = frozenset()
+
+    def _note_kind(self, value: float, key: str) -> None:
+        kind = self.money if _is_money_key(key, self._currency_fields) else self.other
+        kind.add(round(abs(value), 6))
 
     def _note_count(self, value: float, key: str) -> None:
         name = key.lower()
@@ -738,14 +783,19 @@ class _Reader:
                     if value and all(isinstance(v, dict) for v in value):
                         children.setdefault(key, []).extend(value)
                     continue
-                got = _number(value, key in numeric)
+                # A rating may come as a string ("4"), from a child table's
+                # field the parent's numeric fields don't name.
+                got = _number(value, key in numeric or _is_rating(key))
                 if got is not None:
                     table.numeric.setdefault(key, [None] * len(rows))[i] = got
                     self.cells.append((got, truncated))
                     self._note_currency(got, key, row.get("currency"))
+                    self._note_kind(got, key)
                     if not truncated:
                         self._note_count(got, key)
-                    if _is_rating(key) and 0 <= got <= 1:
+                    # Only a JSON number is a Rating fraction: a string ("1")
+                    # is a rating already out of five.
+                    if _is_rating(key) and not isinstance(value, str) and 0 <= got <= 1:
                         # ERPNext keeps a Rating as a fraction (0.8); people
                         # and replies give it out of five (4).
                         stars = round(got * RATING_STARS, 6)
@@ -767,11 +817,12 @@ class _Reader:
             for v in value:
                 self.scalars(v, numeric, key)
         else:
-            got = _number(value, key in numeric)
+            got = _number(value, key in numeric or _is_rating(key))
             if got is not None:
                 self.cells.append((got, False))
                 self.headline.append(got)
                 self._note_currency(got, key)
+                self._note_kind(got, key)
                 self._note_count(got, key)
 
     def result(self, result: ErpnextResult) -> None:
@@ -788,12 +839,26 @@ class _Reader:
         self._company = company if isinstance(company, str) else None
         document = payload.get("document_currency")
         self._document = document if isinstance(document, str) else None
+        # list_records' dotted child fields ("parameters.rating") come back
+        # under the child's own name ("rating"): numeric when the child
+        # table's field is.
+        fields = result.arguments.get("fields")
+        for dotted in fields if isinstance(fields, list) else []:
+            if isinstance(dotted, str) and dotted.count(".") == 1:
+                child, _, name = dotted.partition(".")
+                if name in self.types.numeric(doctype, child):
+                    numeric |= {name}
         columns = payload.get("columns")
+        self._currency_fields = frozenset()
         if isinstance(columns, list):
             numeric |= frozenset(
                 c["fieldname"] for c in columns
                 if isinstance(c, dict) and isinstance(c.get("fieldname"), str)
                 and c.get("fieldtype") in _NUMERIC_FIELDTYPES
+            )
+            self._currency_fields = frozenset(
+                c["fieldname"] for c in columns
+                if isinstance(c, dict) and isinstance(c.get("fieldname"), str) and c.get("fieldtype") == "Currency"
             )
         label = str(payload.get("report_name") or doctype or result.tool)
         cut = payload.get("truncated_child_tables")
@@ -889,6 +954,8 @@ class Sources:
     symbols: dict[str, frozenset[str]] = field(default_factory=dict)
     # Each currency's own symbol, as answer_check_context gives it.
     marks: dict[str, str] = field(default_factory=dict)
+    # Values seen only in money columns (an amount, a price, a total).
+    money: set[float] = field(default_factory=set)
     _complete_keys: list[float] = field(default_factory=list)
     _truncated_keys: list[float] = field(default_factory=list)
 
@@ -901,6 +968,10 @@ class Sources:
     def has_value(self, x: float) -> bool:
         """Whether ``x`` is one of ERPNext's own values."""
         return _near(self.values, abs(x))
+
+    def is_money(self, x: float) -> bool:
+        """Whether ``x`` is only ever an amount of money in the results."""
+        return round(abs(x), 6) in self.money
 
     def in_cut_off_rows_only(self, x: float) -> bool:
         """Whether ``x`` appears only in rows of a result ERPNext cut off."""
@@ -986,6 +1057,7 @@ def sources_for(
     extra = [abs(v) for v in extra]
     src = Sources()
     src.value_currencies = reader.currencies
+    src.money = reader.money - reader.other
     src.symbols = _symbols(currencies)
     src.marks = {
         code: info["symbol"].strip()
@@ -1164,10 +1236,105 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
     for fig in figures:
         _classify(fig, sources)
         _check_currency(fig, sources)
-    if not any(f.flagged for f in figures):
-        return figures
-    # What the reply worked out from figures it already gave ("together
-    # $3,000", "up 12%"), from those figures' values.
+    if any(f.flagged for f in figures):
+        _from_the_reply(text, figures, sources, fmt)
+    _own_differences(text, figures)
+    return figures
+
+
+# "$3.76 a board under the BOM": a difference the reply states between the two
+# figures before it. Never "over the next quarter", nor "under $X", whose
+# second figure follows.
+_DIFFERENCE_AFTER = re.compile(
+    r"[ \t]*(?:(?:a|an|per|each)[ \t]+[A-Za-z]+[ \t]+)?"
+    r"(?:under|over|below|above|less[ \t]+than|more[ \t]+than|cheaper[ \t]+than|short[ \t]+of)\b"
+    r"(?![ \t]+(?:the[ \t]+)?(?:next|last|past|previous|coming|period|time|year|month|week|quarter)\b)"
+    r"(?![ \t]*[\d" + _CURRENCY_SYMBOLS + r"])"
+    # What it is under or over: "the BOM", "budget".
+    r"[ \t]+(?:(?:the|its|our|their|a|an)[ \t]+)?(?P<noun>[A-Za-z][\w-]*)"
+)
+_TOTAL_CELL = re.compile(r"(?i)(?:grand[ \t]+)?totals?\b")
+
+
+def _written(fig: Figure) -> float:
+    return fig.readings[0][0] * fig.scale
+
+
+def _in_table_line(text: str, pos: int) -> bool:
+    return text[text.rfind("\n", 0, pos) + 1:pos].lstrip().startswith("|")
+
+
+def _total_row_figures(text: str, figures: list[Figure]) -> list[Figure]:
+    """The passed figures of the reply's own tables' total rows."""
+    out: list[Figure] = []
+    for fig in figures:
+        line = text[text.rfind("\n", 0, fig.start) + 1:fig.start]
+        if not line.lstrip().startswith("|") or fig.status not in ("confirmed", "given") or fig.percent:
+            continue
+        first = _cells(line + "|")[0].strip(" *_~")
+        if _TOTAL_CELL.match(first):
+            out.append(fig)
+    return out
+
+
+def _own_differences(text: str, figures: list[Figure]) -> None:
+    """An opening figure the reply's own table and stated difference both
+    contradict: "costs $174.90 against a BOM of $188.40 … $3.76 a board under
+    the BOM" beside a table whose Total is $192.16. The difference matches
+    neither the two figures before it, but does when the table's total takes
+    one of their places: that one is written from the total (``arithmetic``),
+    as a product the reply works out wrong is. Only then: any other mismatch
+    may compare with something the sentence doesn't show (a demo reshoot).
+
+    All three figures lie in one sentence, and what the difference is under or
+    over ("the BOM") names one of the two figures right before it ("a BOM of
+    $188.40"): that one is the reference, and only the other is ever written
+    from the total."""
+    from openexecutive.orchestrator.answer_correct import unit_of, units
+
+    totals = _total_row_figures(text, figures)
+    if not totals:
+        return
+    all_units = units(text)
+    for i, diff in enumerate(figures):
+        if not diff.currency_text or diff.percent:
+            continue
+        stated = _DIFFERENCE_AFTER.match(text, diff.end)
+        if stated is None or _in_table_line(text, diff.start):
+            continue
+        sentence = unit_of(all_units, diff.start, diff.end)
+        if sentence is None or sentence.kind != "sentence":
+            continue
+        before = [
+            f for f in figures[:i]
+            if sentence.start <= f.start and not f.percent and f.currency_text == diff.currency_text
+        ]
+        if len(before) < 2:
+            continue
+        a, b = before[-2], before[-1]
+        if a.status not in ("confirmed", "given") or b.status not in ("confirmed", "given"):
+            continue
+        if diff.matches(abs(_written(a) - _written(b))):
+            continue
+        noun = re.compile(r"\b" + re.escape(stated.group("noun")) + r"\b[^$\d]{0,12}$", re.I)
+        named = [f for f in (a, b) if noun.search(text[max(sentence.start, f.start - 40):f.start])]
+        if len(named) != 1:
+            continue
+        (reference,) = named
+        x = b if reference is a else a
+        fixes = {
+            round(_written(t), 6): _written(t)
+            for t in totals if t.currency_text == diff.currency_text
+            if not x.matches(_written(t)) and diff.matches(abs(_written(t) - _written(reference)))
+        }
+        if len(fixes) == 1:
+            (value,) = fixes.values()
+            x.status, x.matched, x.how, x.arithmetic = "unconfirmed", None, "", value
+
+
+def _from_the_reply(text: str, figures: list[Figure], sources: Sources, fmt: NumberFormat) -> None:
+    """Flagged figures the reply worked out from figures it already gave
+    ("together $3,000", "up 12%"), held to those figures' values."""
     confirmed = sorted({abs(f.matched) for f in figures if f.status == "confirmed" and f.matched})
     pool = sorted({*confirmed, *sources.headline})
     for i, fig in enumerate(figures):
@@ -1195,7 +1362,6 @@ def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> lis
         pair = _pair(pool, fig) if confirmed else None
         if pair is not None:
             fig.status, fig.matched, fig.how = "confirmed", pair[0], pair[1]
-    return figures
 
 
 # What may stand in an expression the reply works out: numbers, operators,
