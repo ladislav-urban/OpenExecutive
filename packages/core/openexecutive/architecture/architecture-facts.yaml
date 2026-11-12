@@ -5573,7 +5573,9 @@ chat:
     (oe_connector, hidden, CODE_ONLY_TOOLS; the gateway runs it only inside
     erpnext_caller.answer_check_run, which runs nothing else) gives the
     number format and numeric fields; figure_check (check 1, no model)
-    finds each figure's source; answer_review (check 2, ROUTING_MODEL) sees
+    finds each figure's source (a date or time is neither: _DATE_RES masks
+    numeric dates and dates with a month's name, so the turn's own
+    <current_time> or the brief's NOW line never sources a figure); answer_review (check 2, ROUTING_MODEL) sees
     only flagged ones and code works out every operation it names from
     ERPNext's own numbers; answer_correct writes known values in by code,
     calls the turn's model once (tools=[], constant prompt, draft as
