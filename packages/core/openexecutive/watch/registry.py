@@ -258,6 +258,37 @@ Build = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[CardSpe
 # read (bank matching's monthly list of the matches made): (the run's
 # settings, its day) -> notices. Called after ``build``.
 ExtraNotices = Callable[[Settings, date], Sequence[CardSpec]]
+# A job's notices from its reads that keep state in this install's own
+# records (the bank-rules job's chain head): (each read's result, the run's
+# settings, its day) -> notices. Called after ``build``.
+ReadNotices = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[CardSpec]]
+
+# The proposals a job may try to leave in a day (``watch_days.proposals``),
+# each counted before its call, whatever ERPNext answers.
+PROPOSAL_CAP_DAY = 5
+
+
+@dataclass(frozen=True)
+class ProposalSpec:
+    """One inert proposal a job's rules leave for a person to decide on in
+    ERPNext (a proposed Bank Transaction Rule), never a draft card.
+
+    - ``key``: the finding's id in code (``rule:<digest>``); never shown.
+    - ``arguments``: the proposal tool's arguments exactly, taken from a
+      read's own result by code (never a model), and accepted by the job's
+      ``proposal_check`` again under its marker."""
+
+    key: str
+    arguments: Mapping[str, Any]
+
+
+# (each read's result, the run's settings, its day) -> the proposals. Pure code.
+Proposals = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[ProposalSpec]]
+# (the job's current settings, a proposal's arguments) -> whether they are
+# exactly what the job may propose (its company, its kind, the fields' types).
+ProposalCheck = Callable[[Settings, Mapping[str, Any]], bool]
+# (oe_connector's refusal text, only searched) -> a short code, never the text.
+ProposalRefusal = Callable[[object], str]
 
 
 def _setting_ok(value: object, bounds: tuple[int, int] | None = None) -> bool:
@@ -304,6 +335,16 @@ class WatchJob:
     weekdays: frozenset[int] = frozenset(range(7))
     # Its notices from this install's own records (``ExtraNotices``), if any.
     extra_notices: ExtraNotices | None = None
+    # Its notices from its reads that keep state here (``ReadNotices``).
+    read_notices: ReadNotices | None = None
+    # Its proposals (``Proposals``), the oe_connector tool that leaves one
+    # (a write: erpnext_caller.ERPNEXT_PROPOSAL_TOOLS, never a read it lists)
+    # and their check (``ProposalCheck``): all three, or none.
+    proposals: Proposals | None = None
+    proposal_tool: str = ""
+    proposal_check: ProposalCheck | None = None
+    # How it reads a refused proposal (``ProposalRefusal``); None: "refused".
+    proposal_refusal: ProposalRefusal | None = None
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -312,17 +353,21 @@ class WatchJob:
             raise ValueError("a job's title is one short line")
         if not self.reads:
             raise ValueError("a job reads something")
+        # A withheld tool only by the job that owns it (the gateway's one
+        # exception mirrored), any other only from READ_TOOLS.
+        from openexecutive.orchestrator.erpnext_caller import is_erpnext_write
         from openexecutive.prompts.connected_systems import (
             ERPNEXT_WITHHELD_TOOLS,
             JOB_WITHHELD_EXCEPTIONS,
         )
 
-        # A withheld tool only by the job that owns it (the gateway's one
-        # exception mirrored), any other only from READ_TOOLS.
         owned = JOB_WITHHELD_EXCEPTIONS.get(self.id, frozenset())
         for read in self.reads:
             withheld = read.gateway_tool in ERPNEXT_WITHHELD_TOOLS
-            if read.tool not in READ_TOOLS and not (withheld and read.gateway_tool in owned):
+            # Never a write as a read, even one the job owns (its proposal tool).
+            if is_erpnext_write(read.gateway_tool) or (
+                read.tool not in READ_TOOLS and not (withheld and read.gateway_tool in owned)
+            ):
                 raise ValueError(f"a job may not list {read.tool!r}")
             if not isinstance(read.shape, Mapping) or not read.label or not read.label.isprintable():
                 raise ValueError("each read has a shape and a label")
@@ -356,6 +401,19 @@ class WatchJob:
             raise ValueError("a job's slots are distinct times, in order, from its schedule")
         if not self.weekdays or not self.weekdays <= frozenset(range(7)):
             raise ValueError("a job runs on some of the week's days, Monday 0 to Sunday 6")
+        if (self.proposals is None) != (not self.proposal_tool) or (self.proposals is None) != (
+            self.proposal_check is None
+        ):
+            raise ValueError("a job's proposals, their tool and their check come together")
+        if self.proposal_tool:
+            from openexecutive.orchestrator.erpnext_caller import ERPNEXT_PROPOSAL_TOOLS
+
+            gateway = self.proposal_gateway_tool
+            if (
+                gateway not in ERPNEXT_PROPOSAL_TOOLS or gateway not in owned
+                or gateway not in ERPNEXT_WITHHELD_TOOLS or gateway in self.tools()
+            ):
+                raise ValueError(f"a job may not propose with {self.proposal_tool!r}")
 
     def slot_keys(self) -> tuple[tuple[time, str], ...]:
         """Its slots and their keys ("HH:MM"), or its schedule with key ""
@@ -371,8 +429,14 @@ class WatchJob:
         return tuple(key for at, key in self.slot_keys() if at <= now)
 
     def tools(self) -> frozenset[str]:
-        """The gateway names of the tools it lists."""
+        """The gateway names of the tools it lists (its reads; never its
+        proposal tool)."""
         return frozenset(read.gateway_tool for read in self.reads)
+
+    @property
+    def proposal_gateway_tool(self) -> str:
+        """Its proposal tool's gateway name, or "" for a job that proposes nothing."""
+        return GATEWAY_PREFIX + self.proposal_tool if self.proposal_tool else ""
 
 
 def get(job_id: object) -> WatchJob | None:
@@ -599,12 +663,13 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
 # The jobs this install runs, each with its entry in oe_connector_watch_jobs.
 # Imported here, once everything a job module uses is defined.
 from openexecutive.watch.jobs import bank_matching as _bank_matching  # noqa: E402
+from openexecutive.watch.jobs import bank_rules as _bank_rules  # noqa: E402
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
 from openexecutive.watch.jobs import invoice_capture as _invoice_capture  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
 
 _LISTED: tuple[WatchJob, ...] = (
-    _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB,
+    _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB, _bank_rules.JOB,
 )
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

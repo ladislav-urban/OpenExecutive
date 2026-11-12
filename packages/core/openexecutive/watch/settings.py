@@ -54,6 +54,7 @@ _RUNS_DDL = """CREATE TABLE IF NOT EXISTS {table} (
 RUNS_TABLE = "watch_runs"
 DAYS_TABLE = "watch_days"
 APPROVED_TABLE = "watch_approved"
+HEADS_TABLE = "watch_chain_heads"
 
 _DDL = (
     f"""CREATE TABLE IF NOT EXISTS {JOBS_TABLE} (
@@ -83,6 +84,7 @@ _DDL = (
         amount REAL NOT NULL DEFAULT 0,
         checks INTEGER NOT NULL DEFAULT 0,
         notices INTEGER NOT NULL DEFAULT 0,
+        proposals INTEGER NOT NULL DEFAULT 0,
         PRIMARY KEY (job, day)
     )""",
     # One row per amount-capped card approved (or claimed for approval: a
@@ -95,6 +97,16 @@ _DDL = (
         amount REAL NOT NULL,
         PRIMARY KEY (job, day, decision_id)
     )""",
+    # The OE Draft chain's head a job last read in ERPNext, per company: its
+    # place and hash only (``chain_head``), so a shorter chain shows.
+    f"""CREATE TABLE IF NOT EXISTS {HEADS_TABLE} (
+        job TEXT NOT NULL,
+        company TEXT NOT NULL,
+        chain_index INTEGER NOT NULL,
+        row_hash TEXT NOT NULL,
+        seen_on TEXT NOT NULL,
+        PRIMARY KEY (job, company)
+    )""",
 )
 # Columns added after the table first shipped: name -> its definition.
 _RUN_COLUMNS = {"detail": "TEXT NOT NULL DEFAULT '{}'"}
@@ -102,9 +114,10 @@ _DAY_COLUMNS = {
     "amount": "REAL NOT NULL DEFAULT 0",
     "checks": "INTEGER NOT NULL DEFAULT 0",
     "notices": "INTEGER NOT NULL DEFAULT 0",
+    "proposals": "INTEGER NOT NULL DEFAULT 0",
 }
 # What a day's row counts against a cap (``take_day``).
-DAY_COUNTS = frozenset({"cards", "checks", "notices"})
+DAY_COUNTS = frozenset({"cards", "checks", "notices", "proposals"})
 # The columns a run row had before slots, copied as they are by the migration.
 _PRE_SLOT_COLUMNS = (
     "job", "day", "status", "started_at", "finished_at", "attempts", "cards", "error", "reads",
@@ -314,6 +327,36 @@ def day_count(job_id: str, day: str, what: str, *, path: Path | None = None) -> 
     finally:
         conn.close()
     return int(row[0] or 0) if row else 0
+
+
+def swap_chain_head(
+    job_id: str, company: str, index: int, row_hash: str, day: str, *, path: Path | None = None,
+) -> tuple[int, str] | None:
+    """Keep ``(index, row_hash)`` as the chain head the job last read for
+    ``company``, and return the one it replaces (None the first time), read
+    and written in one ``BEGIN IMMEDIATE`` transaction."""
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            row = conn.execute(
+                f"SELECT chain_index, row_hash FROM {HEADS_TABLE} WHERE job = ? AND company = ?",  # noqa: S608
+                (job_id, company),
+            ).fetchone()
+            conn.execute(
+                f"INSERT INTO {HEADS_TABLE} (job, company, chain_index, row_hash, seen_on) "  # noqa: S608
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT (job, company) DO UPDATE SET "
+                "chain_index = excluded.chain_index, row_hash = excluded.row_hash, seen_on = excluded.seen_on",
+                (job_id, company, index, row_hash, day),
+            )
+            conn.execute("COMMIT")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
+    return (int(row[0]), str(row[1])) if row else None
 
 
 def take_failure_notice(job_id: str, day: str, *, path: Path | None = None) -> bool:

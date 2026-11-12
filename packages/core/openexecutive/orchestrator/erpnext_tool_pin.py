@@ -36,6 +36,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "audit_drafts": "086c6aaa377a06f3104d176d57cd9201ff14ab9e0f510a059e373df67d992149",
     "bank_line_candidates": "310b32757b2b53c3c2cd0603b16f7cbd719e01ed41f17d0c213bb033ccd42e74",
     "bank_lines_to_match": "f6d693c3f0bfc4bdd16e8ab2192aa1473ca02181cf98c94da09c5f65e3cbe609",
+    "bank_rule_evidence": "2f01c086d1bc601b580013f3dc9a5a9fdc2fb752ad303afd76a1c5c62215c0be",
     "confirm_figure": "7e92126de1a33bced94e4b247220bac4fddaf8c26f0ec141fd612011cf34102b",
     "customer_payment_record": "fc960953b41f8a2cfc639e1d3277b38e348883a089bda0f5d60707ea18f7d4ea",
     "describe_doctype": "857eb11de056c01ca1a85be1552e22e04068b63bf37ccdf7de15edfc99cc13a3",
@@ -54,6 +55,8 @@ TOOL_DIGESTS: dict[str, str] = {
     "get_record": "4d486bf8e9cc6afce155b722b3565f4908563b4580838722a3ee7d28841c3698",
     "list_records": "11b5293628e6c26937a4b8c568231f1bec8e41b977de0a05675fa492aa34f387",
     "mail_invoices_to_fill": "f892687842ae916c0b2c68812a0381c11ddb023063732463577c21b7dbddfd9a",
+    "propose_rule": "7a028212837014586201c9f7cf28cce9639ff21af2c2cacb8a2fe142090d2c0b",
+    "proposed_rules": "049ba1c46f1bc9bb431c4e7b1e66dc22daf34b55102a876fa6af7d4a2950373b",
     "read_attachment": "e2890a5ed9875146b5af0ee563f24ba76c0b390cea1bee9481a40a762f14773d",
     "run_report": "43fc20d9c48e80bd64df2c16530ad84d6d30083fc6972d0f51cecd1bd218acb4",
     "search_catalog": "dbe9c1e72588824ebed3dcbfc01e0d90b39d4ad82ab0168d9cc6c0756b0f137c",
@@ -64,7 +67,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "supplier_orders": "abfa94e11de532f9cf1531c221dd4f8e8120816c215fb4b2780fd2edc338c1f8",
 }
 # oe_connector's protocol.TOOLS_DIGEST for the definitions pinned above.
-TOOLS_DIGEST = "aa01ad95cc509014f95649aa1b3f7e433705666c4e02c95957469d0c555ef4e6"
+TOOLS_DIGEST = "f250ccf3d091af810fd7afec13bfda64103a4ec806e29c997ccacc7bd5c1903f"
 
 # The supplier tools as oe_connector serves them (its mcp/protocol.py
 # SUPPLIER_TOOLS), offered to the A2A agent from this copy rather than from
