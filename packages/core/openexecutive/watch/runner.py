@@ -43,7 +43,8 @@ A run (``run_job``, its own task):
    finding ids it was shown; anything else is dropped. Its input is the
    findings' bounded facts, wrapped as untrusted. A reason is labelled on the
    notice as the model's, never as a figure, and never used in a key, title
-   or routing.
+   or routing. A finding with no facts (a project with no update this
+   week) is never shown to the model, so it gets no line.
 4. **Who it goes to** (``watch.cards.route``): the job's reviewer only when
    every read ran as the job's own ERP user and the reviewer may approve,
    else the principal, with notices only and the reason recorded.
@@ -99,7 +100,9 @@ REASON_TIMEOUT_S = 60.0
 STALE_AFTER = timedelta(minutes=30)
 # The first claim, then one retry of a stale run.
 MAX_ATTEMPTS = 2
-MAX_VALUE_CHARS = 120
+# A value's length on a notice and a text fact's for the model, unless the
+# job's ReasonSchema.max_fact_chars says longer (``value_chars``).
+MAX_VALUE_CHARS = registry.DEFAULT_FACT_CHARS
 MAX_LABEL_CHARS = 40
 MAX_REASON_CHARS = 200
 MAX_REASON_FINDINGS = 20
@@ -725,8 +728,9 @@ async def _one_read(
 
 
 def _reasoned(notices: Sequence[registry.CardSpec]) -> list[registry.CardSpec]:
-    """What the reason step is shown: each notice's rows, or the notice."""
-    return [item for spec in notices for item in (spec.items or (spec,))]
+    """What the reason step is shown: each notice's rows, or the notice,
+    those with facts only (with none, the model has nothing to sum up)."""
+    return [item for spec in notices for item in (spec.items or (spec,)) if item.facts]
 
 
 def _found(notices: Sequence[registry.CardSpec]) -> int:
@@ -739,7 +743,14 @@ def _found(notices: Sequence[registry.CardSpec]) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _facts(spec: registry.CardSpec) -> dict[str, str | int | float]:
+def value_chars(job: registry.WatchJob) -> int:
+    """How long a text fact (for the model) and a notice's value may be for
+    ``job``: its ``ReasonSchema.max_fact_chars``, else ``MAX_VALUE_CHARS``."""
+    schema = job.reason_schema
+    return schema.max_fact_chars if schema is not None else MAX_VALUE_CHARS
+
+
+def _facts(spec: registry.CardSpec, limit: int = MAX_VALUE_CHARS) -> dict[str, str | int | float]:
     out: dict[str, str | int | float] = {}
     for key, value in list(spec.facts.items())[:MAX_FACTS]:
         name = clean(key, MAX_LABEL_CHARS)
@@ -752,7 +763,7 @@ def _facts(spec: registry.CardSpec) -> dict[str, str | int | float]:
                 continue
             out[name] = value
         else:
-            out[name] = clean(value)
+            out[name] = clean(value, limit)
     return out
 
 
@@ -770,7 +781,7 @@ def reason_turn(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> t
     for n, spec in enumerate(specs[:limit], 1):
         fid = f"f{n}"
         ids[fid] = spec.key
-        findings.append({"id": fid, "facts": _facts(spec)})
+        findings.append({"id": fid, "facts": _facts(spec, value_chars(job))})
     data = json.dumps({"findings": findings}, ensure_ascii=False, sort_keys=True)
     turn = (
         f"Instruction from the job's code: {schema.instruction}\n\n"
@@ -893,15 +904,17 @@ def notice_body(
     notes and the run's (``notes``)."""
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
+    # The job's own cap (a project's quoted update), else MAX_VALUE_CHARS.
+    width = value_chars(job)
     lines = [clean(spec.summary)]
     for label, value in spec.values:
-        lines.append(f"{clean(label, MAX_LABEL_CHARS)}: {clean(value)}")
+        lines.append(f"{clean(label, MAX_LABEL_CHARS)}: {clean(value, width)}")
     if reason:
         lines.append(f"Reason (a model's words, not a figure): {clean(reason, MAX_REASON_CHARS)}")
     for number, item in enumerate(spec.items, 1):
         lines.append(f"{number}. {clean(item.summary)}")
         for label, value in item.values:
-            lines.append(f"   {clean(label, MAX_LABEL_CHARS)}: {clean(value)}")
+            lines.append(f"   {clean(label, MAX_LABEL_CHARS)}: {clean(value, width)}")
         why = (reasons or {}).get(item.key, "")
         if why:
             lines.append(f"   Why now (a model's words, not a figure): {clean(why, MAX_REASON_CHARS)}")

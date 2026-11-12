@@ -17,8 +17,9 @@ There is no way to add a job at run time: no settings row, chat turn or API
 names one. ``JOBS`` is read-only and holds what this module lists in
 ``_LISTED``: phase 1's collections job (``watch.jobs.collections``), its
 payment-checks job (``watch.jobs.payment_checks``), its quote-follow-up
-job (``watch.jobs.quote_follow_up``) and its late-deliveries job
-(``watch.jobs.late_deliveries``), and phase 2's bank-matching job
+job (``watch.jobs.quote_follow_up``), its late-deliveries job
+(``watch.jobs.late_deliveries``) and its project-status job
+(``watch.jobs.project_status``), and phase 2's bank-matching job
 (``watch.jobs.bank_matching``) and invoice-capture job
 (``watch.jobs.invoice_capture``). The test job,
 ``watch.jobs._example``, is put in by the tests alone.
@@ -66,9 +67,14 @@ from typing import Any
 # `sub` of a watch assertion.
 JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOTS: tuple[str, ...] = (
-    "$company", "$date", "$party", "$parties", "$customers", "$int", "$bank_line", "$mail_draft", "$mail_file",
+    "$company", "$date", "$party", "$parties", "$customers", "$projects", "$int", "$bank_line", "$mail_draft",
+    "$mail_file",
 )
-LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers")
+# The list slots (oe_connector's watch.LIST_SLOTS): up to MAX_LIST names,
+# only after in or not in. oe_connector also checks each name is a document
+# of the slot's DocType the call's user may read (its LIST_SLOT_DOCTYPES:
+# Supplier, Customer, Project); here, that each is a name.
+LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers", "$projects")
 # Slots this side only: a value oe_connector's listing holds as a literal,
 # one read per value (an operator lists bank matching's
 # ``bank_lines_to_match`` once per Bank Account). Checked here as a name;
@@ -246,14 +252,24 @@ class DraftSpec:
 CheckFields = Callable[[str, str, Mapping[str, Any], str], dict[str, Any] | str]
 
 
+# How long a text fact the reason step shows the model, and a notice shows
+# a value, unless a job's ReasonSchema says longer (at most MAX_FACT_CHARS).
+DEFAULT_FACT_CHARS = 120
+MAX_FACT_CHARS = 400
+
+
 @dataclass(frozen=True)
 class ReasonSchema:
     """A job's reason step: one short line per finding, written by a model
     from the findings' ``facts``. ``instruction`` says what a line explains
-    (a constant in the job's code)."""
+    (a constant in the job's code). ``max_fact_chars``: how long a text fact
+    may be, cleaned (``DEFAULT_FACT_CHARS`` to ``MAX_FACT_CHARS``); the
+    job's notice values are cut at the same length, so a quoted text reads
+    the same on the notice as the model was shown it."""
 
     instruction: str
     max_findings: int = 20
+    max_fact_chars: int = DEFAULT_FACT_CHARS
 
 
 # (each read's result, in the order of ``reads``, {} for a skipped one; the
@@ -351,6 +367,12 @@ class WatchJob:
                 raise ValueError("only a repeated read's call may fail on its own")
         if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
             raise ValueError("a job's card cap is 1 to 50 a day")
+        schema = self.reason_schema
+        if schema is not None and (
+            not isinstance(schema.max_fact_chars, int) or isinstance(schema.max_fact_chars, bool)
+            or not DEFAULT_FACT_CHARS <= schema.max_fact_chars <= MAX_FACT_CHARS
+        ):
+            raise ValueError(f"a reason's text facts are {DEFAULT_FACT_CHARS} to {MAX_FACT_CHARS} characters")
         for key, bound in self.setting_bounds.items():
             if (
                 key not in self.default_settings or len(bound) != 2
@@ -424,7 +446,7 @@ def _slot_holds(slot: str, value: Any, today: date) -> bool:
         return isinstance(value, str) and _text_ok(value)
     if slot in ("$bank_line", "$bank_account", "$mail_draft", "$mail_file"):
         return isinstance(value, str) and _text_ok(value) and _NAME_RE.fullmatch(value) is not None
-    if slot in ("$parties", "$customers"):
+    if slot in LIST_SLOTS:
         return (
             isinstance(value, list)
             and 0 < len(value) <= MAX_LIST
@@ -616,11 +638,12 @@ from openexecutive.watch.jobs import collections as _collections  # noqa: E402
 from openexecutive.watch.jobs import invoice_capture as _invoice_capture  # noqa: E402
 from openexecutive.watch.jobs import late_deliveries as _late_deliveries  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
+from openexecutive.watch.jobs import project_status as _project_status  # noqa: E402
 from openexecutive.watch.jobs import quote_follow_up as _quote_follow_up  # noqa: E402
 
 _LISTED: tuple[WatchJob, ...] = (
     _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB, _quote_follow_up.JOB,
-    _late_deliveries.JOB,
+    _late_deliveries.JOB, _project_status.JOB,
 )
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

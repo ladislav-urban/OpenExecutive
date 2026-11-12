@@ -11772,7 +11772,8 @@ watch:
     collections (watch.jobs.collections), payment checks
     (watch.jobs.payment_checks), quote follow-up
     (watch.jobs.quote_follow_up), late deliveries
-    (watch.jobs.late_deliveries), bank matching
+    (watch.jobs.late_deliveries), project status
+    (watch.jobs.project_status), bank matching
     (watch.jobs.bank_matching, phase 2) and invoice capture
     (watch.jobs.invoice_capture, phase 2).
   registry: |
@@ -11783,7 +11784,9 @@ watch:
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same
     slot names ($company, $date within 400 days, $party, $parties and
-    $customers up to 50, $int 1-500, $bank_line a Bank Transaction's name
+    $customers and $projects up to 50 (oe_connector's _slot_holds also
+    checks each is a Supplier, Customer or Project the call's user may
+    read; here, LIST_SLOTS and _slot_holds check names only), $int 1-500, $bank_line a Bank Transaction's name
     that oe_connector also checks is on an account listed for bank
     matching; LOCAL_SLOTS holds this side's own $bank_account, a value
     oe_connector's listing holds as a literal, one read per account; the
@@ -11794,7 +11797,7 @@ watch:
     watch._mismatch (ladislav-urban/oe_connector#536). shape_problem mirrors
     watch._shape_problem: a $ string that isn't a slot, a list or object in a
     list, a slot in a list other than [op, slot] (= != < <= > >= before a
-    single-value slot, in / not in before $parties or $customers), or a list
+    single-value slot, in / not in before $parties, $customers or $projects), or a list
     slot as a bare filter value makes the read unsound, and
     WatchJob.__post_init__ refuses the job. tests/unit/watch_shape_vectors.json
     is oe_connector's own file (shapes, matches, slot_oracle), run against
@@ -11870,7 +11873,7 @@ watch:
     reviewer's notices by runner._without_rows), and a notice whose key was
     told before isn't left again. JOBS is a read-only
     mapping of _LISTED (collections, payment-checks, bank-matching,
-    invoice-capture, quote-follow-up, late-deliveries),
+    invoice-capture, quote-follow-up, late-deliveries, project-status),
     imported at the
     module's end (watch.jobs imports the registry first); the test job
     watch.jobs._example is put in by tests only.
@@ -12428,16 +12431,73 @@ watch:
     ERPNext's text kept in last_error only; _CLOSED_SAYS has the line. Known residual, as payment checks:
     a row reaches the reviewer's notice when its card's check doesn't run
     that run.
+  project_status: |
+    watch.jobs.project_status: 17:00 Fridays (weekdays {4}), company time,
+    after the team's Project Updates; card_cap_day 1 (one notice a run);
+    once False (the notice key projects:<company>:<day>); check_fields
+    None (notices only: no card, check, hold or kept-from-reviewer path);
+    settings company only. reason_schema ReasonSchema(REASON_INSTRUCTION, a
+    constant; max_findings 10, max_fact_chars 300). Three reads, exactly
+    oe_connector's (ladislav-urban/oe_connector#574: watch_shape_vectors
+    cases marked to sync, copied verbatim into tests/unit/
+    watch_shape_vectors.json; watch_job_vectors.json project_status_job;
+    watch_users.JOB_ACCESS["project-status"]: read Project, Task, Project
+    Update, Company, no report, never Timesheet, Project Update in its
+    JOB_WIDER): list_records Project (name, project_name, status,
+    percent_complete, expected_start_date, expected_end_date, actual_time,
+    estimated_costing, total_costing_amount, total_billed_amount, customer)
+    with {company, status ["!=", "Completed"]}; Task (name, subject,
+    project, status, exp_end_date, expected_time, actual_time, progress)
+    with {company, status ["!=", "Completed"], project ["in", $projects]};
+    Project Update (name, project, date, users.project_status) with
+    {docstatus 1, date [">=", today - 7], project ["in", $projects]}; limit
+    500 each. $projects (selected()): read 1's projects less Cancelled
+    (dropped in code: no status list in a shape), active ones by days
+    late, share over, billed, name, then On Hold (status casefolded, the
+    demo writes "On hold"), at most MAX_LIST 50, Derived(truncated=True)
+    when more or when a name fails _slot_holds("$projects") (never sent);
+    reads 2 and 3 skipped when none. Rules: _name caps every ERPNext
+    string at 140 before cleaning; hours: over = total_costing_amount /
+    estimated_costing - 1 when cost passes the estimate, hours over =
+    actual_time * over / (1 + over) ("N hours over the estimate at cost,
+    P%", "P% over the estimated cost" with no hours, "within the
+    estimate", "no estimate"); schedule: expected_end_date vs today ("N
+    days late", "on plan", "no end date"); late tasks: not Completed,
+    Cancelled or Template, exp_end_date < today, oldest first, 5 shown
+    then "and N more"; the team's words: the week's latest update by
+    (date, name), its users rows' project_status (dotted or bare key)
+    joined, each raw text cut at 4000, tags dropped, html.unescape, then
+    settled (runner.clean until stable) at QUOTE_MAX 300. Order: days
+    late, share over, late tasks, billed, name (all desc but name).
+    Output: one CardSpec "Projects this week", items one per active
+    project (up to 10: Project, Customer, Complete, Hours, Schedule, Late
+    tasks, "The team wrote" or "Update: No status update this week"),
+    facts (plain-word keys, since the reason step cleans a key as text and
+    drops underscores) days late, late tasks, percent and hours over the
+    estimate, percent complete, the team wrote, only with an update (none: no model
+    line), then an "On hold" item (each held project's overdue tasks, no
+    facts); notes for more than 10 and each cut read; count active +
+    held. Bad rows are skipped, never stop the run (a missing rows list in
+    read 1 stops the run as any job's would). Cost: one reason call a run on
+    the fast model, max_tokens 1200, actor watch:project-status (the
+    runner's _cost_budget hook binds it once cost caps land).
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds
     the job's instruction and the findings' facts (at most 20 findings, 8
-    facts, values cleaned to 120 chars) as JSON in wrap_untrusted, keyed f1,
+    facts, text values cleaned to runner.value_chars(job): 120 chars, or
+    the job's ReasonSchema.max_fact_chars, 120-400, checked in
+    WatchJob.__post_init__; notice_body cuts the job's values at the same
+    width, so project-status's quoted update reads the same on the notice)
+    as JSON in wrap_untrusted, keyed f1,
     f2... never by a finding's key. parse_reasons keeps only {"reasons":
     {id: str}} for ids shown, each cleaned (no control chars, line breaks,
     markdown or links) and at most 200 chars; the rest is dropped. Usage:
     log_model_usage actor watch:<id>. A reason is shown as "Reason (a
     model's words, not a figure)" and never reaches a key, title or routing.
+    runner._reasoned shows the model only rows with facts: a row with none
+    (project-status's project with no update this week, its on-hold row)
+    gets no line, and a run with none makes no call.
   notices: |
     Private alerts stored directly with alerts.store.insert_alert
     (runner._leave_notice), never through alerts.pipeline or triage, whose

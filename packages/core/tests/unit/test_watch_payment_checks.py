@@ -229,7 +229,7 @@ def _oracle(slot: str, value: Any) -> bool:
 
 def test_the_slot_oracle_names_exactly_our_slots() -> None:
     assert set(SHAPES["slot_oracle"]) == set(registry.SLOTS)
-    assert set(registry.LIST_SLOTS) == {"$parties", "$customers"}
+    assert set(registry.LIST_SLOTS) == {"$parties", "$customers", "$projects"}
 
 
 @pytest.mark.parametrize("case", SHAPES["shapes"], ids=lambda c: c["note"])
