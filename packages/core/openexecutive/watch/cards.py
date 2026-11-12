@@ -385,11 +385,18 @@ async def leave_drafts(
         return out
     # A finding gets one card a day, whatever became of it: a job that runs at
     # several slots never proposes a card again the hour after it was dismissed.
-    # A once job's finding gets one card ever.
+    # A once job's finding gets one card ever: any card of the job in the
+    # ledger, or one recorded as carded (``carded_key``), which outlives the
+    # ledger's listing bound.
     left_today = {
         drafts._payload(c).get("dedup_key") for c in drafts.job_cards(job.id, open_only=False)
         if job.once or drafts._payload(c).get("run_day") == day
     }
+    if job.once:
+        from openexecutive.watch.settings import told
+
+        carded = told(job.id, [carded_key(dedup_key(job.id, s.key)) for s in specs])
+        left_today |= {dedup_key(job.id, s.key) for s in specs if carded_key(dedup_key(job.id, s.key)) in carded}
     for n, spec in enumerate(specs):
         key = dedup_key(job.id, spec.key)
         if key in left_today or drafts.job_card_waiting(key):
@@ -426,6 +433,22 @@ async def leave_drafts(
     if out.capped:
         out.lines.append(f"{out.capped} more {noun} are due; they come once the waiting ones are handled.")
     return out
+
+
+def carded_key(key: str) -> str:
+    """A once job's record that a card was left for a finding (its dedupe
+    digest ``key``), kept beside what its notices told (``watch_told``)."""
+    return f"card:{key}"
+
+
+def _mark_carded(job: registry.WatchJob, day: str, key: str) -> None:
+    from openexecutive.watch.settings import mark_told
+
+    try:
+        mark_told(job.id, [carded_key(key)], day)
+    except Exception:
+        # The ledger's own card still counts: only its listing is bounded.
+        logger.warning("watch: job %s's card couldn't be recorded as left", job.id)
 
 
 async def _leave_one(
@@ -515,6 +538,8 @@ async def _leave_one(
             take_day_amount(job.id, day, -amount, 0.0)
     if new:
         out.left += 1
+        if job.once:
+            _mark_carded(job, day, key)
     else:
         out.repeats += 1
     return new

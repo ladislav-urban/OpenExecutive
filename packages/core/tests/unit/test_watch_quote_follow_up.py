@@ -570,3 +570,45 @@ def test_a_changed_assignee_since_the_card_is_refused_at_approval(
     with pytest.raises(drafts.ApproveRefused):
         asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
     assert people_store.get_person(team.cara) is not None
+
+
+def test_rows_past_the_days_card_cap_get_their_cards_on_a_later_day(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.memory.decision_ledger import close_externally
+
+    eight = [_q(f"QTN-E{i}", f"Cust {i}", 4, 1000.0 + 100 * i) for i in range(8)]
+
+    def specs(day: date) -> list[DraftSpec]:
+        built = qfu.build(_results(eight, []), SETTINGS, day, assignee=REVIEWER)
+        return [s for s in built if isinstance(s, DraftSpec)]
+
+    # Day 1: eight rows on the notice, five cards (the day's cap).
+    erp.replies.extend([_list(eight), _list([], "Sales Order")])
+    erp.replies.extend(_checks_for(specs(TODAY)[:5]))
+    first = _run()
+    assert (first.draft_cards, first.draft_capped) == (5, 3)
+    [notice] = _alerts()
+    assert all(f"QTN-E{i}" in notice.body for i in range(8))
+    assert sorted(drafts._payload(c)["fields"]["reference_name"] for c in _job_cards()) == [
+        f"QTN-E{i}" for i in range(3, 8)]
+    # Cara handles (dismisses) day 1's cards.
+    for card in _job_cards():
+        close_externally(card.id, reason="dismissed")
+    # Day 2: the other three cards, no row told again, no dismissed card again.
+    erp.replies.extend([_list(eight), _list([], "Sales Order")])
+    erp.replies.extend(_checks_for(specs(date.fromisoformat(NEXT_DAY))[5:]))
+    second = _run(NEXT_DAY)
+    assert (second.draft_cards, second.checks) == (3, 3)
+    assert len(_alerts()) == 1
+    assert sorted(drafts._payload(c)["fields"]["reference_name"] for c in _job_cards()) == [
+        f"QTN-E{i}" for i in range(8)]
+    # Day 3: every finding carded once; even with the ledger's listing gone,
+    # the job's own record keeps a second card from being left.
+    monkeypatch.setattr(drafts, "job_cards", lambda *_a, **_k: [])
+    for card in _job_cards():
+        close_externally(card.id, reason="dismissed")
+    day3 = (TODAY + timedelta(days=2)).isoformat()
+    erp.replies.extend([_list(eight), _list([], "Sales Order")])
+    third = _run(day3)
+    assert (third.draft_cards, third.checks, third.draft_repeats) == (0, 0, 8)

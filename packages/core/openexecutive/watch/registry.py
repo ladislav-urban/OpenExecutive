@@ -312,8 +312,9 @@ class WatchJob:
     # Each finding raised once, ever, rather than once a day: the runner
     # records the findings a left notice told (its key, its rows' keys and
     # ``counted``; ``settings.mark_told``) for the job's rules to leave out
-    # (``settings.told``), and a finding a card was ever left for gets no
-    # second card, whatever became of the first (``cards.leave_drafts``).
+    # (``settings.told``) from the notice only, and a finding a card was ever
+    # left for gets no second card, whatever became of the first
+    # (``cards.leave_drafts``); one the day's cap held back gets it later.
     once: bool = False
 
     def __post_init__(self) -> None:

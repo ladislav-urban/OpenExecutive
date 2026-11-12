@@ -11827,8 +11827,11 @@ watch:
     CardSpec.counted (findings it counts without naming) as dedup_key
     digests in watch_told; the job's rules read them back with
     runner.told (raises when unreadable, so the run stops rather than tell
-    everything again) and leave them out; cards.leave_drafts skips a
-    finding any card of the job was ever left for. JOBS is a read-only
+    everything again) and leave them out of the notice only (their
+    DraftSpecs are still built); cards.leave_drafts skips a finding any
+    card of the job was ever left for: in the ledger, or a watch_told row
+    card:<digest> (cards.carded_key, written when a new card is left), since
+    job_cards lists at most 5000 draft cards. JOBS is a read-only
     mapping of _LISTED (collections, payment-checks, bank-matching,
     invoice-capture, quote-follow-up),
     imported at the
