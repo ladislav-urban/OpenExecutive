@@ -141,6 +141,11 @@ def test_an_unverified_turn_is_not_kept(roster: SimpleNamespace, extra: dict[str
     assert _record(roster.principal, session=session) is None
 
 
+def test_a_demo_persons_turn_is_not_kept(db: Path, roster: SimpleNamespace) -> None:
+    assert _record(roster.teammate, session=_web(roster.teammate.id, demo_caller=True)) is None
+    assert _pending_reviews(db) == []
+
+
 def test_an_adapters_own_verification_counts(roster: SimpleNamespace) -> None:
     session = Session(session_id="s-1", origin_channel="otherchat", caller_person_id=roster.teammate.id,
                       speaker_verified=True)
@@ -474,7 +479,7 @@ def test_it_grades_each_turn_and_keeps_what_they_wanted(db: Path, roster: Simple
     _record(roster.principal, text=ASK, reply="I'll keep an eye on it.", at=NOW)
     _record(roster.principal, text=AGAIN, reply="Sorry, creating it now.", at=NOW + timedelta(minutes=2))
     provider.grades = [
-        {"turn": 1, "verdict": "miss", "kind": "company",
+        {"turn": 1, "verdict": "miss", "kind": "company", "cause": "do_it",
          "wanted": "The alert created in the turn, not a promise to watch.",
          "quote": "did you set up that alert"},
         {"turn": 2, "verdict": "fine"},
@@ -484,7 +489,7 @@ def test_it_grades_each_turn_and_keeps_what_they_wanted(db: Path, roster: Simple
     assert provider.grade_calls[0]["tool_choice"] == {"type": "tool", "name": "grade_turns"}
     assert "[1] SIGNALS: none" in _grade_content(provider)
     first, second = _turns(db)
-    assert first["verdict"] == "miss" and first["kind"] == "company"
+    assert first["verdict"] == "miss" and first["kind"] == "company" and first["cause"] == "do_it"
     assert first["wanted"] == "The alert created in the turn, not a promise to watch."
     assert first["graded_at"] is not None and json.loads(first["signals"]) == []
     assert second["verdict"] == "fine" and second["wanted"] is None
@@ -504,6 +509,20 @@ def test_a_miss_without_their_words_is_unclear(db: Path, roster: SimpleNamespace
     [row] = _turns(db)
     assert row["verdict"] == "unclear" and row["wanted"] is None and row["kind"] is None
     assert cr.weekly_rates(person_id=None, db_path=db) == [{"week": "2026-W42", "graded": 1, "misses": 0}]
+
+
+def test_a_cause_from_the_other_kind_is_dropped(db: Path, roster: SimpleNamespace, provider: _Provider) -> None:
+    _record(roster.principal, text=ASK, reply="I'll keep an eye on it.", at=NOW)
+    _record(roster.principal, text=AGAIN, reply="Sorry, creating it now.", at=NOW + timedelta(minutes=2))
+    provider.grades = [
+        {"turn": 1, "verdict": "miss", "kind": "product", "cause": "term",
+         "wanted": "The alert created.", "quote": "did you set up that alert"},
+        {"turn": 2, "verdict": "fine", "cause": "tool"},
+    ]
+    _review(db)
+    first, second = _turns(db)
+    assert first["verdict"] == "miss" and first["kind"] == "product" and first["cause"] is None
+    assert second["verdict"] == "fine" and second["cause"] is None
 
 
 def test_a_skipped_or_odd_grade_is_unclear(db: Path, roster: SimpleNamespace, provider: _Provider) -> None:
@@ -542,7 +561,7 @@ def test_the_signals_the_product_recorded_reach_the_grader(db: Path, roster: Sim
     _review(db)
     content = _grade_content(provider)
     assert ("[1] SIGNALS: thumbs down: it never made the alert; stopped the reply; "
-            "the reply claimed a change no tool made; tool create_alert failed") in content
+            "the reply claimed a change no tool made, and was sent back once to make it or say so; tool create_alert failed") in content
     assert "[2] SIGNALS: took the turn back to ask again" in content
     first, second = _turns(db)
     assert first["message_id"] == mid and second["message_id"] is None
@@ -714,9 +733,33 @@ def test_misses_are_listed_per_person_and_forgotten_by_their_owner(db: Path, ros
     assert [m["person_name"] for m in everyone] == ["Olivia Owner"]
     miss = everyone[0]
     assert miss["message"] == ASK and miss["wanted"] == "The alert created." and miss["kind"] == "company"
+    assert miss["cause"] is None
     assert miss["session_id"] == "s-1" and miss["tools"] == [] and miss["signals"] == []
     assert cr.list_misses(person_id=roster.teammate.id, db_path=db) == []
     assert not cr.forget_miss(miss["id"], caller_person_id=roster.teammate.id, db_path=db)
     assert not cr.forget_miss(miss["id"] + 50, caller_person_id=roster.principal.id, db_path=db)
     assert cr.forget_miss(miss["id"], caller_person_id=roster.principal.id, db_path=db)
     assert cr.list_misses(person_id=None, db_path=db) == []
+
+
+def test_a_short_quote_backs_a_fix_when_it_names_the_thing() -> None:
+    """Two of their words are enough, and one word in common (by stem) ties
+    the change to them; a change about something else is still refused."""
+    ok = {"source_quote": "drop invoices", "item": "the overdue invoice reminder"}
+    assert cr._target_refusal("leave_out_of_brief", ok, "drop invoices") is None
+    one_word = {"source_quote": "invoices", "item": "the overdue invoice reminder"}
+    assert "at least" in (cr._target_refusal("leave_out_of_brief", one_word, "invoices") or "")
+    elsewhere = {"source_quote": "drop invoices", "item": "the hiring plan"}
+    assert cr._target_refusal("leave_out_of_brief", elsewhere, "drop invoices") == (
+        "what this changes isn't named in their own words")
+
+
+@pytest.mark.parametrize("quote", ["ok thanks", "sounds good", "do it", "not now", "great, thanks"])
+@pytest.mark.parametrize(("tool", "tool_input"), [
+    ("leave_out_of_brief", {"item": "sounds good report"}),
+    ("remember_fact", {"subject": "thanks", "statement": "Send thanks notes to the team"}),
+    ("learn_reply_style", {"rule": "Say thanks and keep it good and short"}),
+])
+def test_a_filler_reply_backs_no_fix(quote: str, tool: str, tool_input: dict[str, str]) -> None:
+    assert cr._target_refusal(tool, {**tool_input, "source_quote": quote}, quote) == (
+        "what this changes isn't named in their own words")

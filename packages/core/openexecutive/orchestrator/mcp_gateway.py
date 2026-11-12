@@ -478,9 +478,9 @@ _TOO_DEEP = "<too-deep>"
 # upload (XLSX, ODS, XLS) hides its formulas behind zip members, XML encodings
 # and character references — nothing a scan here can read reliably. So such an
 # upload may only be text `content`, which is scanned; base64_content and a
-# server-side file_path are refused for it. Every other upload (a PNG to
-# Drive, a DOCX to Docs) is left alone.
-_SHEET_MIME_RE = re.compile(r"spreadsheet|ms-?excel|openxmlformats.*sheet|opendocument\.spreadsheet|csv")
+# server-side file_path are refused for it. Every other upload (an .xlsx kept
+# as an Excel file in Drive, a PNG, a DOCX to Docs) is left alone.
+_NATIVE_SHEET_MIME = "google-apps.spreadsheet"
 # Free text Google mails to someone the roster never checked: an RSVP comment
 # goes to the event's organizer; an out-of-office / focus-time decline message
 # goes to whoever invites the Executive during the window. Refused on every
@@ -687,6 +687,10 @@ def _refuse(tool: str, field: str, shown: str, *, reason: str) -> str:
 
 
 _ERPNEXT_PREFIX = "erpnext__"
+# oe_connector's Block Invoice tool (integrations.erpnext_block): a draft
+# tool outside ERPNEXT_DRAFT_TOOLS, called only by the payment-checks job's
+# card executor, so hidden from search and discovered only on that call.
+ERPNEXT_BLOCK_TOOL = "erpnext__draft_block_invoice"
 
 # Server names `load_mcp_server` never registers. extensible-mcp hands a URL
 # server the line of the `tokens` file named after it, and indexes its tools as
@@ -815,6 +819,13 @@ def _check_erpnext_caller(tool_name: str) -> tuple[str | None, ErpnextCaller | N
             "A supplier's agent is answered only with per-person access "
             "(ERPNEXT_CALLER_PRIVATE_KEY).",
         ), None
+    if not setting and erpnext_caller.watch_call() is not None:
+        # A watch job reads only as a signed `watch` caller, never as the
+        # brief's unsigned service view.
+        return _refuse_erpnext_call(
+            tool_name, "watch-needs-keys",
+            "A watch job reads ERPNext only with per-person access (ERPNEXT_CALLER_PRIVATE_KEY).",
+        ), None
     if not setting:
         # The morning brief's own report runs are for the principal alone.
         if erpnext_caller.in_brief_run() or principal_speaking(current_session.get()):
@@ -856,14 +867,38 @@ def _check_erpnext_draft(
     (oe_connector may add more): it passes only inside a marker code set for
     exactly this call (``erpnext_caller.draft_call_for``). The card
     executor's names the approver; an alert's "Prepare" tap
-    (``draft_check_as``, ``draft_check`` only) names the principal who
-    tapped; the proposal path's (``draft_check`` only) asks as the turn's
-    own caller. All need per-person access, since
+    (``draft_check_as``, ``draft_check`` only) names the person who
+    tapped; the card list's fresh read of a waiting credit-raise card
+    (``draft_recheck_as``, ``draft_check`` only) names that card's approver,
+    set only once ``verified.caller_refusal`` proved the viewer is them; the
+    proposal path's (``draft_check`` only) asks as the turn's
+    own caller. A watch job's check (``draft_check_for_job``, unattended,
+    ``draft_check`` only) asks as the job's reviewer, read again from People
+    here, and is refused under a turn's session or a watch read. Its
+    arguments are only what the job's own ``check_fields`` built: never
+    ``asked_by`` or ``configured_by``, which draft_check doesn't take. All
+    need per-person access, since
     oe_connector inserts a draft as the asking person's ERPNext user."""
     plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
     marker = erpnext_caller.draft_call_for(normalized, plain)
     if marker is None:
         return _refuse_erpnext_call(tool_name, "draft-outside-card", _DRAFT_OUTSIDE_CARD), None
+    if marker.unattended:
+        from openexecutive.orchestrator.schedule_tools import current_session
+
+        refusal = "a watch job checks only its own card, with nobody's turn bound. Do not retry."
+        if current_session.get() is not None:
+            return _refuse_erpnext_call(tool_name, "job-check-in-turn", refusal), None
+        if erpnext_caller.watch_call() is not None or erpnext_caller.in_brief_run() or (
+            erpnext_caller.in_oversight_run() or erpnext_caller.in_answer_check_run()
+            or erpnext_caller.in_supplier_run()
+        ):
+            return _refuse_erpnext_call(tool_name, "job-check-with-other-marker", refusal), None
+        if normalized != erpnext_caller.DRAFT_CHECK_TOOL:
+            return _refuse_erpnext_call(tool_name, "job-check-tool", refusal), None
+        why = erpnext_caller.job_check_refusal(marker)
+        if why is not None:
+            return _refuse_erpnext_call(tool_name, why, refusal), None
     setting = erpnext_caller.signing_setting()
     if not setting:
         return _refuse_erpnext_call(
@@ -888,6 +923,48 @@ def _check_erpnext_draft(
     if caller is None or caller.kind != "user":
         return _refuse_erpnext_call(tool_name, "draft-not-a-person", _DRAFT_OUTSIDE_CARD), None
     return None, caller
+
+
+def _check_watch_read(tool_name: str, normalized: str, arguments: Any) -> str | None:
+    """Inside a watch job's read (``erpnext_caller.watch_run``), the refusal
+    for anything but that marker's own call, else None (and None outside
+    one). Checked at call time: still no turn bound and no other marker,
+    and the arguments' digest, taken after the gateway's argument coercion,
+    the one the marker was set for."""
+    watch = erpnext_caller.watch_call()
+    if watch is None:
+        return None
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    refusal = "a watch job makes only the one read its runner set up. Do not retry."
+    if current_session.get() is not None:
+        return _refuse_erpnext_call(str(tool_name)[:200], "watch-in-turn", refusal)
+    if erpnext_caller.other_marker_bound():
+        return _refuse_erpnext_call(str(tool_name)[:200], "watch-with-other-marker", refusal)
+    if normalized != watch.tool or normalized.startswith(erpnext_caller.DRAFT_TOOL_PREFIX):
+        return _refuse_erpnext_call(str(tool_name)[:200], "outside-watch-read", refusal)
+    if not isinstance(arguments, dict) or erpnext_caller.arguments_digest(arguments) != watch.digest:
+        return _refuse_erpnext_call(str(tool_name)[:200], "outside-watch-read", refusal)
+    return None
+
+
+def _job_reads_withheld(normalized: str) -> bool:
+    """Whether this withheld tool is the read its own watch job is making:
+    inside ``erpnext_caller.watch_run`` with exactly this tool bound, for a
+    job ``JOB_WITHHELD_EXCEPTIONS`` gives it to, with no turn and no other
+    marker. Every other caller (a chat turn, the panel, the brief, a
+    supplier's agent, a draft, another job's read) is refused."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.prompts.connected_systems import JOB_WITHHELD_EXCEPTIONS
+
+    watch = erpnext_caller.watch_call()
+    return (
+        watch is not None
+        and watch.tool == normalized
+        and normalized in JOB_WITHHELD_EXCEPTIONS.get(watch.job, frozenset())
+        and current_session.get() is None
+        and not erpnext_caller.other_marker_bound()
+    )
 
 
 def _erpnext_downstream(
@@ -1044,20 +1121,25 @@ def _nested_fetch_key(value: Any, depth: int = 0) -> str | None:
 
 def _becomes_sheet(tool: str, arguments: dict[str, Any]) -> bool:
     """True when an upload through ``tool`` is converted into a native Sheet:
-    the Sheets import, or a Drive create whose target type is a spreadsheet.
-    A Drive update's target is unknown here, so it counts too."""
+    the Sheets import, a Drive create whose target type is a native Sheet,
+    or any Drive update: the file being rewritten may be a native Sheet, and
+    Drive converts plain text and TSV into one too, so a stated type on an
+    update proves nothing.
+
+    A Drive create stores the bytes as they are (workspace-mcp's
+    create_drive_file never converts), so an .xlsx or .csv saved to Drive
+    stays an Excel or CSV file that Google does not evaluate: only an
+    explicit ``application/vnd.google-apps.spreadsheet`` target counts."""
     bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
     if bare in ("import_to_google_sheets", "update_drive_file"):
         return True
     if bare != "create_drive_file":
         return False
-    for key, value in arguments.items():
-        if (
-            isinstance(key, str) and _norm_key(key) in ("mimetype", "contentmimetype")
-            and isinstance(value, str) and _SHEET_MIME_RE.search(value.lower())
-        ):
-            return True
-    return False
+    return any(
+        isinstance(key, str) and _norm_key(key) in ("mimetype", "contentmimetype")
+        and isinstance(value, str) and _NATIVE_SHEET_MIME in value.lower()
+        for key, value in arguments.items()
+    )
 
 
 def _formula_fetches(text: str) -> bool:
@@ -1083,6 +1165,10 @@ def _check_sheet_formulas(tool: str, arguments: dict[str, Any]) -> str | None:
     formulas cannot be read from here; else a JSON error."""
     bare = tool[len(_GW_PREFIX):] if tool.startswith(_GW_PREFIX) else tool
     if not _CELL_WRITER_RE.search(bare):
+        return None
+    # A Drive create that doesn't become a Sheet is stored as text or bytes,
+    # never evaluated: "Logo image (PNG)" in a note is not a formula.
+    if bare == "create_drive_file" and not _becomes_sheet(tool, arguments):
         return None
     if _becomes_sheet(tool, arguments):
         for key, value in arguments.items():
@@ -1301,7 +1387,13 @@ def _roster_ack_admits(tool: str, arguments: dict[str, Any]) -> bool:
 # call is always a different object, so it can never pass as one. Every
 # other gate (acting account, URL fetch, sheet formulas, the Drive / OneDrive
 # share gates, own-drive writes) still runs on them as on any call.
+# ``ghostwrite_email``'s ``drive_files`` (``orchestrator.drive_attach``)
+# sizes and downloads the Drive files it attaches the same way: the file id is
+# the model's choice, checked there against the saved files and folders, and
+# the bytes go onto the principal's draft without reaching the model.
 _CODE_BUILT_TOOLS = frozenset({
+    "google_workspace__get_drive_file_permissions",
+    "google_workspace__get_drive_file_download_url",
     "google_workspace__create_drive_folder",
     "google_workspace__create_drive_file",
     "google_workspace__manage_drive_access",
@@ -1334,6 +1426,42 @@ def _code_built_admits(tool_input: Any) -> bool:
         and granted is tool_input
         and isinstance(tool_input, dict)
         and tool_input.get("name") in _CODE_BUILT_TOOLS
+    )
+
+
+# A rename or move the person approved on a card (``delegation.action_cards``,
+# ``drive_files``) runs as that very ``tool_input``, built in code from what
+# the card showed them: the file, its new name, the folder it goes to. Their
+# tap is the approval, so the own-file check (`_check_google_file_write`)
+# looks only at the folder it goes to. Every other gate still runs.
+_TAPPED_DRIVE_TOOLS = frozenset({"google_workspace__update_drive_file"})
+_TAPPED_DRIVE_KEYS = frozenset({"fileid", "name", "addparents", "removeparents"})
+_tapped_drive: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
+    "tapped_drive_call", default=None
+)
+
+
+@contextlib.contextmanager
+def tapped_drive_call(tool_input: dict[str, Any]) -> Iterator[None]:
+    """Run this exact ``tool_input`` as a rename or move the person tapped
+    Approve on (see ``_TAPPED_DRIVE_TOOLS``). For code that built every
+    argument from a card; never around a model's input."""
+    token = _tapped_drive.set(tool_input)
+    try:
+        yield
+    finally:
+        _tapped_drive.reset(token)
+
+
+def _tapped_drive_admits(tool_input: Any) -> bool:
+    granted = _tapped_drive.get()
+    if granted is None or granted is not tool_input or not isinstance(tool_input, dict):
+        return False
+    arguments = tool_input.get("arguments")
+    return (
+        tool_input.get("name") in _TAPPED_DRIVE_TOOLS
+        and isinstance(arguments, dict)
+        and all(isinstance(k, str) and _norm_key(k) in _TAPPED_DRIVE_KEYS for k in arguments)
     )
 
 
@@ -2831,15 +2959,20 @@ async def _check_m365_drive_write(
 
 
 # Google Docs, Sheets, Slides, Forms and Drive writes land only in files and
-# folders the Executive's own account owns: the twin of
-# `_M365_DRIVE_WRITE_TOOLS`. A stranger can share a doc, sheet or folder with
-# the Executive's account, and planted text could then have it append company
-# data there ("add the Q3 numbers to this sheet"), with nothing shared and no
-# roster check. Every Google write that names a file (`_GOOGLE_WRITTEN_FILE_KEYS`)
-# or a destination folder (`_GOOGLE_DESTINATION_KEYS`) is checked; a write is
-# any tool whose name starts with a write verb (`outside_content.gateway_call_reads`).
-# Sharing has its own gate (`_GATED_DRIVE_TOOLS`), and mail and calendar name
-# no file. Reading what others shared stays open.
+# folders the Executive's own account owns, or the company's own
+# (`_company_item`): owned by someone on a company domain or kept on a shared
+# drive only the company organizes, and open to nobody outside the company.
+# The twin of `_M365_DRIVE_WRITE_TOOLS`. A stranger can share a doc, sheet or
+# folder with the Executive's account, and planted text could then have it
+# append company data there ("add the Q3 numbers to this sheet"), with
+# nothing shared and no roster check; a company file shared outside the
+# company is the same open door. Every Google write that names a file
+# (`_GOOGLE_WRITTEN_FILE_KEYS`) or a destination folder
+# (`_GOOGLE_DESTINATION_KEYS`) is checked; a write is any tool whose name
+# starts with a write verb (`outside_content.gateway_call_reads`). Sharing has
+# its own gate (`_GATED_DRIVE_TOOLS`), and mail and calendar name no file.
+# Reading what others shared stays open. A rename or move the person approved
+# on a card (`tapped_drive_call`) checks only where the file goes.
 _GOOGLE_WRITTEN_FILE_KEYS = frozenset({"documentid", "spreadsheetid", "presentationid", "formid", "fileid"})
 _GOOGLE_DESTINATION_KEYS = frozenset({"folderid", "parentfolderid", "addparents"})
 # Writes whose file argument is only read: the copy or PDF goes to the
@@ -2873,10 +3006,9 @@ def _google_ids(arguments: dict[str, Any], keys: frozenset[str]) -> list[Any] | 
     return ids
 
 
-async def _google_file_owner(session: Any, file_id: str, discover: _Discover | None) -> str | None:
-    """The owner address of Drive item ``file_id``, lowercased, or None when
-    it can't be read or doesn't name exactly one owner line (a shared drive
-    item has none)."""
+async def _google_item_text(session: Any, file_id: str, discover: _Discover | None) -> str | None:
+    """The owner lookup's answer for Drive item ``file_id``, or None when it
+    can't be read."""
     arguments = {"file_id": file_id}
     try:
         result = await _session_call(
@@ -2898,6 +3030,12 @@ async def _google_file_owner(session: Any, file_id: str, discover: _Discover | N
         return None
     if not isinstance(text, str) or _is_error_payload(text):
         return None
+    return text
+
+
+def _google_owner_of(text: str) -> str | None:
+    """The owner address in an owner lookup's answer, lowercased, or None when
+    it doesn't name exactly one owner line (a shared drive item has none)."""
     # A file's name is the line above and can hold a line break: more than one
     # owners line is refused, never guessed between.
     lines = [line for line in text.splitlines() if line.startswith("Owners: ")]
@@ -2905,6 +3043,158 @@ async def _google_file_owner(session: Any, file_id: str, discover: _Discover | N
         return None
     match = _GOOGLE_OWNERS_LINE_RE.fullmatch(lines[0].rstrip())
     return match.group(1).strip().lower() if match else None
+
+
+async def _google_file_owner(session: Any, file_id: str, discover: _Discover | None) -> str | None:
+    """The owner address of Drive item ``file_id``, lowercased, or None when
+    it can't be read or doesn't name exactly one owner line (a shared drive
+    item has none)."""
+    text = await _google_item_text(session, file_id, discover)
+    return None if text is None else _google_owner_of(text)
+
+
+# One permission line of the owner lookup (workspace-mcp's
+# ``format_permission_info``): "    - User: a@b.com (writer) [id: 1]", with
+# " | inherited from: …" after it on a shared drive. Any other line in the
+# list (an unknown kind) counts as someone outside the company.
+_GOOGLE_PERMISSION_RE = re.compile(
+    r"\s+- (?:(?P<kind>User|Group): (?P<addr>[^\s()]+@[^\s()]+)|Domain: (?P<domain>[^\s()]+)"
+    r"|(?P<anyone>Anyone) with the link) \((?P<role>\w+)\)(?: \[id: [^\]]*\])?(?: \|.*)?"
+)
+
+
+@dataclass(frozen=True)
+class _DriveItem:
+    """What the owner lookup says of one Drive item: its owner (None on a
+    shared drive), whether it is on a shared drive, and who can open it as
+    ``(kind, address or domain, role)``, kind "user", "group", "domain",
+    "anyone" or "other"."""
+
+    owner: str | None
+    shared_drive: bool
+    permissions: tuple[tuple[str, str, str], ...]
+
+
+def _parse_drive_item(text: str, item_id: str) -> _DriveItem | None:
+    """Read ``text`` (the owner lookup for ``item_id``) from its last
+    ``ID: <item_id>`` line on. Everything before that line is the item's name
+    (the first line), which whoever named the file chose, line breaks and
+    all; everything after it is Drive's own. None when it can't be read."""
+    lines = text.splitlines()
+    anchor = f"ID: {item_id}"
+    starts = [i for i, line in enumerate(lines) if line.rstrip() == anchor]
+    if not starts:
+        return None
+    rest = [line.rstrip() for line in lines[starts[-1] + 1:]]
+    # Drive's own lines in their fixed order: a line break in the type or an
+    # owner's display name (chosen by whoever uploaded or owns it) shifts
+    # them, and is refused.
+    if len(rest) < 4 or not (
+        rest[0].startswith("Type: ") and rest[1].startswith("Parents: ")
+        and rest[2].startswith("Owners: ") and rest[3].startswith("Size: ")
+    ):
+        return None
+    if sum(1 for line in rest if line.startswith("Owners: ")) != 1:
+        return None
+    owner: str | None = None
+    if rest[2] != "Owners: None available":
+        match = _GOOGLE_OWNERS_LINE_RE.fullmatch(rest[2])
+        if match is None:
+            return None
+        owner = match.group(1).strip().lower()
+    shared_drive = any(line.startswith("Shared Drive ID: ") for line in rest)
+    # The permission list: exactly one header, right after its count, then
+    # exactly that many entries and a blank line.
+    headers = [i for i, line in enumerate(rest) if line == "  Permissions:"]
+    permissions: list[tuple[str, str, str]] = []
+    if headers:
+        if len(headers) != 1:
+            return None
+        at = headers[0]
+        count = re.fullmatch(r"  Number of permissions: (\d+)", rest[at - 1]) if at else None
+        if count is None:
+            return None
+        entries = rest[at + 1:at + 1 + int(count.group(1))]
+        if len(entries) != int(count.group(1)) or rest[at + 1 + len(entries):at + 2 + len(entries)] != [""]:
+            return None
+        for line in entries:
+            found = _GOOGLE_PERMISSION_RE.fullmatch(line) if line.startswith("    - ") else None
+            if found is None:
+                permissions.append(("other", "", ""))
+            elif found.group("addr"):
+                # A group can hold anyone, so only a user counts as one of the company's.
+                kind = "user" if found.group("kind") == "User" else "group"
+                permissions.append((kind, found.group("addr").lower(), found.group("role").lower()))
+            elif found.group("domain"):
+                permissions.append(("domain", found.group("domain").lower(), found.group("role").lower()))
+            else:
+                permissions.append(("anyone", "", found.group("role").lower()))
+    elif "  No additional permissions (private file)" not in rest:
+        return None
+    return _DriveItem(owner=owner, shared_drive=shared_drive, permissions=tuple(permissions))
+
+
+def _company_domains_with(exec_address: str) -> frozenset[str]:
+    """The company's own email domains (``people.identity.company_domains``),
+    and the Executive's own unless it is free mail."""
+    from openexecutive.people.identity import FREEMAIL_DOMAINS, company_domains
+
+    domains = set(company_domains())
+    _, _, exec_domain = exec_address.rpartition("@")
+    if exec_domain and exec_domain not in FREEMAIL_DOMAINS:
+        domains.add(exec_domain)
+    return frozenset(domains)
+
+
+def _company_item(item: _DriveItem, exec_address: str, domains: frozenset[str]) -> bool:
+    """Whether a Drive item is the company's own: owned by the Executive or
+    someone on a company domain, or on a shared drive whose every organizer
+    is; and nobody outside the company can open it (every user and domain
+    it is shared with is the company's; never a group, which can hold
+    anyone, nor "anyone with the link"). A file owned by someone else must show who can open it: the list
+    is hidden from a reader, and a hidden list proves nothing."""
+
+    def ours(address: str) -> bool:
+        return address == exec_address or address.rpartition("@")[2] in domains
+
+    if item.owner is not None:
+        if not ours(item.owner):
+            return False
+        if item.owner != exec_address and not item.permissions:
+            return False
+    elif not item.shared_drive or not any(role == "organizer" for _, _, role in item.permissions):
+        return False
+    for kind, who, _role in item.permissions:
+        if kind == "user" and ours(who):
+            continue
+        if kind == "domain" and who in domains:
+            continue
+        return False
+    return True
+
+
+async def _google_company_items(
+    session: Any, ids: Iterable[str], discover: _Discover | None = None,
+) -> set[str]:
+    """The ids in ``ids`` that are the company's own (``_company_item``).
+    Fails closed: an item whose lookup can't be read is not."""
+    exec_address = get_settings().exec_email_address.strip().lower()
+    domains: frozenset[str] | None = None
+    out: set[str] = set()
+    for item_id in ids:
+        text = await _google_item_text(session, item_id, discover)
+        if text is None:
+            continue
+        # The Executive's own files too: one it shared outside the company
+        # holds outside words like any other.
+        item = _parse_drive_item(text, item_id)
+        if item is None:
+            continue
+        if domains is None:
+            domains = _company_domains_with(exec_address)
+        if _company_item(item, exec_address, domains):
+            out.add(item_id)
+    return out
 
 
 # Google tools whose name starts with one of these, and names no write verb
@@ -2922,15 +3212,27 @@ def _google_reads_only(tool: str) -> bool:
     return words[0] in _GOOGLE_READ_VERBS and not any(w in _WRITE_VERBS for w in words[1:])
 
 
+# What a refused Drive write tells the model to do instead: a rename or move
+# the person asked for goes on a card they tap (``action_cards``,
+# ``drive_files``), which runs it with only the destination checked.
+_GOOGLE_WRITE_CARD_HINT = (
+    " If the person asked you to rename or move these files, put that on an "
+    "approval card (propose_actions, kind drive_files) for them to tap, and tell "
+    "them it is waiting. Do not ask them to share it again: sharing won't change this."
+)
+
+
 async def _check_google_file_write(
     session: Any, tool: str, arguments: dict[str, Any], discover: _Discover | None = None,
+    *, tapped: bool = False,
 ) -> str | None:
     """Keep Google writes in files and folders the Executive's own account
-    owns (see `_GOOGLE_WRITTEN_FILE_KEYS`). Fail closed when an owner can't
-    be read."""
+    owns or the company's own (see `_GOOGLE_WRITTEN_FILE_KEYS`). Fail closed
+    when an owner can't be read. ``tapped``: a rename or move the person
+    approved on a card, so only the folder it goes to is checked."""
     if _google_reads_only(tool) or tool in _GATED_DRIVE_TOOLS:
         return None
-    files = [] if tool in _GOOGLE_SOURCE_ONLY_TOOLS else _google_ids(arguments, _GOOGLE_WRITTEN_FILE_KEYS)
+    files = [] if tool in _GOOGLE_SOURCE_ONLY_TOOLS or tapped else _google_ids(arguments, _GOOGLE_WRITTEN_FILE_KEYS)
     folders = _google_ids(arguments, _GOOGLE_DESTINATION_KEYS)
     if files is None or folders is None:
         return _refuse(tool, "file_id", "<unreadable>", reason=f"{tool} ids must be strings — refusing.")
@@ -2939,23 +3241,37 @@ async def _check_google_file_write(
     if not targets:
         return None
     exec_address = get_settings().exec_email_address.strip().lower()
+    domains: frozenset[str] | None = None
     for target in targets[:10]:
-        owner = await _google_file_owner(session, target, discover)
-        if owner is None:
+        text = await _google_item_text(session, target, discover)
+        owner = None if text is None else _google_owner_of(text)
+        if owner == exec_address:
+            continue
+        item = None if text is None else _parse_drive_item(text, target)
+        if owner is None and item is None:
             return _refuse(
                 tool, "file_id", target[:60],
-                reason=f"could not read who owns {target[:60]!r} to check {tool} — refusing.",
+                reason=f"could not read who owns {target[:60]!r} to check {tool} — refusing." + _GOOGLE_WRITE_CARD_HINT,
             )
-        if owner != exec_address:
-            return _refuse(
-                tool, "file_id", target[:60],
-                reason=(
-                    f"{tool} may only write to files and folders the Executive's own "
-                    "Google account owns, not one someone shared with it — refusing. "
-                    "Save it to a new file in the Executive's Drive and share that "
-                    "with the People who need it."
-                ),
-            )
+        if item is not None:
+            if domains is None:
+                domains = _company_domains_with(exec_address)
+            # Owned by the company and shared with no one outside it: a file
+            # open to named outsiders is not written into (the owner, Nov 8,
+            # 2026, keeping the fork's rule over SenteLabsAI/OpenExecutive#686).
+            if _company_item(item, exec_address, domains):
+                continue
+        return _refuse(
+            tool, "file_id", target[:60],
+            reason=(
+                f"{tool} may only write to files and folders the Executive's own "
+                "Google account owns, or the company's own: owned by someone at the "
+                "company or on its shared drive, and not shared with anyone outside "
+                "it. This one is not — refusing. Save it to a new file in the "
+                "Executive's Drive and share that with the People who need it."
+                + _GOOGLE_WRITE_CARD_HINT
+            ),
+        )
     if len(targets) > 10:
         return _refuse(tool, "file_id", "<too-many>", reason=f"{tool} names too many files — refusing.")
     return None
@@ -3393,6 +3709,59 @@ _M365_SENT_REPLY_TOOLS = frozenset({
 })
 
 
+def _sent_to(tool_name: str, normalized: str, arguments: dict[str, Any]) -> set[str]:
+    """The lowercased to/cc addresses of a Gmail or Outlook send; empty for
+    any other tool (an Outlook reply names none in its arguments)."""
+    out: set[str] = set()
+    if tool_name == "google_workspace__send_gmail_message":
+        for field in _OUTBOUND_CONTEXT_RECIPIENT_FIELDS:
+            value = arguments.get(field)
+            items = value if isinstance(value, list) else [value]
+            for _name, addr in getaddresses([s for s in items if isinstance(s, str)]):
+                if addr.strip():
+                    out.add(addr.strip().lower())
+    elif normalized == _M365_RECORD_SEND_TOOL:
+        message = _ci_get(_ci_get(arguments, "body"), "message")
+        for key in ("toRecipients", "ccRecipients"):
+            for addr in _m365_recipient_addresses(_ci_get(message, key)):
+                if addr.strip():
+                    out.add(addr.strip().lower())
+    return out
+
+
+async def _clear_replaced_drafts(tool_name: str, normalized: str, arguments: dict[str, Any]) -> None:
+    """The Executive just sent an email itself: take this conversation's
+    unsent chat drafts of it (same people, same subject) out of the writer's Drafts
+    (``delegation.redrafts.clear_after_send``). Never raises."""
+    from openexecutive.delegation.settings import DelegationOverride
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    session = current_session.get()
+    if session is None:
+        return
+    try:
+        sent = _sent_to(tool_name, normalized, arguments)
+        if not sent:
+            return
+        from openexecutive.delegation.redrafts import clear_after_send
+
+        if tool_name == "google_workspace__send_gmail_message":
+            subject = arguments.get("subject")
+        else:
+            subject = _ci_get(_ci_get(_ci_get(arguments, "body"), "message"), "subject")
+        override = getattr(session, "delegation_override", None)
+        client: Any = None
+        client_person_id: int | None = None
+        if isinstance(override, DelegationOverride):
+            client, client_person_id = override.gmail, getattr(override.person, "id", None)
+        await clear_after_send(
+            str(session.session_id), sent, subject=subject if isinstance(subject, str) else "",
+            client=client, client_person_id=client_person_id,
+        )
+    except Exception:
+        logger.exception("clear_replaced_drafts: could not clear drafts (non-fatal)")
+
+
 def _note_mail_sent(tool_name: str, normalized: str, arguments: dict[str, Any]) -> None:
     """Mark on the conversation (``Session.mail_sent_to`` /
     ``mail_replied_ids``) who a send the mailbox accepted went to, so the
@@ -3405,19 +3774,8 @@ def _note_mail_sent(tool_name: str, normalized: str, arguments: dict[str, Any]) 
     if session is None:
         return
     try:
-        if tool_name == "google_workspace__send_gmail_message":
-            for field in _OUTBOUND_CONTEXT_RECIPIENT_FIELDS:
-                value = arguments.get(field)
-                items = value if isinstance(value, list) else [value]
-                for _name, addr in getaddresses([s for s in items if isinstance(s, str)]):
-                    if addr.strip():
-                        session.mail_sent_to.add(addr.strip().lower())
-        elif normalized == _M365_RECORD_SEND_TOOL:
-            message = _ci_get(_ci_get(arguments, "body"), "message")
-            for key in ("toRecipients", "ccRecipients"):
-                for addr in _m365_recipient_addresses(_ci_get(message, key)):
-                    if addr.strip():
-                        session.mail_sent_to.add(addr.strip().lower())
+        if tool_name == "google_workspace__send_gmail_message" or normalized == _M365_RECORD_SEND_TOOL:
+            session.mail_sent_to.update(_sent_to(tool_name, normalized, arguments))
         elif normalized in _M365_SENT_REPLY_TOOLS:
             message_id = _ci_get(arguments, "messageId")
             if isinstance(message_id, str) and message_id:
@@ -3522,7 +3880,8 @@ def _drop_blocked_tools(text: object) -> Any:
             or normalized in ERPNEXT_SUPPLIER_TOOLS
             or normalized in ERPNEXT_CODE_ONLY_TOOLS
             or normalized in ERPNEXT_WITHHELD_TOOLS
-            # A draft tool no card here uses yet (Dunning, update, comment, the invoice block):
+            # A draft tool no card here uses yet (the invoice block, outside its job card;
+            # any new one until its card exists):
             # the call is refused anyway, so the model needn't read it.
             or (normalized.startswith(DRAFT_TOOL_PREFIX) and normalized not in ERPNEXT_DRAFT_TOOLS)
             or name in changed
@@ -3551,6 +3910,7 @@ def _is_undiscovered_refusal(
         ERPNEXT_SERVER,
         ERPNEXT_SHOW_TOOL,
         ERPNEXT_SUPPLIER_TOOLS,
+        ERPNEXT_WITHHELD_TOOLS,
         PINNED_ERPNEXT_TOOLS,
         PINNED_GOOGLE_TOOLS,
     )
@@ -3559,11 +3919,16 @@ def _is_undiscovered_refusal(
         return False
     # The draft tools are never shown to the model, so they are discovered the
     # same way (only the gated draft path calls them, by these exact names).
+    # So are a watch job's withheld read and the payment-checks job's block:
+    # a call reaches here only once its own gate let it through (the job's
+    # read marker; the executor's marker for that card).
     pinned = tool_name in PINNED_GOOGLE_TOOLS or (
         (
             tool_name in PINNED_ERPNEXT_TOOLS or tool_name in ERPNEXT_DRAFT_TOOLS
             or tool_name in ERPNEXT_SUPPLIER_TOOLS
             or tool_name in ERPNEXT_CODE_ONLY_TOOLS
+            or tool_name in ERPNEXT_WITHHELD_TOOLS
+            or tool_name == ERPNEXT_BLOCK_TOOL
             or tool_name in (ERPNEXT_AUDIT_TOOL, ERPNEXT_SHOW_TOOL)
         )
         and ERPNEXT_SERVER in server_names
@@ -3656,6 +4021,50 @@ class PinnedToolsProbe:
     missing: tuple[str, ...] | None
 
 
+# A call that finds the connection to the child closed (it went away: an
+# out-of-memory kill, a crash, a restart of the machine's services) starts it
+# again once and is retried. Only these errors: they are raised when a
+# request is about to be sent, so the closed call never reached a server and
+# retrying it can't do anything twice.
+REVIVE_TIMEOUT_S = 120.0
+
+
+def _closed_connection(exc: BaseException) -> bool:
+    import anyio
+
+    return isinstance(exc, (anyio.ClosedResourceError, anyio.BrokenResourceError))
+
+
+async def _close_parts(session: Any, stdio_cm: Any) -> None:
+    """Tear down a dead session and its stdio pipes. Never raises."""
+    for part in (session, stdio_cm):
+        if part is None:
+            continue
+        # Not BaseException: a cancelled request must stop the revival too.
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(part.__aexit__(None, None, None), timeout=10.0)
+
+
+class _RevivingSession:
+    """The gateway's session, for one caller: ``call_tool`` starts the child
+    again once and retries when the connection has closed
+    (``_closed_connection``)."""
+
+    def __init__(self, gateway: MCPGateway, session: Any) -> None:
+        self._gateway = gateway
+        self._session = session
+
+    async def call_tool(self, name: str, arguments: dict[str, Any]) -> Any:
+        if self._session is not None:
+            try:
+                return await self._session.call_tool(name, arguments)
+            except BaseException as exc:
+                if not _closed_connection(exc):
+                    raise
+        self._session = await self._gateway._revive(self._session)
+        return await self._session.call_tool(name, arguments)
+
+
 class MCPGateway:
     """Proxies search_tools / call_tool / load_mcp_server to an extensible-mcp subprocess.
 
@@ -3670,13 +4079,16 @@ class MCPGateway:
     def __init__(self) -> None:
         self._session: Any = None
         self._stdio_cm: Any = None
+        # Kept from start() so a child that went away can be started again
+        # in place (``_revive``), with every holder of this gateway intact;
+        # its directory also holds the `tokens` file whose names
+        # load_mcp_server must not take.
+        self._config_path: Path | None = None
+        self._revive_lock: asyncio.Lock | None = None
         # The servers the config named when this gateway started. The
         # Connected Systems prompt section reads it, so a gateway that never
         # started never reads as connected.
         self.server_names: tuple[str, ...] = ()
-        # The config the gateway started with; its directory holds the
-        # `tokens` file whose names load_mcp_server must not take.
-        self._config_path: Path | None = None
         # What startup priming found, for /health and the Setup status page.
         # None until priming finishes, so a probe that crashed can never read
         # as "every pinned tool is present" — only PinnedToolsProbe(missing=())
@@ -3743,13 +4155,13 @@ class MCPGateway:
             args=[*_EXTENSIBLE_MCP_LAUNCH_ARGS, "--config", str(config_path)],
             env=forwarded_env or None,
         )
+        self._config_path = config_path
         self._stdio_cm = stdio_client(params)
         read, write = await self._stdio_cm.__aenter__()
         self._session = ClientSession(read, write)
         await self._session.__aenter__()
         await self._session.initialize()
         self.server_names = tuple(configured_server_names(config_path))
-        self._config_path = config_path
         logger.info("MCPGateway started — config=%s", config_path)
 
     async def close(self) -> None:
@@ -3761,11 +4173,37 @@ class MCPGateway:
                 await self._stdio_cm.__aexit__(None, None, None)
         self._session = None
         self._stdio_cm = None
+        # Closed on purpose (shutdown): no call starts it again.
+        self._config_path = None
 
     def _require_session(self) -> Any:
-        if self._session is None:
+        if self._session is None and self._config_path is None:
             raise RuntimeError("MCPGateway.start() must be called before using the gateway")
-        return self._session
+        # None after a revival that failed: the next call tries it again.
+        return _RevivingSession(self, self._session)
+
+    async def _revive(self, dead: Any) -> Any:
+        """Start the child again in place after its connection closed under
+        ``dead``, once for every call that found it closed. Returns the live
+        session (another call's revival, when it got there first)."""
+        if self._revive_lock is None:
+            self._revive_lock = asyncio.Lock()
+        async with self._revive_lock:
+            if self._session is not None and self._session is not dead:
+                return self._session
+            if self._config_path is None:
+                raise RuntimeError("MCPGateway.start() must be called before using the gateway")
+            logger.warning("MCPGateway: the connection to the tools closed; starting it again")
+            await _close_parts(self._session, self._stdio_cm)
+            self._session = self._stdio_cm = None
+            try:
+                await asyncio.wait_for(self.start(self._config_path), timeout=REVIVE_TIMEOUT_S)
+            except BaseException:
+                # Left with nothing half open, so the next call tries again.
+                await _close_parts(self._session, self._stdio_cm)
+                self._session = self._stdio_cm = None
+                raise
+            return self._session
 
     async def search_tools(self, tool_input: dict[str, Any]) -> str:
         return _drop_blocked_tools(await self._search(tool_input))
@@ -3924,8 +4362,16 @@ class MCPGateway:
         # PRIVATE_TURN_MCP_TOOLS run: reads, and sends whose every recipient
         # the roster checks below (delegation.lockdown).
         from openexecutive.delegation.lockdown import outside_reach_refusal
+        from openexecutive.orchestrator import levels
 
-        refused = outside_reach_refusal(
+        # The owner's level (orchestrator.levels): under Hands-off, or for a
+        # step they approved on a card, the checks that only protect the
+        # owner from their own Executive (who it may email or invite, which
+        # folder a file goes in, what a call may fetch) don't run. Below
+        # Hands-off, a send or invite to someone they'd have to OK comes to
+        # them as an Approve card instead of a refusal.
+        relaxed = levels.relaxed()
+        refused = None if relaxed else outside_reach_refusal(
             str(tool_input.get("name") or "call_tool")[:200], tool_input, tool_name="call_tool"
         )
         code_built = _code_built_admits(tool_input)
@@ -3933,7 +4379,9 @@ class MCPGateway:
             return refused
         # A turn another AI app asked over Open Executive's MCP server runs
         # gateway reads only (schedule_tools.MCP_CLIENT_MCP_TOOLS), whether or
-        # not it may act: a mail send or draft goes on an approval card. The
+        # not it may act (mail only to the owner too: levels.only_to_owner
+        # never holds on someone else's turn):
+        # anything else goes on an approval card. The
         # chat loop already refuses anything else; this holds for any other
         # path.
         from openexecutive.orchestrator.schedule_tools import (
@@ -3942,6 +4390,7 @@ class MCPGateway:
             mcp_client_withheld_error,
             mcp_client_withholds,
             mcp_rules_turn,
+            read_only_turn,
         )
         from openexecutive.prompts.connected_systems import ERPNEXT_CODE_ONLY_TOOLS
 
@@ -3963,7 +4412,25 @@ class MCPGateway:
                 called, {k: v for k, v in raw_args.items() if k != erpnext_caller.ASSERTION_ARG}
             ) is not None
         )
-        if mcp_rules_turn(turn_session) and not own_check and mcp_client_withholds("call_tool", tool_input):
+        # A demo person's turn reads and answers only: any other gateway call
+        # is refused outright, at every level and never as an Approve card
+        # (people.demo, the owner, Nov 8, 2026).
+        from openexecutive.orchestrator.outside_content import outside_allows_mcp_call
+        from openexecutive.people.demo import demo_refusal, demo_turn
+
+        if demo_turn(turn_session) and not own_check and not outside_allows_mcp_call(tool_input):
+            return demo_refusal(str(tool_input.get("name") or "call_tool"))
+        # A read-only turn (a host page's, an AI app's that may not act, a
+        # teammate's queued run) stays read-only even when the level is
+        # relaxed: Hands-off only lifts what protects the owner from their own
+        # Executive, and outside_mode already runs those turns below it.
+        if (
+            (not relaxed or read_only_turn(turn_session))
+            and mcp_rules_turn(turn_session)
+            and not own_check
+            and mcp_client_withholds("call_tool", tool_input)
+            and not levels.only_to_owner("call_tool", tool_input)
+        ):
             return mcp_client_withheld_error(
                 str(tool_input.get("name") or "call_tool")[:200],
                 acting=mcp_client_acting(turn_session),
@@ -3986,6 +4453,21 @@ class MCPGateway:
             return _refuse_erpnext_call(
                 str(tool_name)[:200], "outside-supplier-tools",
                 "a supplier's agent is answered only from its own orders and invoices.",
+            )
+        # A watch job's read reaches its one tool and nothing else, ERPNext's
+        # or any other server's (its arguments are checked below, once the
+        # gateway's coercion has run).
+        watch_read = erpnext_caller.watch_call()
+        if watch_read is not None and normalized != watch_read.tool:
+            return _refuse_erpnext_call(
+                str(tool_name)[:200], "outside-watch-read",
+                "a watch job makes only the one read its runner set up. Do not retry.",
+            )
+        # Likewise a watch job's check of its card: draft_check and nothing else.
+        if erpnext_caller.job_check_call() is not None and normalized != erpnext_caller.DRAFT_CHECK_TOOL:
+            return _refuse_erpnext_call(
+                str(tool_name)[:200], "outside-job-check",
+                "a watch job's check makes only the one draft_check its runner set up. Do not retry.",
             )
         # Files saved from someone's own mail are theirs alone, and their
         # folder is no model's to name (see `_saved_files_hidden`). The save's
@@ -4010,16 +4492,22 @@ class MCPGateway:
             # Before every gate and the caller's signature, so both see the
             # call as it will run.
             arguments = _erpnext_arguments(arguments, self._erpnext_schemas.get(normalized))
+            watch_refused = _check_watch_read(
+                tool_name, normalized,
+                {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG},
+            )
+            if watch_refused is not None:
+                return watch_refused
             from openexecutive.prompts.connected_systems import (
                 ERPNEXT_AUDIT_TOOL,
                 ERPNEXT_CODE_ONLY_TOOLS,
                 ERPNEXT_WITHHELD_TOOLS,
             )
 
-            # Pinned but not yet used here (connected_systems.
-            # ERPNEXT_WITHHELD_TOOLS): refused on every path, whatever marker
-            # or turn is bound.
-            if normalized in ERPNEXT_WITHHELD_TOOLS:
+            # Pinned but withheld (connected_systems.ERPNEXT_WITHHELD_TOOLS):
+            # refused on every path but its own job's read
+            # (_job_reads_withheld).
+            if normalized in ERPNEXT_WITHHELD_TOOLS and not _job_reads_withheld(normalized):
                 return _refuse_erpnext_call(
                     tool_name, "withheld",
                     "OpenExecutive doesn't use this ERPNext tool yet. Do not retry.",
@@ -4088,22 +4576,34 @@ class MCPGateway:
             blocked = _check_acting_account(tool_name, arguments)
             if blocked is not None:
                 return blocked
+            # Server-side fetches and fetching formulas carry data out at any
+            # level: no card makes them safe, so they run even when relaxed.
             blocked = _check_url_fetch(tool_name, arguments)
-            if blocked is not None:
-                return blocked
-            blocked = _check_mailed_text(tool_name, arguments)
             if blocked is not None:
                 return blocked
             blocked = _check_sheet_formulas(tool_name, arguments)
             if blocked is not None:
                 return blocked
-            blocked = await _check_google_file_write(session, tool_name, arguments, self._discover)
-            if blocked is not None:
-                return blocked
+            if not relaxed:
+                blocked = _check_mailed_text(tool_name, arguments)
+                if blocked is not None:
+                    return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
+                blocked = await _check_google_file_write(
+                    session, tool_name, arguments, self._discover, tapped=_tapped_drive_admits(tool_input),
+                )
+                if blocked is not None:
+                    # A call built in code (save_my_email_attachment) gets the
+                    # refusal itself: its caller recovers (a remembered folder
+                    # it can't reach is forgotten and made again), and Approve
+                    # on a card would make a bare copy it never records or shares.
+                    if code_built:
+                        return blocked
+                    return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
         if tool_name in _GATED_GMAIL_TOOLS:
-            blocked = _check_gmail_recipients(tool_name, arguments)
-            if blocked is not None:
-                return blocked
+            if not relaxed:
+                blocked = _check_gmail_recipients(tool_name, arguments)
+                if blocked is not None:
+                    return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
             blocked = _check_attachment_urls(tool_name, arguments)
             if blocked is not None:
                 return blocked
@@ -4114,9 +4614,9 @@ class MCPGateway:
                 return expanded
             arguments, attached_artifacts = expanded
         if tool_name in _GATED_CALENDAR_TOOLS:
-            blocked = _check_calendar_attendees(tool_name, arguments)
+            blocked = None if relaxed else _check_calendar_attendees(tool_name, arguments)
             if blocked is not None:
-                return blocked
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
             arguments = _pin_calendar_notifications(arguments)
         if _is_drive_share_tool(tool_name):
             blocked = _check_drive_share(tool_name, arguments)
@@ -4132,10 +4632,10 @@ class MCPGateway:
             blocked = _check_m365_sender(tool_name, arguments)
             if blocked is not None:
                 return blocked
-        if normalized in _GATED_M365_MAIL_TOOLS or normalized in _GATED_M365_CALENDAR_TOOLS:
+        if not relaxed and (normalized in _GATED_M365_MAIL_TOOLS or normalized in _GATED_M365_CALENDAR_TOOLS):
             blocked = _check_m365_recipients(tool_name, arguments)
             if blocked is not None:
-                return blocked
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.NEW_PERSON)
         if normalized in _M365_REPLY_BY_ID_TOOLS:
             blocked = await _check_m365_referenced_message(
                 session, tool_name, normalized, arguments, self._discover
@@ -4168,16 +4668,19 @@ class MCPGateway:
             blocked = _check_m365_drive_share(tool_name, normalized, arguments)
             if blocked is not None:
                 return blocked
-        if normalized in _M365_DRIVE_WRITE_TOOLS:
+        if normalized in _M365_DRIVE_WRITE_TOOLS and not relaxed:
             blocked = await _check_m365_drive_write(
                 session, tool_name, normalized, arguments, self._discover
             )
             if blocked is not None:
-                return blocked
-        if normalized == _M365_MOVE_TOOL:
+                # As for Google: a call built in code gets the refusal itself.
+                if code_built:
+                    return blocked
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
+        if normalized == _M365_MOVE_TOOL and not relaxed:
             blocked = _check_m365_move_destination(tool_name, arguments)
             if blocked is not None:
-                return blocked
+                return levels.card_or(blocked, tool_name, arguments, reason=levels.FILE_PLACE)
         if normalized in _GATED_M365_MAIL_TOOLS:
             # Same order as Gmail: only after every recipient gate above passed.
             expanded = await _expand_m365_artifact_attachments(tool_name, normalized, arguments)
@@ -4288,6 +4791,7 @@ class MCPGateway:
         # either: marking it would hide the unanswered-email card.
         if not _is_error_payload(result_text) and not result_text.lstrip().lower().startswith("error"):
             _note_mail_sent(tool_name, normalized, arguments)
+            await _clear_replaced_drafts(tool_name, normalized, arguments)
         if attached_artifacts and not _is_error_payload(result_text):
             from openexecutive.audit import log_event as audit_log
 
@@ -4333,6 +4837,82 @@ class MCPGateway:
         elif server in self.needs_reconnect:
             self.mark_reconnected(server)
 
+    async def company_drive_items(self, ids: Iterable[str]) -> set[str]:
+        """The Google Drive ids in ``ids`` that are the company's own
+        (``_company_item``), so reading them is not reading outside content
+        (``outside_content.vet_reads``). Empty when it can't tell."""
+        try:
+            session = self._require_session()
+        except Exception:
+            return set()
+        try:
+            return await _google_company_items(session, ids, self._discover)
+        except Exception:
+            logger.warning("company_drive_items: lookup failed", exc_info=True)
+            return set()
+
+    async def drive_item_names(self, ids: Iterable[str]) -> dict[str, str]:
+        """Each Drive item's current name, as the owner lookup gives it (for
+        a card to show; whoever named the file chose it). Missing when it
+        can't be read."""
+        out: dict[str, str] = {}
+        try:
+            session = self._require_session()
+        except Exception:
+            return out
+        for item_id in ids:
+            text = await _google_item_text(session, item_id, self._discover)
+            first = (text or "").split("\n", 1)[0]
+            if first.startswith("File: "):
+                out[item_id] = first[len("File: "):].strip()
+        return out
+
+    async def tapped_drive_change(self, file_id: str, *, name: str = "", move_to: str = "") -> str | None:
+        """Rename and/or move one Drive file as the person approved it on a
+        card (``tapped_drive_call``): a move takes it out of every folder it
+        is in now. None when it worked, else what went wrong in plain words."""
+        arguments: dict[str, Any] = {"file_id": file_id}
+        if name:
+            arguments["name"] = name
+        if move_to:
+            session = self._require_session()
+            text = await _google_item_text(session, file_id, self._discover)
+            item_lines = (text or "").splitlines()
+            anchor = f"ID: {file_id}"
+            starts = [i for i, line in enumerate(item_lines) if line.rstrip() == anchor]
+            # Drive's own Parents line, second after the id, in a lookup
+            # whose lines are all where Drive puts them.
+            after = item_lines[starts[-1] + 1:starts[-1] + 3] if starts else []
+            parents_line = after[1].rstrip() if (
+                len(after) == 2 and after[1].startswith("Parents: ") and _parse_drive_item(text or "", file_id)
+            ) else None
+            if parents_line is None:
+                return "Couldn't read which folder it is in now."
+            parents = [
+                p.strip() for p in parents_line[len("Parents: "):].split(",")
+                if re.fullmatch(r"[A-Za-z0-9_-]{10,200}", p.strip())
+            ]
+            arguments["add_parents"] = move_to
+            if parents:
+                arguments["remove_parents"] = ",".join(p for p in parents if p != move_to)
+                if not arguments["remove_parents"]:
+                    del arguments["remove_parents"]
+        tool_input = {"name": "google_workspace__update_drive_file", "arguments": arguments}
+        with tapped_drive_call(tool_input):
+            result = await self.call_tool(tool_input)
+        text = result if isinstance(result, str) else ""
+        head = text.lstrip()
+        if head.startswith("{"):
+            try:
+                parsed = json.loads(head)
+            except ValueError:
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("error"):
+                return str(parsed["error"])[:300]
+        if not head or head.lower().startswith(("error", "tool error")):
+            return (head or "Drive didn't answer.")[:300]
+        return None
+
     async def load_mcp_server(self, tool_input: dict[str, Any]) -> str:
         from openexecutive.delegation.lockdown import outside_reach_refusal
 
@@ -4369,9 +4949,10 @@ MCP_TOOLS: list[dict[str, Any]] = [
     {
         "name": "search_tools",
         "description": (
-            "Search the MCP tool catalog by natural language query. "
-            "Returns ranked tool names and descriptions. "
-            "Call this first to discover what external tools are available before calling them."
+            "Search the connected tool servers' catalog (mail, calendar, documents and the like) "
+            "by natural language query. Returns ranked tool names and descriptions. Call this "
+            "to find a server's tool before calling it. It does not cover the tool groups "
+            "open_tools opens: look there too before saying a tool isn't available."
         ),
         "input_schema": {
             "type": "object",
