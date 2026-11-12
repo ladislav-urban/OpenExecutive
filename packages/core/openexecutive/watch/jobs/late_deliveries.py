@@ -8,7 +8,10 @@ Each weekday at 07:15 company time it reads:
    today** (``list_records``, ``per_received < 100``, ``schedule_date <
    today``), with its lines' item, quantity, received quantity and date
    (``items.*``: a row per order and line). A shape holds no list of
-   statuses, so code drops Closed, On Hold and Completed orders;
+   statuses, so code drops Closed, On Hold and Completed orders. The call
+   leaves out the order's own ``schedule_date`` (a call may ask fewer
+   fields than its shape lists): ERPNext returns a line's field under its
+   bare name, so a bare ``schedule_date`` is then only ever the line's;
 2. **the suppliers' delivery record** over the last 12 months
    (``run_report`` Supplier Delivery Record, one row per supplier: lines
    received, lines late, average days late). Derived from read 1 and
@@ -21,9 +24,12 @@ Its rules are code (``candidates``, ``build``), unit-tested on fixed data:
 
 - **A late line:** received less than ordered and due before today. An
   order is as late as its oldest late line, in days, and counts from
-  ``min_days_late`` days; never a supplier in ``skip_suppliers``.
-- **Order:** the most days late first, then the order's value, then its
-  name.
+  ``min_days_late`` days; never a supplier in ``skip_suppliers``. Every
+  text ERPNext returns is capped at 140 characters before it is cleaned.
+- **Order:** an order no earlier week's card was left for first, then
+  the one carded longest ago (``card_history``: so a weekly restart never
+  starves the newest late orders of a card while the stale ones get one
+  every week), then the most days late, the order's value and its name.
 - **The supplier's record**, in code's words: "late on 4 of 20 lines in 12
   months, 3.5 days on average", "on time on all 20 lines in 12 months", or
   "no receipts in 12 months" when the report has none for them.
@@ -39,7 +45,8 @@ What it leaves:
   description a chase note from code's template only (``description``),
   which the buyer sends from their own mail. No card when read 1 was cut
   (an order's lines may be short), nor while an earlier week's card for
-  the same order still waits.
+  the same order still waits, nor when the order's name or an item's
+  doesn't fit the template (the notice says so).
 
 An order is raised once a week while it's late (``WatchJob.once``, the
 finding key ``po:<name>:<ISO week>``): a row a notice told isn't told again
@@ -79,6 +86,9 @@ ORDER_FIELDS = [
     "name", "supplier", "status", "transaction_date", "schedule_date", "per_received", "grand_total",
     "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date",
 ]
+# What read 1 asks for: the shape's fields less the order's own
+# schedule_date, so a line's date can't be mistaken for it.
+CALL_FIELDS = [f for f in ORDER_FIELDS if f != "schedule_date"]
 # Its reads' entries in oe_connector_watch_jobs, as oe_connector lists them
 # (tests/unit/watch_job_vectors.json pins them).
 ORDERS_SHAPE: Mapping[str, Any] = {
@@ -136,6 +146,10 @@ ORDERS_CUT_LINE = (
 )
 RECORD_CUT_LINE = "Not every supplier's delivery record could be read this run; those are shown as not read."
 MORE_LINE = "{n} more late orders; the first {shown} are shown."
+UNTASKED_LINE = (
+    "Some orders shown couldn't get a task: their name or an item's doesn't fit the task's text. "
+    "Chase them in the ERP."
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -182,8 +196,8 @@ def _rows(result: Mapping[str, Any], *, required: bool) -> list[Mapping[str, Any
 
 def _line_value(row: Mapping[str, Any], field: str) -> Any:
     """A line's field, under its dotted key or ERPNext's own: a child field
-    may come back by its bare name (and the line's ``schedule_date`` then
-    stands for the order's)."""
+    comes back by its bare name. Read 1 never asks for the order's own
+    ``schedule_date``, so a bare one is the line's."""
     dotted = f"items.{field}"
     return row[dotted] if dotted in row else row.get(field)
 
@@ -221,18 +235,17 @@ def orders(result: Mapping[str, Any]) -> list[Order]:
             continue
         order = found.get(name)
         if order is None:
-            status, currency = row.get("status"), row.get("currency")
+            # ERPNext's text capped (_name) before anything cleans it.
             order = found[name] = Order(
-                name=name, supplier=supplier, status=status if isinstance(status, str) else "",
+                name=name, supplier=supplier, status=_name(row.get("status")),
                 grand_total=round(_amount(row.get("grand_total")) or 0.0, 2),
-                currency=currency if isinstance(currency, str) else "", lines=[],
+                currency=_name(row.get("currency")), lines=[],
             )
         qty, received = _amount(_line_value(row, "qty")), _amount(_line_value(row, "received_qty"))
         due = _day(_line_value(row, "schedule_date"))
         if qty is None or received is None or due is None:
             continue
-        item = _line_value(row, "item_code")
-        order.lines.append(Line(item=item if isinstance(item, str) else "", qty=qty, received=received, due=due))
+        order.lines.append(Line(item=_name(_line_value(row, "item_code")), qty=qty, received=received, due=due))
     return list(found.values())
 
 
@@ -277,6 +290,14 @@ def candidates(result: Mapping[str, Any], settings: Settings, today: date) -> li
     return sorted(out, key=lambda f: (-f.days, -f.order.grand_total, f.order.name))
 
 
+def ranked(found: Sequence[Late], carded: Mapping[str, int]) -> list[Late]:
+    """``found`` in the order rows and cards are given: an order no earlier
+    week's card was left for first, then the one carded longest ago
+    (``carded``: each order's latest such card, by the ledger's id, which
+    only grows), then as ``candidates`` sorts (days late, value, name)."""
+    return sorted(found, key=lambda f: (f.order.name in carded, carded.get(f.order.name, 0)))
+
+
 # --------------------------------------------------------------------------- #
 # The reads' arguments
 # --------------------------------------------------------------------------- #
@@ -285,7 +306,7 @@ def candidates(result: Mapping[str, Any], settings: Settings, today: date) -> li
 def _orders(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
     return {
         "doctype": ORDER,
-        "fields": list(ORDER_FIELDS),
+        "fields": list(CALL_FIELDS),
         "filters": {
             "company": settings["company"],
             "docstatus": 1,
@@ -397,6 +418,23 @@ def _missing_shown(late: Late) -> str:
     return "; ".join(shown) + (f"; and {rest} more lines" if rest > 0 else "")
 
 
+def fits_template(text: object, reference: str) -> bool:
+    """Whether ``text`` is the job's template naming the order
+    ``reference``, as check_fields holds a stored card to it: the order's
+    own name in its place, the supplier and item their own clean, one line,
+    no control characters, at most 1,000. The builder holds its own text to
+    it too, so a card it leaves is one check_fields takes."""
+    if not isinstance(text, str):
+        return False
+    found = _TEMPLATE_RE.fullmatch(text)
+    return not (
+        found is None or found.group("order") != reference or len(text) > DESCRIPTION_MAX
+        or _CONTROL.search(text) or text != " ".join(text.split())
+        or found.group("supplier") != settled(found.group("supplier"))
+        or found.group("item") != settled(found.group("item")) or not nameable(reference)
+    )
+
+
 def _row(late: Late, record: str, notes: tuple[str, ...] = ()) -> CardSpec:
     """An order as the notice shows it: one of its rows, or a notice of its
     own (``notes``)."""
@@ -420,14 +458,16 @@ def _row(late: Late, record: str, notes: tuple[str, ...] = ()) -> CardSpec:
 def build(
     reads: Sequence[Mapping[str, Any]], settings: Settings, today: date, *,
     told: Collection[str] = frozenset(), assignee: str = "", on_card: Collection[str] = frozenset(),
+    carded: Mapping[str, int] | None = None,
 ) -> list[CardSpec | DraftSpec]:
     """The "Late deliveries" notice and a ToDo per late order, figures from
     the reads only. ``told``: the finding keys a notice told before (left
     out of this one); ``assignee``: who the ToDos are for (``assign_to``,
     else the reviewer's ERPNext user); ``on_card``: orders an earlier week's
-    card still waits for (no second card)."""
+    card still waits for (no second card); ``carded``: each order's latest
+    earlier week's card (``ranked``)."""
     orders_result, record_result = reads
-    found = candidates(orders_result, settings, today)
+    found = ranked(candidates(orders_result, settings, today), carded or {})
     if not found:
         return []
     known = records(record_result)
@@ -440,35 +480,18 @@ def build(
             return said
         return RECORD_UNREAD if record_cut else RECORD_NONE
 
-    new = [f for f in found if f.key not in told]
-    shown = new[:NOTICE_MAX]
-    notes: list[str] = []
-    if len(new) > NOTICE_MAX:
-        notes.append(MORE_LINE.format(n=len(new) - NOTICE_MAX, shown=NOTICE_MAX))
-    if orders_cut:
-        notes.append(ORDERS_CUT_LINE)
-    if record_cut and any(record(f) == RECORD_UNREAD for f in new):
-        notes.append(RECORD_CUT_LINE)
-    out: list[CardSpec | DraftSpec] = []
-    if shown:
-        out.append(CardSpec(
-            key=f"late:{settings['company']}:{today.isoformat()}",
-            summary="Late deliveries",
-            items=tuple(_row(f, record(f)) for f in shown),
-            notes=tuple(notes),
-            count=len(new),
-        ))
-    if orders_cut:
-        # An order's lines may be short: its chase note could understate.
-        return out
     drafts: list[DraftSpec] = []
-    for late in found:
+    untasked: set[str] = set()
+    # An order's lines may be short when read 1 was cut: no chase note then.
+    for late in () if orders_cut else found:
         name = late.order.name
-        if name in on_card or not nameable(name):
+        if name in on_card:
             continue
         text = description(late, record(late))
-        if not _TEMPLATE_RE.fullmatch(text):
-            # Past the template's own bounds (a huge quantity): on the notice only.
+        if not fits_template(text, name):
+            # A name, an item or a quantity the template can't hold as is
+            # (the template's own words in an item code): on the notice only.
+            untasked.add(name)
             continue
         drafts.append(DraftSpec(
             key=late.key,
@@ -489,6 +512,26 @@ def build(
             # reviewer (the runner strips its row from the reviewer's notice
             # and sends this to the principal).
             notice=_row(late, record(late), notes=(KEPT_LINE,)),
+        ))
+    new = [f for f in found if f.key not in told]
+    shown = new[:NOTICE_MAX]
+    notes: list[str] = []
+    if len(new) > NOTICE_MAX:
+        notes.append(MORE_LINE.format(n=len(new) - NOTICE_MAX, shown=NOTICE_MAX))
+    if orders_cut:
+        notes.append(ORDERS_CUT_LINE)
+    if record_cut and any(record(f) == RECORD_UNREAD for f in new):
+        notes.append(RECORD_CUT_LINE)
+    if untasked & {f.order.name for f in shown}:
+        notes.append(UNTASKED_LINE)
+    out: list[CardSpec | DraftSpec] = []
+    if shown:
+        out.append(CardSpec(
+            key=f"late:{settings['company']}:{today.isoformat()}",
+            summary="Late deliveries",
+            items=tuple(_row(f, record(f)) for f in shown),
+            notes=tuple(notes),
+            count=len(new),
         ))
     return [*out, *drafts[:DRAFTS_MAX]]
 
@@ -516,17 +559,21 @@ def assignee(settings: Settings | None = None) -> str:
     return email if "@" in email else ""
 
 
-def on_earlier_card(found: Sequence[Late]) -> set[str]:
-    """The orders among ``found`` whose card from an earlier week still
-    waits (live, or being approved): this week's finding gets no second
-    card beside it. This week's own card is the card store's to hold."""
+def card_history(found: Sequence[Late]) -> tuple[set[str], dict[str, int]]:
+    """From the ledger's listing of the job's cards (bounded by
+    ``job_cards``' own cap), for the orders among ``found``: those an
+    earlier week's card still waits for (live, or being approved: this
+    week's finding gets no second card beside it), and each order's latest
+    earlier week's card id, whatever became of it (``ranked``). This week's
+    own card is the card store's to hold."""
     from openexecutive.integrations import erpnext_drafts as drafts
-    from openexecutive.memory.decision_ledger import STATUS_EXECUTING
+    from openexecutive.memory.decision_ledger import STATUS_EXECUTING, STATUS_PROPOSED
     from openexecutive.watch.runner import dedup_key
 
     this_week = {f.order.name: dedup_key(JOB_ID, f.key) for f in found}
-    out: set[str] = set()
-    for card in drafts.job_cards(JOB_ID):
+    waiting: set[str] = set()
+    carded: dict[str, int] = {}
+    for card in drafts.job_cards(JOB_ID, open_only=False):
         payload = drafts._payload(card)
         fields = payload.get("fields")
         if not isinstance(fields, Mapping) or fields.get("reference_type") != ORDER:
@@ -534,22 +581,30 @@ def on_earlier_card(found: Sequence[Late]) -> set[str]:
         name = fields.get("reference_name")
         if not isinstance(name, str) or name not in this_week or payload.get("dedup_key") == this_week[name]:
             continue
-        if card.status == STATUS_EXECUTING or drafts.card_live(card):
-            out.add(name)
-    return out
+        if isinstance(card.id, int) and card.id > carded.get(name, 0):
+            carded[name] = card.id
+        if card.status == STATUS_EXECUTING or (card.status == STATUS_PROPOSED and drafts.card_live(card)):
+            waiting.add(name)
+    return waiting, carded
+
+
+def on_earlier_card(found: Sequence[Late]) -> set[str]:
+    """The orders among ``found`` an earlier week's card still waits for."""
+    return card_history(found)[0]
 
 
 def _build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -> list[CardSpec | DraftSpec]:
     """``build`` with what this install knows: the findings told before, who
-    the ToDos are for and the orders an earlier card still waits for."""
+    the ToDos are for, and the orders' earlier cards (``card_history``)."""
     from openexecutive.watch.runner import told
 
     found = candidates(reads[0], settings, today)
     if not found:
         return []
+    waiting, carded = card_history(found)
     return build(
         reads, settings, today, told=told(JOB, [f.key for f in found]), assignee=assignee(settings),
-        on_card=on_earlier_card(found),
+        on_card=waiting, carded=carded,
     )
 
 
@@ -571,14 +626,7 @@ def check_fields(operation: str, doctype: str, fields: Mapping[str, Any], name: 
         return "A late-deliveries card's ToDo is on a Purchase Order."
     if fields.get("priority") not in ("High", "Medium"):
         return "A late-deliveries card's priority is High or Medium."
-    text = fields.get("description")
-    found = _TEMPLATE_RE.fullmatch(text) if isinstance(text, str) else None
-    if (
-        found is None or found.group("order") != reference or len(text or "") > DESCRIPTION_MAX
-        or _CONTROL.search(text or "") or text != " ".join((text or "").split())
-        or found.group("supplier") != settled(found.group("supplier"))
-        or found.group("item") != settled(found.group("item")) or not nameable(reference)
-    ):
+    if not fits_template(fields.get("description"), reference):
         return "A late-deliveries card's description is the job's own: Chase <supplier> on <order> ..."
     expected = assignee()
     if not expected or fields.get("allocated_to") != expected:

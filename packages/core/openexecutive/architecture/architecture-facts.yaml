@@ -12339,13 +12339,21 @@ watch:
     {company, from_date today - 365, to_date today}, no limit (the
     tool's default), derived and skipped when no order counts. No list
     in a list: Closed, On Hold and Completed are dropped in code from
-    status. A line's fields are read under items.<field> or the bare
-    name (frappe's child-field select keeps the bare column name, so a
-    bare schedule_date is the line's). Rules: a line is late when
+    status. Read 1's call asks CALL_FIELDS, the shape's fields less the
+    header's schedule_date (a subset, which the shape's top-level fields
+    allow): frappe's child-field select keeps the bare column name, so
+    asking both made the line's date win only by column order; now a
+    bare schedule_date is only the line's. Every ERPNext string (name,
+    supplier, item code, status, currency) is capped by _name at 140
+    before settled/clean, which are slow on long input. Rules: a line is late when
     qty - received_qty > 0 and its schedule_date < today; an order's
     days = today - its oldest late line's date, counted when >=
-    min_days_late; skip_suppliers dropped; days desc, grand_total desc,
-    name. The supplier's record from the report's lines_received,
+    min_days_late; skip_suppliers dropped; ranked: orders with no card
+    from an earlier ISO week first, then by that latest card's ledger id
+    ascending (card_history over job_cards' bounded listing), then days
+    desc, grand_total desc, name, for rows and cards alike (otherwise
+    the weekly key reset re-carded the most-late every week and starved
+    the rest past the day's cap). The supplier's record from the report's lines_received,
     lines_late and average_days_late (whole counts, late <= lines,
     finite average, else the row is left out): RECORD_LATE "late on N of
     M lines in 12 months, X days on average", RECORD_ON_TIME, RECORD_NONE
@@ -12363,8 +12371,10 @@ watch:
     Purchase Order, reference_name; expect reference "Purchase Order
     <name>" and the description; notice its row with KEPT_LINE, told
     only when ERPNext kept it from the reviewer). No DraftSpec when read
-    1 was truncated, for a name not nameable, for a description the
-    template's own regex doesn't take (a quantity past 10 digits), or for
+    1 was truncated, for a description fits_template refuses (the same
+    gate check_fields applies: a name not nameable, an item code holding
+    the template's words so the order's place is misread, a quantity past
+    10 digits; the notice then carries UNTASKED_LINE), or for
     an order on_earlier_card finds (a live or executing card of the job
     on that Purchase Order whose dedup_key isn't this week's), so a card
     left late one week isn't doubled the next. Within the week the card

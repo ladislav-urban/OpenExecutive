@@ -135,8 +135,10 @@ def _results(orders: list[dict[str, Any]] = ORDERS, record: list[dict[str, Any]]
 
 
 def _specs(*, told: frozenset[str] = frozenset(), settings: dict[str, Any] | None = None,
-           day: date = TODAY, on_card: frozenset[str] = frozenset(), **extra: Any) -> list[Any]:
-    return ld.build(_results(**extra), settings or SETTINGS, day, told=told, assignee=REVIEWER, on_card=on_card)
+           day: date = TODAY, on_card: frozenset[str] = frozenset(), carded: dict[str, int] | None = None,
+           **extra: Any) -> list[Any]:
+    return ld.build(_results(**extra), settings or SETTINGS, day, told=told, assignee=REVIEWER, on_card=on_card,
+                    carded=carded)
 
 
 def _cards_of(specs: list[Any]) -> list[DraftSpec]:
@@ -172,6 +174,22 @@ def _job_cards() -> list[Any]:
 
 def _checks_for(specs: list[Any]) -> list[str]:
     return [_checked(dict(s.fields)) for s in _cards_of(specs)]
+
+
+def _auto_checks(erp: FakeErpnext) -> None:
+    """Every draft check answers for the fields it was sent; other calls
+    take the queued replies."""
+    from unittest.mock import AsyncMock
+
+    from .test_erpnext_drafts import _reply
+
+    async def call(_name: str, body: dict[str, Any]) -> Any:
+        erp.calls.append((body["tool_name"], dict(body["arguments"])))
+        if body["tool_name"] == "erpnext__draft_check":
+            return _reply(_checked(body["arguments"]["fields"]))
+        return _reply(erp.replies.pop(0))
+
+    erp.session.call_tool = AsyncMock(side_effect=call)
 
 
 def _one_card_run(erp: FakeErpnext, day: str = DAY, assignee: str = REVIEWER) -> runner.RunOutcome:
@@ -225,7 +243,41 @@ def test_read_one_is_every_open_order_due_before_today() -> None:
     assert registry.shape_mismatch(ld.ORDERS_SHAPE, args, TODAY) == ""
     assert args["filters"] == {"company": "Acme", "docstatus": 1, "per_received": ["<", 100],
                                "schedule_date": ["<", DAY]}
-    assert args["fields"] == ld.ORDER_FIELDS and args["limit"] == ld.READ_LIMIT
+    assert args["limit"] == ld.READ_LIMIT
+    # Every listed field but the order's own schedule_date: a subset, which
+    # the shape's top-level fields allow, so a bare schedule_date is a line's.
+    assert args["fields"] == [f for f in ld.ORDER_FIELDS if f != "schedule_date"]
+    assert "items.schedule_date" in args["fields"] and "schedule_date" not in args["fields"]
+    assert ld.ORDERS_SHAPE["fields"] == VECTORS["late_deliveries_job"]["reads"][0]["fields"]
+
+
+def test_the_lines_date_decides_whatever_the_orders_header_says() -> None:
+    # The header's date (were ERPNext to send it) differs from the line's.
+    early = {**_line("PO-H", "Orion", "A", 4.0, 0.0, 5), "schedule_date": _in(-30)}
+    assert ld.candidates({"rows": [early]}, SETTINGS, TODAY) == []
+    late = {**_line("PO-H", "Orion", "A", 4.0, 0.0, -5), "schedule_date": _in(30)}
+    [found] = ld.candidates({"rows": [late]}, SETTINGS, TODAY)
+    assert (found.days, found.due) == (5, date.fromisoformat(_in(-5)))
+    # By ERPNext's bare keys, the one schedule_date is the line's.
+    bare = _line("PO-B", "Orion", "A", 4.0, 0.0, -4, dotted=False)
+    [found] = ld.candidates({"rows": [bare]}, SETTINGS, TODAY)
+    assert found.days == 4
+
+
+def test_long_erpnext_text_is_capped_before_any_cleaning() -> None:
+    import time as clock
+
+    long = "a." * 10_000
+    row = {**_line("PO-L", "Orion", long, 4.0, 0.0, -5), "status": long, "currency": long}
+    started = clock.perf_counter()
+    specs = _specs(orders=[row], record=[])
+    assert clock.perf_counter() - started < 2.0
+    [order] = ld.orders({"rows": [row]})
+    assert (order.lines[0].item, order.status, order.currency) == ("", "", "")
+    [card] = _cards_of(specs)
+    assert " of an item missing." in card.fields["description"]
+    capped = _line("PO-C", "Orion", "I" * 140, 4.0, 0.0, -5)
+    assert ld.orders({"rows": [capped]})[0].lines[0].item == "I" * 140
 
 
 def test_read_two_is_the_years_record_and_skipped_when_nothing_is_late() -> None:
@@ -394,6 +446,35 @@ def test_told_findings_are_left_out_and_next_week_they_are_new() -> None:
     assert ld.week_of(later) == "2026-W47"
 
 
+def test_an_item_code_the_template_cant_hold_is_on_the_notice_with_a_line_and_no_task(
+    job_on: WatchJob,
+) -> None:
+    # The template's own words in an item code, so the order's place is misread.
+    for item in ("BOLT on PO-FAKE: 1 line due 2026-01-01, 5 of NUT",):
+        rows = [_line("PO-T", "Acme", item, 3.0, 0.0, -4, dotted=False),
+                _line("PO-T", "Acme", "NUT", 3.0, 0.0, -3, dotted=False)]
+        specs = _specs(orders=[*rows, ORDERS[3]], record=[])
+        assert [c.fields["reference_name"] for c in _cards_of(specs)] == ["PO-3"], item
+        [notice] = [s for s in specs if isinstance(s, CardSpec)]
+        assert ld.UNTASKED_LINE in notice.notes
+        assert "PO-T" in [dict(i.values)["Order"] for i in notice.items]
+    # Every card the builder leaves is one check_fields takes.
+    for card in _cards_of(_specs()):
+        assert ld.fits_template(card.fields["description"], card.fields["reference_name"])
+    assert ld.UNTASKED_LINE not in next(s for s in _specs() if isinstance(s, CardSpec)).notes
+
+
+def test_orders_never_carded_come_first_then_the_longest_ago() -> None:
+    found = ld.candidates({"rows": ORDERS}, SETTINGS, TODAY)
+    assert [f.order.name for f in ld.ranked(found, {})] == ["PO-1", "PO-2", "PO-3", "PO-9"]
+    # PO-1 and PO-2 had cards in earlier weeks, PO-2's longer ago.
+    assert [f.order.name for f in ld.ranked(found, {"PO-1": 40, "PO-2": 7})] == ["PO-3", "PO-9", "PO-2", "PO-1"]
+    specs = _specs(carded={"PO-1": 40, "PO-2": 7})
+    assert [c.fields["reference_name"] for c in _cards_of(specs)] == ["PO-3", "PO-9", "PO-2", "PO-1"]
+    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    assert [dict(i.values)["Order"] for i in notice.items] == ["PO-3", "PO-9", "PO-2", "PO-1"]
+
+
 def test_an_order_an_earlier_weeks_card_waits_for_gets_no_second_card() -> None:
     specs = _specs(on_card=frozenset({"PO-1"}))
     assert "PO-1" not in [c.fields["reference_name"] for c in _cards_of(specs)]
@@ -526,8 +607,8 @@ def test_the_next_day_tells_nothing_again_and_next_week_raises_it_once_more(
     for card in _job_cards():
         mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
     # A week on, the orders still late are told and carded once more.
+    _auto_checks(erp)
     _reads(erp)
-    erp.replies.extend(_checks_for(_specs(day=date.fromisoformat(NEXT_WEEK))))
     outcome = _run(NEXT_WEEK)
     assert outcome.draft_cards == 5
     newest = [a for a in _alerts() if NEXT_WEEK in a.headline]
@@ -706,3 +787,31 @@ def test_a_tampered_todo_is_refused(
         asyncio.run(drafts.approve(fresh, caller=None, resolver=fresh.approver_person_id))
     assert refused.value.code == "malformed"
     assert [c for c in erp.calls if c[0] == "erpnext__draft_todo"] == []
+
+
+def test_thirty_late_orders_each_get_a_card_before_any_gets_a_second(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from openexecutive.memory.decision_ledger import STATUS_REJECTED, mark_resolved
+
+    _auto_checks(erp)
+    # The most days late first by plain order: PO-00 (40 days) to PO-29 (11).
+    thirty = [_line(f"PO-{i:02d}", f"Sup {i:02d}", "A", 1.0, 0.0, -40 + i) for i in range(30)]
+    # Tuesday to Friday of one week, then Monday to Wednesday of the next.
+    days = ["2026-11-10", "2026-11-11", "2026-11-12", "2026-11-13", "2026-11-16", "2026-11-17", "2026-11-18"]
+    order: list[str] = []
+    for day in days:
+        erp.replies.extend([_list(thirty), _report([])])
+        before = {c.id for c in _job_cards()}
+        assert _run(day).draft_cards == 5, day
+        new = sorted((c for c in _job_cards() if c.id not in before), key=lambda c: c.id)
+        order += [drafts._payload(c)["fields"]["reference_name"] for c in new]
+        # The reviewer handles each day's cards.
+        for card in new:
+            mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
+    first, again = order[:30], order[30:]
+    assert len(set(first)) == 30
+    # The week's four days carded the 20 latest; the next Monday the other ten
+    # come first, then the longest-ago carded.
+    assert order[20:30] == [f"PO-{i:02d}" for i in range(20, 30)]
+    assert again == order[:5]
