@@ -8256,6 +8256,24 @@ user_guide:
     required-key validation live in the store. The UI reuses the
     architecture `DynamicSection` component via a `basePath` prop
     ("architecture" default, "guide" for the guide).
+  product_name: |
+    The guide's own words name the product one way, "OpenExecutive"
+    (guide.prebuilt.PRODUCT_WORD). GET /guide/sections/{id} and the
+    read_user_guide tool serve a section through guide.prebuilt.get_named,
+    which writes the install's name (OE_PRODUCT_NAME via
+    utils.product_name; "Open Executive" when unset) in its place outside
+    code spans and link targets, the same split oe_connector's help_page.named
+    uses when oe-connector-sync-guide copies these files into ERPNext's Help.
+    The on-screen labels it quotes name the product too ("Settings ->
+    OpenExecutive", "Pause OpenExecutive"), as the UI does: the UI writes
+    OE_PRODUCT_NAME wherever it names the system (useProductName,
+    <ProductName />, or a "{product}" token in shared copy filled in by
+    withProduct / useNamed, lib/productName.ts), and neutral wording where a
+    name reads badly. Paths, ids, API fields and stream events are unchanged.
+    test_guide_prebuilt fails a section that says "Executive" or "Open
+    Executive" outside code and links (the role option "Executive inside an
+    organisation" aside); scripts/productName.test.mjs fails a UI string that
+    does.
   maintenance: |
     When a user-facing feature is added or materially changed, add/update
     the matching `guide/prebuilt/<id>.json` plus its registry entry in
@@ -8788,7 +8806,12 @@ integrations:
     subject -> exists (untouched, a suspended one stays so); anyone holding
     the email, alias included -> address_held, unless the subject reads as
     linked on a second look (a concurrent admit of the same person) ->
-    exists. None of these reads the
+    exists. That second look waits for _person_write_lock (ADMIT_LOCK_WAIT_S,
+    else busy, noted as refused): _add writes the Person, then links its
+    subject, as two commits under that lock, so the look never falls between
+    them. The lock is held for those writes only, never across a run's
+    provider reads, so a sign-in never waits on a run or makes one skip.
+    None of these reads the
     provider or is audited. Then the per-subject limit (30 s; the map pruned
     and capped at 10,000, refusing at the cap rather than evicting), a
     process-wide slot of one admit (busy at once), the global cap (20 a
@@ -11054,7 +11077,12 @@ integrations:
     erpnext). last_error and the ERP's words never reach it. Its instruction
     line says to mention a card only when asked or relevant and that a card
     closed because the records changed is not the model's error (the
-    persona's "Correct yourself plainly, once" is for its own errors only).
+    persona's "Correct yourself plainly, once" is for its own errors only;
+    either way, a figure or date for the same thing (record, period,
+    filters) now differing from an earlier answer to the same person is
+    said in one sentence with both, never switched quietly; another
+    thing or a rounding that agrees is no difference: erpnext_084,
+    erpnext_095, and erpnext_096 as the control).
     Any failure leaves the note out. A note sets Session.read_erpnext, and
     audit.erpnext_reads.conversation_read_erpnext (behind
     executive._conversation_read_erpnext) also answers yes for a session

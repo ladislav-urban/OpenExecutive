@@ -1,20 +1,21 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import { useEffect, useMemo, useState } from "react";
 import { WorkflowToolInfo, describeWorkflowTools } from "@/lib/api";
 
 /**
  * "google_workspace__append_table_rows" → { label: "Append table rows", source: "google_workspace" }
- * "oe__read_file" → { label: "Read file", source: "Open Executive" }
+ * "oe__read_file" → { label: "Read file", source: <the product's name> }
  */
-export function toolLabel(name: string): { label: string; source: string } {
+export function toolLabel(name: string, product = "Open Executive"): { label: string; source: string } {
   const cut = name.indexOf("__");
   const server = cut > 0 ? name.slice(0, cut) : "";
   const tool = cut > 0 ? name.slice(cut + 2) : name;
   const words = (tool || name).replace(/[_-]+/g, " ").trim();
   return {
     label: words.charAt(0).toUpperCase() + words.slice(1),
-    source: server === "oe" ? "Open Executive" : server.replace(/[_-]+/g, " "),
+    source: server === "oe" ? product : server.replace(/[_-]+/g, " "),
   };
 }
 
@@ -56,11 +57,12 @@ export default function ToolChips({
   info: Map<string, WorkflowToolInfo>;
   onRemove?: (name: string) => void;
 }) {
+  const product = useProductName();
   if (names.length === 0) return null;
   return (
     <div className="flex flex-wrap gap-1.5">
       {names.map((name) => {
-        const { label, source } = toolLabel(name);
+        const { label, source } = toolLabel(name, product);
         const writes = mayWrite(name, info);
         return (
           <span

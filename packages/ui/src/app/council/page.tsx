@@ -34,10 +34,11 @@ import Button from "@/components/ui/Button";
 import OverflowMenu from "@/components/ui/OverflowMenu";
 import SectionTabs, { sectionPanelProps } from "@/components/ui/SectionTabs";
 import SidePanel from "@/components/ui/SidePanel";
+import { useProductName } from "@/components/embed/EmbedProvider";
 import {
   agentArea,
+  agentCardName,
   agentCardStatus,
-  agentDisplayName,
   agentHasNoInstructions,
   agentInitials,
   listedAgents as listAgentsShown,
@@ -185,6 +186,7 @@ function draftIsDirty(d: AgentDetail | null, draft: DraftState | null): boolean 
 }
 
 export default function CouncilPage() {
+  const product = useProductName();
   const [agents, setAgents] = useState<AgentMeta[]>([]);
   // Which fields each customized agent overrides (from its detail), so a
   // card can tell the owner's own instructions from a Quality preset's model.
@@ -539,7 +541,7 @@ export default function CouncilPage() {
 
   const panelOpen = selected !== null;
   const selectedMeta = agents.find((a) => a.name === selected);
-  const panelTitle = agentDisplayName(detail?.role ?? selectedMeta?.role ?? "");
+  const panelTitle = agentCardName({ name: selected ?? "", role: detail?.role ?? selectedMeta?.role ?? "" }, product);
   const panelModel = draft ?? selectedMeta;
   const panelSubtitle = selectedMeta
     ? [
@@ -665,7 +667,7 @@ export default function CouncilPage() {
           className="group flex items-center justify-between gap-3 rounded-2xl border border-line bg-surface-elevated px-5 py-4 text-[15px] text-fg-muted transition-colors hover:border-accent/50 hover:text-fg"
         >
           <span>
-            Voice is set in <span className="font-semibold text-fg">Settings → Your Executive</span>
+            Voice is set in <span className="font-semibold text-fg">Settings → {product}</span>
           </span>
           <span aria-hidden="true" className="text-fg-subtle group-hover:text-fg">
             →
@@ -681,7 +683,7 @@ export default function CouncilPage() {
           </div>
           <ul className="overflow-hidden rounded-2xl border border-line bg-surface-elevated divide-y divide-line sm:grid sm:grid-cols-2 lg:grid-cols-3 sm:gap-3 sm:divide-y-0 sm:overflow-visible sm:rounded-none sm:border-0 sm:bg-transparent">
             {listedAgents.map((a) => {
-              const name = agentDisplayName(a.role);
+              const name = agentCardName(a, product);
               const status = agentCardStatus(a.has_override, overrideFields[a.name], customAgents.has(a.name));
               const model = shortModelName(a.model, labelFor(a.model));
               return (
@@ -1000,7 +1002,7 @@ export default function CouncilPage() {
                         <div>
                           <h3 className="text-base font-semibold text-fg">Voice Persona</h3>
                           <p className="text-sm text-fg-muted mt-0.5">
-                            Sets the Executive&apos;s tone and communication style. The structural prompt stays intact.
+                            Sets {product}&apos;s tone and communication style. The structural prompt stays intact.
                           </p>
                         </div>
                         <Button

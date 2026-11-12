@@ -357,7 +357,7 @@ async def _send_checked(
         )
     if exec_address and exec_address in recipients:
         raise SendRefused(
-            409, "executive_recipient", "The draft is addressed to the Executive's own mailbox. Change it in your mailbox.",
+            409, "executive_recipient", "The draft is addressed to the mailbox this app sends from. Change it in your mailbox.",
         )
     if draft.message.from_addr not in own:
         raise SendRefused(409, "not_from_you", "The draft isn't from one of your own addresses. Check it in your mailbox.")
@@ -644,7 +644,7 @@ async def send_for_workflow(person: Any, client: Any, *, draft_id: str, recipien
     if len(sent_to) > MAX_RECIPIENTS:
         raise SendRefused(409, "too_many_recipients", f"At most {MAX_RECIPIENTS} recipients.")
     if exec_address and exec_address in sent_to:
-        raise SendRefused(409, "executive_recipient", "It is addressed to the Executive's own mailbox.")
+        raise SendRefused(409, "executive_recipient", "It is addressed to the mailbox this app sends from.")
     if normalize_email(draft.message.from_addr) not in own:
         raise SendRefused(409, "not_from_you", "The draft isn't from one of their own addresses.")
     try:
@@ -756,7 +756,7 @@ async def _send_chat_draft(
         )
     if exec_address and exec_address in recipients:
         raise SendRefused(
-            409, "executive_recipient", "The draft is addressed to the Executive's own mailbox. Change it in your mailbox.",
+            409, "executive_recipient", "The draft is addressed to the mailbox this app sends from. Change it in your mailbox.",
         )
     if normalize_email(draft.message.from_addr) not in own:
         raise SendRefused(409, "not_from_you", "The draft isn't from one of your own addresses. Check it in your mailbox.")

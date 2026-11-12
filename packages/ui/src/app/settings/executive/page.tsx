@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import { useExecutiveStatus } from "@/components/executive/ExecutiveStatusContext";
 import ExecutiveRunSwitch from "@/components/executive/ExecutiveRunSwitch";
 import VoicePicker from "@/components/executive/VoicePicker";
@@ -27,9 +28,10 @@ const ALWAYS_DOES: { title: string; text: string }[] = [
 // including Take the lead and booking meetings, which live under Delegate
 // with what it sends as you. /settings/on-its-own lands here.
 export default function ExecutiveSettingsPage() {
+  const product = useProductName();
   return (
     <SettingsSubpage
-      title="Your Executive"
+      title={product}
       description="Pause it, when it checks with you, what it always does without asking, and the voice it answers in."
     >
       <SettingsCard
