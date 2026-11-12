@@ -989,6 +989,20 @@ class Settings(BaseSettings):
     # user (who may read ERPNext as themselves; erpnext_caller.caller_for).
     # Off by default, so an install's drafts stay the principal's until set.
     erpnext_drafts_teammates: bool = Field(False, alias="ERPNEXT_DRAFTS_TEAMMATES")
+    # The credit-hold alert's "Prepare the raise" (integrations/erpnext_credit.py):
+    # a card that raises one company's credit limit for a customer whose
+    # draft Sales Order is held, approved by someone with customer credit
+    # authority. The first card whose approval changes a live master, so off
+    # by default; needs drafts on and oe_connector's Customer update listed.
+    erpnext_credit_raise: bool = Field(False, alias="ERPNEXT_CREDIT_RAISE")
+    # Separation of duties for those cards, set as oe_connector's
+    # oe_connector_draft_sod is on the site: "agent" means whoever prepared a
+    # raise never approves it (the card goes to the principal, or none is
+    # left when the principal prepared it). Set both the same; either
+    # mismatch fails closed: the site on and this off refuses the approval
+    # there, and this on with the site off only sends more cards to the
+    # principal.
+    erpnext_draft_sod: Literal["off", "agent"] = Field("off", alias="ERPNEXT_DRAFT_SOD")
     # Watch jobs (watch/): the operator's master switch for the unattended
     # ERPNext jobs defined in code. Off, no job runs whatever its row in
     # `watch_jobs` says. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.

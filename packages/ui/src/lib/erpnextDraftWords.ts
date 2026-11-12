@@ -46,8 +46,23 @@ export function changeMadeLine(operation: string, doctype: string, name: string,
     : `${doctype} ${name} is changed in the ERP, still unsubmitted.`;
 }
 
-/** The card's kind, over its headline: a new draft, a change or a comment. */
+/** The line an approved credit-limit raise shows: the limit is raised at
+ * once, and the held order is still its owner's to submit. */
+export function creditMadeLine(customer: string, company: string, limit: string, already: boolean): string {
+  const now = already ? "was already" : "is now";
+  const at = company ? ` at ${company}` : "";
+  const to = limit ? ` ${limit}` : " raised";
+  return `${customer}'s credit limit${at} ${now}${to}. The order is still a draft for its owner to submit.`;
+}
+
+/** What a credit-limit raise the ERP now reads differently says on its card. */
+export const CREDIT_CHANGED_NOTE =
+  "This changed in the ERP since it was left (what the customer owes, the order or its limit). " +
+  "Approving it is refused: dismiss it and prepare the raise again from the alert.";
+
+/** The card's kind, over its headline: a new draft, a change, a comment or a raise. */
 export function cardKind(doctype: string, operation: string | undefined, named: boolean): string {
+  if (operation === "credit") return "Raise a credit limit";
   if (operation === "update") return `Change to a ${doctype}`;
   if (operation === "comment") return `Comment on a ${doctype}`;
   return draftKind(doctype, named);

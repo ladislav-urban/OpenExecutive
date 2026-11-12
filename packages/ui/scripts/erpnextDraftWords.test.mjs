@@ -63,3 +63,16 @@ test("a change or a comment says what it did, never 'submit the new draft'", asy
     "Your comment is now on Purchase Invoice PINV-1.");
   assert.doesNotMatch(words.changeMadeLine("update", "Purchase Invoice", "PINV-1", true), /submit it/);
 });
+
+test("a credit-limit raise card says what it raises and that the order is still a draft", async () => {
+  const words = await import("../src/lib/erpnextDraftWords.ts");
+  assert.equal(words.cardKind("Customer", "credit", true), "Raise a credit limit");
+  assert.equal(words.cardKind("Customer", "credit", false), "Raise a credit limit");
+  assert.equal(
+    words.creditMadeLine("Harbor Electric Co-op", "Aurora Components", "31,000.00 USD", false),
+    "Harbor Electric Co-op's credit limit at Aurora Components is now 31,000.00 USD. " +
+      "The order is still a draft for its owner to submit.",
+  );
+  assert.match(words.creditMadeLine("H", "A", "1.00 USD", true), /^H's credit limit at A was already 1\.00 USD\./);
+  assert.doesNotMatch(words.CREDIT_CHANGED_NOTE, /ERPNext/);
+});

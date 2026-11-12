@@ -30,10 +30,14 @@ from typing import Any
 
 from openexecutive.config import get_settings
 
-OPERATIONS = ("create", "update", "comment")
+# "credit" is a credit-limit raise (integrations.erpnext_credit): only ever
+# left from a credit-hold alert's tap, never proposed by the model, so
+# ``enabled("credit")`` lists nothing and ``check_change`` refuses it.
+OPERATIONS = ("create", "update", "comment", "credit")
 OPERATION_TOOLS: dict[str, str] = {
     "update": "erpnext__draft_update",
     "comment": "erpnext__draft_comment",
+    "credit": "erpnext__draft_update",
 }
 MAX_CHANGES = 40
 COMMENT_MAX = 2000
@@ -169,7 +173,8 @@ def check_change(operation: str, doctype: Any, name: Any, fields: Any) -> tuple[
     """``(name, fields)`` as they will be stored and sent for an update or a
     comment, or why they can't be. Shape and kind only: oe_connector checks
     the document, the person's right to change it and every value again."""
-    if operation not in OPERATION_TOOLS:
+    if operation not in ("update", "comment"):
+        # A credit-limit raise is never asked for this way: only an alert's tap leaves one.
         return "`operation` must be create, update or comment."
     allowed = enabled(operation)
     if doctype not in allowed:

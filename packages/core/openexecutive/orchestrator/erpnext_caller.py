@@ -67,6 +67,10 @@ and the digest of its exact arguments:
 - ``draft_check_as``: a person's own verified tap preparing the card an
   ERPNext alert suggests, ``draft_check`` only, asked as that person (an API
   request, with no session);
+- ``draft_recheck_as``: the card list reading a waiting credit-raise card
+  again for its approver (``integrations.erpnext_credit.recheck``, after
+  ``verified.caller_refusal`` proved the viewer is that approver),
+  ``draft_check`` only, asked as them (an API request, with no session);
 - ``draft_executor_run``: the card executor carrying out an approved card,
   asked as the approver it names (an API request, with no session).
 
@@ -267,6 +271,19 @@ def draft_check_as(arguments: dict[str, Any], email: str) -> Any:
     if "@" not in asker:
         raise ValueError("a draft is checked as a person's own ERPNext user")
     return _marked(DraftCall(DRAFT_CHECK_TOOL, arguments_digest(arguments), ErpnextCaller("user", asker)))
+
+
+def draft_recheck_as(arguments: dict[str, Any], approver_email: str) -> Any:
+    """Mark the one ``erpnext__draft_check`` call with exactly ``arguments``
+    that the card list makes to read a waiting credit-raise card again, as
+    its approver ``approver_email`` with no turn
+    (``integrations.erpnext_credit.recheck``, only after
+    ``verified.caller_refusal`` proved the viewer is that approver). It reads
+    and never writes: draft_check saves nothing. Code only."""
+    email = approver_email.strip().lower()
+    if "@" not in email:
+        raise ValueError("a card is read again as its approver's own ERPNext user")
+    return _marked(DraftCall(DRAFT_CHECK_TOOL, arguments_digest(arguments), ErpnextCaller("user", email)))
 
 
 def draft_executor_run(tool: str, arguments: dict[str, Any], approver_email: str) -> Any:
