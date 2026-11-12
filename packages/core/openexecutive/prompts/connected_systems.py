@@ -364,7 +364,7 @@ _ERPNEXT_GUIDE = (
 # it searched; on the pilot it guessed shapes and names, Oct 29, 2026).
 # Written for the pin below: a test fails when the pin moves, so a changed
 # definition gets these lines checked too. Process-constant.
-ERPNEXT_ARGS_WRITTEN_FOR = "aa01ad95cc509014f95649aa1b3f7e433705666c4e02c95957469d0c555ef4e6"
+ERPNEXT_ARGS_WRITTEN_FOR = "37c8f64ce61ee6b7be0e2e95723cd8c0a5abf7a5290f4cc7432c2e14ce1a1e6f"
 _ERPNEXT_ARGS = (
     "  Their arguments, exactly these names, with objects and lists passed as JSON "
     "values, never as quoted strings: "

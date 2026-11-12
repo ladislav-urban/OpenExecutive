@@ -12166,7 +12166,16 @@ watch:
     fill_allowed is the owner's gate (Nov 11, 2026): sender_checked
     "dmarc-enforced", sender_from set, and sender_policy "reject" or
     "quarantine" with authserv_id set; a missing key fails; oe_connector's
-    draft_fill.fills refuses the same. fill_fields: {source {doctype PO or
+    draft_fill.fills refuses the same. Or, on a demo installation only
+    (demo_simulated, ladislav-urban/oe_connector#564): sender_checked
+    "demo-simulated" with sender_policy "not checked: simulated" and
+    sender_from set, and the draft's company exactly DEMO_RESET_COMPANY
+    (stripped, case-sensitive; empty means never), read again at every
+    check, approval included. Elsewhere it is a notice (gate_reason), never
+    a card. slice_of takes the simulated value and policy only together.
+    The card's first line is SIMULATED_LINE, and the oversight export
+    records sender_checked. oe_connector's own gate runs again at fill and
+    decides. fill_fields: {source {doctype PO or
     PR, name}, lower [] (no lowering in v1), bill_no (oe_connector's
     pattern), bill_date ISO}. echo_refusal: the same draft and operation,
     slice_of (every summary key present, at most 100 rows and 20 people,

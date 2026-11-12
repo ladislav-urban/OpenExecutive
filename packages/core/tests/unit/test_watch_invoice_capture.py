@@ -259,6 +259,84 @@ def test_the_gate_says_why() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# The demo's simulated supplier (ladislav-urban/oe_connector#564)
+# --------------------------------------------------------------------------- #
+
+SIMULATED = {
+    "company": "Acme", "sender_from": "billing@lumen-co-lighting.example", "sender_from_reason": "",
+    "authserv_id": None, "sender_checked": "demo-simulated",
+    "sender_checked_reason": "the supplier is simulated for the demo",
+    "sender_policy": "not checked: simulated", "sender_policy_domain": None,
+}
+
+
+@pytest.mark.parametrize(("demo", "facts", "allowed"), [
+    ("Acme", {}, True),
+    ("  Acme ", {}, True),                                   # the setting, stripped
+    ("", {}, False),                                         # not a demo installation
+    ("Other Co", {}, False),                                 # another company
+    ("acme", {}, False),                                     # case-sensitive
+    ("Acme", {"company": "Acme Ltd"}, False),
+    ("Acme", {"sender_policy": "reject"}, False),            # never with a looked-up policy
+    ("Acme", {"sender_from": None}, False),
+    ("Acme", {"sender_from": "  "}, False),
+    ("Acme", {"sender_checked": "demo-simulated "}, False),  # only the exact value
+])
+def test_the_demos_simulated_sender_passes_only_on_its_own_demo_company(
+    monkeypatch: pytest.MonkeyPatch, demo: str, facts: dict[str, Any], allowed: bool,
+) -> None:
+    monkeypatch.setenv("DEMO_RESET_COMPANY", demo)
+    assert erpnext_fill.fill_allowed({**SIMULATED, **facts}) is allowed
+    assert erpnext_fill.demo_simulated({**SIMULATED, **facts}) is allowed
+
+
+def test_the_demo_setting_never_loosens_the_real_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEMO_RESET_COMPANY", "Acme")
+    # A real mail's rule is unchanged on a demo installation.
+    assert erpnext_fill.fill_allowed({**GOOD, "company": "Acme"}) is True
+    assert erpnext_fill.fill_allowed({**GOOD, "company": "Acme", "sender_policy": "none"}) is False
+    assert erpnext_fill.fill_allowed({**GOOD, "company": "Acme", "sender_policy": "not checked: simulated"}) is False
+
+
+def test_a_simulated_sender_off_its_demo_is_a_notice_never_a_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    draft = invoice_capture.Draft(name="ACC-PINV-1", facts=SIMULATED, supplier="Lumen", supplier_name="Lumen",
+                                  attachment="F-1", empty=True, reason="")
+    monkeypatch.setenv("DEMO_RESET_COMPANY", "")
+    # Off its demo: no PDF read and no card; the notice says why.
+    assert invoice_capture.fillable([draft]) == []
+    assert "simulated for the demo" in erpnext_fill.gate_reason(SIMULATED)
+    monkeypatch.setenv("DEMO_RESET_COMPANY", "Acme")
+    assert invoice_capture.fillable([draft]) == [draft]
+
+
+def test_the_simulated_card_says_so_and_keeps_it_for_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+    summary = _summary("ACC-PINV-1", ("Purchase Receipt", "PR-1"), 120.0, supplier="Lumen",
+                       sender_from="billing@lumen-co-lighting.example", sender_checked="demo-simulated",
+                       sender_policy="not checked: simulated", sender_policy_domain=None)
+    view = erpnext_fill.card_view(summary)
+    first = view["fields"][0]
+    assert first["value"] == erpnext_fill.SIMULATED_LINE
+    kept = erpnext_fill.slice_of(summary)
+    assert kept is not None and kept["sender_checked"] == "demo-simulated"
+    again = erpnext_fill.slice_of_stored(json.loads(json.dumps(kept)))
+    assert again == kept
+    # Approval reads the stored slice through the same gate, the setting read again.
+    monkeypatch.setenv("DEMO_RESET_COMPANY", "Acme")
+    assert erpnext_fill.fill_allowed(again) is True
+    monkeypatch.setenv("DEMO_RESET_COMPANY", "")
+    assert erpnext_fill.fill_allowed(again) is False
+    # The simulated value and the simulated policy only together.
+    for odd in ({"sender_checked": "demo-simulated", "sender_policy": "reject"},
+                {"sender_checked": "dmarc-enforced", "sender_policy": "not checked: simulated"},
+                {"sender_checked": "simulated"}):
+        assert erpnext_fill.slice_of({**summary, **odd}) is None, odd
+    # A real mail's card shows no such line.
+    real = erpnext_fill.card_view(_summary("ACC-PINV-1", ("Purchase Receipt", "PR-1"), 120.0))
+    assert erpnext_fill.SIMULATED_LINE not in json.dumps(real)
+
+
+
+# --------------------------------------------------------------------------- #
 # Reading the PDF, choosing the source
 # --------------------------------------------------------------------------- #
 

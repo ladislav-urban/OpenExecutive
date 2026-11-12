@@ -139,6 +139,7 @@ CSV_COLUMNS = (
     "target",
     "asked_by_person_id",
     "approver",
+    "sender_checked",
 )
 
 
@@ -254,6 +255,10 @@ def records(
             ),
             "attempts": int((final or payload).get("attempts") or 0),
             "last_error": (final or payload).get("last_error"),
+            # A fill card's sender check ("dmarc-enforced", or the demo's
+            # "demo-simulated"); None on any other card.
+            "sender_checked": (payload.get("slice") or {}).get("sender_checked")
+            if isinstance(payload.get("slice"), dict) else None,
             "private": False,
         })
         if reader is None or card.approver_person_id != reader:
