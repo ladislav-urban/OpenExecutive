@@ -22,7 +22,7 @@ def cli() -> None:
 @cli.command()
 @click.argument("question")
 def ask(question: str) -> None:
-    """Ask the Executive a single question."""
+    """Ask a single question."""
     asyncio.run(_ask(question))
 
 
@@ -64,7 +64,7 @@ async def _ask(question: str) -> None:
 
 @cli.command()
 def chat() -> None:
-    """Start an interactive chat session with the Executive."""
+    """Start an interactive chat session."""
     asyncio.run(_chat())
 
 
@@ -387,8 +387,8 @@ async def _purge_onedrive(key: str | None, stale: bool, purge_all: bool) -> None
 @click.argument("link")
 def onedrive_folder(link: str) -> None:
     """Turn a OneDrive or SharePoint folder sharing link into the
-    <drive id>/<item id> entry ONEDRIVE_SYNC_FOLDERS takes. Reads as the
-    Executive's Microsoft 365 sign-in, so the folder must be shared with it."""
+    <drive id>/<item id> entry ONEDRIVE_SYNC_FOLDERS takes. Reads as this
+    app's Microsoft 365 sign-in, so the folder must be shared with it."""
     asyncio.run(_onedrive_folder(link))
 
 
@@ -527,7 +527,7 @@ def principal_command(email: str, name: str | None, role: str | None) -> None:
 
 @cli.command("draft-seals")
 def draft_seals_command() -> None:
-    """Print the seals OpenExecutive recorded for the ERPNext drafts it made,
+    """Print the seals this app recorded for the ERPNext drafts it made,
     as JSON for oe_connector's `oe-connector-verify-drafts --expect`. Reads
     this install's decision ledger only. Exits 1 when it holds none, so an
     empty or wrong ledger is never a pass."""
