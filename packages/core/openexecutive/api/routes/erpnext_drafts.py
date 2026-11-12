@@ -97,6 +97,10 @@ class DraftCardOut(BaseModel):
     asked_in: str = ""
     # A credit-limit raise ERPNext now reads differently: approving is refused.
     changed: bool = False
+    # A watch job's card: the job's title, and its reason line (a model's
+    # words, shown as "Why now").
+    job_title: str = ""
+    why_now: str = ""
 
 
 class DraftCardsOut(BaseModel):

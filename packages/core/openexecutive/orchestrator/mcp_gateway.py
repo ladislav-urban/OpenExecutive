@@ -868,12 +868,33 @@ def _check_erpnext_draft(
     (``draft_recheck_as``, ``draft_check`` only) names that card's approver,
     set only once ``verified.caller_refusal`` proved the viewer is them; the
     proposal path's (``draft_check`` only) asks as the turn's
-    own caller. All need per-person access, since
+    own caller. A watch job's check (``draft_check_for_job``, unattended,
+    ``draft_check`` only) asks as the job's reviewer, read again from People
+    here, and is refused under a turn's session or a watch read. Its
+    arguments are only what the job's own ``check_fields`` built: never
+    ``asked_by`` or ``configured_by``, which draft_check doesn't take. All
+    need per-person access, since
     oe_connector inserts a draft as the asking person's ERPNext user."""
     plain = {k: v for k, v in arguments.items() if k != erpnext_caller.ASSERTION_ARG}
     marker = erpnext_caller.draft_call_for(normalized, plain)
     if marker is None:
         return _refuse_erpnext_call(tool_name, "draft-outside-card", _DRAFT_OUTSIDE_CARD), None
+    if marker.unattended:
+        from openexecutive.orchestrator.schedule_tools import current_session
+
+        refusal = "a watch job checks only its own card, with nobody's turn bound. Do not retry."
+        if current_session.get() is not None:
+            return _refuse_erpnext_call(tool_name, "job-check-in-turn", refusal), None
+        if erpnext_caller.watch_call() is not None or erpnext_caller.in_brief_run() or (
+            erpnext_caller.in_oversight_run() or erpnext_caller.in_answer_check_run()
+            or erpnext_caller.in_supplier_run()
+        ):
+            return _refuse_erpnext_call(tool_name, "job-check-with-other-marker", refusal), None
+        if normalized != erpnext_caller.DRAFT_CHECK_TOOL:
+            return _refuse_erpnext_call(tool_name, "job-check-tool", refusal), None
+        why = erpnext_caller.job_check_refusal(marker)
+        if why is not None:
+            return _refuse_erpnext_call(tool_name, why, refusal), None
     setting = erpnext_caller.signing_setting()
     if not setting:
         return _refuse_erpnext_call(
@@ -921,6 +942,25 @@ def _check_watch_read(tool_name: str, normalized: str, arguments: Any) -> str | 
     if not isinstance(arguments, dict) or erpnext_caller.arguments_digest(arguments) != watch.digest:
         return _refuse_erpnext_call(str(tool_name)[:200], "outside-watch-read", refusal)
     return None
+
+
+def _job_reads_withheld(normalized: str) -> bool:
+    """Whether this withheld tool is the read its own watch job is making:
+    inside ``erpnext_caller.watch_run`` with exactly this tool bound, for a
+    job ``JOB_WITHHELD_EXCEPTIONS`` gives it to, with no turn and no other
+    marker. Every other caller (a chat turn, the panel, the brief, a
+    supplier's agent, a draft, another job's read) is refused."""
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.prompts.connected_systems import JOB_WITHHELD_EXCEPTIONS
+
+    watch = erpnext_caller.watch_call()
+    return (
+        watch is not None
+        and watch.tool == normalized
+        and normalized in JOB_WITHHELD_EXCEPTIONS.get(watch.job, frozenset())
+        and current_session.get() is None
+        and not erpnext_caller.other_marker_bound()
+    )
 
 
 def _erpnext_downstream(
@@ -4412,6 +4452,12 @@ class MCPGateway:
                 str(tool_name)[:200], "outside-watch-read",
                 "a watch job makes only the one read its runner set up. Do not retry.",
             )
+        # Likewise a watch job's check of its card: draft_check and nothing else.
+        if erpnext_caller.job_check_call() is not None and normalized != erpnext_caller.DRAFT_CHECK_TOOL:
+            return _refuse_erpnext_call(
+                str(tool_name)[:200], "outside-job-check",
+                "a watch job's check makes only the one draft_check its runner set up. Do not retry.",
+            )
         # Files saved from someone's own mail are theirs alone, and their
         # folder is no model's to name (see `_saved_files_hidden`). The save's
         # own code-built calls are the one exception.
@@ -4447,10 +4493,10 @@ class MCPGateway:
                 ERPNEXT_WITHHELD_TOOLS,
             )
 
-            # Pinned but not yet used here (connected_systems.
-            # ERPNEXT_WITHHELD_TOOLS): refused on every path, whatever marker
-            # or turn is bound.
-            if normalized in ERPNEXT_WITHHELD_TOOLS:
+            # Pinned but withheld (connected_systems.ERPNEXT_WITHHELD_TOOLS):
+            # refused on every path but its own job's read
+            # (_job_reads_withheld).
+            if normalized in ERPNEXT_WITHHELD_TOOLS and not _job_reads_withheld(normalized):
                 return _refuse_erpnext_call(
                     tool_name, "withheld",
                     "OpenExecutive doesn't use this ERPNext tool yet. Do not retry.",

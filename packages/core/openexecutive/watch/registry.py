@@ -3,14 +3,24 @@
 A job is a ``WatchJob``: the reads it makes (``WatchRead``: an oe_connector
 tool and the shape of its arguments, the same entry and slot names as the
 job's ``oe_connector_watch_jobs`` listing on the ERPNext side), the rules that
-turn their results into notices (``build``, pure code returning
-``CardSpec``\\ s), when it runs, how many notices a day it may leave, and the
-settings the principal may change.
+turn their results into notices and draft cards (``build``, pure code
+returning ``CardSpec``\\ s and ``DraftSpec``\\ s), when it runs, how many cards
+a day it may leave, and the settings the principal may change.
+
+A read may depend on the ones before it (``WatchRead.arguments`` gets their
+results): collections asks for the payment record of the customers its
+receivables read found overdue. A derived list that comes out empty skips
+the read (``None``); one cut to its first 50 says so (``Derived``).
 
 There is no way to add a job at run time: no settings row, chat turn or API
 names one. ``JOBS`` is read-only and holds what this module lists in
-``_LISTED``, which phase 0 leaves empty (its test job,
-``watch.jobs._example``, is put in by the tests alone).
+``_LISTED``: phase 1's collections job (``watch.jobs.collections``). The
+test job, ``watch.jobs._example``, is put in by the tests alone.
+
+A tool the gateway withholds from every turn
+(``connected_systems.ERPNEXT_WITHHELD_TOOLS``) may be listed only by the job
+``JOB_WITHHELD_EXCEPTIONS`` gives it to, and the gateway opens it only under
+that job's own read.
 
 **Shapes** are oe_connector's (its ``watch.py``): a fixed value must match
 exactly; a typed slot takes any value of its type (``SLOTS``); a ``fields``
@@ -39,9 +49,8 @@ MAX_INT = 500
 MAX_TEXT = 140
 # The gateway's name for an oe_connector tool is this plus its own name.
 GATEWAY_PREFIX = "erpnext__"
-# The only oe_connector tools a job may list in phase 0. A tool the gateway
-# withholds (customer_payment_record, supplier_bank_changed) joins this list
-# in the phase 1 PR that uses it, with its pin round.
+# The oe_connector tools any job may list. A withheld one is listed only by
+# the job connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to.
 READ_TOOLS: frozenset[str] = frozenset({"run_report", "list_records"})
 MAX_CARD_CAP = 50
 
@@ -53,14 +62,33 @@ class SettingsError(ValueError):
 
 
 @dataclass(frozen=True)
+class Derived:
+    """A read's arguments built from the reads before it, with whether a
+    list in them was cut to its first ``MAX_LIST`` names (the job's own
+    order). The run records the cut."""
+
+    arguments: dict[str, Any]
+    truncated: bool = False
+
+
+# The results of the reads before this one, in order, each without its
+# ``acting`` key; a skipped read's is {}.
+Prior = tuple[Mapping[str, Any], ...]
+# A read's arguments: a dict, a ``Derived`` one, or None to skip the read
+# (a derived list came out empty: never sent with an empty list).
+ReadArguments = dict[str, Any] | Derived | None
+
+
+@dataclass(frozen=True)
 class WatchRead:
     """One read a job makes: oe_connector's ``tool`` with arguments of
-    ``shape``, built for each run by ``arguments`` (the run's settings and
-    day). ``label`` is how a notice names it ("the receivables report")."""
+    ``shape``, built for each run by ``arguments`` (the run's settings, its
+    day and the earlier reads' results). ``label`` is how a notice names it
+    ("the receivables report")."""
 
     tool: str
     shape: Mapping[str, Any]
-    arguments: Callable[[Settings, date], dict[str, Any]]
+    arguments: Callable[[Settings, date, Prior], ReadArguments]
     label: str
 
     @property
@@ -88,6 +116,48 @@ class CardSpec:
     summary: str
     values: tuple[tuple[str, str], ...] = ()
     facts: Mapping[str, str | int | float] = field(default_factory=dict)
+    # The notice's rows (e.g. each customer to chase), each a finding of its
+    # own for the reason step and shown with its reason under the summary.
+    items: tuple[CardSpec, ...] = ()
+    # Lines in code's own words (counts only, never ERPNext's text), shown
+    # outside the untrusted block.
+    notes: tuple[str, ...] = ()
+    # What the notice's subject counts, when more than its rows (0: its rows,
+    # or one).
+    count: int = 0
+
+
+@dataclass(frozen=True)
+class DraftSpec:
+    """One draft card a job's rules propose: the operation, DocType and
+    fields, built in code from the reads (never by a model) and checked again
+    by the job's ``check_fields`` before ERPNext's own check, which runs as
+    the job's reviewer.
+
+    - ``key``: the finding's id in code (``dunning:<invoice>:<type>``); only
+      its digest is kept, as the card's dedupe key.
+    - ``expect``: what ERPNext's check must echo in its summary (e.g. the
+      invoice and its customer), or no card is left.
+    - ``title``: the card's headline, code's words around ERPNext's names
+      (cleaned when the card is left).
+    - ``reason_key``: the notice item whose reason line the card shows as
+      "Why now".
+    - ``group``: what the notice groups it under (a customer)."""
+
+    key: str
+    operation: str
+    doctype: str
+    fields: Mapping[str, Any]
+    expect: Mapping[str, str]
+    title: str
+    reason_key: str = ""
+    group: str = ""
+
+
+# A job's own builder of a card's fields, by operation and DocType: the
+# fields as they will be checked, stored and sent, or why not. Run before
+# each check and again at approval, so a tampered card is refused.
+CheckFields = Callable[[str, str, Mapping[str, Any]], dict[str, Any] | str]
 
 
 @dataclass(frozen=True)
@@ -100,16 +170,18 @@ class ReasonSchema:
     max_findings: int = 20
 
 
-# (each read's result, in the order of ``reads``; the run's settings; its day)
-# -> the findings. Pure code: every figure comes from the results.
-Build = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[CardSpec]]
+# (each read's result, in the order of ``reads``, {} for a skipped one; the
+# run's settings; its day) -> the findings. Pure code: every figure comes
+# from the results.
+Build = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[CardSpec | DraftSpec]]
 
 
-def _setting_ok(value: object) -> bool:
+def _setting_ok(value: object, bounds: tuple[int, int] | None = None) -> bool:
     if isinstance(value, bool):
         return True
     if isinstance(value, int):
-        return 1 <= value <= MAX_INT
+        low, high = bounds or (1, MAX_INT)
+        return low <= value <= high
     if isinstance(value, str):
         return _text_ok(value, allow_empty=True)
     if isinstance(value, list):
@@ -128,6 +200,12 @@ class WatchJob:
     card_cap_day: int
     default_settings: Mapping[str, Any]
     reason_schema: ReasonSchema | None = None
+    # Its draft cards' builder (``CheckFields``); None: a job of notices only.
+    check_fields: CheckFields | None = None
+    # A whole-number setting's bounds other than 1 to MAX_INT (e.g. an amount).
+    setting_bounds: Mapping[str, tuple[int, int]] = field(default_factory=dict)
+    # What a notice calls its draft cards ("reminder drafts").
+    card_noun: str = "drafts"
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -136,27 +214,37 @@ class WatchJob:
             raise ValueError("a job's title is one short line")
         if not self.reads:
             raise ValueError("a job reads something")
+        from openexecutive.prompts.connected_systems import (
+            ERPNEXT_WITHHELD_TOOLS,
+            JOB_WITHHELD_EXCEPTIONS,
+        )
+
+        # A withheld tool only by the job that owns it (the gateway's one
+        # exception mirrored), any other only from READ_TOOLS.
+        owned = JOB_WITHHELD_EXCEPTIONS.get(self.id, frozenset())
         for read in self.reads:
-            if read.tool not in READ_TOOLS:
+            withheld = read.gateway_tool in ERPNEXT_WITHHELD_TOOLS
+            if read.tool not in READ_TOOLS and not (withheld and read.gateway_tool in owned):
                 raise ValueError(f"a job may not list {read.tool!r}")
             if not isinstance(read.shape, Mapping) or not read.label or not read.label.isprintable():
                 raise ValueError("each read has a shape and a label")
         if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
             raise ValueError("a job's card cap is 1 to 50 a day")
+        for key, bound in self.setting_bounds.items():
+            if (
+                key not in self.default_settings or len(bound) != 2
+                or not all(isinstance(b, int) and not isinstance(b, bool) for b in bound) or bound[0] > bound[1]
+            ):
+                raise ValueError(f"setting {key!r}'s bounds are two whole numbers, low to high")
         for key, value in self.default_settings.items():
-            if not isinstance(key, str) or not key or not _setting_ok(value):
+            if not isinstance(key, str) or not key or not _setting_ok(value, self.setting_bounds.get(key)):
                 raise ValueError(f"setting {key!r} isn't a bool, a number, a line of text or a list of names")
+        if not self.card_noun or not self.card_noun.isprintable() or len(self.card_noun) > 40:
+            raise ValueError("a job's card noun is a few words")
 
     def tools(self) -> frozenset[str]:
         """The gateway names of the tools it lists."""
         return frozenset(read.gateway_tool for read in self.reads)
-
-
-# The jobs this install runs. Phase 0 lists none; phase 1 adds collections
-# and payment-checks, each with its entry in oe_connector_watch_jobs.
-_LISTED: tuple[WatchJob, ...] = ()
-_JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
-JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)
 
 
 def get(job_id: object) -> WatchJob | None:
@@ -261,7 +349,8 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
         if isinstance(default, bool):
             ok = isinstance(value, bool)
         elif isinstance(default, int):
-            ok = isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_INT
+            low, high = job.setting_bounds.get(key, (1, MAX_INT))
+            ok = isinstance(value, int) and not isinstance(value, bool) and low <= value <= high
         elif isinstance(default, str):
             ok = isinstance(value, str) and _text_ok(value, allow_empty=True)
         else:
@@ -274,3 +363,13 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
             raise SettingsError(f"Setting {key} isn't of its type or is out of bounds.")
         out[key] = list(value) if isinstance(value, list) else value
     return out
+
+
+# The jobs this install runs, each with its entry in oe_connector_watch_jobs
+# (payment-checks joins in its own PR). Imported here, once everything a job
+# module uses is defined.
+from openexecutive.watch.jobs import collections as _collections  # noqa: E402
+
+_LISTED: tuple[WatchJob, ...] = (_collections.JOB,)
+_JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
+JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

@@ -154,7 +154,10 @@ def _outcome(card: Any, final: dict[str, Any]) -> str:
     from openexecutive.integrations.erpnext_drafts import CHANGED_SINCE_PROPOSED
 
     if card.status == "closed_externally":
-        return {"expired": "expired", "changed": "replaced: ERPNext's reading changed"}.get(
+        return {
+            "expired": "expired", "changed": "replaced: ERPNext's reading changed",
+            "sod_refused": "not made: separation of duties",
+        }.get(
             card.reversal_reason or "", "closed"
         )
     if card.status == "failed":
@@ -212,7 +215,11 @@ def records(
         payload, final = _json(card.proposed_payload_json), _json(card.final_payload_json)
         made = final.get("created")
         created: dict[str, Any] = made if isinstance(made, dict) else {}
-        asked_in = payload.get("asked_in") or ("alert" if payload.get("from_alert") is not None else "chat")
+        # A watch job's card was asked for by no conversation: its job left it.
+        asked_in = payload.get("asked_in") or (
+            "watch" if payload.get("source") == "watch"
+            else "alert" if payload.get("from_alert") is not None else "chat"
+        )
         out.append({
             "decision_id": card.id,
             "card_key": card.idempotency_key,

@@ -7,8 +7,15 @@ Routes:
                           switch (``ERPNEXT_WATCH_JOBS_ENABLED``).
   PUT /watch/jobs/{id}  — turn a job on or off, change its settings (exactly
                           the job's keys and types, within bounds, else 400)
-                          or its reviewer. Records who configured it and
-                          writes a ``watch_job_configured`` audit row.
+                          or its reviewer (an active teammate, never the
+                          principal or a demo person, else 400). Records who
+                          configured it and writes a ``watch_job_configured``
+                          audit row.
+
+The reviewer gets the job's notices and its draft cards
+(``watch.cards.route``); ``REVIEWER_NOTE`` says so, for Settings to show.
+Whoever configures a job never approves its cards, so its reviewer is
+someone else.
 
 Both need the API to know the caller is the principal
 (``delegation.verified.caller_refusal``: a signed principal, or local
@@ -63,6 +70,14 @@ class WatchRunOut(BaseModel):
     error: str
 
 
+# What Settings shows beside a job's reviewer, in its own words.
+REVIEWER_NOTE = (
+    "The reviewer sees this job's notices, with the figures ERPNext read as the job's own user, and "
+    "approves its draft cards. It can't be you: whoever sets up a job never approves its cards. "
+    "Without a reviewer, you get the notices only."
+)
+
+
 class WatchJobOut(BaseModel):
     id: str
     title: str
@@ -76,6 +91,8 @@ class WatchJobOut(BaseModel):
     runs_at: str
     card_cap_day: int
     last_run: WatchRunOut | None = None
+    # What Settings says beside the reviewer (REVIEWER_NOTE).
+    reviewer_note: str = REVIEWER_NOTE
 
 
 class WatchJobsOut(BaseModel):
@@ -89,7 +106,8 @@ class WatchJobUpdate(BaseModel):
 
     enabled: bool | None = None
     settings: dict[str, Any] | None = None
-    # Stored for phase 1's separation of duties; the runner never reads it.
+    # Who gets the job's notices and cards (watch.cards.route); never the
+    # principal, who configures every job.
     reviewer_person_id: int | None = None
 
 
@@ -144,6 +162,12 @@ def _check_reviewer(person_id: int) -> None:
     person = get_person(person_id)
     if person is None or not person.active or person.kind != "team":
         raise _refuse(400, "bad_reviewer", "The reviewer must be an active person on the team.")
+    # Separation of duties: the principal configures every job, so they
+    # never review one; a demo person approves nothing.
+    if person.is_principal:
+        raise _refuse(400, "bad_reviewer", "You set up the job, so someone else reviews it.")
+    if person.demo:
+        raise _refuse(400, "bad_reviewer", "A demo account can't review a job.")
 
 
 @router.put("/watch/jobs/{job_id}", response_model=WatchJobOut)

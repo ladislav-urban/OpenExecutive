@@ -195,11 +195,13 @@ def _job(job_id: str = "capped", *, specs: int = 3, cap: int = 1, reason: bool =
 # --------------------------------------------------------------------------- #
 
 
-def test_jobs_are_code_only_and_phase_0_lists_none() -> None:
+def test_jobs_are_code_only_and_phase_1_lists_collections() -> None:
+    from openexecutive.watch.jobs import collections
+
     assert isinstance(registry.JOBS, MappingProxyType)
     with pytest.raises(TypeError):
         registry.JOBS["x"] = _example.JOB  # type: ignore[index]
-    assert registry._LISTED == ()
+    assert registry._LISTED == (collections.JOB,)
     # The test job is put in by the tests alone.
     assert _example.JOB_ID not in registry.JOBS
     assert not [n for n in dir(registry) if n.lower().startswith(("register", "add_", "load"))]
@@ -330,7 +332,9 @@ def test_without_the_key_the_gateway_refuses_a_watch_read(
 def test_the_marker_is_bound_to_a_registered_enabled_job_its_tools_and_shapes(
     example: WatchJob, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
-    assert _refused(job_id="collections") == "watch-unknown-job"
+    assert _refused(job_id="payment-checks") == "watch-unknown-job"
+    # Listed, but off until the principal turns it on.
+    assert _refused(job_id="collections") == "watch-job-off"
     assert _refused(job_id="Bad Id") == "watch-unknown-job"
     assert _refused(tool="erpnext__list_records") == "watch-tool-not-listed"
     assert _refused(tool="erpnext__draft_check") == "watch-tool-not-listed"
@@ -892,7 +896,7 @@ def test_the_principal_configures_a_job_and_it_is_recorded(
     monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
     listed = client.get("/watch/jobs").json()
     assert listed["master_switch"] is True
-    assert [j["id"] for j in listed["jobs"]] == ["example"]
+    assert [j["id"] for j in listed["jobs"]] == ["collections", "example"]
     response = client.put("/watch/jobs/example", json={
         "enabled": False, "settings": {"company": "Bolt Industries", "limit": 50}, "reviewer_person_id": roster.teammate,
     })
@@ -983,7 +987,7 @@ def test_the_api_adds_no_job_and_rejects_unknown_fields(
     client: TestClient, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
-    assert client.put("/watch/jobs/collections", json={"enabled": True}).status_code == 404
+    assert client.put("/watch/jobs/payment-checks", json={"enabled": True}).status_code == 404
     assert client.post("/watch/jobs", json={"id": "x"}).status_code == 405
     assert client.put("/watch/jobs/example", json={"enabled": True, "reads": []}).status_code == 422
     assert client.put("/watch/jobs/example", json={"reviewer_person_id": 9999}).status_code == 400

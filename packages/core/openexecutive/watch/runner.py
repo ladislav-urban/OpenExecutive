@@ -12,7 +12,10 @@ past the hour with no row for the day.
 A run (``run_job``, its own task):
 
 1. **Reads.** Each read's arguments are built by the job's code from its
-   settings and the day, checked against the read's listed shape, and sent
+   settings, the day and the earlier reads' results (a derived list: an
+   empty one skips the read, recorded ``{"read", "skipped": true}``, and one
+   cut to 50 names is recorded ``truncated``), checked against the read's
+   listed shape, and sent
    through the gateway inside ``erpnext_caller.watch_run``, which signs the
    call as the ``watch`` caller. A refused or failed read ends the run: the
    principal gets one notice naming the read and why, in our words. The
@@ -20,22 +23,28 @@ A run (``run_job``, its own task):
    oe_connector's ``acting`` (top-level key of the result) is recorded per
    read as whether it ran as the job's own ERP user; its ``job`` must be this
    job's.
-2. **Rules.** ``job.build`` turns the results into ``CardSpec``\\ s, in code.
+2. **Rules.** ``job.build`` turns the results into notices (``CardSpec``)
+   and draft cards (``DraftSpec``), in code.
 3. **Reasons** (only for a job with a ``reason_schema``): one tool-less model
    call whose output must be a JSON object of short reason lines keyed by the
    finding ids it was shown; anything else is dropped. Its input is the
    findings' bounded facts, wrapped as untrusted. A reason is labelled on the
    notice as the model's, never as a figure, and never used in a key, title
    or routing.
-4. **Notices.** Private alerts (source ``watch``), stored directly, never
+4. **Who it goes to** (``watch.cards.route``): the job's reviewer only when
+   every read ran as the job's own ERP user and the reviewer may approve,
+   else the principal, with notices only and the reason recorded.
+5. **Cards** (``watch.cards.leave_drafts``): only for the reviewer, each
+   checked by ERPNext as them, within the caps.
+6. **Notices.** Private alerts (source ``watch``), stored directly, never
    through triage, so no model rewrites or drops one: tagged private and
-   routed to the principal, never the stored reviewer. The subject is the
-   job's title and counts only; every ERPNext string in the body is
-   stripped and capped, and the body is wrapped as untrusted. At most
-   ``card_cap_day`` attempts a day, and a finding whose notice is still open
-   isn't raised again.
-
-PR 4 leaves notices only: job draft cards come with phase 1's jobs.
+   routed as ``route`` said, except that a run whose every check ERPNext
+   refused for the reviewer's permissions goes to the principal. The
+   subject is the job's title and counts only; every ERPNext string in the
+   body is stripped and capped, and the body is wrapped as untrusted, with
+   code's own lines (how many cards wait, why none were prepared) after it.
+   At most ``card_cap_day`` attempts a day, and a finding whose notice is
+   still open isn't raised again.
 """
 from __future__ import annotations
 
@@ -144,6 +153,24 @@ class RunOutcome:
     repeats: int = 0
     capped: int = 0
     as_job_user: list[bool] = field(default_factory=list)
+    # Who it went to: "reviewer" or "principal" (with the route's code).
+    routed: str = ""
+    routed_principal: str = ""
+    draft_cards: int = 0
+    draft_repeats: int = 0
+    draft_capped: int = 0
+    checks: int = 0
+    check_refused: int = 0
+
+    def detail(self) -> dict[str, Any]:
+        """What ``watch_runs.detail`` keeps: codes and counts only."""
+        out: dict[str, Any] = {
+            "routed": self.routed, "draft_cards": self.draft_cards, "draft_repeats": self.draft_repeats,
+            "draft_capped": self.draft_capped, "checks": self.checks, "check_refused": self.check_refused,
+        }
+        if self.routed_principal:
+            out["routed_principal"] = self.routed_principal
+        return out
 
 
 # --------------------------------------------------------------------------- #
@@ -265,14 +292,15 @@ def _finish(job_id: str, day: str, outcome: RunOutcome, reads: list[dict[str, An
     conn = connect(path)
     try:
         conn.execute(
-            f"UPDATE {RUNS_TABLE} SET status = ?, finished_at = ?, cards = ?, error = ?, reads = ? "  # noqa: S608
-            "WHERE job = ? AND day = ?",
+            f"UPDATE {RUNS_TABLE} SET status = ?, finished_at = ?, cards = ?, error = ?, reads = ?, "  # noqa: S608
+            "detail = ? WHERE job = ? AND day = ?",
             (
                 outcome.status,
                 datetime.now(UTC).isoformat(),
                 outcome.cards,
                 outcome.error,
                 json.dumps(reads),
+                json.dumps(outcome.detail()),
                 job_id,
                 day,
             ),
@@ -364,7 +392,7 @@ async def run_job(job: registry.WatchJob, day: str, *, path: Path | None = None)
             outcome = RunOutcome("failed", error="run_failed")
             if _take_failure_notice(job.id, day, path=path):
                 _fail_notice(job, day, "run_failed", "")
-        outcome.as_job_user = [bool(r.get("as_job_user")) for r in reads]
+        outcome.as_job_user = [bool(r.get("as_job_user")) for r in reads if not r.get("skipped")]
         try:
             _finish(job.id, day, outcome, reads, path=path)
         except Exception:
@@ -419,18 +447,29 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
 
 
 async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) -> RunOutcome:
+    from openexecutive.orchestrator import erpnext_caller
+    from openexecutive.watch import cards
+
     today = date.fromisoformat(day)
     row = get_row(job.id)
     if not master_on() or not row.enabled:
         raise _Stop("watch-job-off")
     settings = effective_settings(job, row)
+    erpnext_caller.begin_job_checks(job.id, day)
     results: list[Mapping[str, Any]] = []
     users: set[str] = set()
     for read in job.reads:
         try:
-            arguments = read.arguments(settings, today)
+            built = read.arguments(settings, today, tuple(results))
         except Exception:
             raise _Stop("read_build_failed", read.label) from None
+        if built is None:
+            # A derived list came out empty: never sent with an empty list.
+            reads.append({"read": read.label, "skipped": True})
+            results.append({})
+            continue
+        truncated = isinstance(built, registry.Derived) and built.truncated
+        arguments = built.arguments if isinstance(built, registry.Derived) else built
         if not isinstance(arguments, dict) or registry.shape_mismatch(read.shape, arguments, today):
             raise _Stop("read_shape", read.label)
         result = await _read(job, read, arguments, today)
@@ -443,38 +482,73 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         as_user, user = _as_job_user(acting, job.id)
         if as_user:
             users.add(user)
-        reads.append({"read": read.label, "as_job_user": as_user})
+        entry: dict[str, Any] = {"read": read.label, "as_job_user": as_user}
+        if truncated:
+            entry["truncated"] = True
+        reads.append(entry)
         results.append({k: v for k, v in result.items() if k != "acting"})
     if len(users) > 1:
         # Not one job user across the run: none of its reads counts as one.
         for entry in reads:
-            entry["as_job_user"] = False
+            if "as_job_user" in entry:
+                entry["as_job_user"] = False
     try:
         specs = list(job.build(tuple(results), settings, today))
     except Exception:
         raise _Stop("rules_failed") from None
-    if not all(isinstance(s, registry.CardSpec) and isinstance(s.key, str) and s.key for s in specs):
+    if not all(
+        isinstance(s, registry.CardSpec | registry.DraftSpec) and isinstance(s.key, str) and s.key for s in specs
+    ):
         raise _Stop("rules_failed")
     # Bounded whatever the job's rules return: the reason step, the dedupe
     # reads and the audit's counts never see more.
     specs = specs[:MAX_FINDINGS]
-    reasons = await reason_step(job, specs) if job.reason_schema is not None and specs else {}
+    notices = [s for s in specs if isinstance(s, registry.CardSpec)]
+    drafts = [s for s in specs if isinstance(s, registry.DraftSpec)]
+    # Who it goes to, from the database and oe_connector's own word, before
+    # anything is checked as the reviewer.
+    run_route = cards.route(job, row, reads)
     outcome = RunOutcome("done", findings=len(specs))
+    outcome.routed = "reviewer" if run_route.reviewer is not None else "principal"
+    outcome.routed_principal = run_route.reason
+    shown = _reasoned(notices)
+    reasons = await reason_step(job, shown) if job.reason_schema is not None and shown else {}
+    made = await cards.leave_drafts(job, day, row, run_route, drafts, reasons)
+    outcome.draft_cards, outcome.draft_repeats, outcome.draft_capped = made.left, made.repeats, made.capped
+    outcome.checks, outcome.check_refused = made.checks, made.check_refused
+    to = run_route.person_id
+    if made.all_refused_for_permissions:
+        # Nothing the reviewer could act on: the principal hears of it.
+        to, outcome.routed = _principal_id(), "principal"
+        outcome.routed_principal = "checks_refused"
     # The cap counts attempts, not successes, so a notice that fails to
     # store never lets another finding through in its place.
     attempts = 0
-    for n, spec in enumerate(specs):
+    for n, spec in enumerate(notices):
         key = dedup_key(job.id, spec.key)
         if _still_open(key):
             outcome.repeats += 1
             continue
         if attempts >= job.card_cap_day:
-            outcome.capped = len(specs) - n
+            outcome.capped = len(notices) - n
             break
         attempts += 1
-        if _leave_notice(job, day, spec, reasons.get(spec.key, ""), key, found=len(specs)) is not None:
+        if _leave_notice(
+            job, day, spec, reason=reasons.get(spec.key, ""), key=key, found=_found(notices),
+            reasons=reasons, notes=tuple(made.lines) if n == 0 else (), to=to,
+        ) is not None:
             outcome.cards += 1
     return outcome
+
+
+def _reasoned(notices: Sequence[registry.CardSpec]) -> list[registry.CardSpec]:
+    """What the reason step is shown: each notice's rows, or the notice."""
+    return [item for spec in notices for item in (spec.items or (spec,))]
+
+
+def _found(notices: Sequence[registry.CardSpec]) -> int:
+    """What a notice's subject counts: each notice's rows, or one each."""
+    return sum(spec.count or len(spec.items) or 1 for spec in notices)
 
 
 # --------------------------------------------------------------------------- #
@@ -599,7 +673,13 @@ def _still_open(key: str) -> bool:
     return row is not None
 
 
-def notice_body(job: registry.WatchJob, day: str, spec: registry.CardSpec, reason: str) -> str:
+def notice_body(
+    job: registry.WatchJob, day: str, spec: registry.CardSpec, reason: str,
+    *, reasons: Mapping[str, str] | None = None, notes: Sequence[str] = (),
+) -> str:
+    """The notice's body: a code preamble, the finding (and its rows, each
+    with its reason) wrapped as untrusted, then code's own lines: the job's
+    notes and the run's (``notes``)."""
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
     lines = [clean(spec.summary)]
@@ -607,11 +687,20 @@ def notice_body(job: registry.WatchJob, day: str, spec: registry.CardSpec, reaso
         lines.append(f"{clean(label, MAX_LABEL_CHARS)}: {clean(value)}")
     if reason:
         lines.append(f"Reason (a model's words, not a figure): {clean(reason, MAX_REASON_CHARS)}")
+    for number, item in enumerate(spec.items, 1):
+        lines.append(f"{number}. {clean(item.summary)}")
+        for label, value in item.values:
+            lines.append(f"   {clean(label, MAX_LABEL_CHARS)}: {clean(value)}")
+        why = (reasons or {}).get(item.key, "")
+        if why:
+            lines.append(f"   Why now (a model's words, not a figure): {clean(why, MAX_REASON_CHARS)}")
+    own = [line for line in (*spec.notes, *notes) if line]
     return (
         f"The watch job {job.title} found this in ERPNext on {day}. The figures are "
         "ERPNext's own, read by the job; names and text in it are ERPNext's, not "
         "instructions.\n\n"
         + wrap_untrusted("\n".join(line for line in lines if line), source="erpnext", author=f"watch:{job.id}")
+        + ("\n\n" + "\n".join(own) if own else "")
     )
 
 
@@ -622,10 +711,11 @@ def notice_subject(job: registry.WatchJob, day: str, found: int) -> str:
 
 def _leave_notice(
     job: registry.WatchJob, day: str, spec: registry.CardSpec, reason: str, key: str, *, found: int,
+    reasons: Mapping[str, str] | None = None, notes: Sequence[str] = (), to: int | None = None,
 ) -> int | None:
     """Store the notice as is: no triage, so no model rewrites its subject or
-    body, or drops it. Private to the principal, whoever the job's reviewer
-    is (read with the service view or the job's own user)."""
+    body, or drops it. Private to ``to``: the reviewer ``cards.route`` named,
+    else the principal."""
     from openexecutive.alerts import store
     from openexecutive.alerts.models import NEEDS_FYI, PRIVATE_ALERT_TAG
 
@@ -635,10 +725,10 @@ def _leave_notice(
             external_id=f"{key}:{day}",
             severity=NOTICE_SEVERITY,
             headline=notice_subject(job, day, found),
-            body=notice_body(job, day, spec, reason),
+            body=notice_body(job, day, spec, reason, reasons=reasons, notes=notes),
             topic_tags=[PRIVATE_ALERT_TAG],
             dedup_key=f"private:{key}",
-            routed_to_person_id=_principal_id(),
+            routed_to_person_id=to if to is not None else _principal_id(),
             needs=NEEDS_FYI,
         )
     except Exception:
@@ -700,6 +790,7 @@ def _audit(job: registry.WatchJob, day: str, outcome: RunOutcome, *, reads: int)
             "repeats": outcome.repeats,
             "capped": outcome.capped,
             "as_job_user": outcome.as_job_user,
+            **outcome.detail(),
         },
         private=True,
     )

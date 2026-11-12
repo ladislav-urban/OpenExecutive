@@ -3080,6 +3080,10 @@ export interface ErpnextDraftCard {
   asked_in?: string;
   // A credit-limit raise the ERP now reads differently: approving is refused.
   changed?: boolean;
+  // A watch job's card: the job's title (e.g. "Collections"), and the job's
+  // reason line for it, a model's words shown as "Why now".
+  job_title?: string;
+  why_now?: string;
 }
 
 // What an approval made in ERPNext.
