@@ -12152,11 +12152,18 @@ watch:
     name and its OE Draft seal (row_hash, chain_index), never the word or
     account. The run's notice to the principal (_proposal_notice) is counts
     and codes only. read_notices (chain_notices): the head is kept per job
-    and company in watch_chain_heads (settings.swap_chain_head, BEGIN
-    IMMEDIATE); a lower index, or the same index with another hash, than
-    last seen leaves the principal "ERPNext's draft log is shorter than when
-    the bank-rules job last read it (row n, now m). Rows may have been
-    deleted; run oe-connector-verify-drafts."
+    and company in watch_chain_heads (settings.get_chain_head and
+    swap_chain_head, BEGIN IMMEDIATE). A head that moved on is kept at once.
+    A lower index, or the same index with another hash, than last kept
+    leaves the principal "ERPNext's draft log is shorter than when the
+    bank-rules job last read it (row n, now m). Rows may have been deleted;
+    run oe-connector-verify-drafts." That head becomes the baseline only
+    once the notice was left (runner.raised_ever), so a run that fails
+    first says it again. A head missing or malformed after one was kept
+    says CHAIN_GONE_LINE. It sees a net-shorter chain only: rows rewritten
+    and then outgrown before the next run aren't seen here (verify-drafts
+    checks the whole chain). A proposal call that times out leaves a
+    watch_proposal row with outcome "unknown" (it may have been written).
   proposed_rules_home: |
     integrations.erpnext_rule_proposals: Home's "Needs you" list of the
     proposed rules still waiting for a System Manager, from oe_connector's

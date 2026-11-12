@@ -709,8 +709,11 @@ async def _propose(job: registry.WatchJob, day: str, spec: registry.ProposalSpec
     except erpnext_caller.WatchRefused as refused:
         return refused.reason
     except TimeoutError:
+        # It may still have been written in ERPNext: recorded as unknown.
+        _audit_proposal(job, day, spec, name="", seal="", place=0, outcome="unknown")
         return "timeout"
     except Exception:
+        _audit_proposal(job, day, spec, name="", seal="", place=0, outcome="unknown")
         return "unanswered"
     try:
         result = json.loads(raw)
@@ -740,19 +743,22 @@ def _proposal_refusal(job: registry.WatchJob, said: object) -> str:
 
 def _audit_proposal(
     job: registry.WatchJob, day: str, spec: registry.ProposalSpec, *, name: str, seal: str, place: int,
+    outcome: str = "proposed",
 ) -> None:
     """A proposal's audit row: the proposal's name in ERPNext and its seal in
     the OE Draft chain (kept here too, as a card's is, so the two records
-    check each other). Never the rule's word or account."""
+    check each other), or ``outcome`` "unknown" when the call didn't answer
+    and may still have been written. Never the rule's word or account."""
     from openexecutive.audit import log_event
 
+    said = f"proposed {name or 'a rule'}" if outcome == "proposed" else "may have proposed a rule"
     log_event(
         "watch_proposal",
-        f"Watch job {job.id} proposed {name or 'a rule'} in ERPNext for {day}",
+        f"Watch job {job.id} {said} in ERPNext for {day}",
         actor=f"watch:{job.id}",
         details={
             "job": job.id, "day": day, "key": hashlib.sha256(spec.key.encode("utf-8")).hexdigest()[:16],
-            "name": name, **({"row_hash": seal, "chain_index": place} if seal else {}),
+            "outcome": outcome, "name": name, **({"row_hash": seal, "chain_index": place} if seal else {}),
         },
         private=True,
     )

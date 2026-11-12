@@ -147,6 +147,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "erpnext_a2a_exchange",  # a supplier's agent was answered: supplier, key id, tools called, lengths only
     "erpnext_a2a_refused",   # a request was refused: unknown key, bad signature, replay, rate limit (details.reason)
     # Watch jobs (watch/) — private to the principal.
+    "watch_proposal",        # a watch job's proposal left in ERPNext (its name and seal), or "unknown" when unanswered
     "watch_run",             # a job's daily run: status, a reason code and counts only, never ERPNext's figures
     "watch_job_configured",  # the principal turned a job on or off or changed it: before/after, setting keys, who
 )

@@ -82,6 +82,10 @@ CHAIN_LINE = (
     "ERPNext's draft log is shorter than when the bank-rules job last read it (row {then}, now {now}). "
     "Rows may have been deleted; run oe-connector-verify-drafts."
 )
+CHAIN_GONE_LINE = (
+    "ERPNext no longer reports its draft log's newest row to the bank-rules job (row {then} when it last read "
+    "it). Rows may have been deleted; run oe-connector-verify-drafts."
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -180,35 +184,63 @@ def build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -
     return ()
 
 
-def chain_notices(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -> Sequence[CardSpec]:
-    """Keep the chain head the read returned, and tell the principal when it
-    is behind the one this job last saw (a lower index, or the same index with
-    another hash): counts and indexes only."""
-    from openexecutive.watch.settings import swap_chain_head
-
-    company = settings["company"]
+def _head(reads: Sequence[Mapping[str, Any]]) -> tuple[int, str] | None:
+    """The chain head the read returned, or None when it gave none fit to
+    keep (no head, a negative or non-whole index, a hash not 64 hex)."""
     head = reads[0].get("chain_head") if reads and isinstance(reads[0], Mapping) else None
-    if not isinstance(company, str) or not company or not isinstance(head, Mapping):
-        return ()
+    if not isinstance(head, Mapping):
+        return None
     index, row_hash = head.get("index"), head.get("row_hash")
     if not isinstance(index, int) or isinstance(index, bool) or index < 0:
-        return ()
+        return None
     if not isinstance(row_hash, str) or not _HEX_RE.fullmatch(row_hash):
+        return None
+    return index, row_hash
+
+
+def chain_notices(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -> Sequence[CardSpec]:
+    """Tell the principal when the chain head the read returned is behind
+    the one this job last kept (a lower index, or the same index with another
+    hash), or when it returned none after one was kept: counts and indexes
+    only. A head that has moved on is kept at once; one that is behind is
+    kept only once its notice was left (``runner.raised_ever``), so a run
+    that fails before leaving it tells it again next time."""
+    from openexecutive.watch.runner import dedup_key, raised_ever
+    from openexecutive.watch.settings import get_chain_head, swap_chain_head
+
+    company = settings["company"]
+    if not isinstance(company, str) or not company:
         return ()
-    before = swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
-    if before is None:
+    seen = get_chain_head(JOB_ID, company)
+    head = _head(reads)
+    if head is None:
+        if seen is None:
+            return ()
+        then, then_hash = seen
+        return (
+            CardSpec(
+                key=f"chain:gone:{then}:{then_hash[:16]}",
+                summary="ERPNext's draft log can't be checked",
+                notes=(CHAIN_GONE_LINE.format(then=then),),
+                to_principal=True,
+            ),
+        )
+    index, row_hash = head
+    if seen is None or index > seen[0] or (index == seen[0] and row_hash == seen[1]):
+        swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
         return ()
-    then, then_hash = before
-    if index > then or (index == then and row_hash == then_hash):
-        return ()
-    return (
-        CardSpec(
-            key=f"chain:{then}:{index}:{row_hash[:16]}",
-            summary="ERPNext's draft log is shorter than before",
-            notes=(CHAIN_LINE.format(then=then, now=index),),
-            to_principal=True,
-        ),
+    then, _then_hash = seen
+    spec = CardSpec(
+        key=f"chain:{then}:{index}:{row_hash[:16]}",
+        summary="ERPNext's draft log is shorter than before",
+        notes=(CHAIN_LINE.format(then=then, now=index),),
+        to_principal=True,
     )
+    if raised_ever(dedup_key(JOB_ID, spec.key)):
+        # Told already: this head is the one to compare with from now on.
+        swap_chain_head(JOB_ID, company, index, row_hash, today.isoformat())
+        return ()
+    return (spec,)
 
 
 JOB: WatchJob = WatchJob(

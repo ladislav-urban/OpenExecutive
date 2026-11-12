@@ -540,3 +540,56 @@ def test_the_route_lists_them_for_the_principal_alone(
     assert [r["name"] for r in shown] == ["OE-RULE-0001"] and shown[0]["word"] == "servicefee"
     assert client.get("/erpnext/proposed-rules", headers={"x-caller-email": TEAM}).json() == {"rules": []}
     assert len(erp.calls) == 1
+
+
+def test_a_head_gone_after_one_was_kept_tells_the_principal(job_on: WatchJob) -> None:
+    keep = (json.loads(_evidence()),)
+    assert bank_rules.chain_notices(keep, SETTINGS, TODAY) == ()
+    for gone in (None, {}, {"index": -1, "row_hash": "a" * 64}, {"index": 41, "row_hash": ""}, "41"):
+        read = {**json.loads(_evidence()), "chain_head": gone}
+        [spec] = bank_rules.chain_notices((read,), SETTINGS, TODAY)
+        assert spec.to_principal and "row 41 when it last read" in spec.notes[0]
+    # Never kept, nothing to compare: nothing said.
+    assert bank_rules.chain_notices(({**json.loads(_evidence()), "chain_head": None},), {"company": "Other"}, TODAY) == ()
+
+
+def test_a_shorter_head_becomes_the_baseline_only_once_its_notice_was_left(
+    job_on: WatchJob, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert bank_rules.chain_notices((json.loads(_evidence()),), SETTINGS, TODAY) == ()
+    shorter = (json.loads(_evidence(head={"index": 30, "row_hash": "f" * 64})),)
+    [spec] = bank_rules.chain_notices(shorter, SETTINGS, TODAY)
+    # Not left yet (the run failed before its notices): the old head stays, and it is said again.
+    assert watch_settings.get_chain_head(JOB.id, "Acme") == (41, "a" * 64)
+    assert [s.key for s in bank_rules.chain_notices(shorter, SETTINGS, TODAY)] == [spec.key]
+    monkeypatch.setattr(runner, "raised_ever", lambda key: key == runner.dedup_key(JOB.id, spec.key))
+    assert bank_rules.chain_notices(shorter, SETTINGS, TODAY) == ()
+    assert watch_settings.get_chain_head(JOB.id, "Acme") == (30, "f" * 64)
+
+
+def test_an_unanswered_proposal_is_audited_as_unknown(
+    job_on: WatchJob, erp: FakeErpnext, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from unittest.mock import AsyncMock
+
+    calls = 0
+    first = erp.session.call_tool.side_effect
+
+    async def slow(name: str, body: dict[str, Any]) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return await first(name, body)
+        await asyncio.sleep(5)
+        return await first(name, body)
+
+    erp.session.call_tool = AsyncMock(side_effect=slow)
+    monkeypatch.setattr(runner, "CALL_TIMEOUT_S", 0.2)
+    erp.replies.append(_evidence(FEE))
+    outcome = _run(job_on)
+    assert outcome.proposal_refused == {"timeout": 1}
+    [row] = _audit_rows("watch_proposal")
+    assert row.details["outcome"] == "unknown" and row.details["name"] == ""
+    from openexecutive.audit.logger import EVENT_TYPES
+
+    assert "watch_proposal" in EVENT_TYPES

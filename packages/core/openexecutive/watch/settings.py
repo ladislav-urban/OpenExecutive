@@ -329,6 +329,19 @@ def day_count(job_id: str, day: str, what: str, *, path: Path | None = None) -> 
     return int(row[0] or 0) if row else 0
 
 
+def get_chain_head(job_id: str, company: str, *, path: Path | None = None) -> tuple[int, str] | None:
+    """The chain head the job last kept for ``company``, or None."""
+    conn = connect(path)
+    try:
+        row = conn.execute(
+            f"SELECT chain_index, row_hash FROM {HEADS_TABLE} WHERE job = ? AND company = ?",  # noqa: S608
+            (job_id, company),
+        ).fetchone()
+    finally:
+        conn.close()
+    return (int(row[0]), str(row[1])) if row else None
+
+
 def swap_chain_head(
     job_id: str, company: str, index: int, row_hash: str, day: str, *, path: Path | None = None,
 ) -> tuple[int, str] | None:
