@@ -269,6 +269,28 @@ def test_call_tool_chip_uses_underlying_name() -> None:
 # Error paths — no chip when the tool failed.
 # ---------------------------------------------------------------------------
 
+@pytest.mark.parametrize("result", [
+    "Tool error: Error calling tool 'create_doc': An unexpected error occurred in create_doc: "
+    "Google turned off saving in that folder. Tap Allow saving again.",
+    "Error calling tool 'create_drive_file': API error in create_drive_file: <HttpError 403>",
+    "Error: the server is not connected",
+])
+def test_failed_connected_tool_has_no_chip(result: str) -> None:
+    """A connected tool's failure comes back as text: no "Created a doc" over it."""
+    for name in ("google_workspace__create_doc", "google_workspace__create_drive_file"):
+        chip = summarize_action(tool_name="call_tool", tool_input={"name": name, "arguments": {}}, tool_result=result)
+        assert chip is None
+
+
+def test_connected_tool_result_opening_with_errors_still_has_a_chip() -> None:
+    chip = summarize_action(
+        tool_name="call_tool",
+        tool_input={"name": "google_workspace__create_doc", "arguments": {"title": "Errors in Q3"}},
+        tool_result="Errors in Q3 doc created. Link: https://docs.google.com/document/d/abc",
+    )
+    assert chip is not None and chip["summary"] == "Created a doc"
+
+
 def test_failed_send_suppresses_chip() -> None:
     chip = summarize_action(
         tool_name="send_slack_dm",
@@ -340,6 +362,8 @@ _KNOWN_READ_ONLY_TOOLS: frozenset[str] = frozenset({
     "search_tools",
     # workflow_run_tools — catalog read (run_workflow is in SIDE_EFFECTING_TOOLS)
     "list_workflows",
+    # workflow_authoring_tools — a draft saves nothing (save_workflow is side-effecting)
+    "draft_workflow",
     # mail_read_tools — reads of the speaker's own mailbox (Act as me)
     "my_calendar",
     "search_my_email",
@@ -372,6 +396,7 @@ def _all_registered_tool_names() -> set[str]:
     from openexecutive.orchestrator.people_tools import PEOPLE_TOOL_HANDLERS
     from openexecutive.orchestrator.schedule_tools import SCHEDULE_TOOL_HANDLERS
     from openexecutive.orchestrator.skills_tools import SKILL_TOOL_HANDLERS
+    from openexecutive.orchestrator.workflow_authoring_tools import WORKFLOW_AUTHORING_TOOL_HANDLERS
     from openexecutive.orchestrator.workflow_run_tools import WORKFLOW_RUN_TOOL_HANDLERS
 
     return (
@@ -388,6 +413,7 @@ def _all_registered_tool_names() -> set[str]:
         | set(DRAFT_ARTIFACT_TOOL_HANDLERS)
         | set(MCP_TOOL_NAMES)
         | set(WORKFLOW_RUN_TOOL_HANDLERS)
+        | set(WORKFLOW_AUTHORING_TOOL_HANDLERS)
         | set(APP_TOOL_HANDLERS)
         # Act as me: its own registry, offered per turn (never _ALL_SKILL_TOOLS).
         | set(DELEGATION_TOOL_HANDLERS)
@@ -460,14 +486,15 @@ def test_a_booked_meeting_says_booked() -> None:
     assert "decision_id" not in chip
 
 
-def test_a_held_send_is_not_a_done_chip() -> None:
+def test_a_held_send_carries_its_card() -> None:
     chip = summarize_action(
         tool_name="send_slack_dm",
         tool_input={"channel_ref": "U1", "text": "hi"},
         tool_result=json.dumps({"status": "waiting_for_approval", "decision_instance_id": 9}),
     )
     assert chip is not None and chip["summary"] == "Waiting for approval"
-    assert "decision_id" not in chip
+    # It carries its card, so the chat shows Approve under the reply.
+    assert chip["decision_id"] == 9 and chip["link"] == "/today"
 
 
 def test_a_cancelled_meeting_says_so() -> None:

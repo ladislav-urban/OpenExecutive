@@ -123,6 +123,9 @@ class Settings(BaseSettings):
     # the request carries an `anthropic-workspace-id` header (#128). A
     # workspace-scoped key needs no value here.
     anthropic_workspace_id: str | None = Field(None, alias="ANTHROPIC_WORKSPACE_ID")
+    # Pydantic Logfire write token. Unset (the default) leaves request tracing
+    # off entirely; see openexecutive.observability for what a trace records.
+    logfire_token: str | None = Field(None, alias="LOGFIRE_TOKEN")
 
     default_model: str = Field("claude-sonnet-5-5", alias="DEFAULT_MODEL")
     # The model the specialists with deep reasoning on by default (CFO, legal,
@@ -142,6 +145,13 @@ class Settings(BaseSettings):
     # Anthropic calls from, which report no cost (audit/pricing.py). Empty:
     # the dated one shipped as openexecutive/audit/model_prices.json.
     model_prices_path: str = Field("", alias="MODEL_PRICES_PATH")
+    # The Executive's model for the one answer after someone pushes back on
+    # the last one (a thumbs down, "that's not what I asked", the same ask
+    # again, or a reply the claim check caught); the answer after that goes
+    # back to the normal model (orchestrator.pushback). Empty = off, every
+    # answer on the normal model. The Executive's Council card can set its
+    # own pick, which wins over this.
+    pushback_model: str = Field("", alias="PUSHBACK_MODEL")
 
     vector_store_path: Path = Field(_ROOT / "chroma_db", alias="VECTOR_STORE_PATH")
     company_profile_path: Path = Field(
@@ -451,11 +461,12 @@ class Settings(BaseSettings):
     # Whole-turn wall-clock ceiling for a streaming chat turn. Raised from 120s
     # because deep multi-specialist turns were being cut off mid-answer. A
     # ceiling this high is only tolerable because the user can end a turn
-    # themselves — see POST /chat/stop in api/routes/chat.py.
-    chat_stream_timeout_s: float = Field(300.0, alias="CHAT_STREAM_TIMEOUT_S")
+    # themselves — see POST /chat/stop in api/routes/chat.py. Raised again to
+    # 600s: filing two emails' worth of attachments to Drive ran past 300s.
+    chat_stream_timeout_s: float = Field(600.0, alias="CHAT_STREAM_TIMEOUT_S")
 
     # Extra wall-clock allowance added to chat_stream_timeout_s when a request
-    # opts in to Committee review (so 360s in total at the defaults). Committee
+    # opts in to Committee review (so 660s in total at the defaults). Committee
     # adds three reviewer calls + one full-pass revision on top of the draft,
     # typically 5–12s.
     committee_extra_timeout_s: float = Field(60.0, alias="COMMITTEE_EXTRA_TIMEOUT_S")
@@ -501,6 +512,11 @@ class Settings(BaseSettings):
     # The other way to hear Slack: with this set and no SLACK_APP_TOKEN, Slack
     # posts events to POST /webhook/slack, signed with the app's signing secret.
     slack_signing_secret: str | None = Field(None, alias="SLACK_SIGNING_SECRET")
+    # Approve and Skip buttons on the cards a reply leaves in a Slack DM
+    # (integrations.channel_cards). Needs Interactivity turned on in the Slack
+    # app's settings (with SLACK_SIGNING_SECRET, its Request URL is
+    # /webhook/slack); off, a DM points to the web app instead.
+    slack_card_buttons: bool = Field(False, alias="SLACK_CARD_BUTTONS")
     # Company-wide broadcast channels — when set, OE can post to "the
     # whole team" on a given integration without picking a specific
     # human or department. Used by `send_company_broadcast`. Each is
@@ -891,7 +907,7 @@ class Settings(BaseSettings):
     mcp_servers_config_path: Path = Field(
         _ROOT / "company" / "mcp_servers.json", alias="MCP_SERVERS_CONFIG_PATH"
     )
-    # Directories a workflow action step's `oe__read_file` tool may read —
+    # Directories `read_document` (a workflow step's `oe__read_document`) may read —
     # where tools that download files (e.g. Gmail attachments via
     # workspace-mcp) save them. Comma-separated. Empty means workspace-mcp's
     # own default: $WORKSPACE_ATTACHMENT_DIR, else ~/.workspace-mcp/attachments.
@@ -1214,8 +1230,12 @@ class Settings(BaseSettings):
     # ROUTING_MODEL.
     chat_review_enabled: bool = Field(True, alias="CHAT_REVIEW_ENABLED")
     chat_review_quiet_minutes: int = Field(30, ge=1, alias="CHAT_REVIEW_QUIET_MINUTES")
-    chat_review_max_per_day: int = Field(10, ge=0, alias="CHAT_REVIEW_MAX_PER_DAY")
+    chat_review_max_per_day: int = Field(50, ge=0, alias="CHAT_REVIEW_MAX_PER_DAY")
     chat_review_model: str = Field("", alias="CHAT_REVIEW_MODEL")
+    # What it worked out (memory.worked_out): figures the Executive worked
+    # out, kept with their source for that person's later turns.
+    worked_out_enabled: bool = Field(True, alias="WORKED_OUT_ENABLED")
+    worked_out_max_per_day: int = Field(40, ge=0, alias="WORKED_OUT_MAX_PER_DAY")
     # Replay of the misses (memory.replay): nightly, the turns the review
     # graded a miss run again with today's lessons and facts, in a dry run,
     # and a judge says whether they would now go right. At most MAX_CASES a
@@ -1232,7 +1252,7 @@ class Settings(BaseSettings):
     # cannot sit in /today (and the nudge queue) forever.
     attunement_loop_ttl_days: int = Field(21, alias="ATTUNEMENT_LOOP_TTL_DAYS")
     attunement_max_open_loops_per_person: int = Field(
-        15, alias="ATTUNEMENT_MAX_OPEN_LOOPS_PER_PERSON"
+        50, alias="ATTUNEMENT_MAX_OPEN_LOOPS_PER_PERSON"
     )
     # Tell a person, once, when someone else assigns them a task
     # (attunement/assignment_notice.py). Chasing it stays the nudge engine's.
@@ -1298,6 +1318,12 @@ class Settings(BaseSettings):
     # drafts limit above. Past it, replies wait on cards as before.
     delegation_handle_it_max_sends_per_day: int = Field(
         20, alias="DELEGATION_HANDLE_IT_MAX_SENDS_PER_DAY", ge=1, le=500
+    )
+    # Workflows that send email as their creator (delegation.workflow_email,
+    # oe__send_email_as_me): the most such emails a day per person, within
+    # the drafts limit above. Past it the step is told to stop.
+    delegation_workflow_max_sends_per_day: int = Field(
+        20, alias="DELEGATION_WORKFLOW_MAX_SENDS_PER_DAY", ge=1, le=500
     )
     # Whether the owner may let team members use Act as me for themselves
     # (Delegate → Act as me → "Let team members use it", off until they turn

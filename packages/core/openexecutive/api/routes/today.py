@@ -34,8 +34,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from datetime import UTC, datetime, timedelta, tzinfo
+from typing import TYPE_CHECKING, Any, Literal
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
@@ -56,6 +56,7 @@ from openexecutive.clients.cockpit import ClientCockpitCard, format_practice_for
 if TYPE_CHECKING:
     from openexecutive.alerts.models import Alert
     from openexecutive.briefing.reader import Reader
+    from openexecutive.departments.models import Goal
     from openexecutive.people.models import Person
 
 logger = logging.getLogger(__name__)
@@ -68,6 +69,10 @@ StaleInsight = tuple["Person", dict[str, Any], str]
 # Most attention-worthy (off-track/at-risk) goals shown inline on a Department
 # card before the card defers the rest to the department page.
 _DEPT_ATTENTION_GOAL_CAP = 3
+# The briefing row that holds the goals with no department (slug ""). It is
+# shaped like a department so every reader of `departments` (the narrative,
+# the header, the digest, the fingerprint) counts its at-risk goals too.
+UNASSIGNED_GOALS_TITLE = "Other goals"
 
 router = APIRouter()
 
@@ -85,9 +90,14 @@ class GoalBrief(BaseModel):
     current: str
     target: str
     status: str  # "at_risk" | "off_track" (the only statuses surfaced here)
+    # Who the goal is on: its own owner, else the department's lead, else the
+    # principal (``departments.goals.effective_owner_id``). Additive.
+    owner_id: int | None = None
+    owner_name: str = ""
 
 
 class DepartmentBriefItem(BaseModel):
+    # "" for the row of goals with no department (UNASSIGNED_GOALS_TITLE).
     slug: str
     title: str
     authority_level: str
@@ -246,6 +256,12 @@ class ProposalItem(BaseModel):
     superseded_count: int = 0
     # Registry workflow the review suggested as the next step ('' = none).
     suggested_workflow: str = ""
+    # What the card needs from its reader (Alert.needs): an answer or a pick
+    # (answered at POST /alerts/{id}/answer), an OK, or nothing. '' keeps the
+    # card's own buttons.
+    needs: str = ""
+    question: str = ""
+    choices: list[str] = Field(default_factory=list)
     # Drafted artifacts only (source='artifact'): the format, so the card can
     # badge it and link to /artifacts, and the link target for 'link' ones.
     # `body` already carries a Markdown rendering for every format.
@@ -260,6 +276,12 @@ class ProposalItem(BaseModel):
     # An ERP alert's document, for Open (action ``open_record``); None on
     # every other card, and on a rule that names a report, not a document.
     record: ErpRecord | None = None
+
+    # Approvals one request held together (the same chat turn asking for the
+    # same kind of step, e.g. saving four files): every card of the request
+    # carries the same opaque key, so Needs you shows them as one card with a
+    # box per item. None on a card that stands alone.
+    group_key: str | None = None
 
 
 def _erp_record(alert: Alert) -> ErpRecord | None:
@@ -482,6 +504,52 @@ def _watch_trust_by_slug(alerts: list[Any]) -> dict[str, float]:
         return {}
 
 
+def _group_requests(items: list[ProposalItem]) -> None:
+    """Give the approvals one request held together the same ``group_key``:
+    open decision-backed cards from the same conversation for the same kind
+    of step (the tool, or the decision class), waiting on the same person. A key only two or more cards
+    share is set; the rest stay None. Never raises."""
+    import hashlib
+
+    from openexecutive.memory.decision_ledger import STATUS_PROPOSED, get_decision_instances
+    from openexecutive.orchestrator.take_the_lead import TRAINING_TAG
+
+    # A Take the lead training card is answered on its own (it asks whether
+    # to do it alone next time), so it never joins a group.
+    ids = [
+        p.decision_instance_id for p in items
+        if p.decision_instance_id is not None and TRAINING_TAG not in p.topic_tags
+    ]
+    if len(ids) < 2:
+        return
+    try:
+        instances = get_decision_instances(ids)
+    except Exception:
+        logger.debug("today: grouping approvals failed", exc_info=True)
+        return
+    keys: dict[int, str] = {}
+    for p in items:
+        inst = instances.get(p.decision_instance_id or 0)
+        if inst is None or TRAINING_TAG in p.topic_tags or inst.status != STATUS_PROPOSED or not inst.originating_session_id:
+            continue
+        try:
+            payload = json.loads(inst.proposed_payload_json or "{}")
+        except ValueError:
+            payload = {}
+        step = str(payload.get("tool") or "") if isinstance(payload, dict) else ""
+        raw = "|".join((
+            inst.originating_session_id, inst.decision_class, step, str(p.routed_to_person_id),
+        ))
+        keys[p.alert_id] = hashlib.sha256(raw.encode()).hexdigest()[:16]
+    counts: dict[str, int] = {}
+    for key in keys.values():
+        counts[key] = counts.get(key, 0) + 1
+    for p in items:
+        shared = keys.get(p.alert_id)
+        if shared is not None and counts[shared] > 1:
+            p.group_key = shared
+
+
 def _parse_decision_instance_id(topic_tags: list[str]) -> int | None:
     """Extract the decision_instance id from a ``decision_instance:{id}`` tag.
 
@@ -607,6 +675,104 @@ class HeldBackItem(BaseModel):
     lines: list[str]
 
 
+class PointSource(BaseModel):
+    """What a Right now point is about, when Home can open it: an email in
+    the reader's own inbox (``kind`` "mail": its ids, and its reply card
+    when one is open), a card in Needs you (``kind`` "alert"), or a team
+    chat message (``kind`` "link": its link in that app, and the app's
+    name)."""
+
+    kind: Literal["mail", "alert", "link"]
+    message_id: str | None = None
+    thread_id: str | None = None
+    decision_id: int | None = None
+    alert_id: int | None = None
+    url: str | None = None
+    app: str | None = None
+
+
+class NarrativePoint(BaseModel):
+    """One point of Right now (the /today header): its Markdown, when it
+    first appeared today (ISO-8601 UTC), and what it is about."""
+
+    text: str
+    since: str | None = None
+    source: PointSource | None = None
+
+
+def _point_source(raw: dict[str, Any] | None) -> PointSource | None:
+    """A stored point source as the API shows it; None when unreadable."""
+    if not raw:
+        return None
+    try:
+        return PointSource.model_validate(raw)
+    except ValueError:
+        return None
+
+
+class RightNowRow(BaseModel):
+    """One row of Home's Right now list (``briefing.right_now_list``): what
+    it is (``mail``, ``draft``, ``chat``), who it is from or to, its
+    subject, the newest activity on it (ISO-8601 UTC), a short note on why
+    it is listed, and what Home can open from it. ``key`` is what
+    ``POST /today/right-now/dismiss`` takes."""
+
+    key: str
+    kind: Literal["mail", "draft", "chat"]
+    who: str
+    subject: str
+    at: str
+    note: str = ""
+    source: PointSource | None = None
+
+
+class NarrativeProgress(BaseModel):
+    """What a Right now being written is doing, for the page to show in its
+    place: ``reading`` what moved (mail, calendar, Needs you), ``writing``
+    the header, ``checking`` each point cites something that moved. Plus how
+    many emails from people they deal with came to the principal's own inbox
+    since the served header was written (``since``), when there is one."""
+
+    step: Literal["reading", "writing", "checking"]
+    new_mail: int = 0
+    since: str | None = None
+
+
+class MorningBriefItem(BaseModel):
+    """Today's delivered morning brief, for Right now's "Earlier today" link."""
+
+    at: str
+    text: str
+
+
+class CalendarNextItem(BaseModel):
+    """A meeting still ahead today, for Right now's calendar list. ``start``
+    is ISO-8601 UTC; None with ``all_day``."""
+
+    title: str
+    start: str | None = None
+    all_day: bool = False
+
+
+class DoneRow(BaseModel):
+    """One thing in Home's Done for you. ``key`` names it (``approval:<card
+    id>`` for a card the viewer approved, else the activity row), and its
+    ``status`` changes in place: ``working`` while it runs, then ``done`` or
+    ``failed``. ``session_id`` is the chat that shows the work, when it ran
+    as one; ``alert_id`` lets a failed approval be tried again."""
+
+    key: str
+    kind: str
+    title: str
+    detail: str = ""
+    status: Literal["working", "done", "failed"] = "done"
+    at: str
+    session_id: str | None = None
+    alert_id: int | None = None
+    approval_id: int | None = None
+    artifact_id: str | None = None
+
+
 class TodayResponse(BaseModel):
     departments: list[DepartmentBriefItem]
     people: list[PersonBriefItem]
@@ -621,6 +787,41 @@ class TodayResponse(BaseModel):
     # narrative lands without a reload. Additive; None / False on a cold cache.
     narrative_generated_at: str | None = None
     narrative_stale: bool = False
+    # While ``narrative_stale``: what the rewrite is doing, so the page shows
+    # that instead of the header it replaces. Additive; None otherwise.
+    narrative_progress: NarrativeProgress | None = None
+    # The same narrative split for Home's Right now card
+    # (``briefing.right_now``): the bold opener, the points with when each
+    # first appeared today, and the Move today line. Plus when this reader
+    # last looked, so the page can say what is new since. Additive.
+    narrative_lead: str | None = None
+    narrative_points: list[NarrativePoint] = Field(default_factory=list)
+    narrative_move: str | None = None
+    narrative_seen_at: str | None = None
+    # When the served header was last found current (ISO-8601 UTC): now,
+    # when nothing it reads has moved since it was written, so a quiet
+    # header says "Checked 2:20 PM" rather than the hour it was written.
+    # None while a fresher one is being written. Additive.
+    narrative_checked_at: str | None = None
+    # The principal's own: mail to their own inbox today from people they
+    # don't deal with (strangers, bulk mail), as short "Name: subject"
+    # labels (a few) and how many there were. Right now's "Also in" line,
+    # never a point. Additive; empty / 0 for anyone else.
+    inbox_also: list[str] = Field(default_factory=list)
+    inbox_also_total: int = 0
+    # The principal's own: Home's Right now list, one row per thing waiting
+    # on them that Needs you doesn't show (``briefing.right_now_list``).
+    # Built from the records on every load, never written by a model.
+    # Additive; empty for anyone else.
+    right_now: list[RightNowRow] = Field(default_factory=list)
+    # Done for you: what the Executive did, or is doing, for the viewer in
+    # the last day, one row per thing (``_done_for_you``). Home's only place
+    # for it, so nothing in Needs you repeats it.
+    done_for_you: list[DoneRow] = Field(default_factory=list)
+    # The principal's own: today's delivered morning brief and the meetings
+    # still ahead today. Additive; None / empty for anyone else.
+    morning_brief: MorningBriefItem | None = None
+    calendar_next: list[CalendarNextItem] = Field(default_factory=list)
     # In-flight work the Executive will do soon (pending follow-ups / nudges)
     # and people we're awaiting a reply from. Both additive, default empty.
     in_flight: list[InFlightItem] = []
@@ -685,6 +886,11 @@ class ActivityItem(BaseModel):
     # and the artifact id of its write-up when it kept one (`run:<id>`).
     detail: str | None = None
     artifact_id: str | None = None
+    # An email it sent on its own, for Home's Done for you only
+    # (owner-only there): its subject and the addresses it went to. Never
+    # served, since this feed is the whole team's ("named, never quoted").
+    mail_subject: str = Field(default="", exclude=True)
+    mail_to: str = Field(default="", exclude=True)
 
 
 class ActivityResponse(BaseModel):
@@ -838,38 +1044,55 @@ def _build_today(
         if slug:
             dept_awaiting[slug] = dept_awaiting.get(slug, 0) + 1
 
-    dept_items = []
-    for ds in depts:
-        cfg = ds.config
-        at_risk = sum(1 for g in ds.goals if g.status == "at_risk")
-        off_track = sum(1 for g in ds.goals if g.status == "off_track")
+    from openexecutive.departments.goals import list_goal_views
+
+    try:
+        views = list_goal_views()
+    except Exception:
+        logger.warning("today: goal owners unreadable", exc_info=True)
+        views = []
+    owner_by_goal = {v.goal.id: (v.owner_id, v.owner_name) for v in views}
+
+    def _brief_row(
+        slug: str, title: str, authority_level: str, goals: list[Goal]
+    ) -> DepartmentBriefItem:
         # Surface the actual problem goals inline on the card — off_track
         # (worse) before at_risk, capped so a department with many goals can't
         # blow out the card. Goals already loaded, so no extra query. The id
         # tiebreaker makes intra-tier order deterministic regardless of how
-        # ds.goals was loaded (today it's ORDER BY id; this pins it).
+        # the goals were loaded (today it's ORDER BY id; this pins it).
         attention = sorted(
-            (g for g in ds.goals if g.status in ("off_track", "at_risk")),
+            (g for g in goals if g.status in ("off_track", "at_risk")),
             key=lambda g: (0 if g.status == "off_track" else 1, g.id or 0),
         )[:_DEPT_ATTENTION_GOAL_CAP]
-        dept_items.append(DepartmentBriefItem(
-            slug=cfg.slug,
-            title=cfg.title,
-            authority_level=cfg.authority_level.value,
-            goal_count=len(ds.goals),
-            at_risk_count=at_risk,
-            off_track_count=off_track,
-            awaiting_count=dept_awaiting.get(cfg.slug, 0),
+        return DepartmentBriefItem(
+            slug=slug,
+            title=title,
+            authority_level=authority_level,
+            goal_count=len(goals),
+            at_risk_count=sum(1 for g in goals if g.status == "at_risk"),
+            off_track_count=sum(1 for g in goals if g.status == "off_track"),
+            awaiting_count=dept_awaiting.get(slug, 0) if slug else 0,
             attention_goals=[
                 GoalBrief(
                     key_result=g.key_result,
                     current=g.current,
                     target=g.target,
                     status=g.status,
+                    owner_id=owner_by_goal.get(g.id, (None, ""))[0],
+                    owner_name=owner_by_goal.get(g.id, (None, ""))[1],
                 )
                 for g in attention
             ],
-        ))
+        )
+
+    dept_items = [
+        _brief_row(ds.config.slug, ds.config.title, ds.config.authority_level.value, ds.goals)
+        for ds in depts
+    ]
+    unassigned = [v.goal for v in views if not v.goal.department_slug]
+    if unassigned:
+        dept_items.append(_brief_row("", UNASSIGNED_GOALS_TITLE, "", unassigned))
 
     # Per-person insight notes only earn their model call when the brief has a
     # roster to show: the UI renders the People sidebar only for more than one
@@ -1014,6 +1237,9 @@ def _build_today(
             due_at=alert.due_at,
             superseded_count=superseded_counts.get(alert.id or -1, 0),
             suggested_workflow=alert.suggested_workflow,
+            needs=alert.needs,
+            question=alert.question,
+            choices=alert.choices,
             artifact_format=alert.artifact_format if alert.source == "artifact" else None,
             artifact_url=alert.artifact_url if alert.source == "artifact" else None,
             record=_erp_record(alert),
@@ -1027,6 +1253,7 @@ def _build_today(
     # team" and collapses the monitoring tail.
     proposal_items.sort(key=lambda p: p.created_at, reverse=True)
     proposal_items.sort(key=lambda p: (0 if p.category == "action" else 1, -p.score))
+    _group_requests(proposal_items)
 
     response = TodayResponse(
         departments=dept_items,
@@ -1213,6 +1440,51 @@ def _payload_headline(payload_json: str | None) -> str | None:
     return None
 
 
+def _app_action_summary(instance: Any) -> str | None:
+    """What a card left from chat (``orchestrator.app_control``) did, in its
+    own words ("Deleted the department “Finance”"), or what it would have
+    done ("Turned down: Delete the department “Finance”"). "" for a card on
+    something private to its person (left off the feed); None for any other
+    decision class. Its payload's title is only the item's name, so the
+    generic "Approved: Finance" read as the Executive approving a decision."""
+    from openexecutive.orchestrator.app_control import DECISION_CLASS
+
+    if instance.decision_class != DECISION_CLASS:
+        return None
+    final = _payload_dict(instance.final_payload_json)
+    proposed = _payload_dict(instance.proposed_payload_json)
+    if not _team_visible_app_action(str(proposed.get("action") or "")):
+        return ""  # names something private (a chat, a file, a memory): left out
+    did = final.get("did")
+    if isinstance(did, str) and did.strip() and instance.status in _APPROVED_STATUSES:
+        return f"{did.strip()} (asked for in chat, approved on its card)"
+    card = final.get("card") or proposed.get("card") or proposed.get("title") or "a change from chat"
+    if instance.status in _APPROVED_STATUSES:
+        verb = "Done"
+    else:
+        verb = {"rejected": "Turned down", "failed": "Didn't go through"}.get(instance.status, "Not done")
+    return f"{verb}: {str(card).strip()}"
+
+
+_APPROVED_STATUSES = frozenset({"approved_unchanged", "approved_with_edit", "executed"})
+
+# Cards whose item the whole team may see by name (``app_control_catalog``);
+# the rest (a chat's title, a file, a memory) stay off this shared feed.
+_TEAM_VISIBLE_APP_ACTIONS = frozenset({"add_department", "rename_department", "delete_department"})
+
+
+def _team_visible_app_action(action_name: str) -> bool:
+    return action_name in _TEAM_VISIBLE_APP_ACTIONS
+
+
+def _payload_dict(payload_json: str | None) -> dict[str, Any]:
+    try:
+        data = json.loads(payload_json or "")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 # The Executive's own daily rhythm runs. Each lands as a dated
 # "workflow_done: Executive Reflection 2026-09-28" row every day: fine on the
 # rail, but noise to the header and the briefs (and the dated title moved the
@@ -1394,6 +1666,19 @@ def _build_activity(
         if instance.decision_class == DEPARTMENT_ACTION_CLASS:
             continue  # it quotes a teammate's conversation; the audit log keeps who approved it
         label = _DECISION_STATUS_LABEL.get(instance.status, "Resolved")
+        app_action = _app_action_summary(instance)
+        if app_action == "":
+            continue
+        if app_action is not None:
+            items.append(ActivityItem(
+                kind="decision_resolved",
+                summary=app_action,
+                actor="Executive",
+                target=None,
+                department=instance.department or None,
+                at=instance.resolved_at or instance.created_at,
+            ))
+            continue
         detail = (
             _payload_headline(instance.final_payload_json)
             or _payload_headline(instance.proposed_payload_json)
@@ -1421,13 +1706,27 @@ def _build_activity(
     for row in led:
         if row.status not in ("done", "approved"):
             continue
+        if "__" in row.tool and not take_the_lead.mcp_tool_acts(row.tool):
+            # A connected-app read logged before reads stopped being gated
+            # ("Get gmail messages content batch") did nothing for anyone.
+            continue
+        # An email names who it went to ("Emailed Riley Park"),
+        # never the raw tool ("Send gmail message").
+        # The feed is the whole team's: it names teammates only, and an
+        # email to anyone else (a contact, an outside address) is "Sent an
+        # email". Done for you, the owner's own, names them all.
+        team = _mail_names(row.mail_to, team_only=True)
+        mailed = bool(row.mail_to) or take_the_lead.is_mail_send(row.tool)
+        summary = f"Emailed {team}" if team else "Sent an email" if mailed else row.summary
         items.append(ActivityItem(
             kind="took_the_lead",
-            summary=row.summary if row.status == "done" else f"{row.summary} (after a yes)",
+            summary=summary if row.status == "done" else f"{summary} (after a yes)",
             actor="Executive",
-            target=None,
+            target=team or None,
             department=None,
             at=row.at,
+            mail_subject=row.mail_subject,
+            mail_to=row.mail_to,
         ))
 
     # Operational alerts the Executive raised. For the rail, all statuses are
@@ -1592,7 +1891,19 @@ def _viewer_slice(
         p for p in _action_proposals(response.proposals)
         if p.routed_to_person_id == viewer.id or (demo and p.routed_to_person_id is None)
     ]
-    departments = [d for d in response.departments if d.slug in depts]
+    departments = [d for d in response.departments if d.slug and d.slug in depts]
+    # Of the goals with no department, only the ones on this teammate.
+    for d in response.departments:
+        if d.slug:
+            continue
+        mine = [g for g in d.attention_goals if g.owner_id == viewer.id]
+        if mine:
+            departments.append(d.model_copy(update={
+                "goal_count": len(mine),
+                "at_risk_count": sum(1 for g in mine if g.status == "at_risk"),
+                "off_track_count": sum(1 for g in mine if g.status == "off_track"),
+                "attention_goals": mine,
+            }))
     return {
         "departments": [d.model_dump() for d in departments],
         "people": [],
@@ -1703,14 +2014,20 @@ def _nothing_needs_attention(today_data: dict[str, Any], mode: str = "team") -> 
 
 
 def _with_due_soon(
-    today_data: dict[str, Any], mode: str, viewer_desc: dict[str, str] | None
+    today_data: dict[str, Any],
+    mode: str,
+    viewer_desc: dict[str, str] | None,
+    scope: str | None = None,
 ) -> dict[str, Any]:
-    """``today_data`` plus, in solo and for the principal's own (whole-
-    business) view only, ``due_soon``: their open loops due this week or
-    overdue (``open_loops.principal_due_soon``). Rendered as the context's
-    DUE THIS WEEK block, so the cache key moves when one is added, closed or
-    falls due. A copy; team data is returned untouched."""
-    if mode != "solo" or viewer_desc is not None:
+    """``today_data`` plus ``due_soon``: the principal's open loops due this
+    week or overdue (``open_loops.principal_due_soon``), for their own
+    whole-business view only: in solo, and in a team on the principal's own
+    scope (Right now names what came due today). Rendered into the context,
+    so the cache key moves when one is added, closed or falls due. A copy;
+    anything else is returned untouched."""
+    from openexecutive.briefing import narrative_cache
+
+    if viewer_desc is not None or (mode != "solo" and scope != narrative_cache.DEFAULT_SCOPE):
         return today_data
     from openexecutive.attunement.open_loops import principal_due_soon
 
@@ -1721,6 +2038,13 @@ def _with_due_soon(
 # the last 12 hours when that is longer (so at 07:00 last night's mail is
 # still "going on").
 _LIVE_MIN_LOOKBACK = timedelta(hours=12)
+
+
+def _live_start(now: datetime, tz: tzinfo) -> datetime:
+    """Where Right now's live window starts: local midnight, or
+    ``_LIVE_MIN_LOOKBACK`` before the current hour when that is earlier."""
+    hour = now.astimezone(tz).replace(minute=0, second=0, microsecond=0)
+    return min(hour.replace(hour=0), hour - _LIVE_MIN_LOOKBACK)
 
 
 def _header_live(include_private: bool, now: datetime | None = None) -> tuple[Any, str, str]:
@@ -1740,9 +2064,8 @@ def _header_live(include_private: bool, now: datetime | None = None) -> tuple[An
     now = now or datetime.now(UTC)
     tz = get_user_timezone()
     hour = now.astimezone(tz).replace(minute=0, second=0, microsecond=0)
-    midnight = hour.replace(hour=0)
-    start = min(midnight, hour - _LIVE_MIN_LOOKBACK)
-    window = "today so far" if start == midnight else f"since {start:%a %H:%M}"
+    start = _live_start(now, tz)
+    window = "today so far" if start == hour.replace(hour=0) else f"since {start:%a %H:%M}"
     now_label = f"{hour:%A %d %B}, between {hour:%H}:00 and {(hour + timedelta(hours=1)):%H}:00 local time"
     signals = gather_live_signals(
         start.astimezone(UTC), now=now, include_private=include_private,
@@ -1761,39 +2084,36 @@ def _narrative_context(
     mode: str = "team",
     scope: str | None = None,
     reader: Reader | None | object = _LOOKUP,
+    sources_out: dict[str, dict[str, Any]] | None = None,
 ) -> tuple[str, list[dict[str, Any]] | None]:
     """``(context, activity)`` — the exact user turn the model would receive.
 
     ``reader`` is who the header is written for (``_narrative_reader``); the
     regeneration resolves it once and hands the same one to the post-check.
+    ``sources_out``, when given, is filled with Right now's tag → item map
+    (``HeaderContext.sources``), so a point can be opened from Home.
 
     The single source both the cache key and the model call come from, so the
     key can never be computed over something the model did not see.
 
-    The whole-company scopes (``principal`` / ``company``) also get the live
-    blocks (`_header_live`) — what came in today, what is stuck, the rest of
-    the calendar — private rows only in the principal's own scope, and in
-    the first week nothing extra: Home's first-week card says what the week
-    is for (``briefing.first_week.first_week_card``).
+    The whole-company scopes (``principal`` / ``company``) get Right now's
+    context (`_header_context`, ``briefing.header_context``): what moved
+    today, tagged, with the live blocks (`_header_live`) private only in the
+    principal's own scope. A teammate's header keeps the older render.
 
-    On a quiet board — nothing awaiting a decision and nothing live — it
-    returns `narrative_cache.QUIET_CONTEXT` and no activity: the narrative is
-    a fixed line there, so the key must not depend on the rail, and building
-    the rail would be wasted work (it is a seven-source SQL union) on a
-    request whose answer is a constant.
+    On a quiet board it returns a fixed context (`narrative_cache.
+    QUIET_CONTEXT`, or `NOTHING_MOVED_CONTEXT` for the header when items are
+    open but none moved today) and no activity: the narrative is a fixed
+    line there, so the key must not depend on anything volatile.
     """
     from openexecutive.briefing import narrative_cache
     from openexecutive.briefing.narrative import render_briefing_context
 
-    today_data = _with_due_soon(today_data, mode, viewer_desc)
-    live = None
-    window = "today so far"
-    now_label: str | None = None
+    today_data = _with_due_soon(today_data, mode, viewer_desc, scope)
+    resolved = _narrative_reader(scope, viewer) if reader is _LOOKUP else reader
     if viewer_desc is None:
-        live, window, now_label = _header_live(
-            include_private=scope == narrative_cache.DEFAULT_SCOPE
-        )
-    if _nothing_needs_attention(today_data, mode) and (live is None or live.is_empty()):
+        return _header_context(today_data, viewer, mode, scope, resolved, sources_out)  # type: ignore[arg-type]
+    if _nothing_needs_attention(today_data, mode):
         return narrative_cache.QUIET_CONTEXT, None
     activity = _narrative_activity(viewer, viewer_desc)
     if viewer is not None and _demo_caller(viewer.id, principal=False):
@@ -1813,14 +2133,92 @@ def _narrative_context(
         today_data=today_data,
         activity=activity,
         mode=mode,
-        live=live,
-        live_window=window,
-        now_label=now_label,
-        brief_requests=viewer_desc is None and scope == narrative_cache.DEFAULT_SCOPE,
-        reader=_narrative_reader(scope, viewer) if reader is _LOOKUP else reader,  # type: ignore[arg-type]
+        brief_requests=False,
+        reader=resolved,  # type: ignore[arg-type]
         standing_facts=unattributed,
     )
     return context, activity
+
+
+def _header_context(
+    today_data: dict[str, Any],
+    viewer: PersonBriefItem | None,
+    mode: str,
+    scope: str | None,
+    reader: Reader | None,
+    sources_out: dict[str, dict[str, Any]] | None = None,
+) -> tuple[str, list[dict[str, Any]] | None]:
+    """Right now's context for a whole-company scope
+    (``briefing.header_context``). With nothing moved today it is one of the
+    two fixed contexts (``QUIET_CONTEXT``: nothing open either;
+    ``NOTHING_MOVED_CONTEXT``: open items, none of them new), so the header
+    is a fixed line and no model call happens. A calendar alone does not
+    count as moved, on purpose: Right now lists the meetings still ahead
+    (``calendar_next``) under that line, so a meetings-only day costs no
+    model call."""
+    from openexecutive.briefing import brief_requests, narrative_cache
+    from openexecutive.briefing.header_context import HeaderContext, render_header_context
+    from openexecutive.memory.facts import render_facts_for_prompt
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    own = scope == narrative_cache.DEFAULT_SCOPE
+    live, _window, now_label = _header_live(include_private=own)
+    tz: tzinfo
+    try:
+        tz = get_user_timezone()
+    except Exception:
+        logger.exception("today: reading the user's time zone failed; Right now uses UTC")
+        tz = UTC
+    # What the Executive said in a chat it would do and couldn't: news on
+    # the day it was saved, an open item after that.
+    raise_lines: list[str] = []
+    raise_older: list[str] = []
+    leave_out = ""
+    dismissed: list[Any] = []
+    if own:
+        from openexecutive.briefing import right_now
+
+        raise_lines, raise_older, leave_out = brief_requests.raise_split(tz)
+        # What they cleared from Right now today stays out of the next one.
+        dismissed = right_now.dismissed(narrative_cache.DEFAULT_SCOPE, narrative_cache.local_today())
+    standing_facts = render_facts_for_prompt()
+
+    def render(activity: list[dict[str, Any]]) -> HeaderContext:
+        return render_header_context(
+            period_label=narrative_cache.local_today(),
+            today_data=today_data,
+            live=live,
+            activity=activity,
+            mode=mode,
+            now_label=now_label,
+            tz=tz,
+            standing_facts=standing_facts,
+            raise_lines=raise_lines,
+            raise_older=raise_older,
+            leave_out_block=leave_out,
+            reader=reader,
+            dismissed=dismissed,
+        )
+
+    # Rendered first without the rail: on a board with nothing open and
+    # nothing moved, the answer is the fixed quiet line and the rail (a
+    # seven-source SQL union) is never built. Work finished today alone does
+    # not make a header there.
+    ctx = render([])
+    open_items = (
+        not _nothing_needs_attention(today_data, mode)
+        or bool(today_data.get("due_soon"))
+        or bool(today_data.get("in_flight"))
+    )
+    if not ctx.moved and not open_items:
+        return narrative_cache.QUIET_CONTEXT, None
+    activity = _narrative_activity(viewer, None)
+    ctx = render(activity)
+    if not ctx.moved:
+        return narrative_cache.NOTHING_MOVED_CONTEXT, None
+    if sources_out is not None:
+        sources_out.update(ctx.sources)
+    return ctx.text, activity
 
 
 def _narrative_reader(scope: str | None, viewer: PersonBriefItem | None) -> Reader | None:
@@ -1851,6 +2249,8 @@ _regen_pending: set[str] = set()
 # the page is told nothing is coming, so it drops its "Catching up…" line.
 _REGEN_FAILURE_BACKOFF = timedelta(minutes=5)
 _regen_failed_at: dict[str, datetime] = {}
+# Scope → the step a running rewrite is on (``NarrativeProgress.step``).
+_regen_step: dict[str, str] = {}
 
 
 def _in_failure_backoff(scope: str, now: datetime | None = None) -> bool:
@@ -1863,6 +2263,39 @@ def _regen_lock(scope: str) -> asyncio.Lock:
     if lock is None:
         lock = _regen_locks[scope] = asyncio.Lock()
     return lock
+
+
+# A stale header older than this is not served: the rewrite runs at least
+# hourly (the NOW line moves the key), so one this old means it has been
+# failing, and its "next meeting" or "due in an hour" no longer holds.
+_STALE_HEADER_MAX_AGE = timedelta(hours=2)
+
+
+def _header_outdated(written: datetime, now: datetime, *, quotes_calendar: bool) -> bool:
+    """Whether a header written at ``written`` can no longer be shown as now:
+    it is over ``_STALE_HEADER_MAX_AGE`` old, or (``quotes_calendar``: the
+    principal's own header) a meeting on today's cached calendar started or
+    ended since it was written, so it may call that meeting next or say there
+    is time to prepare. Only asked of a stale header, whose rewrite is
+    already scheduled. Never raises."""
+    if now - written > _STALE_HEADER_MAX_AGE:
+        return True
+    if not quotes_calendar:
+        return False
+    from openexecutive.briefing.live_signals import cached_calendar
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    try:
+        events = cached_calendar(now, get_user_timezone()) or []
+        return any(
+            edge is not None and written < edge <= now
+            for e in events
+            if not e.all_day
+            for edge in (e.start, e.end)
+        )
+    except Exception:
+        logger.exception("today: checking the header against the calendar failed")
+        return False
 
 
 def _attach_narrative(
@@ -1879,7 +2312,9 @@ def _attach_narrative(
     say how old the text is and re-poll until the regeneration lands. A row
     written on an earlier local day is never served as today's: the page
     shows nothing until today's is written (a few seconds) rather than
-    yesterday's read as if it were current."""
+    yesterday's read as if it were current, and the same goes for a stale
+    one a meeting has started or ended since, or that is hours old
+    (``_header_outdated``): it may still call a finished call next."""
     from openexecutive.briefing import narrative_cache
     from openexecutive.memory.workspace_settings import get_workspace
 
@@ -1893,21 +2328,105 @@ def _attach_narrative(
         age_s: int | None = None
         if cached is not None:
             written = _parse_aware(cached.generated_at)
-            if written is not None and narrative_cache.local_today(written) == narrative_cache.local_today():
+            if (
+                written is not None
+                and narrative_cache.local_today(written) == narrative_cache.local_today()
+                and not (is_stale and _header_outdated(
+                    written, datetime.now(UTC),
+                    quotes_calendar=scope == narrative_cache.DEFAULT_SCOPE,
+                ))
+            ):
                 response.narrative = cached.narrative_text
                 response.narrative_generated_at = cached.generated_at
+                if not is_stale:
+                    response.narrative_checked_at = narrative_cache.utc_now_iso()
                 age_s = int((datetime.now(UTC) - written).total_seconds())
+                _attach_right_now(response, scope, cached.narrative_text, cached.generated_at)
         scheduled = is_stale and background_tasks is not None and not _in_failure_backoff(scope)
         if scheduled:
             assert background_tasks is not None
             background_tasks.add_task(_regen_briefing_narrative, caller_person_id, scope)
         response.narrative_stale = scheduled
+        if scheduled:
+            response.narrative_progress = _narrative_progress(scope, cached)
         logger.info(
             "today: narrative served scope=%s age_s=%s stale=%s regen_scheduled=%s",
             scope, age_s, is_stale, scheduled,
         )
     except Exception:
         logger.exception("today: briefing narrative attach failed (scope=%s)", scope)
+
+
+def _narrative_progress(scope: str, cached: Any, now: datetime | None = None) -> NarrativeProgress:
+    """Where the rewrite of ``scope``'s header is (``reading`` until it
+    starts), and for the principal how many emails came to their own inbox
+    since ``cached`` was written. Never raises."""
+    from openexecutive.briefing import narrative_cache
+
+    step = _regen_step.get(scope)
+    progress = NarrativeProgress(step="writing" if step == "writing" else "checking" if step == "checking" else "reading")
+    written = _parse_aware(cached.generated_at) if cached is not None else None
+    if written is None or narrative_cache.local_today(written) != narrative_cache.local_today():
+        return progress
+    progress.since = cached.generated_at
+    if scope != narrative_cache.DEFAULT_SCOPE:
+        return progress
+    try:
+        from openexecutive.briefing.live_signals import own_inbox
+        from openexecutive.memory.workspace_settings import get_user_timezone
+
+        mail = own_inbox(written, get_user_timezone(), now or datetime.now(UTC))
+        progress.new_mail = mail.total  # from people they deal with, not yet answered
+    except Exception:
+        logger.exception("today: counting new mail for Right now failed")
+    return progress
+
+
+def _attach_right_now(response: TodayResponse, scope: str, text: str, written_at: str) -> None:
+    """Split the served narrative for Home's Right now card. A point with no
+    recorded time (a header written before times were kept) takes the
+    header's own time."""
+    from openexecutive.briefing import narrative_cache, right_now
+
+    parts = right_now.split_narrative(text)
+    day = narrative_cache.local_today()
+    times = right_now.point_times(scope, day)
+    sources = right_now.point_sources(scope, day)
+    # Dismissed today: gone until the day ends, however the header words it.
+    gone = right_now.dismissed(scope, day)
+    response.narrative_lead = parts.lead
+    response.narrative_move = parts.move
+    response.narrative_points = [
+        NarrativePoint(
+            text=p,
+            since=times.get(right_now.point_key(p), written_at),
+            source=_point_source(sources.get(right_now.point_key(p))),
+        )
+        for p in parts.points
+        if not right_now.is_dismissed(p, sources.get(right_now.point_key(p)), gone)
+    ]
+    # Only a rostered reader's own scope has a last look (see /today/seen).
+    if scope != narrative_cache.COMPANY_SCOPE:
+        response.narrative_seen_at = right_now.seen_at(scope)
+    if scope == narrative_cache.DEFAULT_SCOPE:
+        _attach_inbox_also(response)
+
+
+def _attach_inbox_also(response: TodayResponse, now: datetime | None = None) -> None:
+    """The principal's "Also in" line: today's mail to their own inbox from
+    people they don't deal with. Never raises."""
+    from openexecutive.briefing.live_signals import own_inbox
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    now = now or datetime.now(UTC)
+    try:
+        tz = get_user_timezone()
+        mail = own_inbox(_live_start(now, tz).astimezone(UTC), tz, now)
+    except Exception:
+        logger.exception("today: reading the own inbox for Right now failed")
+        return
+    response.inbox_also = list(mail.others)
+    response.inbox_also_total = mail.others_total
 
 
 async def _regen_briefing_narrative(
@@ -1940,19 +2459,23 @@ async def _regen_briefing_narrative(
         )
         return
     async with lock:
-        # At most one extra pass: a trigger that arrived mid-run may carry
-        # news the running pass never saw. The pass is cheap when nothing
-        # moved (it returns before the model call when the key matches).
-        for _ in range(2):
-            _regen_pending.discard(expected_scope)
-            ok = await _regen_briefing_narrative_locked(caller_person_id, expected_scope)
-            if not ok:
-                _regen_failed_at[expected_scope] = datetime.now(UTC)
+        try:
+            # At most one extra pass: a trigger that arrived mid-run may carry
+            # news the running pass never saw. The pass is cheap when nothing
+            # moved (it returns before the model call when the key matches).
+            for _ in range(2):
                 _regen_pending.discard(expected_scope)
-                return
-            _regen_failed_at.pop(expected_scope, None)
-            if expected_scope not in _regen_pending:
-                return
+                _regen_step[expected_scope] = "reading"
+                ok = await _regen_briefing_narrative_locked(caller_person_id, expected_scope)
+                if not ok:
+                    _regen_failed_at[expected_scope] = datetime.now(UTC)
+                    _regen_pending.discard(expected_scope)
+                    return
+                _regen_failed_at.pop(expected_scope, None)
+                if expected_scope not in _regen_pending:
+                    return
+        finally:
+            _regen_step.pop(expected_scope, None)
 
 
 async def _regen_briefing_narrative_locked(
@@ -1964,7 +2487,9 @@ async def _regen_briefing_narrative_locked(
     import time
 
     from openexecutive.briefing import narrative_cache
+    from openexecutive.briefing.header_context import keep_cited_points, tags_in
     from openexecutive.briefing.narrative import (
+        NOTHING_NEW,
         QUIET_PRINCIPAL,
         QUIET_VIEWER,
         REWRITE_TIMEOUT_S,
@@ -1973,6 +2498,11 @@ async def _regen_briefing_narrative_locked(
     from openexecutive.memory.workspace_settings import get_workspace
 
     started = time.monotonic()
+    # The new points that need the principal, by key (right_now_ping).
+    important: set[str] = set()
+    # Tag → item for the lines Home can open, and point key → item.
+    sources: dict[str, dict[str, Any]] = {}
+    pointed: dict[str, dict[str, Any]] = {}
 
     def prepare() -> tuple[Any, ...] | None:
         # The SQLite reads behind the context: seconds on a slow disk, so run
@@ -1990,25 +2520,29 @@ async def _regen_briefing_narrative_locked(
             return None
         reader = _narrative_reader(scope, viewer)
         context, activity = _narrative_context(
-            today_data, viewer, viewer_desc, mode, scope, reader=reader,
+            today_data, viewer, viewer_desc, mode, scope, reader=reader, sources_out=sources,
         )
         input_hash = narrative_cache.build_narrative_input_hash(context, scope=scope, mode=mode)
         cached = narrative_cache.get(scope)
         if cached is not None and cached.input_hash == input_hash:
             return None  # another trigger already wrote this exact state
-        return mode, scope, today_data, viewer_desc, reader, context, activity, input_hash
+        return mode, scope, today_data, viewer_desc, reader, context, activity, input_hash, cached
 
     try:
         prepared = await asyncio.to_thread(prepare)
         if prepared is None:
             return True
-        mode, scope, today_data, viewer_desc, reader, context, activity, input_hash = prepared
+        mode, scope, today_data, viewer_desc, reader, context, activity, input_hash, cached = prepared
         if context == narrative_cache.QUIET_CONTEXT:
             # Nothing awaits a decision — skip the model call entirely and
             # write the fixed quiet line. Still cached (below) so the hot path
             # sees a fresh hash instead of re-scheduling this task forever.
             text = QUIET_VIEWER if viewer_desc is not None else QUIET_PRINCIPAL
+        elif context == narrative_cache.NOTHING_MOVED_CONTEXT:
+            # Open items, none new today: Needs you below is the whole story.
+            text = NOTHING_NEW
         else:
+            _regen_step[expected_scope] = "writing"
             text = await asyncio.wait_for(
                 synthesize_briefing_narrative(
                     today_data=today_data, activity=activity or [],
@@ -2022,6 +2556,25 @@ async def _regen_briefing_narrative_locked(
                 # 25 s for the draft, plus the rewrite's own budget.
                 timeout=25.0 + REWRITE_TIMEOUT_S,
             )
+            _regen_step[expected_scope] = "checking"
+            if viewer_desc is None and text:
+                from openexecutive.briefing.header_context import point_sources
+                from openexecutive.briefing.right_now import point_key as key_of
+
+                pointed = {key_of(p): src for p, src in point_sources(text, sources)}
+                if scope == narrative_cache.DEFAULT_SCOPE:
+                    from openexecutive.briefing.header_context import (
+                        needs_you_tags,
+                        point_citations,
+                    )
+                    from openexecutive.briefing.right_now import point_key
+
+                    needs_you = needs_you_tags(context)
+                    important = {point_key(p) for p, cited in point_citations(text) if cited & needs_you}
+                # Right now: a point must cite a line of what moved today.
+                # A draft with nothing left is still cached (as the fixed
+                # line), or every view would pay for the same draft again.
+                text = keep_cited_points(text, tags_in(context)) or NOTHING_NEW
     except Exception:
         logger.exception("today: briefing narrative regen failed (scope=%s)", expected_scope)
         return False
@@ -2029,29 +2582,49 @@ async def _regen_briefing_narrative_locked(
     if not text:
         logger.warning("today: narrative regen returned no text (scope=%s) — not cached", scope)
         return False
+    written_at = narrative_cache.utc_now_iso()
     await asyncio.to_thread(narrative_cache.put, narrative_cache.BriefingNarrative(
         scope=scope,
         input_hash=input_hash,
         narrative_text=text,
-        generated_at=narrative_cache.utc_now_iso(),
+        generated_at=written_at,
     ))
+    from openexecutive.briefing import right_now
+
+    recorded = right_now.record_points(scope, text, written_at, pointed)
+    right_now.record_sources(scope, written_at, pointed)
+    if scope == narrative_cache.DEFAULT_SCOPE and recorded.new:
+        from openexecutive.briefing.right_now_ping import maybe_ping
+
+        ping = await maybe_ping(recorded.new, important, earlier_today=_written_earlier_today(cached))
+        logger.info("today: right now ping %s", ping.status)
     logger.info(
         "today: narrative regenerated scope=%s ms=%d quiet=%s context_chars=%d",
         scope, int((time.monotonic() - started) * 1000),
-        context == narrative_cache.QUIET_CONTEXT, len(context),
+        context in (narrative_cache.QUIET_CONTEXT, narrative_cache.NOTHING_MOVED_CONTEXT), len(context),
     )
     return True
+
+
+def _written_earlier_today(cached: Any) -> bool:
+    """Whether the header being replaced was written today, the quiet line
+    included: the first header of the day is the morning's, which the brief
+    covers, so it pings nobody."""
+    from openexecutive.briefing import narrative_cache
+
+    written = _parse_aware(cached.generated_at) if cached is not None else None
+    return written is not None and narrative_cache.local_today(written) == narrative_cache.local_today()
 
 
 async def refresh_principal_narrative() -> bool:
     """Bring the principal's header up to date without anyone opening the page.
 
     Called from the scheduler's tick: refreshes the calendar read the header
-    quotes and settles the chat drafts it counts, then regenerates the principal's narrative only when its key
+    quotes and the principal's unanswered sent mail (``briefing.waiting_on``), and settles the chat drafts it counts, then regenerates the principal's narrative only when its key
     moved (new mail, something stuck, a proposal, the hour). True when a
     regeneration ran. Never raises.
     """
-    from openexecutive.briefing import narrative_cache
+    from openexecutive.briefing import narrative_cache, waiting_on
     from openexecutive.briefing.live_signals import refresh_calendar, settle_principal_drafts
     from openexecutive.memory.workspace_settings import get_workspace
     from openexecutive.people.store import find_principal_person
@@ -2060,8 +2633,8 @@ async def refresh_principal_narrative() -> bool:
         principal = find_principal_person()
         if principal is None or principal.id is None:
             return False
-        await refresh_calendar()
-        await settle_principal_drafts()
+        # Independent reads, so a slow mailbox delays none of the others.
+        await asyncio.gather(refresh_calendar(), waiting_on.refresh(), settle_principal_drafts())
         mode = get_workspace().mode
         snapshot = _build_today(include_private=True)
         scope, today_data, desc, viewer = _narrative_inputs(snapshot, principal.id)
@@ -2077,6 +2650,27 @@ async def refresh_principal_narrative() -> bool:
     except Exception:
         logger.exception("today: principal narrative refresh failed")
         return False
+
+
+# How often the principal opening the page settles their chat drafts (and
+# rewrites the header when that moved it). The scheduler's own pass runs only
+# every BRIEFING_NARRATIVE_REFRESH_MINUTES in daytime, and not at all when
+# they turned that background job off; without this a draft they sent from
+# their mailbox kept being called unsent on the page in between.
+_VIEW_SETTLE_EVERY = timedelta(minutes=2)
+_view_settled_at: datetime | None = None
+
+
+def _maybe_settle_on_view(background_tasks: BackgroundTasks, now: datetime | None = None) -> bool:
+    """Queue ``refresh_principal_narrative`` after the response, at most once
+    per ``_VIEW_SETTLE_EVERY``. True when queued."""
+    global _view_settled_at
+    now = now or datetime.now(UTC)
+    if _view_settled_at is not None and now - _view_settled_at < _VIEW_SETTLE_EVERY:
+        return False
+    _view_settled_at = now
+    background_tasks.add_task(refresh_principal_narrative)
+    return True
 
 
 def _is_principal(caller_person_id: int | None) -> bool:
@@ -2101,11 +2695,11 @@ async def get_today(
     # disk (Nov 3, 2026: WSL on /mnt/c). On the event loop that stalled every
     # other request, so an ERPNext panel question signed for 60 s was read
     # after its assertion had expired. A worker thread keeps the loop free.
-    return await asyncio.to_thread(_today_for, caller, background_tasks, tz)
+    return await asyncio.to_thread(_today_for, caller, background_tasks, tz, request)
 
 
 def _today_for(
-    caller: int | None, background_tasks: BackgroundTasks, tz: TzQuery
+    caller: int | None, background_tasks: BackgroundTasks, tz: TzQuery, request: Request
 ) -> TodayResponse:
     """GET /today's work for ``caller``, synchronous (run in a thread)."""
     from openexecutive.orchestrator.artifact_records import viewer_for_person
@@ -2126,9 +2720,14 @@ def _today_for(
         background_tasks=background_tasks,
     )
     if principal:
+        _maybe_settle_on_view(background_tasks)
         response.held_back = _held_back(datetime.now(UTC))
         response.first_week_card = _first_week_card()
         response.first_week = response.first_week_card is not None
+        response.morning_brief = _morning_brief_today()
+        response.calendar_next = _calendar_next(datetime.now(UTC))
+        response.right_now = _right_now_rows()
+    response.done_for_you = _done_for_you(request, caller, datetime.now(UTC))
     _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)
     return response
 
@@ -2191,6 +2790,12 @@ def _demo_caller(caller: int | None, *, principal: bool) -> bool:
     return not principal and caller is not None and is_demo_person(caller)
 
 
+# Right now's split of the header text (`_attach_narrative`): hidden with it.
+_NARRATIVE_PARTS: tuple[tuple[str, Any], ...] = (
+    ("narrative_lead", None), ("narrative_points", list), ("narrative_move", None),
+)
+
+
 def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, principal: bool) -> None:
     """A demo caller's Home names no other demo person (people.demo): not in
     the team list, the people waited on, what is in flight or was handled
@@ -2212,19 +2817,30 @@ def _hide_other_demo_people(response: TodayResponse, *, caller: int | None, prin
         response.handled_overnight = []
         # Their texts could name the principal, which can't be checked now.
         response.proposals = []
-        for field, empty in (("narrative", None), ("departments", []), ("held_back", []), ("practice_clients", [])):
+        for field, empty in (
+            ("narrative", None), ("departments", []), ("held_back", []), ("practice_clients", []),
+            *_NARRATIVE_PARTS,
+        ):
             if hasattr(response, field):
-                setattr(response, field, empty)
+                setattr(response, field, empty() if callable(empty) else empty)
         return
     hidden_ids = {p.id for p in others}
     hidden_names = {p.full_name for p in others if p.full_name}
     # The header is model-written: one that names another demo person isn't
-    # shown at all.
+    # shown at all, nor Right now's split of it.
     narrative = getattr(response, "narrative", None)
     if isinstance(narrative, str) and any(name in narrative for name in hidden_names):
         response.narrative = None
+        for field, empty in _NARRATIVE_PARTS:
+            if hasattr(response, field):
+                setattr(response, field, empty() if callable(empty) else empty)
     response.people = [p for p in response.people if p.id not in hidden_ids]
     response.awaiting = [a for a in response.awaiting if a.person_id not in hidden_ids]
+    # A goal another demo person owns or heads shows with no owner.
+    for dept in getattr(response, "departments", None) or []:
+        for goal in getattr(dept, "attention_goals", None) or []:
+            if getattr(goal, "owner_id", None) in hidden_ids:
+                goal.owner_id, goal.owner_name = None, ""
     response.in_flight = [i for i in response.in_flight if i.target not in hidden_names]
     response.handled_overnight = [h for h in response.handled_overnight if h.target not in hidden_names]
     # A target that isn't a name they may see (a raw address or chat id,
@@ -2408,6 +3024,320 @@ async def get_alert_card(alert_id: int, request: Request, tz: TzQuery = None) ->
     return shown
 
 
+# How far back Home's Done for you looks, and how many rows it sends.
+_DONE_WINDOW = timedelta(hours=24)
+_DONE_MAX = 8
+# Activity rows that are not something done for the reader: a card raised
+# (that is Needs you's), advice and decisions noted from their own chats,
+# a project started, and the contacts tally.
+_DONE_SKIP_KINDS = frozenset({
+    "alert_raised", "advice_given", "decision_logged", "initiative_started", "contacts_kept",
+})
+
+
+def _reader_name(caller: int | None) -> str:
+    """The reader's name as the activity rows name whom a message went to
+    (``_build_channel_lookup``), folded for matching, or "" when there is
+    no one to match."""
+    if caller is None:
+        return ""
+    try:
+        from openexecutive.people.store import get_person
+
+        person = get_person(caller)
+    except Exception:
+        return ""
+    return " ".join((person.full_name or "").split()).casefold() if person is not None else ""
+
+
+def _done_for_you(request: Request, caller: int | None, now: datetime) -> list[DoneRow]:
+    """What the Executive did or is doing for the viewer in the last day:
+    the cards they approved (one row per card, its newest try) and what it
+    did on its own. Running ones first, then newest. Never raises."""
+    from openexecutive.alerts import approvals as alert_approvals
+    from openexecutive.alerts.store import get_alert
+    from openexecutive.api.routes.chat import _caller_is_principal_or_unclaimed
+
+    since = now - _DONE_WINDOW
+    rows: list[DoneRow] = []
+    # On an install with no principal yet anyone may approve (unsigned, so
+    # the approval has no person) and is the owner here: they see every
+    # approval and the shared feed, as the approve route lets them act.
+    try:
+        owner = _caller_is_principal_or_unclaimed(request)
+    except Exception:
+        owner = False
+    unclaimed = caller is None and owner
+    if caller is not None or unclaimed:
+        try:
+            for a in alert_approvals.recent(since.isoformat(), approved_by_person_id=caller):
+                alert = get_alert(a.alert_id)
+                status: Literal["working", "done", "failed"] = (
+                    "working" if a.status == alert_approvals.STATUS_RUNNING
+                    else "failed" if a.status == alert_approvals.STATUS_FAILED else "done"
+                )
+                rows.append(DoneRow(
+                    key=f"approval:{a.alert_id}",
+                    kind="approval",
+                    title=alert.headline if alert is not None else "A card you approved",
+                    detail=a.outcome,
+                    status=status,
+                    at=a.finished_at or a.approved_at,
+                    session_id=a.session_id,
+                    alert_id=a.alert_id,
+                    approval_id=a.id,
+                ))
+        except Exception:
+            logger.warning("today: reading approvals for Done for you failed", exc_info=True)
+    try:
+        # The shared feed is what the Executive did for the company, so it
+        # is "done for you" only to the principal; anyone else gets their
+        # own approvals and what was sent as them.
+        shared = (
+            _build_activity(
+                20, since, include_alert_raised=False, exclude_workflows=RHYTHM_WORKFLOWS,
+            ).items
+            if owner else []
+        )
+        activity = [*shared, *_sent_as_caller(request)]
+    except Exception:
+        logger.warning("today: reading activity for Done for you failed", exc_info=True)
+        activity = []
+    # A message it sent to the reader (a reminder, a Right now note) is
+    # something they already got, not something it did for them.
+    reader = _reader_name(caller)
+    reader_emails = _reader_emails(caller)
+    seen: set[str] = set()
+    for item in activity:
+        at = _parse_aware(item.at)
+        if item.kind in _DONE_SKIP_KINDS or at is None or at < since:
+            continue
+        if reader and " ".join((item.target or "").split()).casefold() == reader:
+            continue
+        mailed = {a for a in item.mail_to.split(",") if a}
+        if mailed and reader_emails and mailed <= reader_emails:
+            continue
+        key = f"{item.kind}:{item.at}:{item.summary}"
+        if key in seen:
+            continue
+        seen.add(key)
+        title = item.summary or item.kind
+        if item.mail_to:
+            # Done for you is the owner's own, so it says who and what.
+            who = _mail_names(item.mail_to)
+            title = f"Emailed {who}" + (" (after a yes)" if title.endswith("(after a yes)") else "")
+            if item.mail_subject:
+                title = f"{title}: {item.mail_subject}"
+        rows.append(DoneRow(
+            key=key, kind=item.kind, title=title[:240],
+            detail=item.detail or "", at=item.at, artifact_id=item.artifact_id,
+        ))
+    rows.sort(key=lambda r: _parse_aware(r.at) or datetime.min.replace(tzinfo=UTC), reverse=True)
+    rows.sort(key=lambda r: 0 if r.status == "working" else 1)
+    # An approved ERPNext draft says "the ERP" on a named install, as its card
+    # does (prompts.connected_systems.in_product_reply).
+    from openexecutive.prompts.connected_systems import in_product_reply
+
+    for row in rows[:_DONE_MAX]:
+        row.title = in_product_reply(row.title)
+        if isinstance(row.detail, str):
+            row.detail = in_product_reply(row.detail)
+    return rows[:_DONE_MAX]
+
+
+def _mail_names(mail_to: str, *, team_only: bool = False) -> str:
+    """"Riley Park", "Riley Park and sam@example.com", "Riley Park and 2
+    others": who an email went to, by their People name where there is
+    one (contacts included), else the address. ``team_only`` (the shared
+    feed): teammates' names, and "" when anyone else got it. "" when there's
+    no address. Never raises."""
+    from openexecutive.people.store import find_person_by_email
+
+    addresses = [a.strip() for a in (mail_to or "").split(",") if a.strip()]
+    if not addresses:
+        return ""
+    names: list[str] = []
+    for index, address in enumerate(addresses):
+        try:
+            person = find_person_by_email(address, include_contacts=not team_only)
+        except Exception:
+            person = None
+        name = " ".join((person.full_name or "").split()) if person is not None and person.full_name else ""
+        if team_only and not name:
+            return ""
+        if index < 2:
+            names.append(name or address)
+    if len(addresses) == 1:
+        return names[0]
+    if len(addresses) == 2:
+        return f"{names[0]} and {names[1]}"
+    return f"{names[0]} and {len(addresses) - 1} others"
+
+
+def _reader_emails(caller: int | None) -> set[str]:
+    """The viewer's addresses, lowercased: an email it sent them is
+    something they already got. Empty when unknown. Never raises."""
+    if caller is None:
+        return set()
+    from openexecutive.people.store import get_person
+
+    try:
+        person = get_person(caller)
+    except Exception:
+        return set()
+    if person is None:
+        return set()
+    return {e.strip().lower() for e in [person.email or "", *person.email_aliases] if e and e.strip()}
+
+
+def _right_now_rows(now: datetime | None = None) -> list[RightNowRow]:
+    """The principal's Right now list as the API shows it. Never raises."""
+    from openexecutive.briefing import right_now_list
+
+    try:
+        found = right_now_list.rows(now)
+    except Exception:
+        logger.exception("today: building the Right now list failed")
+        return []
+    return [
+        RightNowRow(
+            key=r.key, kind=r.kind,  # type: ignore[arg-type]
+            who=r.who, subject=r.subject, at=r.at, note=r.note,
+            source=_point_source(r.source),
+        )
+        for r in found
+    ]
+
+
+class DismissRowRequest(BaseModel):
+    """A Right now row to clear, by the ``key`` ``GET /today`` served it with."""
+
+    key: str = Field(min_length=1, max_length=200)
+
+
+@router.post("/today/right-now/dismiss", tags=["today"])
+async def dismiss_right_now_row(body: DismissRowRequest, request: Request) -> dict[str, bool]:
+    """The principal dismissed a row of their Right now list: ``GET /today``
+    leaves it out until something newer lands on it (a later email in the
+    thread, a later ask). Anyone else has no list, so nothing to dismiss."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.briefing import right_now_list
+
+    if not _is_principal(_resolve_caller_person_id(request)):
+        return {"dismissed": False}
+    return {"dismissed": right_now_list.dismiss(body.key)}
+
+
+@router.post("/today/seen", tags=["today"])
+async def mark_today_seen(request: Request) -> dict[str, str | None]:
+    """The reader looked at Right now: the next view counts its points as new
+    only when they appeared after this. Stored per narrative scope, the same
+    scope ``GET /today`` serves this caller; an unrostered caller's shared
+    scope keeps none."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.briefing import narrative_cache, right_now
+    from openexecutive.people.store import get_person
+
+    caller = _resolve_caller_person_id(request)
+    if caller is None or get_person(caller) is None:
+        # The shared `company` scope is read by every unrostered caller, so a
+        # look there is nobody's in particular: not recorded.
+        return {"seen_at": None}
+    scope = narrative_cache.DEFAULT_SCOPE if _is_principal(caller) else f"person:{caller}"
+    return {"seen_at": right_now.mark_seen(scope)}
+
+
+class DismissPointRequest(BaseModel):
+    """A Right now point to clear, as ``GET /today`` served it."""
+
+    text: str = Field(min_length=1, max_length=2000)
+
+
+@router.post("/today/dismiss", tags=["today"])
+async def dismiss_today_point(
+    body: DismissPointRequest, request: Request, background_tasks: BackgroundTasks,
+) -> dict[str, bool]:
+    """The reader dismissed a point of their Right now: ``GET /today`` leaves
+    it out for the rest of the local day (by its subject, or a reworded point
+    about the same email or card), and the principal's next header is told
+    not to raise it again, so the header is rewritten after the response.
+    Stored per narrative scope, like ``/today/seen``; an unrostered caller's
+    shared scope keeps none."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.briefing import narrative_cache, right_now
+    from openexecutive.people.store import get_person
+
+    caller = _resolve_caller_person_id(request)
+    if caller is None or get_person(caller) is None:
+        return {"dismissed": False}
+    principal = _is_principal(caller)
+    scope = narrative_cache.DEFAULT_SCOPE if principal else f"person:{caller}"
+    # Only a point of the header this reader is served, in its words: they go
+    # into the next header's context. One reworded since the page loaded is
+    # matched by its subject.
+    served = narrative_cache.get(scope)
+    points = right_now.split_narrative(served.narrative_text).points if served is not None else []
+    key = right_now.point_key(body.text)
+    point = next((p for p in points if p == body.text), None) or next(
+        (p for p in points if key and right_now.point_key(p) == key), None,
+    )
+    if point is None or right_now.dismiss(scope, point) is None:
+        return {"dismissed": False}
+    if principal:
+        background_tasks.add_task(refresh_principal_narrative)
+    return {"dismissed": True}
+
+
+def _morning_brief_today() -> MorningBriefItem | None:
+    """Today's delivered morning brief, or None. Never raises."""
+    from openexecutive.briefing import brief_state, narrative_cache
+    from openexecutive.workflows.morning_brief import BRIEF_KIND
+
+    try:
+        last = brief_state.last_delivered(BRIEF_KIND)
+        written = _parse_aware(last.generated_at) if last else None
+        if last is None or written is None or not last.narrative_text.strip():
+            return None
+        if narrative_cache.local_today(written) != narrative_cache.local_today():
+            return None
+        return MorningBriefItem(at=last.generated_at, text=last.narrative_text)
+    except Exception:
+        logger.exception("today: morning brief read failed")
+        return None
+
+
+# Right now lists at most this many of the meetings still ahead today.
+_CALENDAR_NEXT_MAX = 3
+
+
+def _calendar_next(now: datetime) -> list[CalendarNextItem]:
+    """The meetings still ahead today from the cached calendar read (never
+    calls out): the one in progress and the next ones, then all-day events."""
+    from openexecutive.briefing.live_signals import cached_calendar
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    try:
+        events = cached_calendar(now, get_user_timezone()) or []
+        items: list[CalendarNextItem] = []
+        timed = sorted(
+            (e for e in events if not e.all_day and e.start is not None and e.end is not None),
+            key=lambda e: e.start,
+        )
+        for e in timed:
+            # Over (a zero-length one once it starts); one in progress stays.
+            over = e.start < now if e.end == e.start else e.end <= now
+            if over:
+                continue
+            items.append(CalendarNextItem(title=e.title, start=e.start.astimezone(UTC).isoformat()))
+        # All-day events fill what room the meetings leave, so a day of
+        # them never hides the next meeting.
+        items += [CalendarNextItem(title=e.title, all_day=True) for e in events if e.all_day]
+    except Exception:
+        logger.exception("today: calendar read failed")
+        return []
+    return items[:_CALENDAR_NEXT_MAX]
+
+
 def _first_week_card() -> FirstWeekCardModel | None:
     from dataclasses import asdict
 
@@ -2432,6 +3362,18 @@ def _held_back(now: datetime) -> list[HeldBackItem]:
     ]
 
 
+@router.get("/today/held-back", response_model=list[HeldBackItem], tags=["today"])
+def get_held_back(request: Request) -> list[HeldBackItem]:
+    """The lines grounding left out of the principal's briefs in the last
+    day, for Memory's What it does. The principal's alone: anyone else gets
+    an empty list."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+
+    if not _is_principal(_resolve_caller_person_id(request)):
+        return []
+    return _held_back(datetime.now(UTC))
+
+
 @router.get("/today/activity", response_model=ActivityResponse, tags=["today"])
 def get_today_activity(
     request: Request,
@@ -2449,7 +3391,7 @@ def get_today_activity(
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be in [1, 100]")
     built = _build_activity(limit)
-    mine = _sent_as_caller(request)
+    mine = [*_sent_as_caller(request), *_contacts_kept_for_caller(request)]
     if mine:
         merged = sorted([*built.items, *mine], key=lambda i: i.at, reverse=True)
         built = ActivityResponse(items=merged[:limit])
@@ -2492,6 +3434,36 @@ def _activity_for_demo(request: Request, built: ActivityResponse) -> ActivityRes
     return scrubbed if scrubbed is not None else ActivityResponse(items=[])
 
 
+def _contacts_kept_for_caller(request: Request) -> list[ActivityItem]:
+    """One line a day on what the Executive changed in the contacts, for the
+    principal alone (contacts are theirs). Counts only. Best effort."""
+    from openexecutive.api.routes.people import caller_is_principal
+    from openexecutive.people import contact_changes
+
+    try:
+        if not caller_is_principal(request):
+            return []
+        days = contact_changes.counts_by_day()
+    except Exception:
+        logger.warning("activity: couldn't read the contact changes", exc_info=True)
+        return []
+    items: list[ActivityItem] = []
+    for _day, added, updated, latest in days:
+        parts = [f"{added} added"] if added else []
+        if updated:
+            parts.append(f"{updated} updated")
+        items.append(ActivityItem(
+            kind="contacts_kept",
+            summary="Kept your contacts up to date",
+            detail=", ".join(parts),
+            actor="executive",
+            target=None,
+            department=None,
+            at=latest,
+        ))
+    return items
+
+
 def _sent_as_caller(request: Request) -> list[ActivityItem]:
     """What Handle it for me sent as the caller this week. Best effort."""
     from openexecutive.api.routes.chat import _resolve_caller_person_id
@@ -2508,7 +3480,7 @@ def _sent_as_caller(request: Request) -> list[ActivityItem]:
     return [
         ActivityItem(
             kind="sent_as_you",
-            summary=(
+            summary=h.summary if h.source == "invite" and h.summary else (
                 f"{'Followed up with' if h.source == 'follow_up' else 'Replied to'} "
                 f"{h.to_name or h.to_email}: {h.subject}"
             ),

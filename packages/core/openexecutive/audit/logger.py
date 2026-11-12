@@ -60,11 +60,13 @@ EVENT_TYPES: tuple[str, ...] = (
     "chat_turn",
     "answer_check",  # a reply's figures held to ERPNext's results that turn (counts only; orchestrator/answer_check.py)
     "answer_check_changes",  # the sentences that check changed, before and after, with each figure and why; private, text kept 30 days
+    "erpnext_carried",  # a conversation took in an earlier chat that read ERPNext (a past-chat hit); it then counts as having read it (audit/erpnext_reads.py)
     "specialist_consult",
     "tool_invocation",
     "scheduled_action",
     "alert",
     "integration_inbound",
+    "chat_card_sent",  # a card waiting outside any chat was sent to its person's chat app (integrations.channel_cards)
     "auth_login",
     "auth_logout",
     # Instrumentation events — surface what the agent saw on each turn so
@@ -87,14 +89,20 @@ EVENT_TYPES: tuple[str, ...] = (
     "delegation_voice_changed",     # "How I write" learned, edited, locked, reset or its signature re-read
     "delegation_voice_described",   # a person had their style written from their own words (nothing saved yet)
     "delegation_drafted",           # ghostwrite_email saved a draft in a person's own Gmail
+    "delegation_draft_replaced",    # earlier chat drafts deleted: a redraft or the Executive's own send replaced them
     "delegation_inbox_changed",     # a person turned "Draft replies to my inbox" on or off (PUT /delegation/inbox)
     "delegation_inbox_scanned",     # the inbox watcher checked a person's inbox (counts only)
     "delegation_reply_drafted",     # it drafted a reply in their Gmail and left a card for them
     "delegation_reply_dismissed",   # they dismissed a card; details.draft says whether the draft was deleted
     "delegation_reply_closed",      # a card closed because Gmail settled it (sent, deleted, replied, expired)
     "delegation_reply_sent",        # the person tapped Send and their draft went, exactly as it was in Gmail
+    "delegation_chat_draft_sent",   # the person tapped Send under a draft chat wrote as them, and it went as written
+    "delegation_chat_draft_edited", # the person changed a chat draft on its card, by hand or by asking (no text in the row)
     "delegation_reminder_set",      # remind_me stored a reminder for the person who asked (no text in the row)
     "delegation_reminder_sent",     # a reminder went to the person who set it, as its stored text
+    "delegation_mail_watch_set",    # watch_for_email set a watch on the person's own mailbox (no address in the row)
+    "delegation_mail_watch_found",  # the awaited email landed and the person was told (sender name + subject only)
+    "delegation_mail_watch_expired",  # nothing came before the watch ran out; the person was told
     "delegation_actions_proposed",  # propose_actions left a person a card of actions to approve (kinds only)
     "delegation_actions_approved",  # the person approved an action card; details.outcomes says what each did
     "delegation_actions_dismissed", # the person dismissed an action card
@@ -104,6 +112,10 @@ EVENT_TYPES: tuple[str, ...] = (
     "delegation_training_changed",  # a person put Act as me settings in or out of training (PUT /delegation/training)
     "delegation_disclosure_changed",  # a person changed the AI line on replies sent as them (PUT /delegation/disclosure)
     "delegation_calendar_changed",  # a person turned Read my calendar on or off (PUT /delegation/calendar, or off with Act as me)
+    "delegation_invite_carded",     # an invite from someone they know became a card to accept or decline (delegation.invites)
+    "delegation_invite_answered",   # the person tapped Accept or Decline; it answered in their own calendar
+    "delegation_invite_handled",    # Handle it for me accepted an invite on its own (no clash, a sender they know)
+    "delegation_invite_dismissed",  # the person dismissed an invite card (nothing answered)
     "fact_retired",                 # the principal (or the teammate who recorded it) retired a standing fact from the Pulse page (memory/facts.py)
     "fact_reviewed",                # the principal approved or declined a teammate's proposed standing fact
     "fact_approval_changed",        # the principal turned "needs my approval" on or off for a teammate's standing facts
@@ -123,6 +135,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "directory_person_unlinked",   # the directory no longer manages a Person (openexecutive directory-unlink)
     "directory_person_suspended",  # a managed Person no longer an active member: suspended, web sessions ended
     "directory_person_restored",   # back in the group: restored with everything they had
+    "content_flagged",  # the content check flagged something a chat turn read (orchestrator/outside_content.py), with which item it was
     "grounding",  # unattended prose held back / refused / rewritten for naming people or figures not in its inputs
     # ERPNext drafts (integrations/erpnext_drafts.py) — written private to the card's person.
     "erpnext_draft_proposed",   # propose_erpnext_draft left a card; details name the DocType and card, never its fields

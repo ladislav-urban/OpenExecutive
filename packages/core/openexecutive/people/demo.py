@@ -178,6 +178,22 @@ def demo_turn(session: Any) -> bool:
     return session is not None and getattr(session, "demo_caller", False) is True
 
 
+# Anything a demo person asks beyond reading is refused outright, never put on
+# an Approve card (the owner, Nov 8, 2026): a stranger trying the demo must not
+# fill the principal's queue, or word a request for them to approve.
+DEMO_REFUSAL = (
+    "This is a demo account: it can read and answer, but nothing it asks for "
+    "beyond that is done or sent to anyone for approval."
+)
+
+
+def demo_refusal(tool_name: str) -> str:
+    """The JSON error tool_result for a step a demo person's turn may not take."""
+    import json
+
+    return json.dumps({"error": f"{str(tool_name)[:200]} was not done. {DEMO_REFUSAL} Do not retry."})
+
+
 def _today() -> str:
     return datetime.now(UTC).date().isoformat()
 

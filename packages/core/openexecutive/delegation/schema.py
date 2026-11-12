@@ -19,6 +19,7 @@ TEAM_TABLE = "delegation_team"
 HANDLE_IT_TABLE = "delegation_handle_it"
 HANDLED_TABLE = "delegation_handled"
 REMINDERS_TABLE = "delegation_reminders"
+MAIL_WATCH_TABLE = "delegation_mail_watches"
 MAIL_READ_TABLE = "delegation_mail_read"
 TRAINING_TABLE = "delegation_training"
 DISCLOSURE_TABLE = "delegation_disclosure"
@@ -37,6 +38,7 @@ TABLES: tuple[str, ...] = (
     HANDLE_IT_TABLE,
     HANDLED_TABLE,
     REMINDERS_TABLE,
+    MAIL_WATCH_TABLE,
     MAIL_READ_TABLE,
     TRAINING_TABLE,
     DISCLOSURE_TABLE,
@@ -81,7 +83,9 @@ _DDL: tuple[str, ...] = (
     ")",
     # Every draft saved in someone's Gmail (delegation.drafts): ids and
     # times only, never an address, a subject or text. gone_at: a chat draft
-    # found missing from their Drafts (sent or deleted there).
+    # found missing from their Drafts (sent or deleted there). session_id:
+    # the conversation a chat draft was written in (``delegation.redrafts``).
+    # replaced_by: the row of the newer chat draft that retired this one.
     f"CREATE TABLE IF NOT EXISTS {DRAFTS_TABLE} ("
     "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
     "  person_id INTEGER NOT NULL,"
@@ -91,7 +95,9 @@ _DDL: tuple[str, ...] = (
     "  message_id TEXT,"
     "  sent_message_id TEXT,"
     "  created_at TEXT NOT NULL,"
-    "  gone_at TEXT"
+    "  gone_at TEXT,"
+    "  session_id TEXT,"
+    "  replaced_by INTEGER"
     ")",
     f"CREATE INDEX IF NOT EXISTS idx_{DRAFTS_TABLE}_person_created "
     f"ON {DRAFTS_TABLE}(person_id, created_at)",
@@ -175,6 +181,22 @@ _DDL: tuple[str, ...] = (
     ")",
     f"CREATE INDEX IF NOT EXISTS idx_{REMINDERS_TABLE}_due "
     f"ON {REMINDERS_TABLE}(claimed_at, cancelled_at, due_at)",
+    # watch_for_email: tell the person when mail from a sender lands in their
+    # own mailbox (delegation.mail_watch). The address and an optional subject
+    # word, never a message's text; outcome is found / expired / person_gone.
+    f"CREATE TABLE IF NOT EXISTS {MAIL_WATCH_TABLE} ("
+    "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+    "  person_id INTEGER NOT NULL,"
+    "  sender TEXT NOT NULL,"
+    "  about TEXT NOT NULL DEFAULT '',"
+    "  created_at TEXT NOT NULL,"
+    "  expires_at TEXT NOT NULL,"
+    "  claimed_at TEXT,"
+    "  outcome TEXT,"
+    "  cancelled_at TEXT"
+    ")",
+    f"CREATE INDEX IF NOT EXISTS idx_{MAIL_WATCH_TABLE}_open "
+    f"ON {MAIL_WATCH_TABLE}(claimed_at, cancelled_at)",
     # The threads of someone's own mailbox read_my_email opened for them
     # (delegation.mail_reads): where, never what. One row per thread, the
     # subject and sender as one line each and never a message's text, so a
@@ -314,6 +336,22 @@ def _add_draft_gone_at(conn: sqlite3.Connection) -> None:
         conn.commit()
 
 
+def _add_draft_session_id(conn: sqlite3.Connection) -> None:
+    """Give a drafts table made before ``session_id`` existed the column."""
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({DRAFTS_TABLE})")}
+    if "session_id" not in columns:
+        conn.execute(f"ALTER TABLE {DRAFTS_TABLE} ADD COLUMN session_id TEXT")
+        conn.commit()
+
+
+def _add_draft_replaced_by(conn: sqlite3.Connection) -> None:
+    """Give a drafts table made before ``replaced_by`` existed the column."""
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({DRAFTS_TABLE})")}
+    if "replaced_by" not in columns:
+        conn.execute(f"ALTER TABLE {DRAFTS_TABLE} ADD COLUMN replaced_by INTEGER")
+        conn.commit()
+
+
 def ensure_schema(conn: sqlite3.Connection) -> None:
     """Create the tables if missing. Idempotent."""
     for statement in _DDL:
@@ -321,4 +359,6 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
     _add_handle_it_mode(conn)
     _add_mailbox_drafts(conn)
     _add_draft_gone_at(conn)
+    _add_draft_session_id(conn)
+    _add_draft_replaced_by(conn)
     _move_training_off_the_dial(conn)

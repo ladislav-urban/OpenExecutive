@@ -45,6 +45,10 @@ ALLOWED: dict[str, tuple[int, str]] = {
     "attunement/open_loops.py": (1, "an archived and a suspended owner get different refusal reasons"),
     "memory/replay.py": (1, "history: replays a chat that already happened"),
     "orchestrator/people_tools.py": (1, "an output field of list_people, not a check"),
+    "people/contact_keeper.py": (
+        1,
+        "an archived person's addresses stay known (_archived_address): the keeper never adds one back as a new contact",
+    ),
     "fixtures/store.py": (3, "the generated_fixtures table, not People"),
     "integrations/discord_bot.py": (1, "a Discord thread's archived flag, not a Person"),
     "people/profile.py": (

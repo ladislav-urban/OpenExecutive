@@ -252,7 +252,7 @@ class MorningBriefWorkflow(Workflow):
             # active projects, each with a free slot when a calendar can be
             # read (one short call). Never raises; without a calendar there
             # are no slots and no calendar block.
-            top_three, calendar = await build_top_three(today_data["due_soon"])
+            top_three, calendar = await build_top_three(today_data["due_soon"], include_own=private_ok)
             if top_three:
                 today_data["top_three"] = top_three
             if calendar is not None:
@@ -400,6 +400,9 @@ class MorningBriefWorkflow(Workflow):
                 "suppressed": suppressed,
                 "since": since.isoformat(),
                 "private_to_principal": private_used,
+                # The brief holds ERPNext figures: the chat it is saved
+                # into counts as having read ERPNext (audit.erpnext_reads).
+                "read_erpnext": bool(erp_numbers),
             },
         )
 
@@ -426,7 +429,6 @@ class MorningBriefWorkflow(Workflow):
         from openexecutive.audit.context import get_active_ids, set_turn
         from openexecutive.briefing.grounding import ground_brief
         from openexecutive.briefing.narrative import (
-            QUIET_PRINCIPAL,
             STANDALONE_BRIEF_SOLO_SYSTEM,
             STANDALONE_BRIEF_SYSTEM,
             render_briefing_context,
@@ -472,10 +474,7 @@ class MorningBriefWorkflow(Workflow):
             yield WorkflowEvent(type="error", message=f"Synthesis failed: {exc}")
             return
 
-        if not artifact_text:
-            # The shared synthesizer's own quiet-day line, so the empty
-            # fallback reads identically to a model-produced quiet brief.
-            artifact_text = QUIET_PRINCIPAL
+        from openexecutive.briefing.narrative import QUIET_PRINCIPAL
 
         # The narrative's figures held to the ERP NUMBERS reports' results, and
         # corrected, before grounding (orchestrator.answer_check). The rest of
