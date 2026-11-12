@@ -374,7 +374,7 @@ export async function transcribeRecording(recording: Blob, filename: string): Pr
   try {
     res = await fetch(`${API_BASE}/chat/transcribe`, { method: "POST", body: form });
   } catch {
-    throw new Error("Couldn't reach Open Executive to hear it. Try again.");
+    throw new Error("Couldn't reach the server to hear it. Try again.");
   }
   if (!res.ok) {
     let detail = "Couldn't hear it. Try again.";
@@ -1984,15 +1984,15 @@ export async function pauseExecutive(reason?: string): Promise<ExecutiveStatus> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason: reason?.trim() || null }),
   });
-  if (!res.ok) throw new Error("Failed to pause the Executive");
+  if (!res.ok) throw new Error("Failed to pause");
   delegationChanged();
   return res.json();
 }
 
 export async function resumeExecutive(): Promise<ExecutiveStatus> {
   const res = await fetch(`${API_BASE}/executive/resume`, { method: "POST" });
-  if (res.status === 403) throw new Error("Only the principal can resume the Executive.");
-  if (!res.ok) throw new Error("Failed to resume the Executive");
+  if (res.status === 403) throw new Error("Only the principal can resume it.");
+  if (!res.ok) throw new Error("Failed to resume");
   delegationChanged();
   return res.json();
 }
@@ -3068,7 +3068,9 @@ export interface ErpnextDraftCard {
   doctype: string;
   // "create" for a new draft; "update" or "comment" on an existing document;
   // "credit" for a credit-limit raise; "block" for a hold on a submitted
-  // supplier invoice (a watch job's card only).
+  // supplier invoice; "match" for a bank line matched with its vouchers;
+  // "fill" for a supplier's mailed draft invoice filled from its order or
+  // receipt (each a watch job's card only).
   operation?: string;
   fields: ErpnextDraftField[];
   lines: ErpnextDraftLine[];
@@ -3095,7 +3097,8 @@ export interface ErpnextDraftCreated {
   url?: string;
   already_created: boolean;
   // "update" or "comment" when the card changed or commented on a document;
-  // "credit" for a raised credit limit; "block" for a held invoice.
+  // "credit" for a raised credit limit; "block" for a held invoice; "match"
+  // for a matched bank line; "fill" for a filled mailed invoice.
   operation?: string;
   // A raised credit limit: the company and the new limit, formatted.
   credit?: { company: string; limit: string };

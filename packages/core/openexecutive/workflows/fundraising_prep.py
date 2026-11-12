@@ -17,6 +17,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -409,7 +410,7 @@ def _assemble_packet(ctx: _FundraisingPrepContext) -> str:
         _ensure_heading(ctx.data_room, "## Data-Room Checklist"),
         "",
         "---",
-        "*Drafted by Open Executive. Sharpen with the CFO and a trusted "
+        f"*Drafted by {product_name()}. Sharpen with the CFO and a trusted "
         "investor before sending the deck out — the first partner meeting "
         "will pull on every number.*",
     ]

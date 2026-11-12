@@ -1059,6 +1059,51 @@ user sees several. Every `erpnext__*` call is in the audit log as a
 write some of ERPNext's text. The design is in the oe_connector app's
 own documentation.
 
+### Watch jobs with cards: bank matching
+
+A watch job runs unattended on a schedule and leaves cards a person approves. Each one needs settings on both sides, and refuses everything until both agree.
+
+**On the ERPNext site (an ERPNext operator, in `site_config.json`):**
+
+- **`oe_connector_watch_jobs["bank-matching"]`:** the job's reads, as `watch/jobs/bank_matching.py`'s `listing(accounts)` prints them, plus:
+  - `"as_job_user": true`. The job runs as its own ERP user, `oe-watch-bank-matching@<site>`, set up with `oe-connector-setup-watch`.
+  - `"configured_by": "<email>"`: the person who sets the job up in OpenExecutive's Settings. Every card is signed with this person. ERPNext refuses a card naming anyone else, or a job with no configurer recorded, and OpenExecutive then closes the card (`configurer_not_recorded`).
+- **`oe_connector_bank_matching`:** per company, the Bank Accounts the job may read, each company marked as carrying no payroll: `{"<Company>": {"accounts": ["<Bank Account>"], "no_payroll": true}}`.
+
+**On OpenExecutive:**
+
+- `ERPNEXT_CALLER_PRIVATE_KEY`, as for every ERPNext write.
+- `ERPNEXT_BANK_MATCH=true`, the pin as released, and the job on in Settings → Watch jobs, with:
+  - its company;
+  - the same bank accounts;
+  - `amount_cap_day` (50,000 by default, at most 1,000,000, the job's day across all approvers);
+  - its reviewer.
+- The configurer may not approve the job's cards. ERPNext also refuses a card to whoever imported the statement or made a voucher on it.
+
+### Watch jobs with cards: invoice capture
+
+The fill card for a supplier's mailed invoice. It needs everything bank matching needs on both sides (the job listing with `as_job_user` and `configured_by`, and the caller key), and:
+
+**On the ERPNext site:**
+
+- **`oe_connector_watch_jobs["invoice-capture"]`:** `watch/jobs/invoice_capture.py`'s `listing()`, including the per-draft read exactly as `{"tool": "read_attachment", "doctype": "Purchase Invoice", "name": "$mail_draft", "file": "$mail_file"}`, with `"as_job_user": true` and `"configured_by"`.
+- **The job's ERP user,** `oe-watch-invoice-capture@<site>`, limited to **exactly one Company** by User Permission. Otherwise every mailed-draft read is refused.
+- **`oe_connector_read_attachment: 1`.**
+- **An Email Account** with incoming mail on, appending to Purchase Invoice from **INBOX only**.
+- **On that Email Account,** set by a System Manager:
+  - **`oe_dmarc_enforced`:** its receiving mail server enforces DMARC (reject or quarantine).
+  - **`oe_dmarc_authserv_id`:** that server's authserv-id. Optional, but without it a `quarantine` domain gets no card. Leave it empty for a server that writes no authserv-id (Microsoft 365); then only `reject` domains get cards.
+- **An Assignment Rule on Purchase Invoice** that assigns each mailed draft to the job's reviewer. Only the person the mail pull assigned a draft to approves its fill, never someone who assigned it to themselves. Otherwise the draft is filled by hand.
+
+**On OpenExecutive:**
+
+- `ERPNEXT_INVOICE_FILL=true`, the pin as released, and the job on in Settings → Watch jobs, with:
+  - its company;
+  - `days_back` (14);
+  - `amount_cap_day`;
+  - its reviewer.
+- **What gets a card:** only mail whose own From was checked (`sender_checked` "dmarc-enforced", `sender_from` set) from a domain asking `reject`, or `quarantine` when the authserv-id check passed. Every other mail gets a "can't be filled from here" notice.
+
 ### Inside ERPNext's desk (the single UI)
 
 With oe_connector's single UI, ERPNext's desk shows Open Executive's pages in a

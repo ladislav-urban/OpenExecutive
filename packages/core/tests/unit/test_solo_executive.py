@@ -62,7 +62,10 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # And again: People is checked first when asked how to reach someone.
 # And: correcting itself is for its own errors only; a card closed because
 # the records changed is said as such, never "Earlier I ...".
-TEAM_PERSONA_SHA256 = "d4fd63e858de2e34e2068403fc321029d066a8fe32a9c05ddf574b8d335e30ef"
+# And: a figure or date that now differs from an earlier answer is said, with
+# both, whatever the cause (erpnext_084, erpnext_095), when it is for the
+# same thing and the earlier answer was to the same person (erpnext_096).
+TEAM_PERSONA_SHA256 = "13978772bdec9d50a49046448cc6db183dd53e31207fd28ebf9d9341012a8187"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",

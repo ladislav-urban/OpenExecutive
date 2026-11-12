@@ -11,7 +11,7 @@ const BASE = {
 };
 
 test("names the running version", () => {
-  assert.equal(versionNotice(BASE).running, "Open Executive v0.4.4");
+  assert.equal(versionNotice(BASE).running, "Version 0.4.4");
 });
 
 test("says when this is the latest release", () => {
@@ -41,7 +41,7 @@ test("an unreachable GitHub is said plainly", () => {
 
 test("a turned-off check says so and still names the version", () => {
   const n = versionNotice({ ...BASE, latest: null, release_url: null, check_enabled: false });
-  assert.equal(n.running, "Open Executive v0.4.4");
+  assert.equal(n.running, "Version 0.4.4");
   assert.match(n.status, /turned off/);
   assert.equal(n.update, null);
 });

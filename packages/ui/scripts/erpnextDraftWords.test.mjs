@@ -72,6 +72,14 @@ test("a credit-limit raise card says what it raises and that the order is still 
     "Hold a submitted Purchase Invoice from the Payment checks job");
   assert.match(words.changeMadeLine("block", "Purchase Invoice", "PINV-2", false), /on hold in the ERP, until someone unblocks it/);
   assert.doesNotMatch(words.changeMadeLine("block", "Purchase Invoice", "PINV-2", false), /unsubmitted|submit it/);
+  assert.equal(words.jobCardKind("Bank Transaction", "match", "Bank matching"),
+    "Match a bank line from the Bank matching job");
+  assert.match(words.changeMadeLine("match", "Bank Transaction", "BT-1", false), /^Bank line BT-1 is matched in the ERP/);
+  assert.doesNotMatch(words.changeMadeLine("match", "Bank Transaction", "BT-1", false), /unsubmitted|submit it/);
+  assert.equal(words.changeMadeLine("match", "Bank Transaction", "BT-1", true), "Bank line BT-1 was already matched in the ERP.");
+  assert.equal(words.cardKind("Purchase Invoice", "fill", false), "Fill a mailed supplier invoice");
+  assert.match(words.changeMadeLine("fill", "Purchase Invoice", "PINV-9", false), /^Invoice PINV-9 is filled in the ERP .*still a draft/);
+  assert.equal(words.changeMadeLine("fill", "Purchase Invoice", "PINV-9", true), "Invoice PINV-9 was already filled in the ERP.");
   assert.equal(words.cardKind("Customer", "credit", false), "Raise a credit limit");
   assert.equal(
     words.creditMadeLine("Harbor Electric Co-op", "Aurora Components", "31,000.00 USD", false),

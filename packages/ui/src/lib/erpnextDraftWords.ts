@@ -36,8 +36,20 @@ export function draftMadeLine(doctype: string, name: string | null, alreadyCreat
     : `The draft is in ${erp}, unsubmitted. Review and submit it there.`;
 }
 
-/** The line an approved change, comment or hold shows. */
+/** The line an approved change, comment, hold, bank match or invoice fill shows. */
 export function changeMadeLine(operation: string, doctype: string, name: string, already: boolean): string {
+  if (operation === "fill") {
+    // ERPNext's own mapper filled the mailed draft: still a draft, nothing submitted.
+    return already
+      ? `Invoice ${name} was already filled in the ERP.`
+      : `Invoice ${name} is filled in the ERP from its order or receipt, still a draft. Review and submit it there.`;
+  }
+  if (operation === "match") {
+    // ERPNext's own bank reconciliation: the line matched, its vouchers cleared.
+    return already
+      ? `Bank line ${name} was already matched in the ERP.`
+      : `Bank line ${name} is matched in the ERP, its vouchers cleared. Nothing was created or cancelled.`;
+  }
   if (operation === "block") {
     // ERPNext's own Block Invoice on a submitted invoice: held until a person unblocks it.
     return already
@@ -66,9 +78,11 @@ export const CREDIT_CHANGED_NOTE =
   "This changed in the ERP since it was left (what the customer owes, the order or its limit). " +
   "Approving it is refused: dismiss it and prepare the raise again from the alert.";
 
-/** The card's kind, over its headline: a new draft, a change, a comment, a raise or a hold. */
+/** The card's kind, over its headline: a new draft, a change, a comment, a raise, a hold, a bank match or a fill. */
 export function cardKind(doctype: string, operation: string | undefined, named: boolean): string {
   if (operation === "credit") return "Raise a credit limit";
+  if (operation === "match") return "Match a bank line";
+  if (operation === "fill") return "Fill a mailed supplier invoice";
   if (operation === "block") return `Hold a submitted ${doctype}`;
   if (operation === "update") return `Change to a ${doctype}`;
   if (operation === "comment") return `Comment on a ${doctype}`;
@@ -107,7 +121,7 @@ export function openDraftLabel(doctype: string, _named: boolean): string {
 /** What the draft cards are, for the Needs you header's tip. */
 export function draftsTip(_named: boolean): string {
   return (
-    "Drafts you asked the Executive to prepare. Each shows exactly what will be " +
+    "Drafts you asked for. Each shows exactly what will be " +
     "written, and the ERP has already checked it. Nothing is created until you tap Approve, and then only an " +
     "unsubmitted draft, as your own ERP user, for you to review and submit in the ERP. " +
     "Only you see these."

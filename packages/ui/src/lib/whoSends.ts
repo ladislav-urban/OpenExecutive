@@ -6,6 +6,10 @@
 
 import type { SendStep, WriteStep } from "@/lib/reach";
 
+// lib/productName.ts's PRODUCT token, written out (this file imports types
+// only): copy naming the product, filled in where it renders (WhoSendsCard).
+const PRODUCT = "{product}";
+
 export type Tab = "act" | "handle" | "lead";
 export type LeadStep = "off" | "training" | "on";
 export type Who = "you" | "exec" | "them";
@@ -81,19 +85,19 @@ export const MAILS: { from: string; text: string; why: string }[] = [
 
 const dana: Step = { who: "them", name: "Dana", does: "Emails you", mail: { from: "From Dana", text: "Can we move to the 5th?" } };
 const yes = "Yes, the 5th works.";
-const notices: Step = { who: "exec", name: "The Executive", does: "Notices Sam's Q3 numbers are 3 days late" };
+const notices: Step = { who: "exec", name: PRODUCT, does: "Notices Sam's Q3 numbers are 3 days late" };
 const writesToSam: Step = {
   who: "exec",
-  name: "The Executive",
+  name: PRODUCT,
   does: "Writes to Sam in its own name",
-  mail: { from: "From the Executive", text: "Hi Sam, can you send the Q3 numbers?", as: "exec" },
+  mail: { from: `From ${PRODUCT}`, text: "Hi Sam, can you send the Q3 numbers?", as: "exec" },
 };
 const yours = (writes: string): Answers => ({ writes, name: "Yours", sends: "You" });
 
 export const SCENES: Scene[] = [
   {
     key: "writes:off", tab: "act", option: "Off", answers: yours("You"),
-    line: "The Executive doesn't write as you. You answer your own mail.",
+    line: `${PRODUCT} doesn't write as you. You answer your own mail.`,
     steps: [
       dana,
       { who: "you", name: "You", does: "Write the reply yourself" },
@@ -101,65 +105,65 @@ export const SCENES: Scene[] = [
     ],
   },
   {
-    key: "writes:when_asked", tab: "act", option: "When I ask", answers: yours("The Executive"),
+    key: "writes:when_asked", tab: "act", option: "When I ask", answers: yours(PRODUCT),
     line: "It writes as you only when you ask in chat.",
     steps: [
       dana,
       { who: "you", name: "You", does: "Ask in chat", mail: { from: "You, in chat", text: "Reply to Dana as me: yes to the 5th" } },
-      { who: "exec", name: "The Executive", does: "Writes the reply in your voice and puts it in your Drafts", mail: { from: "Draft, from you", text: yes, as: "you" } },
+      { who: "exec", name: PRODUCT, does: "Writes the reply in your voice and puts it in your Drafts", mail: { from: "Draft, from you", text: yes, as: "you" } },
       { who: "you", name: "You", does: "Check it and tap Send. Dana gets it from you." },
     ],
   },
   {
-    key: "writes:inbox", tab: "act", option: "Draft replies automatically", answers: yours("The Executive"),
+    key: "writes:inbox", tab: "act", option: "Draft replies automatically", answers: yours(PRODUCT),
     line: "It also drafts replies to mail that needs you, without being asked.",
     steps: [
       dana,
-      { who: "exec", name: "The Executive", does: "Writes a reply in your voice", mail: { from: "Draft, from you", text: yes, as: "you" } },
+      { who: "exec", name: PRODUCT, does: "Writes a reply in your voice", mail: { from: "Draft, from you", text: yes, as: "you" } },
       { who: "you", name: "You", does: "See the draft on Home" },
       { who: "you", name: "You", does: "Tap Send. Dana gets it from you." },
     ],
   },
   {
-    key: "sends:off", tab: "handle", option: "Off", answers: yours("The Executive"), sends: 0,
+    key: "sends:off", tab: "handle", option: "Off", answers: yours(PRODUCT), sends: 0,
     line: "Every reply waits on Home for you to send.",
   },
   {
     key: "sends:careful", tab: "handle", option: "Easy ones", sends: 1,
-    answers: { writes: "The Executive", name: "Yours", sends: "It or you" },
+    answers: { writes: PRODUCT, name: "Yours", sends: "It or you" },
     line: "Only short replies to people you know, when it's very sure.",
   },
   {
     key: "sends:balanced", tab: "handle", option: "People I know", sends: 2,
-    answers: { writes: "The Executive", name: "Yours", sends: "It or you" },
+    answers: { writes: PRODUCT, name: "Yours", sends: "It or you" },
     line: "Replies to people you know, short or long. Strangers and amounts wait for you.",
   },
   {
     key: "sends:bold", tab: "handle", option: "Most mail", sends: 3,
-    answers: { writes: "The Executive", name: "Yours", sends: "It or you" },
+    answers: { writes: PRODUCT, name: "Yours", sends: "It or you" },
     line: "Also people you don't know. Amounts and links only when it's very sure.",
   },
   {
     key: "sends:everything", tab: "handle", option: "Everything", sends: 4,
-    answers: { writes: "The Executive", name: "Yours", sends: "It or you" },
+    answers: { writes: PRODUCT, name: "Yours", sends: "It or you" },
     line: "It decides what to send as you. Links, the topics that always wait and your rules still hold it back.",
   },
   {
     key: "lead:off", tab: "lead", option: "Off", answers: { writes: "You", name: "Yours", sends: "You" },
     line: "It doesn't act in its own name. It tells you and you decide.",
-    steps: [notices, { who: "exec", name: "The Executive", does: "Tells you on Home" }, { who: "you", name: "You", does: "Decide what to do" }],
+    steps: [notices, { who: "exec", name: PRODUCT, does: "Tells you on Home" }, { who: "you", name: "You", does: "Decide what to do" }],
   },
   {
     key: "lead:training", tab: "lead", option: "In training",
-    answers: { writes: "The Executive", name: "The Executive's", sends: "You, with a yes on Home" },
+    answers: { writes: PRODUCT, name: `${PRODUCT}'s`, sends: "You, with a yes on Home" },
     line: "It writes in its own name, and each message waits for your yes.",
-    steps: [notices, writesToSam, { who: "you", name: "You", does: "Tap Yes on Home" }, { who: "them", name: "Sam", does: "Gets it from the Executive" }],
+    steps: [notices, writesToSam, { who: "you", name: "You", does: "Tap Yes on Home" }, { who: "them", name: "Sam", does: `Gets it from ${PRODUCT}` }],
   },
   {
     key: "lead:on", tab: "lead", option: "On",
-    answers: { writes: "The Executive", name: "The Executive's", sends: "The Executive" },
+    answers: { writes: PRODUCT, name: `${PRODUCT}'s`, sends: PRODUCT },
     line: "It acts in its own name without waiting for your yes on Home. Your company's rules and the Always asks first list still hold it back.",
-    steps: [notices, writesToSam, { who: "them", name: "Sam", does: "Gets it from the Executive" }],
+    steps: [notices, writesToSam, { who: "them", name: "Sam", does: `Gets it from ${PRODUCT}` }],
   },
 ];
 

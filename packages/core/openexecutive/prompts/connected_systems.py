@@ -172,16 +172,21 @@ ERPNEXT_CONFIRM_TOOL = "erpnext__confirm_figure"
 ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, ERPNEXT_CONFIRM_TOOL})
 
 # Tools oe_connector serves and this install pins (erpnext_tool_pin), but
-# no turn may call: reading an attachment (S4) waits for intake's tool-less
-# extraction, a supplier's bank-change fact (S5) belongs to the
-# payment-checks job, and customers' payment records (phase 1) to the
-# collections job, which reads many customers' payment behaviour at once. The gateway refuses
+# no turn may call: reading an attachment (S4) and the mailed invoices to
+# fill belong to the invoice-capture job (phase 2), a supplier's bank-change fact (S5) belongs to the
+# payment-checks job, customers' payment records (phase 1) to the
+# collections job, which reads many customers' payment behaviour at once,
+# and bank lines and their candidate vouchers (phase 2) to the bank-matching
+# job. The gateway refuses
 # them on every path but one: a watch job's own read of a tool
 # JOB_WITHHELD_EXCEPTIONS gives that job, under its watch_run marker with
 # exactly that tool bound. Tool search never shows them, and the model is
 # never offered one.
 ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({
+    "erpnext__bank_line_candidates",
+    "erpnext__bank_lines_to_match",
     "erpnext__customer_payment_record",
+    "erpnext__mail_invoices_to_fill",
     "erpnext__read_attachment",
     "erpnext__supplier_bank_changed",
 })
@@ -193,6 +198,12 @@ JOB_WITHHELD_EXCEPTIONS: Mapping[str, frozenset[str]] = MappingProxyType({
     # Whether a supplier's bank details changed since its last payment: the
     # payment-checks job's alone. Chat never reads it, whoever asks.
     "payment-checks": frozenset({"erpnext__supplier_bank_changed"}),
+    # A listed account's unreconciled bank lines and ERPNext's candidate
+    # vouchers for one: the bank-matching job's alone.
+    "bank-matching": frozenset({"erpnext__bank_line_candidates", "erpnext__bank_lines_to_match"}),
+    # The drafts a supplier's mail made, and each one's PDF: the
+    # invoice-capture job's alone (oe_connector refuses both to anyone else).
+    "invoice-capture": frozenset({"erpnext__mail_invoices_to_fill", "erpnext__read_attachment"}),
 })
 
 # The tool ERPNext's panel uses to open what an answer talks about beside it
@@ -353,7 +364,7 @@ _ERPNEXT_GUIDE = (
 # it searched; on the pilot it guessed shapes and names, Oct 29, 2026).
 # Written for the pin below: a test fails when the pin moves, so a changed
 # definition gets these lines checked too. Process-constant.
-ERPNEXT_ARGS_WRITTEN_FOR = "932d4af0e0279097f3aaae35a1518debb9aa47ef78a0d61974c02452e33f6344"
+ERPNEXT_ARGS_WRITTEN_FOR = "aa01ad95cc509014f95649aa1b3f7e433705666c4e02c95957469d0c555ef4e6"
 _ERPNEXT_ARGS = (
     "  Their arguments, exactly these names, with objects and lists passed as JSON "
     "values, never as quoted strings: "

@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useParams } from "next/navigation";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 
@@ -183,7 +184,7 @@ export default function InlineApprove() {
           {canApprove && supported ? (
             <>
               {proposal.decision_instance_id == null && (
-                <p className="text-xs text-fg-subtle">The Executive then does it as you, in a new chat.</p>
+                <p className="text-xs text-fg-subtle"><ProductName /> then does it as you, in a new chat.</p>
               )}
               <div className="flex items-center justify-end gap-2">
                 <a href={cardPage} target="_top" rel="noopener" className="mr-auto text-xs text-accent hover:underline">
@@ -214,7 +215,7 @@ export default function InlineApprove() {
             <div className="flex items-start justify-between gap-2">
               <p className="text-sm text-fg-muted">
                 <a href={cardPage} target="_top" rel="noopener" className="text-accent hover:underline">
-                  Open this card in Open Executive
+                  Open this card in <ProductName />
                 </a>{" "}
                 to answer it{!supported ? ": this browser can't show here that Approve is really on screen" : ""}.
               </p>
