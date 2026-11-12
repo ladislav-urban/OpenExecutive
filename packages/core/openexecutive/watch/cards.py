@@ -44,7 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -420,7 +420,7 @@ async def leave_drafts(
             continue
         if drafts.job_room(job.id, reviewer.id) is not None or take_day_cards(job.id, day, 1, job.card_cap_day) == 0:
             out.capped = len(specs) - n
-            out.unproposed.extend(s for s in specs[n:] if not drafts.job_card_waiting(dedup_key(job.id, s.key)))
+            _unpropose(out, (s for s in specs[n:] if not drafts.job_card_waiting(dedup_key(job.id, s.key))))
             break
         left = False
         try:
@@ -432,7 +432,7 @@ async def leave_drafts(
         if out.capped:
             # The reviewer's cards filled up while this one was checked.
             out.capped = len(specs) - n
-            out.unproposed.extend(s for s in specs[n + 1:] if not drafts.job_card_waiting(dedup_key(job.id, s.key)))
+            _unpropose(out, (s for s in specs[n + 1:] if not drafts.job_card_waiting(dedup_key(job.id, s.key))))
             break
     name = clean(getattr(reviewer, "full_name", "") or "", 80) or "the reviewer"
     if out.left:
@@ -456,6 +456,17 @@ async def leave_drafts(
 _HELD_STATUSES = frozenset({
     "approved_unchanged", "approved_with_edit", "executed", "reversed", "rejected",
 })
+
+
+def _unpropose(out: DraftOutcome, specs: Iterable[registry.DraftSpec]) -> None:
+    """Add ``specs`` to the findings no card was left for, each once: a kept
+    finding is already there before the loop, and a duplicate would count
+    twice in the notice's subject."""
+    have = {s.key for s in out.unproposed}
+    for spec in specs:
+        if spec.key not in have:
+            have.add(spec.key)
+            out.unproposed.append(spec)
 
 
 def _once_held(

@@ -1062,3 +1062,55 @@ def test_an_already_open_hold_survives_an_older_expired_card_of_its_key(
     third = _run((TODAY + timedelta(days=2)).isoformat())
     monkeypatch.setattr(drafts, "CARD_TTL", timedelta(days=3))
     assert (third.draft_cards, third.checks, third.draft_repeats) == (0, 0, 1)
+
+
+def test_kept_findings_past_the_card_cap_are_counted_once_in_the_subject(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from openexecutive.watch import cards
+
+    from .test_erpnext_drafts import _reply
+
+    kept = [_line(f"PO-K{i}", f"Sup K{i}", "A", 1.0, 0.0, -3) for i in range(2)]
+    late = [_line(f"PO-N{i}", f"Sup N{i}", "B", 1.0, 0.0, -30 + i) for i in range(6)]
+
+    async def call(_name: str, body: dict[str, Any]) -> Any:
+        erp.calls.append((body["tool_name"], dict(body["arguments"])))
+        if body["tool_name"] == "erpnext__draft_check":
+            name = body["arguments"]["fields"]["reference_name"]
+            if name.startswith("PO-K"):
+                return _reply(json.dumps({"error": f"You are not permitted to read Purchase Order {name}."}))
+            return _reply(_checked(body["arguments"]["fields"]))
+        return _reply(erp.replies.pop(0))
+
+    erp.session.call_tool = AsyncMock(side_effect=call)
+    # Day 1: the two kept from Cara, told to the principal.
+    erp.replies.extend([_list(kept), _list([]), _report([])])
+    _run()
+    # Day 2: six more late orders ahead of them; the day's five cards stop the
+    # loop before the two kept ones are reached.
+    seen: list[list[str]] = []
+    leave = cards.leave_drafts
+
+    async def watching(*args: Any, **kwargs: Any) -> Any:
+        out = await leave(*args, **kwargs)
+        seen.append([s.key for s in out.unproposed])
+        return out
+
+    import openexecutive.watch.cards as cards_module
+
+    cards_module.leave_drafts = watching  # type: ignore[assignment]
+    try:
+        erp.replies.extend([_list(late + kept), _list([]), _report([])])
+        outcome = _run(NEXT_DAY)
+    finally:
+        cards_module.leave_drafts = leave  # type: ignore[assignment]
+    assert (outcome.draft_cards, outcome.draft_capped) == (5, 3)
+    [keys] = seen
+    assert len(keys) == len(set(keys)) == 3
+    [mine] = [a for a in _alerts() if a.routed_to_person_id == team.cara and NEXT_DAY in a.headline]
+    # Six rows on Cara's notice, and the two kept findings offered to the principal.
+    assert mine.headline == f"Late deliveries: 8 found on {NEXT_DAY}"
+    assert "PO-K" not in mine.body
