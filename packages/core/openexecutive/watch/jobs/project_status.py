@@ -56,8 +56,9 @@ wrapped as untrusted: one project's update never reaches another's call. A
 project with no update this week, or on hold, has no facts, so the model
 never sees it. A line holding any digit or number word is dropped
 (``no_digits``): the notice's own lines carry every figure, so the model
-says only what they mean (Roman numerals and look-alike letters are a
-known residual). A call that fails drops only its own line. The line never
+says only what they mean. The number words are a fixed English list
+matched as whole words, so plurals, run-together words, other languages,
+Roman numerals and look-alike letters are a known residual. A call that fails drops only its own line. The line never
 sets a figure, a key, a title or the notice's route.
 
 No card: the job leaves notices only (``check_fields`` is None), so the

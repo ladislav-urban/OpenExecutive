@@ -885,8 +885,10 @@ def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
     """``reasons`` without each line that holds any digit or names a number
     in words (``ReasonSchema.no_digits``): the notice's own lines carry every
     figure, so the model's line may only say in words what they mean.
-    Returns the lines kept and how many were dropped. Roman numerals and
-    letters that look like digits are a known residual."""
+    Returns the lines kept and how many were dropped. The number words are
+    a fixed English list matched as whole words, so plurals, run-together
+    words, other languages, Roman numerals and letters that look like digits
+    are a known residual."""
     kept = {key: line for key, line in reasons.items() if not has_digit(line) and not has_number_word(line)}
     return kept, len(reasons) - len(kept)
 
