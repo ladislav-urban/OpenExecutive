@@ -15,6 +15,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
 from openexecutive.integrations import erpnext_drafts as drafts
 from openexecutive.memory.decision_ledger import (
@@ -46,6 +47,8 @@ from .test_watch_jobs import (  # noqa: F401
     _alerts,
     _audit_rows,
     alerts_db,
+    client,
+    example,
     model,
     triage,
 )
@@ -326,9 +329,12 @@ def test_the_notice_names_customers_and_counts_leads_without_naming_them() -> No
 
 def test_a_cut_read_is_noted_and_unchecked_orders_get_no_task() -> None:
     specs = _specs(quotes_cut=True, orders_cut=True)
-    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    [held, notice] = [s for s in specs if isinstance(s, CardSpec)]
     assert qfu.QUOTES_CUT_LINE in notice.notes and qfu.ORDERS_CUT_LINE in notice.notes
     assert [s for s in specs if isinstance(s, DraftSpec)] == []
+    # Never silent: the principal hears that tasks were held back.
+    assert held.to_principal and held.key == "orders-cut:Acme:2026-W46"
+    assert held.notes == (qfu.ORDERS_HELD_LINE.format(n=5),)
     # More than ten: the first ten shown, the rest counted.
     many = [_q(f"QTN-M{i:02d}", f"Cust {i:02d}", 1, 100.0 + i) for i in range(12)]
     [notice] = [s for s in _specs(quotes=many, orders=[]) if isinstance(s, CardSpec)]
@@ -342,8 +348,9 @@ def test_a_customer_beyond_the_fifty_asked_about_gets_no_task() -> None:
     cards = [s for s in specs if isinstance(s, DraftSpec)]
     assert len(cards) == registry.MAX_LIST
     assert "QTN-M00" not in [c.fields["reference_name"] for c in cards]
-    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    [held, notice] = [s for s in specs if isinstance(s, CardSpec)]
     assert qfu.ORDERS_CUT_LINE in notice.notes
+    assert held.to_principal and held.notes == (qfu.ORDERS_HELD_LINE.format(n=5),)
 
 
 def test_a_todo_per_quotation_from_codes_template(job_on: WatchJob) -> None:
@@ -889,3 +896,78 @@ def test_a_tried_card_tidied_as_expired_still_holds_its_finding(
     from openexecutive.watch.cards import carded_key
 
     assert watch_settings.told(JOB.id, [carded_key(key)]) == {carded_key(key)}
+
+
+# --------------------------------------------------------------------------- #
+# Read 3's reach, a cut order list told to the principal, and assign_to
+# --------------------------------------------------------------------------- #
+
+
+def _make_demo(person_id: int) -> None:
+    with people_store._get_conn(None) as conn:
+        conn.execute("UPDATE people SET directory_demo = 1 WHERE id = ?", (person_id,))
+
+
+def test_the_orders_read_reaches_back_ninety_days_at_most() -> None:
+    old = _q("QTN-OLD", "Cust 00", 2, 500.0, quoted=-300)
+    many = [old] + [_q(f"QTN-M{i:02d}", f"Cust {i:02d}", 3, 100.0 + i) for i in range(1, 50)]
+    built = qfu._orders(SETTINGS, TODAY, ({"rows": many},))
+    assert isinstance(built, Derived) and len(built.arguments["filters"]["customer"][1]) == 50
+    assert built.arguments["filters"]["transaction_date"] == [">=", _in(-90)]
+    assert registry.shape_mismatch(qfu.ORDERS_SHAPE, built.arguments, TODAY) == ""
+    # A younger oldest quotation: its own date.
+    young = qfu._orders(SETTINGS, TODAY, ({"rows": [_q("QTN-Y", "Orion", 2, 1.0, quoted=-20)]},))
+    assert isinstance(young, Derived) and young.arguments["filters"]["transaction_date"] == [">=", _in(-20)]
+
+
+def test_a_cut_order_list_is_told_to_the_principal_once(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    rows = [QUOTES[0], QUOTES[2]]
+    erp.replies.extend([_list(rows), _list([]), _list([], "Sales Order", truncated=True)])
+    outcome = _run()
+    assert outcome.draft_cards == 0
+    theirs = [a for a in _alerts() if a.routed_to_person_id == team.principal]
+    assert len(theirs) == 1 and "2 quotations were held back" in theirs[0].body
+    # Cut again the next day: not told again that week.
+    erp.replies.extend([_list(rows), _list([]), _list([], "Sales Order", truncated=True)])
+    _run(NEXT_DAY)
+    assert len([a for a in _alerts() if a.routed_to_person_id == team.principal]) == 1
+
+
+def test_assign_to_is_never_the_configurer_nor_a_demo_account_when_saved(
+    client: TestClient, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    demo = people_store.upsert_person(full_name="Demo Dee", email="dee@co.example")
+    _make_demo(demo)
+    for bad in (OWNER, OWNER.upper(), "dee@co.example"):
+        response = client.put("/watch/jobs/quote-follow-up", json={"settings": {**SETTINGS, "assign_to": bad}})
+        assert response.status_code == 400, bad
+        assert response.json()["detail"]["code"] == "bad_settings"
+    ok = client.put("/watch/jobs/quote-follow-up", json={"settings": {**SETTINGS, "assign_to": TEAM}})
+    assert ok.status_code == 200, ok.text
+
+
+@pytest.mark.parametrize("who", ["configurer", "demo"])
+def test_an_assign_to_that_cant_take_the_tasks_leaves_none_and_tells_the_principal(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], who: str,
+) -> None:
+    from openexecutive.watch.settings import ASSIGN_TO_LINES
+
+    if who == "demo":
+        demo = people_store.upsert_person(full_name="Demo Dee", email="dee@co.example")
+        _make_demo(demo)
+        bad = "dee@co.example"
+    else:
+        bad = OWNER
+    # Stored without the route's check (an older row, or the person changed since).
+    _save(team.principal, reviewer=team.cara, settings={**SETTINGS, "assign_to": bad})
+    assert qfu.assignee() == ""
+    [card] = [s for s in _specs(quotes=[QUOTES[0]], orders=[]) if isinstance(s, DraftSpec)]
+    assert isinstance(qfu.check_fields("create", "ToDo", {**card.fields, "allocated_to": bad}), str)
+    erp.replies.extend([_list([QUOTES[0]]), _list([]), _list([], "Sales Order")])
+    outcome = _run()
+    assert (outcome.draft_cards, outcome.checks) == (0, 0)
+    theirs = [a for a in _alerts() if a.routed_to_person_id == team.principal]
+    assert len(theirs) == 1 and ASSIGN_TO_LINES[who] in theirs[0].body

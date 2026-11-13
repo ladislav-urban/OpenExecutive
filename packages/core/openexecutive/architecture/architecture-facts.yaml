@@ -12344,8 +12344,20 @@ watch:
     row counted once); list_records Sales Order (name, customer, transaction_date,
     items.prevdoc_docname) with {company, docstatus ["<", 2], customer
     ["in", the counted quotations' customers, most pressing first, at most
-    50], transaction_date [">=", the oldest of their quotations, within
-    400 days]}, derived, skipped when none. No list in a list: status and
+    50], transaction_date [">=", the later of the oldest of their
+    quotations and today - ORDERS_DAYS (90)]}, derived, skipped when none
+    (its rows are order lines: reaching back to a year-old quotation cut it
+    every day on a busy site, holding back every task). When read 3 is
+    truncated (or its customer list was cut at 50), a to_principal CardSpec
+    orders-cut:<company>:<ISO week> (ORDERS_HELD_LINE, the count held
+    back) tells the principal once a week. An assign_to that is the job's
+    configurer's email or a demo person's (settings.assign_to_problem,
+    People and the row read fresh) is refused at PUT /watch/jobs/{id}
+    (400 bad_settings, ASSIGN_TO_SAVE) and makes assignee() "" at run and
+    check time: no card, and settings.assign_to_notice
+    (assign-to:<job>:<ISO week>, to_principal, ASSIGN_TO_LINES) tells the
+    principal. cards._mark_carded logs a running count of the card records
+    it couldn't write. No list in a list: status and
     the two date bounds are sorted in code. Rules: lapsing = status Open,
     Replied or Partially Ordered and valid_till today to today +
     days_ahead; lapsed = valid_till 1-7 days ago and status Expired, Open
