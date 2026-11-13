@@ -12337,9 +12337,10 @@ watch:
     (registry.check_settings refuses it too), or that casefolded is the
     job's configurer's address or alias or any directory_demo person's
     address or alias, every matching row (settings.assign_to_problem,
-    _demo_addresses; People and the row read fresh), is refused on every
-    PUT /watch/jobs/{id} against the effective settings (the body's, else
-    the stored ones) (400 bad_settings, ASSIGN_TO_SAVE) and makes assignee() "" at run and
+    _demo_addresses; People and the row read fresh), is refused at PUT
+    /watch/jobs/{id} whenever settings are sent and on every PUT that
+    leaves the job on (turning it off is never refused), against the
+    effective settings (the body's, else the stored ones) (400 bad_settings, ASSIGN_TO_SAVE) and makes assignee() "" at run and
     check time: no card, and settings.assign_to_notice
     (assign-to:<job>:<ISO week>, to_principal, ASSIGN_TO_LINES) tells the
     principal. cards._mark_carded logs a running count of the card records

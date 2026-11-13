@@ -1055,3 +1055,21 @@ def test_a_put_without_settings_checks_the_stored_assign_to(
     response = client.put("/watch/jobs/quote-follow-up", json={"enabled": True})
     assert response.status_code == 400 and response.json()["detail"]["code"] == "bad_settings"
     assert watch_settings.get_row(JOB.id).enabled is False
+
+
+def test_turning_a_job_off_isnt_refused_for_an_assign_to_gone_bad(
+    client: TestClient, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    demo = people_store.upsert_person(full_name="Demo Dee", email="dee@co.example")
+    watch_settings.save(JOB, enabled=True, settings={**SETTINGS, "assign_to": "dee@co.example"},
+                        reviewer_person_id=None, set_reviewer=False, configured_by_person_id=roster.principal,
+                        now=datetime.now(UTC))
+    # Dee is moved into the demo group after the setting was saved.
+    _make_demo(demo)
+    off = client.put("/watch/jobs/quote-follow-up", json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert watch_settings.get_row(JOB.id).enabled is False
+    on = client.put("/watch/jobs/quote-follow-up", json={"enabled": True})
+    assert on.status_code == 400 and on.json()["detail"]["code"] == "bad_settings"
+    assert watch_settings.get_row(JOB.id).enabled is False
