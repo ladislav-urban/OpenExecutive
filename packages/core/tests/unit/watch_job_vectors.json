@@ -3,7 +3,7 @@
   "job_id_pattern": "[a-z0-9-]{1,40}",
   "slots": ["$company", "$date", "$party", "$parties", "$customers", "$int", "$bank_line", "$mail_draft", "$mail_file"],
   "limits": {"date_range_days": 400, "max_list": 50, "max_int": 500},
-  "phase1_jobs": ["collections", "payment-checks", "quote-follow-up"],
+  "phase1_jobs": ["collections", "payment-checks", "quote-follow-up", "late-deliveries"],
   "job_user": "oe-watch-{job}@{site}",
   "bad_job_ids": ["", "Collections", "collections_job", "a b", "x/y", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"],
   "shape_cases": [
@@ -100,6 +100,65 @@
         {"doctype": "Sales Order", "fields": ["name"], "filters": {"company": "Acme", "docstatus": ["<", 2], "customer": ["in", []], "transaction_date": [">=", "2026-09-01"]}, "limit": 500},
         {"doctype": "Sales Order", "fields": ["name"], "filters": {"company": "Acme", "docstatus": ["<", 3], "customer": ["in", ["Acme Retail"]], "transaction_date": [">=", "2026-09-01"]}, "limit": 500}
       ]
+    },
+    {
+      "today": "2026-11-10",
+      "shape": {"doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "schedule_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "$company", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "$date"]}, "limit": "$int"},
+      "fits": [
+        {"doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "schedule_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 500},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 500},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier", "items.item_code", "items.received_qty", "items.schedule_date"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50}
+      ],
+      "misfits": [
+        {"doctype": "Purchase Order", "fields": ["name", "items.rate"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "terms"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<=", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": ["<", 2], "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["like", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Invoice", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "Closed", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "On Hold", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": ["in", ["To Receive", "Closed"]], "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100.0], "schedule_date": ["<", "2026-11-10"]}, "limit": 50}
+      ]
+    },
+    {
+      "today": "2026-11-10",
+      "shape": {"doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "schedule_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "$company", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "$date"]}, "limit": "$int"},
+      "fits": [
+        {"doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "schedule_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 500},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 500},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier", "items.item_code", "items.received_qty", "items.schedule_date"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50}
+      ],
+      "misfits": [
+        {"doctype": "Purchase Order", "fields": ["name", "items.rate"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "terms"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<=", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": ["<", 2], "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["like", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Invoice", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "Closed", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "On Hold", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": ["in", ["To Receive", "Closed"]], "per_received": ["<", 100], "schedule_date": ["<", "2026-11-10"]}, "limit": 50},
+        {"doctype": "Purchase Order", "fields": ["name", "supplier"], "filters": {"company": "Acme", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100.0], "schedule_date": ["<", "2026-11-10"]}, "limit": 50}
+      ]
+    },
+    {
+      "today": "2026-11-10",
+      "shape": {"report_name": "Supplier Delivery Record", "filters": {"company": "$company", "from_date": "$date", "to_date": "$date"}},
+      "fits": [
+        {"report_name": "Supplier Delivery Record", "filters": {"company": "Acme", "from_date": "2025-11-10", "to_date": "2026-11-10"}}
+      ],
+      "misfits": [
+        {"report_name": "Supplier Delivery Record", "filters": {"company": "Acme", "from_date": "2025-11-10", "to_date": "2026-11-10", "supplier": "Sup A"}},
+        {"report_name": "Purchase Analytics", "filters": {"company": "Acme", "from_date": "2025-11-10", "to_date": "2026-11-10"}},
+        {"report_name": "Supplier Delivery Record", "filters": {"company": "Acme", "from_date": "2024-09-01", "to_date": "2026-11-10"}},
+        {"report_name": "Supplier Delivery Record", "filters": {"company": "Acme", "from_date": "2025-11-10", "to_date": "2026-11-10"}, "limit": 500}
+      ]
     }
   ],
   "assertion": {
@@ -137,6 +196,15 @@
       {"tool": "list_records", "doctype": "Quotation", "fields": ["name", "party_name", "customer_name", "transaction_date", "valid_till", "grand_total", "currency", "status", "order_type", "amended_from"], "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Customer", "valid_till": [">=", "$date"]}, "limit": "$int"},
       {"tool": "list_records", "doctype": "Quotation", "fields": ["name", "valid_till", "grand_total", "currency", "status"], "filters": {"company": "$company", "docstatus": 1, "quotation_to": "Lead", "valid_till": [">=", "$date"]}, "limit": "$int"},
       {"tool": "list_records", "doctype": "Sales Order", "fields": ["name", "customer", "transaction_date", "items.prevdoc_docname"], "filters": {"company": "$company", "docstatus": ["<", 2], "customer": ["in", "$customers"], "transaction_date": [">=", "$date"]}, "limit": "$int"}
+    ]
+  },
+  "late_deliveries_job": {
+    "id": "late-deliveries",
+    "as_job_user": true,
+    "reads": [
+      {"tool": "list_records", "doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "schedule_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "$company", "docstatus": 1, "status": "To Receive and Bill", "per_received": ["<", 100], "schedule_date": ["<", "$date"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Purchase Order", "fields": ["name", "supplier", "status", "transaction_date", "schedule_date", "per_received", "grand_total", "currency", "items.item_code", "items.qty", "items.received_qty", "items.schedule_date"], "filters": {"company": "$company", "docstatus": 1, "status": "To Receive", "per_received": ["<", 100], "schedule_date": ["<", "$date"]}, "limit": "$int"},
+      {"tool": "run_report", "report_name": "Supplier Delivery Record", "filters": {"company": "$company", "from_date": "$date", "to_date": "$date"}}
     ]
   },
   "example_job": {

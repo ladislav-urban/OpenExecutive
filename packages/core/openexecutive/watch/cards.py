@@ -44,8 +44,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from typing import Any
 
 from openexecutive.watch import registry
@@ -85,7 +86,7 @@ CHECK_CODES = frozenset({
     "job-check-reviewer", "job-check-cap",
     "check_currency", "check_not_whole", "check_reviewer_sod", "check_amount_cap",
     "check_fill_currency", "check_fill_total", "check_fill_sod", "check_fill_assignee", "check_fill_collides",
-    "check_fill_sender",
+    "check_fill_sender", "check_already_open",
 })
 # What a run's notice says of the findings no card was left for, by code,
 # when the code says more than "ERPNext didn't accept them" (``{n}`` how
@@ -113,7 +114,19 @@ CHECK_LINES: dict[str, str] = {
     ),
     "check_fill_collides": "{n} {noun} weren't prepared: the supplier already has an invoice with that number.",
     "check_fill_sender": "{n} {noun} weren't prepared: the ERP can't trust the mail's sender to fill an invoice.",
+    "check_already_open": "{n} {noun} weren't prepared: a task for each is already open in the ERP.",
 }
+
+
+# Checks refused because ERPNext keeps the finding from the reviewer: its
+# row goes to the principal instead.
+KEPT_CODES = frozenset({"check_permission", "check_not_theirs", "check_reviewer_sod", "check_fill_sod"})
+# Checks refused for good while the finding stands: a once job holds the
+# finding as if carded (``_mark_carded``) rather than check it every run.
+HELD_CHECK_CODES = KEPT_CODES | {"check_already_open"}
+# How long such a hold lasts for a once job whose keys carry no period of
+# their own (``WatchJob.periodic_keys``): the finding is checked again after.
+HOLD_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -289,7 +302,11 @@ async def _check(
         return "check_failed", {}
     checked = drafts._result(raw)
     if checked.get("ok") is not True:
-        return ("check_permission" if _permission(drafts._refusal_text(raw)) else "check_refused"), {}
+        said = drafts._refusal_text(raw)
+        if spec.doctype == "ToDo" and spec.operation == "create" and drafts.already_open(said):
+            # oe_connector's duplicate-ToDo guard: one is already open.
+            return "check_already_open", {}
+        return ("check_permission" if _permission(said) else "check_refused"), {}
     why = _echo_refusal(spec, fields, checked, email)
     if why is not None:
         return why, {}
@@ -386,7 +403,15 @@ async def leave_drafts(
     # A finding gets one card a day, whatever became of it: a job that runs at
     # several slots never proposes a card again the hour after it was dismissed.
     if job.once:
-        left_today = _once_held(job, reviewer.id, specs)
+        left_today, kept = _once_held(job, reviewer.id, specs, day)
+        # A finding held because ERPNext kept it from the reviewer (on an
+        # earlier run) is still kept: its row comes off the reviewer's
+        # notice, and its notice is offered to the principal until one of
+        # theirs has told it (the runner skips a finding told before).
+        for spec in specs:
+            if dedup_key(job.id, spec.key) in kept:
+                out.kept_from_reviewer.add(spec.key)
+                out.unproposed.append(spec)
     else:
         left_today = {
             drafts._payload(c).get("dedup_key") for c in drafts.job_cards(job.id, open_only=False)
@@ -399,7 +424,7 @@ async def leave_drafts(
             continue
         if drafts.job_room(job.id, reviewer.id) is not None or take_day_cards(job.id, day, 1, job.card_cap_day) == 0:
             out.capped = len(specs) - n
-            out.unproposed.extend(s for s in specs[n:] if not drafts.job_card_waiting(dedup_key(job.id, s.key)))
+            _unpropose(out, (s for s in specs[n:] if not drafts.job_card_waiting(dedup_key(job.id, s.key))))
             break
         left = False
         try:
@@ -411,7 +436,7 @@ async def leave_drafts(
         if out.capped:
             # The reviewer's cards filled up while this one was checked.
             out.capped = len(specs) - n
-            out.unproposed.extend(s for s in specs[n + 1:] if not drafts.job_card_waiting(dedup_key(job.id, s.key)))
+            _unpropose(out, (s for s in specs[n + 1:] if not drafts.job_card_waiting(dedup_key(job.id, s.key))))
             break
     name = clean(getattr(reviewer, "full_name", "") or "", 80) or "the reviewer"
     if out.left:
@@ -437,8 +462,23 @@ _HELD_STATUSES = frozenset({
 })
 
 
-def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec]) -> set[Any]:
-    """The dedupe keys of a once job's findings that get no new card: a
+def _unpropose(out: DraftOutcome, specs: Iterable[registry.DraftSpec]) -> None:
+    """Add ``specs`` to the findings no card was left for, each once: a kept
+    finding is already there before the loop, and a duplicate would count
+    twice in the notice's subject."""
+    have = {s.key for s in out.unproposed}
+    for spec in specs:
+        if spec.key not in have:
+            have.add(spec.key)
+            out.unproposed.append(spec)
+
+
+def _once_held(
+    job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec], day: str = "",
+) -> tuple[set[Any], set[str]]:
+    """The dedupe keys of a once job's findings that get no new card, and
+    those of them held because ERPNext kept them from the reviewer
+    (``kept_key``). No new card for: a
     card still waiting for the current reviewer and still the job's own
     (``check_fields`` builds it unchanged), one being approved, one whose
     approval was tried at all or went unanswered (its final ``closed_code``
@@ -447,7 +487,14 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
     job's assignee or reviewer changed, a configurer refusal), doesn't hold
     its finding: a waiting one is closed here, its ``card:`` record dropped,
     and the finding gets a new card while it's due. A finding the ledger's
-    listing no longer shows is held by its ``card:`` record."""
+    listing no longer shows is held by its ``card:`` record. A finding whose
+    check ERPNext refused for good is held by its ``held:`` or ``kept:``
+    record whatever older card of the same key the ledger shows: only
+    ``card:`` records (a card left) are dropped with a card that doesn't
+    hold. Those records name the reviewer they were written for, so a new
+    reviewer's check runs at once; for a job whose keys carry no period of
+    their own they last ``HOLD_DAYS`` from ``day``, then are dropped and the
+    finding is checked again."""
     from openexecutive.integrations import erpnext_drafts as drafts
     from openexecutive.memory.decision_ledger import (
         STATUS_EXECUTING,
@@ -456,7 +503,7 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
         close_externally,
     )
     from openexecutive.watch.runner import dedup_key
-    from openexecutive.watch.settings import forget_told, told
+    from openexecutive.watch.settings import forget_told, told, told_days
 
     def tried(card: Any, payload: Mapping[str, Any], final: Mapping[str, Any]) -> bool:
         # An approval was tried: ERPNext may have made the draft.
@@ -498,7 +545,10 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
             ):
                 held.add(key)
         elif card.status in _HELD_STATUSES or (
-            card.status == STATUS_FAILED and final.get("closed_code") == drafts.CLOSED_NO_ANSWER
+            # Unanswered (ERPNext may have made it), or a ToDo already open
+            # in the ERP (that open one is the follow-up).
+            card.status == STATUS_FAILED
+            and final.get("closed_code") in (drafts.CLOSED_NO_ANSWER, drafts.CLOSED_ALREADY_OPEN)
         ):
             held.add(key)
     stale = seen - held
@@ -507,7 +557,18 @@ def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registr
     unseen = wanted - seen
     recorded = told(job.id, [carded_key(k) for k in unseen]) if unseen else set()
     held |= {k for k in unseen if carded_key(k) in recorded}
-    return held
+    holds = [held_key(k, reviewer_id) for k in wanted] + [kept_key(k, reviewer_id) for k in wanted]
+    written = told_days(job.id, holds) if holds else {}
+    if not job.periodic_keys and day:
+        # No period in the key to end the hold: it lasts HOLD_DAYS.
+        oldest = (date.fromisoformat(day) - timedelta(days=HOLD_DAYS)).isoformat()
+        old = [record for record, at in written.items() if at < oldest]
+        if old:
+            forget_told(job.id, old)
+            written = {record: at for record, at in written.items() if at >= oldest}
+    held |= {k for k in wanted if held_key(k, reviewer_id) in written}
+    kept = {k for k in wanted if kept_key(k, reviewer_id) in written}
+    return held | kept, kept
 
 
 def _final(card: Any) -> dict[str, Any]:
@@ -528,15 +589,30 @@ def carded_key(key: str) -> str:
     return f"card:{key}"
 
 
+def held_key(key: str, reviewer_id: int) -> str:
+    """A once job's record that ERPNext refused a finding's check for good
+    while it stands (a ToDo already open for it), as reviewer
+    ``reviewer_id``: held, never dropped with an older card of the same
+    key; another reviewer's check runs at once."""
+    return f"held:{reviewer_id}:{key}"
+
+
+def kept_key(key: str, reviewer_id: int) -> str:
+    """A once job's record that ERPNext kept a finding from reviewer
+    ``reviewer_id``: held, and its notice offered to the principal until one
+    has told it; another reviewer's check runs at once."""
+    return f"kept:{reviewer_id}:{key}"
+
+
 # How many card records this process couldn't write, logged with each.
 _MARK_FAILURES: dict[str, int] = {}
 
 
-def _mark_carded(job: registry.WatchJob, day: str, key: str) -> None:
+def _mark_carded(job: registry.WatchJob, day: str, key: str, record: Any = None) -> None:
     from openexecutive.watch.settings import mark_told
 
     try:
-        mark_told(job.id, [carded_key(key)], day)
+        mark_told(job.id, [(record or carded_key)(key)], day)
     except Exception:
         # The ledger's own card still counts: only its listing is bounded.
         _MARK_FAILURES[job.id] = _MARK_FAILURES.get(job.id, 0) + 1
@@ -578,8 +654,17 @@ async def _leave_one(
             out.check_refused += 1
         if code in ("check_permission", "check_not_theirs"):
             out.permission_refused += 1
-        if code in ("check_permission", "check_not_theirs", "check_reviewer_sod", "check_fill_sod"):
+        if code in KEPT_CODES:
             out.kept_from_reviewer.add(spec.key)
+        if job.once and code in HELD_CHECK_CODES:
+            # A once job's finding ERPNext refused for good (a ToDo already
+            # open for it, or kept from the reviewer, whose row goes to the
+            # principal): held like a card left for it, so it isn't checked
+            # again every run, using up the day's checks before the findings
+            # behind it. A key with a period in it (a week) frees it then.
+            # Its own record kind: a kept one is still kept on later runs.
+            record = kept_key if code in KEPT_CODES else held_key
+            _mark_carded(job, day, key, lambda k: record(k, reviewer.id))
         out.unproposed.append(spec)
         return False
     if not isinstance(pinned, dict):

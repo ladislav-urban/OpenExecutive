@@ -16,8 +16,9 @@ the read (``None``); one cut to its first 50 says so (``Derived``).
 There is no way to add a job at run time: no settings row, chat turn or API
 names one. ``JOBS`` is read-only and holds what this module lists in
 ``_LISTED``: phase 1's collections job (``watch.jobs.collections``), its
-payment-checks job (``watch.jobs.payment_checks``) and its quote-follow-up
-job (``watch.jobs.quote_follow_up``), and phase 2's bank-matching job
+payment-checks job (``watch.jobs.payment_checks``), its quote-follow-up
+job (``watch.jobs.quote_follow_up``) and its late-deliveries job
+(``watch.jobs.late_deliveries``), and phase 2's bank-matching job
 (``watch.jobs.bank_matching``) and invoice-capture job
 (``watch.jobs.invoice_capture``). The test job,
 ``watch.jobs._example``, is put in by the tests alone.
@@ -316,6 +317,10 @@ class WatchJob:
     # left for gets no second card, whatever became of the first
     # (``cards.leave_drafts``); one the day's cap held back gets it later.
     once: bool = False
+    # A once job whose finding keys carry their own period (late deliveries'
+    # ISO week): a hold written when ERPNext refused a finding's check ends
+    # with the period. Without one, such a hold lasts ``cards.HOLD_DAYS``.
+    periodic_keys: bool = False
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -616,11 +621,13 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
 from openexecutive.watch.jobs import bank_matching as _bank_matching  # noqa: E402
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
 from openexecutive.watch.jobs import invoice_capture as _invoice_capture  # noqa: E402
+from openexecutive.watch.jobs import late_deliveries as _late_deliveries  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
 from openexecutive.watch.jobs import quote_follow_up as _quote_follow_up  # noqa: E402
 
 _LISTED: tuple[WatchJob, ...] = (
     _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB, _quote_follow_up.JOB,
+    _late_deliveries.JOB,
 )
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

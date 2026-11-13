@@ -231,13 +231,13 @@ def quotes(result: Mapping[str, Any], *, leads: bool = False) -> list[Quote]:
         customer = "" if leads else _name(row.get("party_name"))
         if not leads and not customer:
             continue
-        currency, status = row.get("currency"), row.get("status")
         out.append(Quote(
             name=name, customer=customer,
             customer_name="" if leads else (_name(row.get("customer_name")) or customer),
             quoted=None if leads else _day(row.get("transaction_date")), valid_till=valid_till,
-            grand_total=round(total, 2), currency=currency if isinstance(currency, str) else "",
-            status=status if isinstance(status, str) else "",
+            # ERPNext's text capped (_name) before anything cleans it.
+            grand_total=round(total, 2), currency=_name(row.get("currency")),
+            status=_name(row.get("status")),
             amended_from="" if leads else _name(row.get("amended_from")),
         ))
     return out
