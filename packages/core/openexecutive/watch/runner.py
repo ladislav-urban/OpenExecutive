@@ -881,15 +881,44 @@ def has_number_word(line: str) -> bool:
     return _NUMBER_WORD_RE.search(line) is not None
 
 
+# Words a project-status line never needs: links and addresses, money and
+# payment, and the language of instructions (a line that narrates an
+# injected request echoes it). Whole words, any case, on the cleaned line;
+# with the currency signs anywhere. A fixed constant, never settings.
+BARRED_WORDS: frozenset[str] = frozenset({
+    "link", "links", "url", "urls", "http", "https", "www", "click", "email", "e-mail",
+    "pay", "paid", "payment", "payments", "approve", "approved", "approval", "transfer", "invoice", "wire",
+    "instruction", "instructions", "ignore", "ignored", "ignoring", "request", "requested", "prompt",
+    "euro", "euros", "eur", "dollar", "dollars", "usd", "pound", "pounds", "gbp", "yen", "cents", "currency",
+})
+BARRED_SIGNS: frozenset[str] = frozenset({"\u20ac", "$", "\u00a3", "\u00a5"})
+_BARRED_RE = re.compile(
+    r"(?<![^\W_])(?:" + "|".join(re.escape(w) for w in sorted(BARRED_WORDS, key=len, reverse=True))
+    + r")(?![^\W_])",
+    re.IGNORECASE,
+)
+
+
+def has_barred_word(line: str) -> bool:
+    """Whether ``line`` holds a ``BARRED_WORDS`` word (whole word, any case)
+    or a ``BARRED_SIGNS`` currency sign anywhere."""
+    return _BARRED_RE.search(line) is not None or any(sign in line for sign in BARRED_SIGNS)
+
+
 def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
-    """``reasons`` without each line that holds any digit or names a number
-    in words (``ReasonSchema.no_digits``): the notice's own lines carry every
-    figure, so the model's line may only say in words what they mean.
+    """``reasons`` without each line that holds any digit, names a number
+    in words or holds a barred word or currency sign (``has_barred_word``;
+    ``ReasonSchema.no_digits``): the notice's own lines carry every figure,
+    so the model's line may only say in words what they mean, and never
+    link, money, payment or a request it was shown.
     Returns the lines kept and how many were dropped. The number words are
     a fixed English list matched as whole words, so plurals, run-together
     words, other languages, Roman numerals and letters that look like digits
     are a known residual."""
-    kept = {key: line for key, line in reasons.items() if not has_digit(line) and not has_number_word(line)}
+    kept = {
+        key: line for key, line in reasons.items()
+        if not has_digit(line) and not has_number_word(line) and not has_barred_word(line)
+    }
     return kept, len(reasons) - len(kept)
 
 
@@ -956,7 +985,7 @@ async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]
         reasons, dropped = without_digits(reasons)
         if dropped:
             # A count only: never the line, which may quote outside text.
-            logger.warning("watch: job %s dropped %d reason line(s) holding a number", job.id, dropped)
+            logger.warning("watch: job %s dropped %d reason line(s) holding a number or a barred word", job.id, dropped)
     return reasons
 
 
