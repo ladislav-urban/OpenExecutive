@@ -106,17 +106,21 @@ def test_unsigned_request_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_an_unsigned_body_never_reaches_the_log(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Bolt logs the whole body of a request that fails its signature check;
     the route refuses it before Bolt sees it."""
-    import logging
+
+    from ._log_capture import recording
 
     _settings(monkeypatch)
-    caplog.set_level(logging.DEBUG)
-    with TestClient(create_app()) as client:
+    # The app's own loggers and Bolt's, recorded directly: building the app
+    # stops "openexecutive" propagating to the root logger caplog listens on.
+    with TestClient(create_app()) as client, recording(caplog, "openexecutive", "slack_bolt", "slack_sdk"):
         res = client.post(
             "/webhook/slack",
             content=b"x=1\nFORGED_LINE the secret is hunter2",
             headers={"x-slack-request-timestamp": str(int(time.time())), "x-slack-signature": "v0=00"},
         )
     assert res.status_code == 401
+    # The refusal was logged, so the capture works, and the body wasn't.
+    assert "bad signature" in caplog.text
     assert "FORGED_LINE" not in caplog.text
 
 
