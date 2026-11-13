@@ -24,7 +24,7 @@ of kinds that are on (a DocType listed for drafts or changes; a block only
 while ``erpnext_block.unavailable`` says nothing; a bank match only while
 ``erpnext_match.unavailable`` says nothing). For each ``DraftSpec``, in
 the job's order: none while the same finding's card waits or once one was
-left that day; at most ``card_cap_day`` a day across the job's slots
+left that day (for a ``once`` job, ever); at most ``card_cap_day`` a day across the job's slots
 (``settings.take_day_cards``), ``erpnext_drafts.JOB_OPEN_MAX`` waiting for
 the job, and never the reviewer past ``OPEN_CARDS_MAX`` less the headroom.
 The fields are the job's ``check_fields`` output; ERPNext checks them as the
@@ -385,10 +385,13 @@ async def leave_drafts(
         return out
     # A finding gets one card a day, whatever became of it: a job that runs at
     # several slots never proposes a card again the hour after it was dismissed.
-    left_today = {
-        drafts._payload(c).get("dedup_key") for c in drafts.job_cards(job.id, open_only=False)
-        if drafts._payload(c).get("run_day") == day
-    }
+    if job.once:
+        left_today = _once_held(job, reviewer.id, specs)
+    else:
+        left_today = {
+            drafts._payload(c).get("dedup_key") for c in drafts.job_cards(job.id, open_only=False)
+            if drafts._payload(c).get("run_day") == day
+        }
     for n, spec in enumerate(specs):
         key = dedup_key(job.id, spec.key)
         if key in left_today or drafts.job_card_waiting(key):
@@ -425,6 +428,122 @@ async def leave_drafts(
     if out.capped:
         out.lines.append(f"{out.capped} more {noun} are due; they come once the waiting ones are handled.")
     return out
+
+
+# A once job's card that keeps its finding from a second card: one a person
+# approved or dismissed, or one whose approval may have made the draft.
+_HELD_STATUSES = frozenset({
+    "approved_unchanged", "approved_with_edit", "executed", "reversed", "rejected",
+})
+
+
+def _once_held(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec]) -> set[Any]:
+    """The dedupe keys of a once job's findings that get no new card: a
+    card still waiting for the current reviewer and still the job's own
+    (``check_fields`` builds it unchanged), one being approved, one whose
+    approval was tried at all or went unanswered (its final ``closed_code``
+    ``no_answer``: ERPNext may have made it), or one a person approved or
+    dismissed. A card that expired, or that code closed or would refuse (the
+    job's assignee or reviewer changed, a configurer refusal), doesn't hold
+    its finding: a waiting one is closed here, its ``card:`` record dropped,
+    and the finding gets a new card while it's due. A finding the ledger's
+    listing no longer shows is held by its ``card:`` record."""
+    from openexecutive.integrations import erpnext_drafts as drafts
+    from openexecutive.memory.decision_ledger import (
+        STATUS_EXECUTING,
+        STATUS_FAILED,
+        STATUS_PROPOSED,
+        close_externally,
+    )
+    from openexecutive.watch.runner import dedup_key
+    from openexecutive.watch.settings import forget_told, told
+
+    def tried(card: Any, payload: Mapping[str, Any], final: Mapping[str, Any]) -> bool:
+        # An approval was tried: ERPNext may have made the draft.
+        attempts = [p.get("attempts") for p in (payload, final)]
+        return payload.get("tried") is True or final.get("tried") is True or any(
+            isinstance(a, int) and not isinstance(a, bool) and a > 0 for a in attempts
+        )
+
+    assert job.check_fields is not None
+    wanted = {dedup_key(job.id, s.key) for s in specs}
+    held: set[Any] = set()
+    seen: set[str] = set()
+    for card in drafts.job_cards(job.id, open_only=False):
+        payload = drafts._payload(card)
+        key = payload.get("dedup_key")
+        if key not in wanted:
+            continue
+        seen.add(key)
+        fields = payload.get("fields")
+        final = _final(card)
+        # A tried card holds whatever became of it (a waiting one _tidy closed
+        # as expired included): its try may have made the draft. A failed one
+        # is told apart by its final closed_code below, since ERPNext answered.
+        if card.status == STATUS_EXECUTING or (card.status != STATUS_FAILED and tried(card, payload, final)):
+            held.add(key)
+        elif card.status == STATUS_PROPOSED:
+            target = payload.get("name")
+            still = (
+                drafts.card_live(card) and card.approver_person_id == reviewer_id and isinstance(fields, dict)
+                and job.check_fields(
+                    str(payload.get("operation", "create")), str(payload.get("doctype")), fields,
+                    target if isinstance(target, str) else "",
+                ) == fields
+            )
+            # Closed from proposed only: one that turned executing meanwhile
+            # is an approval in flight, and holds its finding.
+            if still or not close_externally(
+                card.id, reason="expired" if not drafts.card_live(card) else "job_changed", proposed_only=True,
+            ):
+                held.add(key)
+        elif card.status in _HELD_STATUSES or (
+            card.status == STATUS_FAILED and final.get("closed_code") == drafts.CLOSED_NO_ANSWER
+        ):
+            held.add(key)
+    stale = seen - held
+    if stale:
+        forget_told(job.id, [carded_key(k) for k in stale])
+    unseen = wanted - seen
+    recorded = told(job.id, [carded_key(k) for k in unseen]) if unseen else set()
+    held |= {k for k in unseen if carded_key(k) in recorded}
+    return held
+
+
+def _final(card: Any) -> dict[str, Any]:
+    """A card's final payload (what its approval left: ``closed_code``,
+    ``attempts``), or {}."""
+    import json
+
+    try:
+        final = json.loads(getattr(card, "final_payload_json", None) or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return final if isinstance(final, dict) else {}
+
+
+def carded_key(key: str) -> str:
+    """A once job's record that a card was left for a finding (its dedupe
+    digest ``key``), kept beside what its notices told (``watch_told``)."""
+    return f"card:{key}"
+
+
+# How many card records this process couldn't write, logged with each.
+_MARK_FAILURES: dict[str, int] = {}
+
+
+def _mark_carded(job: registry.WatchJob, day: str, key: str) -> None:
+    from openexecutive.watch.settings import mark_told
+
+    try:
+        mark_told(job.id, [carded_key(key)], day)
+    except Exception:
+        # The ledger's own card still counts: only its listing is bounded.
+        _MARK_FAILURES[job.id] = _MARK_FAILURES.get(job.id, 0) + 1
+        logger.warning(
+            "watch: job %s's card couldn't be recorded as left (%d such failures since start)",
+            job.id, _MARK_FAILURES[job.id], exc_info=True,
+        )
 
 
 async def _leave_one(
@@ -514,6 +633,8 @@ async def _leave_one(
             take_day_amount(job.id, day, -amount, 0.0)
     if new:
         out.left += 1
+        if job.once:
+            _mark_carded(job, day, key)
     else:
         out.repeats += 1
     return new
