@@ -11973,6 +11973,11 @@ watch:
     Reader service view, and puts {kind, job, as_job_user, user} in the
     result's top-level `acting` (a refused call has none).
   runner: |
+    The run's own lines (route reason, cards waiting, caps, refusals;
+    cards.DraftOutcome.lines) go on the first notice it leaves that isn't
+    to_principal (runner._lines_target over the notices still due), else
+    the first it leaves: the weekly principal notices come first and are
+    skipped once told.
     watch.runner.maybe_run, from scheduler.runner._maybe_run_watch_jobs each
     tick: for each job on (master switch and row), on its weekdays, with a
     slot due in the company's zone (get_user_timezone), claim(job, day,
@@ -12356,10 +12361,13 @@ watch:
     every day on a busy site, holding back every task). When read 3 is
     truncated (or its customer list was cut at 50), a to_principal CardSpec
     orders-cut:<company>:<ISO week> (ORDERS_HELD_LINE, the count held
-    back) tells the principal once a week. An assign_to that is the job's
-    configurer's email or a demo person's (settings.assign_to_problem,
-    People and the row read fresh) is refused at PUT /watch/jobs/{id}
-    (400 bad_settings, ASSIGN_TO_SAVE) and makes assignee() "" at run and
+    back) tells the principal once a week. An assign_to that isn't ASCII
+    (registry.check_settings refuses it too), or that casefolded is the
+    job's configurer's address or alias or any directory_demo person's
+    address or alias, every matching row (settings.assign_to_problem,
+    _demo_addresses; People and the row read fresh), is refused on every
+    PUT /watch/jobs/{id} against the effective settings (the body's, else
+    the stored ones) (400 bad_settings, ASSIGN_TO_SAVE) and makes assignee() "" at run and
     check time: no card, and settings.assign_to_notice
     (assign-to:<job>:<ISO week>, to_principal, ASSIGN_TO_LINES) tells the
     principal. cards._mark_carded logs a running count of the card records
