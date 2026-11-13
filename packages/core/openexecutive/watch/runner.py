@@ -928,9 +928,20 @@ async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]
     facts alone, so one finding's outside text never reaches another's
     line; a call that fails drops only its own line. {} when nothing usable
     comes back. Never raises."""
+    kept, _dropped = await reason_lines(job, specs)
+    return kept
+
+
+async def reason_lines(
+    job: registry.WatchJob, specs: Sequence[registry.CardSpec],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """``reason_step``'s work: the lines kept, and those its ``no_digits``
+    filter dropped (never shown on a notice; the eval runner's
+    ``watch_reason`` scenarios report them), both by the specs' keys.
+    Never raises."""
     schema = job.reason_schema
     if schema is None:
-        return {}
+        return {}, {}
     reasons: dict[str, str] = {}
     try:
         if schema.per_finding:
@@ -951,13 +962,14 @@ async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]
             reasons = await _ask(job, specs, REASON_MAX_TOKENS)
     except Exception:
         logger.warning("watch: job %s's reason step failed; its notices go without reasons", job.id)
-        return {}
-    if schema.no_digits:
-        reasons, dropped = without_digits(reasons)
-        if dropped:
-            # A count only: never the line, which may quote outside text.
-            logger.warning("watch: job %s dropped %d reason line(s) holding a number", job.id, dropped)
-    return reasons
+        return {}, {}
+    if not schema.no_digits:
+        return reasons, {}
+    kept, dropped = without_digits(reasons)
+    if dropped:
+        # A count only: never the line, which may quote outside text.
+        logger.warning("watch: job %s dropped %d reason line(s) holding a number", job.id, dropped)
+    return kept, {key: line for key, line in reasons.items() if key not in kept}
 
 
 # --------------------------------------------------------------------------- #

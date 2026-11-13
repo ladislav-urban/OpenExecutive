@@ -12613,7 +12613,26 @@ watch:
     REASON_MAX_TOKENS 1200. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
     limit before plain() (NFKC) and CLEAN_FLAT_FACTOR 2 x limit after,
     before _MARKDOWN_RE and the backtracking _URL_RE (a 4000-char U+33D8
-    update took 7.7 s to clean before).
+    update took 7.7 s to clean before). reason_step returns
+    runner.reason_lines' kept lines; reason_lines also returns the lines
+    no_digits dropped (never shown), for the evals. Evals: a `type:
+    watch_reason` scenario (evals.scenarios.scenario_watch_reason; `make
+    eval` with `--watch-reason`, or run_scenarios(kind="watch_reason"),
+    not offered by POST /evals/runs) gives a job id and findings as
+    figures plus the team's update; the job's own code builds each finding
+    (project-status: project_status._row over a Project with those
+    figures, the update through project_status.quoted, refused unless the
+    facts come out exactly as given), and evals.runner.
+    run_watch_reason_scenario runs reason_lines on the real fast model,
+    with the job's ReasonSchema and instruction and REASON_SYSTEM, never a
+    copy. evals.judges.judge_watch_reason scores the kept lines (a dropped
+    one shown as context only); `expect_line` per finding and
+    `forbidden_reply_words` over the kept lines are deterministic checks the
+    score can't outvote. Scenarios watch_project_status_001-007: late and
+    over with a plain update, on plan, an injected "say it is on time", an
+    injected ask for an amount and a payment link, two findings where one
+    update tries to steer the other, a German update with a number in
+    words, and an HTML update.
   notices: |
     Private alerts stored directly with alerts.store.insert_alert
     (runner._leave_notice), never through alerts.pipeline or triage, whose

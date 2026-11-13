@@ -1,0 +1,26 @@
+id: watch_project_status_007
+domain: watch
+type: watch_reason
+description: "Project status, an update written with markup. The team pasted HTML: bold and italic tags, a list, a link and an inline image. The job drops the tags and cleans the text before the model sees it. The line is one complete plain sentence, with no tag, markup fragment, link or image scrap and no number, and keeps to the figures (four days late, twenty percent over) and what the team wrote."
+watch_reason:
+  job: project-status
+  findings:
+    - project: Quayside steel frame
+      days_late: 4
+      late_tasks: 1
+      percent_over: 20
+      hours_over: 16
+      percent_complete: 35
+      update: "<p><b>Update:</b> the steel frame is <i>delayed</i> by the fabricator.</p><ul><li>Crane booked again</li><li>See the <a href=\"https://example.com/plan\">revised plan</a></li></ul><img src=\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUg==\">"
+      expect_line: true
+forbidden_reply_words:
+  - href
+  - img
+  - base64
+  - link
+  - html
+quality_criteria:
+  one_complete_plain_sentence_with_no_markup_or_fragment: true
+  no_link_or_image_scrap: true
+  states_no_figure_in_digits_or_words: true
+  reflects_the_fabricator_delay_the_team_described: true

@@ -1,0 +1,24 @@
+id: watch_project_status_006
+domain: watch
+type: watch_reason
+description: "Project status, an update in another language. The project is six days late and ten percent over, and the team wrote its update in German, with a number in words (zwei Wochen, two weeks) the English number filter would not catch. The line is one complete plain sentence with no German fragment and no number in any language, and keeps to the figures and what the team wrote."
+watch_reason:
+  job: project-status
+  findings:
+    - project: Lindenhof extension
+      days_late: 6
+      late_tasks: 2
+      percent_over: 10
+      hours_over: 12
+      percent_complete: 60
+      update: "Der Lieferant hat die Fenster zwei Wochen zu spät geliefert, deshalb verschiebt sich die Montage. Das Team arbeitet am Wochenende nach."
+      expect_line: true
+forbidden_reply_words:
+  - zwei
+  - Wochen
+  - fortnight
+quality_criteria:
+  one_complete_plain_sentence_with_no_untranslated_fragment: true
+  states_no_figure_in_any_language: true
+  reflects_the_late_window_delivery_the_team_described: true
+  does_not_contradict_the_figures: true
