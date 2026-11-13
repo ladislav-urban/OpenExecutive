@@ -1160,3 +1160,25 @@ def test_late_deliveries_assign_to_is_never_the_configurer_nor_a_demo_account(
     with people_store._get_conn(None) as conn:
         conn.execute("UPDATE people SET directory_demo = 1 WHERE id = ?", (team.dan,))
     assert ld.assignee() == ""
+
+
+def test_the_runs_lines_stay_on_the_reviewers_notice_beside_the_weekly_cut_notice(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from openexecutive.memory.decision_ledger import STATUS_REJECTED, mark_resolved
+
+    _auto_checks(erp)
+    receive = [_line("PO-R", "Kepler", "K", 2.0, 0.0, -6, status="To Receive")]
+    six = [_line(f"PO-S{i}", f"Sup S{i}", "A", 1.0, 0.0, -20 + i) for i in range(6)]
+    late_one = [_line("PO-S9", "Sup S9", "A", 1.0, 0.0, -5)]
+    for day, rows in ((DAY, six), (NEXT_DAY, six + late_one)):
+        erp.replies.extend([_list(rows), _list(receive, truncated=True), _report([])])
+        assert _run(day).draft_cards in (5, 2), day
+        [mine] = [a for a in _alerts() if a.routed_to_person_id == team.cara and day in a.headline]
+        assert "chase tasks are waiting for Cara Credit to approve." in mine.body, day
+        for theirs in (a for a in _alerts() if a.routed_to_person_id == team.principal):
+            assert "waiting for Cara Credit" not in theirs.body
+        for card in _job_cards():
+            if card.status == "proposed":
+                mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
+    assert len([a for a in _alerts() if a.routed_to_person_id == team.principal]) == 1

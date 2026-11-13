@@ -649,23 +649,45 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # findings never use up the day before a check kept from the reviewer.
     ordered = principal_first(notices)
     told_before = told(job, [spec.key for spec in ordered]) if job.once and ordered else set()
+    due = [
+        spec for spec in ordered
+        if not (
+            _still_open(dedup_key(job.id, spec.key)) or _raised_today(dedup_key(job.id, spec.key), day)
+            or spec.key in told_before
+        )
+    ]
+    # The run's own lines (its route, its cards, the caps) go on the first
+    # notice left that isn't one of the principal's: those come first and
+    # may be a weekly notice told and skipped on later days. With none, on
+    # the first notice left.
+    target = _lines_target(due)
     for n, spec in enumerate(ordered):
         key = dedup_key(job.id, spec.key)
-        if _still_open(key) or _raised_today(key, day) or spec.key in told_before:
+        if spec not in due:
             outcome.repeats += 1
             continue
         if take_day(job.id, day, "notices", 1, job.card_cap_day) == 0:
             outcome.capped = len(ordered) - n
             break
-        if _leave_notice(
+        left = _leave_notice(
             job, day, spec, reason=reasons.get(spec.key, ""), key=key, found=_found(notices),
-            reasons=reasons, notes=tuple(made.lines) if spec is notices[0] else (),
+            reasons=reasons, notes=tuple(made.lines) if spec is target else (),
             to=_principal_id() if spec.to_principal else to,
-        ) is not None:
+        ) is not None
+        if left:
             outcome.cards += 1
             if job.once:
                 _mark_told(job, day, spec)
+        elif spec is target:
+            # Not left after all: the next one due takes the lines.
+            target = _lines_target(due[due.index(spec) + 1:])
     return outcome
+
+
+def _lines_target(due: Sequence[registry.CardSpec]) -> registry.CardSpec | None:
+    """The notice the run's own lines go on: the first of ``due`` that isn't
+    the principal's, else the first of ``due``, else None."""
+    return next((spec for spec in due if not spec.to_principal), due[0] if due else None)
 
 
 def _without_rows(notices: list[registry.CardSpec], kept: set[str]) -> list[registry.CardSpec]:

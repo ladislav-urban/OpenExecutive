@@ -642,6 +642,9 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
             )
         if not ok:
             raise SettingsError(f"Setting {key} isn't of its type or is out of bounds.")
+        if key == "assign_to" and not value.isascii():
+            # An address in look-alike letters could pass for another's.
+            raise SettingsError("Setting assign_to must be a plain email address (ASCII letters only).")
         out[key] = list(value) if isinstance(value, list) else value
     return out
 

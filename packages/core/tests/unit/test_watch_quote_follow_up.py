@@ -1021,3 +1021,119 @@ def test_a_new_reviewer_is_checked_at_once(
     erp.replies.append(_checked(dict(spec.fields)))
     second = _run(NEXT_DAY)
     assert (second.checks, second.draft_cards) == (1, 1)
+
+
+# --------------------------------------------------------------------------- #
+# The run's lines on the reviewer's notice, and assign_to's look-alikes
+# --------------------------------------------------------------------------- #
+
+
+def test_the_runs_lines_stay_on_the_reviewers_notice_beside_a_weekly_principal_notice(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from unittest.mock import AsyncMock
+
+    from openexecutive.memory.decision_ledger import STATUS_REJECTED, mark_resolved
+
+    from .test_erpnext_drafts import _reply
+
+    async def call(_name: str, body: dict[str, Any]) -> Any:
+        erp.calls.append((body["tool_name"], dict(body["arguments"])))
+        if body["tool_name"] == "erpnext__draft_check":
+            return _reply(_checked(body["arguments"]["fields"]))
+        return _reply(erp.replies.pop(0))
+
+    erp.session.call_tool = AsyncMock(side_effect=call)
+    # 55 customers: the five beyond the 50 asked about are held back, told to
+    # the principal once a week; the rest are carded five a day.
+    many = [_q(f"QTN-M{i:02d}", f"Cust {i:02d}", 2, 100.0 + i) for i in range(55)]
+    for day in (DAY, NEXT_DAY):
+        erp.replies.extend([_list(many), _list([]), _list([], "Sales Order")])
+        assert _run(day).draft_cards == 5
+        [mine] = [a for a in _alerts() if a.routed_to_person_id == team.cara and day in a.headline]
+        assert "follow-up tasks are waiting for Cara Credit to approve." in mine.body, day
+        for theirs in (a for a in _alerts() if a.routed_to_person_id == team.principal):
+            assert "waiting for Cara Credit" not in theirs.body
+        # Cara handles the day's cards.
+        for card in _job_cards():
+            if card.status == "proposed":
+                mark_resolved(card.id, STATUS_REJECTED, resolver_person_id=team.cara)
+    assert len([a for a in _alerts() if a.routed_to_person_id == team.principal]) == 1
+
+
+def test_the_lines_go_on_the_first_notice_left_that_isnt_the_principals() -> None:
+    principal = CardSpec(key="p", summary="p", to_principal=True)
+    reviewer, other = CardSpec(key="r", summary="r"), CardSpec(key="o", summary="o")
+    assert runner._lines_target([principal, reviewer, other]) is reviewer
+    assert runner._lines_target([principal]) is principal
+    assert runner._lines_target([]) is None
+
+
+@pytest.mark.parametrize("value", [
+    "\uff4flivia@co.example",   # fullwidth o
+    "ol\u00edvia@co.example",   # i with an acute
+    "oli\u00dfia@co.example",   # sharp s
+    "OLIVIA@co.example",
+    " olivia@CO.example ",
+])
+def test_assign_to_look_alikes_of_the_configurer_are_refused(
+    client: TestClient, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, value: str,
+) -> None:
+    from openexecutive.watch.settings import assign_to_problem
+
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    response = client.put("/watch/jobs/quote-follow-up", json={"settings": {**SETTINGS, "assign_to": value}})
+    assert response.status_code in (400, 422), value
+    assert assign_to_problem(value, roster.principal) in ("configurer", "not_ascii")
+    if not value.isascii():
+        with pytest.raises(registry.SettingsError):
+            registry.check_settings(JOB, {**SETTINGS, "assign_to": value})
+
+
+def test_assign_to_is_never_a_configurers_alias_nor_a_demo_persons_whatever_row_shares_it(
+    roster: SimpleNamespace,
+) -> None:
+    from openexecutive.watch.settings import assign_to_problem
+
+    people_store.add_person_email(roster.principal, "olivia.owner@co.example")
+    assert assign_to_problem("Olivia.Owner@co.example", roster.principal) == "configurer"
+    demo = people_store.upsert_person(full_name="Demo Dee", email="dee@co.example")
+    _make_demo(demo)
+    people_store.add_person_email(demo, "dee.alias@co.example")
+    assert assign_to_problem("dee.alias@co.example", roster.principal) == "demo"
+    # A newer contact sharing the demo person's address doesn't mask it.
+    contact = people_store.upsert_person(full_name="Dee Contact", email="dee.contact@co.example", kind="contact")
+    with people_store._get_conn(None) as conn:
+        conn.execute("UPDATE people SET email = ? WHERE id = ?", ("dee@co.example", contact))
+    assert people_store.find_person_by_own_address("dee@co.example").id == contact  # type: ignore[union-attr]
+    assert assign_to_problem("dee@co.example", roster.principal) == "demo"
+    assert assign_to_problem(TEAM, roster.principal) == ""
+
+
+def test_a_put_without_settings_checks_the_stored_assign_to(
+    client: TestClient, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    watch_settings.save(JOB, enabled=False, settings={**SETTINGS, "assign_to": OWNER}, reviewer_person_id=None,
+                        set_reviewer=False, configured_by_person_id=roster.principal, now=datetime.now(UTC))
+    response = client.put("/watch/jobs/quote-follow-up", json={"enabled": True})
+    assert response.status_code == 400 and response.json()["detail"]["code"] == "bad_settings"
+    assert watch_settings.get_row(JOB.id).enabled is False
+
+
+def test_turning_a_job_off_isnt_refused_for_an_assign_to_gone_bad(
+    client: TestClient, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    demo = people_store.upsert_person(full_name="Demo Dee", email="dee@co.example")
+    watch_settings.save(JOB, enabled=True, settings={**SETTINGS, "assign_to": "dee@co.example"},
+                        reviewer_person_id=None, set_reviewer=False, configured_by_person_id=roster.principal,
+                        now=datetime.now(UTC))
+    # Dee is moved into the demo group after the setting was saved.
+    _make_demo(demo)
+    off = client.put("/watch/jobs/quote-follow-up", json={"enabled": False})
+    assert off.status_code == 200, off.text
+    assert watch_settings.get_row(JOB.id).enabled is False
+    on = client.put("/watch/jobs/quote-follow-up", json={"enabled": True})
+    assert on.status_code == 400 and on.json()["detail"]["code"] == "bad_settings"
+    assert watch_settings.get_row(JOB.id).enabled is False

@@ -474,6 +474,7 @@ def get_row(job_id: str, *, path: Path | None = None) -> JobRow:
 ASSIGN_TO_SAVE: dict[str, str] = {
     "configurer": "assign_to can't be the person who sets up the job: they never take its tasks.",
     "demo": "assign_to can't be a demo account.",
+    "not_ascii": "assign_to must be a plain email address (ASCII letters only).",
 }
 ASSIGN_TO_LINES: dict[str, str] = {
     "configurer": (
@@ -481,26 +482,58 @@ ASSIGN_TO_LINES: dict[str, str] = {
         "prepared. Name someone else in Settings → Watch jobs."
     ),
     "demo": "The job's assign_to names a demo account, so no tasks were prepared. Name someone else in Settings → Watch jobs.",
+    "not_ascii": (
+        "The job's assign_to isn't a plain email address (ASCII letters only), so no tasks were prepared. "
+        "Correct it in Settings → Watch jobs."
+    ),
 }
+
+
+def _address(value: str) -> str:
+    """An address as assign_to is compared: trimmed and casefolded."""
+    return value.strip().casefold()
+
+
+def _demo_addresses() -> set[str]:
+    """Every address of every People row marked demo, its own and its
+    aliases, archived ones too, casefolded: a demo person is never masked by
+    another row sharing the address."""
+    from openexecutive.people import store
+
+    if not store._resolve_db_path(None).exists():
+        return set()
+    with store._get_conn(None) as conn:
+        if not store._table_exists(conn, "people"):
+            return set()
+        rows = [r[0] for r in conn.execute("SELECT email FROM people WHERE directory_demo = 1")]
+        if store._table_exists(conn, "person_emails"):
+            rows += [r[0] for r in conn.execute(
+                "SELECT pe.email FROM person_emails pe JOIN people p ON p.id = pe.person_id"
+                " WHERE p.directory_demo = 1"
+            )]
+    return {_address(r) for r in rows if isinstance(r, str) and r.strip()}
 
 
 def assign_to_problem(value: object, configured_by_person_id: object) -> str:
     """Why ``value`` (a job's ``assign_to``) can't take the job's tasks, as a
-    code in ``ASSIGN_TO_LINES``, or "": the email of the person who set the
-    job up (separation of duties), or of a demo person. People is read
-    fresh each time."""
-    from openexecutive.delegation.gmail import normalize_email
-    from openexecutive.people.store import find_person_by_own_address, get_person
+    code in ``ASSIGN_TO_LINES``, or "": not a plain ASCII address (a
+    look-alike of another), the address or an alias of the person who set
+    the job up (separation of duties), or of any person marked demo.
+    Compared casefolded; People is read fresh each time."""
+    from openexecutive.people.store import get_person
 
-    email = normalize_email(value) if isinstance(value, str) else ""
-    if not email:
+    if not isinstance(value, str) or not value.strip():
         return ""
+    if not value.isascii():
+        return "not_ascii"
+    email = _address(value)
     if isinstance(configured_by_person_id, int) and not isinstance(configured_by_person_id, bool):
         configurer = get_person(configured_by_person_id)
-        if configurer is not None and normalize_email(configurer.email or "") == email:
+        if configurer is not None and email in {
+            _address(a) for a in [configurer.email or "", *configurer.email_aliases] if a
+        }:
             return "configurer"
-    person = find_person_by_own_address(email)
-    if person is not None and person.demo:
+    if email in _demo_addresses():
         return "demo"
     return ""
 
