@@ -11,11 +11,13 @@ Each weekday at 07:30 company time it reads:
 2. **the same for quotations to a Lead**, with only their name, date,
    value, currency and status: counted, never named (no party, name or
    contact field is ever read for them);
-3. **the customers' Sales Orders** since the oldest of read 1's quotations
-   (``list_records``, ``customer in`` read 1's customers, at most 50, the
-   most pressing first), with each order line's quotation
-   (``items.prevdoc_docname``). Derived from read 1 and skipped when no
-   quotation to a customer counts.
+3. **the customers' Sales Orders** since the oldest of read 1's quotations,
+   at most ``ORDERS_DAYS`` back (``list_records``, ``customer in`` read 1's
+   customers, at most 50, the most pressing first), with each order line's
+   quotation (``items.prevdoc_docname``). Derived from read 1 and skipped
+   when no quotation to a customer counts. Its rows are order lines, so on
+   a busy site a year of orders would fill them every day and hold back
+   every task; when it's still cut, the principal is told once a week.
 
 No read relies on ``list_records``' ``titles``.
 
@@ -118,6 +120,8 @@ ORDERS_SHAPE: Mapping[str, Any] = {
 READ_LIMIT = 500
 # A quotation that lapsed this many days ago or less still counts (B1).
 LAPSED_DAYS = 7
+# Read 3 looks this far back at most (an order closing a quotation follows it).
+ORDERS_DAYS = 90
 NOTICE_MAX = 10
 # The quotations a run marks High: the largest this many.
 HIGH_TOP = 3
@@ -154,6 +158,11 @@ ORDERS_CUT_LINE = (
     "no tasks were prepared for those."
 )
 MORE_LINE = "{n} more quotations to follow up; the first {shown} are shown."
+ORDERS_HELD_LINE = (
+    "The customers' sales orders couldn't all be read this run (too many order lines, or more customers than "
+    "one read takes), so follow-up tasks for {n} quotations were held back: a task is prepared only once the "
+    "quotation's orders were read. Raise min_amount or lower days_ahead to narrow the job."
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -348,8 +357,9 @@ def _orders(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments
     customers, cut, oldest = customers_to_check(prior[0], settings, today) if prior else ([], False, None)
     if not customers:
         return None
-    # Within the slot's date range, whatever a quotation's own date.
-    since = min(max(oldest or today, today - timedelta(days=DATE_RANGE_DAYS)), today)
+    # The later of the oldest counted quotation's date and ORDERS_DAYS back
+    # (within the slot's own range), so the order lines fit the read.
+    since = min(max(oldest or today, today - timedelta(days=min(ORDERS_DAYS, DATE_RANGE_DAYS))), today)
     return Derived({
         "doctype": "Sales Order",
         "fields": list(ORDER_FIELDS),
@@ -491,6 +501,16 @@ def build(
     if unchecked & {f.quote.name for f in new}:
         notes.append(ORDERS_CUT_LINE)
     out: list[CardSpec | DraftSpec] = []
+    held = unchecked - untasked if orders_cut or cut else set()
+    if held:
+        # Never silent: the principal hears once a week that tasks were held back.
+        year, week, _ = today.isocalendar()
+        out.append(CardSpec(
+            key=f"orders-cut:{settings['company']}:{year}-W{week:02d}",
+            summary="Quote follow-up held back tasks",
+            notes=(ORDERS_HELD_LINE.format(n=len(held)),),
+            to_principal=True,
+        ))
     if items or new_leads:
         out.append(CardSpec(
             key=f"quotes:{settings['company']}:{today.isoformat()}",
@@ -536,7 +556,7 @@ def assignee(settings: Settings | None = None) -> str:
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.people.store import get_person
     from openexecutive.watch import registry
-    from openexecutive.watch.settings import effective_settings, get_row
+    from openexecutive.watch.settings import assign_to_problem, effective_settings, get_row
 
     job = registry.get(JOB_ID)
     if job is None:
@@ -544,7 +564,8 @@ def assignee(settings: Settings | None = None) -> str:
     row = get_row(JOB_ID)
     given = str((settings if settings is not None else effective_settings(job, row)).get("assign_to") or "")
     if given:
-        return given
+        # Never the job's configurer nor a demo account, read fresh: no card.
+        return "" if assign_to_problem(given, row.configured_by_person_id) else given
     reviewer_id = getattr(row, "reviewer_person_id", None)
     if not isinstance(reviewer_id, int) or isinstance(reviewer_id, bool):
         return ""
@@ -557,11 +578,16 @@ def _build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) 
     """``build`` with what this install knows: the findings told before and
     who the ToDos are for."""
     from openexecutive.watch.runner import told
+    from openexecutive.watch.settings import assign_to_notice
 
     keys = [f.key for f in candidates(reads[0], settings, today)]
     if reads[1]:
         keys += [f.key for f in candidates(reads[1], settings, today, leads=True)]
-    return build(reads, settings, today, told=told(JOB, keys), assignee=assignee(settings))
+    out = build(reads, settings, today, told=told(JOB, keys), assignee=assignee(settings))
+    # An assign_to that can't take the tasks: none are prepared, and the
+    # principal hears why.
+    notice = assign_to_notice(JOB, settings, today) if out else None
+    return [notice, *out] if notice is not None else out
 
 
 def check_fields(operation: str, doctype: str, fields: Mapping[str, Any], name: str = "") -> dict[str, Any] | str:

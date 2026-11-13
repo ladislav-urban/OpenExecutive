@@ -528,6 +528,10 @@ def carded_key(key: str) -> str:
     return f"card:{key}"
 
 
+# How many card records this process couldn't write, logged with each.
+_MARK_FAILURES: dict[str, int] = {}
+
+
 def _mark_carded(job: registry.WatchJob, day: str, key: str) -> None:
     from openexecutive.watch.settings import mark_told
 
@@ -535,7 +539,11 @@ def _mark_carded(job: registry.WatchJob, day: str, key: str) -> None:
         mark_told(job.id, [carded_key(key)], day)
     except Exception:
         # The ledger's own card still counts: only its listing is bounded.
-        logger.warning("watch: job %s's card couldn't be recorded as left", job.id)
+        _MARK_FAILURES[job.id] = _MARK_FAILURES.get(job.id, 0) + 1
+        logger.warning(
+            "watch: job %s's card couldn't be recorded as left (%d such failures since start)",
+            job.id, _MARK_FAILURES[job.id], exc_info=True,
+        )
 
 
 async def _leave_one(

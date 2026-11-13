@@ -198,6 +198,12 @@ def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> Wat
             settings = registry.check_settings(job, body.settings)
         except registry.SettingsError as bad:
             raise _refuse(400, "bad_settings", str(bad)) from None
+        from openexecutive.watch.settings import ASSIGN_TO_SAVE, assign_to_problem
+
+        # A job's tasks never go to whoever sets it up, nor to a demo account.
+        problem = assign_to_problem(settings.get("assign_to"), int(principal.id))
+        if problem:
+            raise _refuse(400, "bad_settings", ASSIGN_TO_SAVE[problem])
     set_reviewer = "reviewer_person_id" in body.model_fields_set
     if set_reviewer and body.reviewer_person_id is not None:
         _check_reviewer(body.reviewer_person_id)
