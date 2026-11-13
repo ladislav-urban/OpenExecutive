@@ -266,14 +266,17 @@ class ReasonSchema:
     may be, cleaned (``DEFAULT_FACT_CHARS`` to ``MAX_FACT_CHARS``); the
     job's notice values are cut at the same length, so a quoted text reads
     the same on the notice as the model was shown it.
-    ``no_digits``: a line holding any digit is dropped
+    ``no_digits``: a line holding any digit or number word is dropped
     (``runner.without_digits``); the job's own lines carry every figure, so
-    its model line says only in words what they mean."""
+    its model line says only in words what they mean. ``per_finding``: one
+    call per finding, each shown that finding's facts alone, rather than one
+    call for all."""
 
     instruction: str
     max_findings: int = 20
     max_fact_chars: int = DEFAULT_FACT_CHARS
     no_digits: bool = False
+    per_finding: bool = False
 
 
 # (each read's result, in the order of ``reads``, {} for a skipped one; the
@@ -383,6 +386,8 @@ class WatchJob:
             raise ValueError(f"a reason's text facts are {DEFAULT_FACT_CHARS} to {MAX_FACT_CHARS} characters")
         if schema is not None and not isinstance(schema.no_digits, bool):
             raise ValueError("a reason's no_digits is true or false")
+        if schema is not None and not isinstance(schema.per_finding, bool):
+            raise ValueError("a reason's per_finding is true or false")
         for key, bound in self.setting_bounds.items():
             if (
                 key not in self.default_settings or len(bound) != 2

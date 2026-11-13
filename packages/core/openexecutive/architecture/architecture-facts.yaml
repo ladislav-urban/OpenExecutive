@@ -12511,7 +12511,8 @@ watch:
     percent_complete, expected_start_date, expected_end_date, actual_time,
     estimated_costing, total_costing_amount, total_billed_amount, customer)
     with {company, status ["!=", "Completed"]}; Task (name, subject,
-    project, status, exp_end_date, expected_time, actual_time, progress)
+    project, status, exp_end_date; no task hours or progress, as
+    oe_connector's narrowed listing)
     with {company, status ["!=", "Completed"], project ["in", $projects]};
     Project Update (name, project, date, users.project_status) with
     {docstatus 1, date [">=", today - 7], project ["in", $projects]}; limit
@@ -12555,10 +12556,13 @@ watch:
     line), then an "On hold" item (each held project's overdue tasks, no
     facts); notes for more than 10 and each cut read; count active +
     held. Bad rows are skipped, never stop the run (a missing rows list in
-    read 1 stops the run as any job's would). Cost: one reason call a run on
-    the fast model, max_tokens 1200, no_digits True (the instruction says
-    to describe the figures in words and never write a digit), actor
-    watch:project-status (the
+    read 1 stops the run as any job's would). TASKS_CUT_LINE and
+    UPDATES_CUT_LINE come only from that read's own result truncated, never
+    from the 50-project cut (PROJECTS_CUT_LINE says that). Cost: one reason
+    call per project with facts (per_finding True, at most 10 a run) on the
+    fast model, max_tokens PER_FINDING_MAX_TOKENS 150 each, no_digits True
+    (the instruction says to say what the figures mean and never write a
+    number, in digits or words), actor watch:project-status (the
     runner's _cost_budget hook binds it once cost caps land).
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
@@ -12585,9 +12589,19 @@ watch:
     numbers, CJK numerals), logging a count only; the notice's own lines carry
     every figure. Matching numbers against the finding's facts was
     bypassable ("0" being another fact's value, "by7", "USD1200", "1,2",
-    "12e2", a minus sign, digits glued to CJK). Numbers written as words
-    remain a known residual, as do Roman numerals and letters that look
-    like digits. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
+    "12e2", a minus sign, digits glued to CJK). It also drops a line
+    naming a number in words (runner.has_number_word: _NUMBER_WORDS, whole
+    words, any case: zero-nineteen, the tens, hundred(s), thousand(s),
+    million(s), billion(s), half, halves, quarter(s), third(s), dozen(s),
+    percent, per cent, once, twice, first-tenth). Roman numerals and letters
+    that look like digits remain a known residual. With
+    ReasonSchema.per_finding (default False; project-status sets it,
+    collections doesn't), reason_step makes one _ask call per finding (at
+    most max_findings, PER_FINDING_MAX_TOKENS 150, asyncio.gather with
+    return_exceptions), each turn holding that finding's facts alone, so one
+    finding's outside text never reaches another's call; a failed call
+    drops only its own line (a count logged). Otherwise one call for all,
+    REASON_MAX_TOKENS 1200. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
     limit before plain() (NFKC) and CLEAN_FLAT_FACTOR 2 x limit after,
     before _MARKDOWN_RE and the backtracking _URL_RE (a 4000-char U+33D8
     update took 7.7 s to clean before).

@@ -107,6 +107,10 @@ MAX_VALUE_CHARS = registry.DEFAULT_FACT_CHARS
 MAX_LABEL_CHARS = 40
 MAX_REASON_CHARS = 200
 MAX_REASON_FINDINGS = 20
+# The reason call's output bound: one call for all a job's findings, or
+# one per finding (ReasonSchema.per_finding), a single short line.
+REASON_MAX_TOKENS = 1200
+PER_FINDING_MAX_TOKENS = 150
 MAX_FACTS = 8
 # The most findings a run takes from a job's rules.
 MAX_FINDINGS = 200
@@ -837,54 +841,99 @@ def has_digit(line: str) -> bool:
     )
 
 
+# Numbers in words, whole words only, any case: a line naming one is
+# dropped like a line holding a digit (``ReasonSchema.no_digits``).
+_NUMBER_WORDS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+    "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "thirty",
+    "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundreds?", "thousands?", "millions?",
+    "billions?", "half", "halves", "quarters?", "thirds?", "dozens?", "percent", r"per\s+cent", "once", "twice",
+    "first", "second", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+)
+_NUMBER_WORD_RE = re.compile(r"(?<![^\W_])(?:" + "|".join(_NUMBER_WORDS) + r")(?![^\W_])", re.IGNORECASE)
+
+
+def has_number_word(line: str) -> bool:
+    """Whether ``line`` names a number in words (``_NUMBER_WORDS``, whole
+    words: "often" and "someone" don't count)."""
+    return _NUMBER_WORD_RE.search(line) is not None
+
+
 def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
-    """``reasons`` without each line that holds any digit
-    (``ReasonSchema.no_digits``): the notice's own lines carry every figure,
-    so the model's line may only say in words what they mean. Returns the
-    lines kept and how many were dropped. Numbers written as words ("zero
-    days"), Roman numerals and letters that look like digits are a known
-    residual."""
-    kept = {key: line for key, line in reasons.items() if not has_digit(line)}
+    """``reasons`` without each line that holds any digit or names a number
+    in words (``ReasonSchema.no_digits``): the notice's own lines carry every
+    figure, so the model's line may only say in words what they mean.
+    Returns the lines kept and how many were dropped. Roman numerals and
+    letters that look like digits are a known residual."""
+    kept = {key: line for key, line in reasons.items() if not has_digit(line) and not has_number_word(line)}
     return kept, len(reasons) - len(kept)
 
 
-async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> dict[str, str]:
-    """One tool-less model call for the job's reason lines, by the specs'
-    keys; {} when it fails or says nothing usable. Never raises."""
+async def _ask(job: registry.WatchJob, specs: Sequence[registry.CardSpec], max_tokens: int) -> dict[str, str]:
+    """One tool-less call on the fast model for ``specs``' lines, by their
+    keys. Raises when the call fails."""
     from openexecutive.agents.utility_fast import get_fast_model
     from openexecutive.audit.usage import log_model_usage
     from openexecutive.providers import get_provider
 
+    turn, ids = reason_turn(job, specs)
+    if not ids:
+        return {}
+    model = get_fast_model()
+    response = await asyncio.wait_for(
+        get_provider(model).messages_create(
+            model=model,
+            max_tokens=max_tokens,
+            system=REASON_SYSTEM,
+            messages=[{"role": "user", "content": turn}],
+        ),
+        timeout=REASON_TIMEOUT_S,
+    )
+    log_model_usage(response, model=model, actor=f"watch:{job.id}")
+    text = "".join(
+        getattr(b, "text", "") for b in getattr(response, "content", None) or []
+        if getattr(b, "type", "") == "text"
+    )
+    return parse_reasons(text, ids)
+
+
+async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> dict[str, str]:
+    """The job's reason lines, by the specs' keys: one tool-less model call
+    for all, or, for a job whose ``ReasonSchema.per_finding`` is set, one
+    call per finding (up to its ``max_findings``), each shown that finding's
+    facts alone, so one finding's outside text never reaches another's
+    line; a call that fails drops only its own line. {} when nothing usable
+    comes back. Never raises."""
+    schema = job.reason_schema
+    if schema is None:
+        return {}
+    reasons: dict[str, str] = {}
     try:
-        turn, ids = reason_turn(job, specs)
-        if not ids:
-            return {}
-        model = get_fast_model()
-        response = await asyncio.wait_for(
-            get_provider(model).messages_create(
-                model=model,
-                max_tokens=1200,
-                system=REASON_SYSTEM,
-                messages=[{"role": "user", "content": turn}],
-            ),
-            timeout=REASON_TIMEOUT_S,
-        )
-        log_model_usage(response, model=model, actor=f"watch:{job.id}")
-        text = "".join(
-            getattr(b, "text", "") for b in getattr(response, "content", None) or []
-            if getattr(b, "type", "") == "text"
-        )
-        reasons = parse_reasons(text, ids)
-        schema = job.reason_schema
-        if schema is not None and schema.no_digits:
-            reasons, dropped = without_digits(reasons)
-            if dropped:
-                # A count only: never the line, which may quote outside text.
-                logger.warning("watch: job %s dropped %d reason line(s) holding a digit", job.id, dropped)
-        return reasons
+        if schema.per_finding:
+            limit = max(0, min(schema.max_findings, MAX_REASON_FINDINGS))
+            asked = await asyncio.gather(
+                *(_ask(job, [spec], PER_FINDING_MAX_TOKENS) for spec in specs[:limit]), return_exceptions=True,
+            )
+            failed = 0
+            for got in asked:
+                if isinstance(got, BaseException):
+                    failed += 1
+                else:
+                    reasons.update(got)
+            if failed:
+                logger.warning("watch: job %s's reason step failed for %d finding(s); they go without reasons",
+                               job.id, failed)
+        else:
+            reasons = await _ask(job, specs, REASON_MAX_TOKENS)
     except Exception:
         logger.warning("watch: job %s's reason step failed; its notices go without reasons", job.id)
         return {}
+    if schema.no_digits:
+        reasons, dropped = without_digits(reasons)
+        if dropped:
+            # A count only: never the line, which may quote outside text.
+            logger.warning("watch: job %s dropped %d reason line(s) holding a number", job.id, dropped)
+    return reasons
 
 
 # --------------------------------------------------------------------------- #

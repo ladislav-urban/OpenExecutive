@@ -162,7 +162,7 @@
     },
     {
       "today": "2026-11-13",
-      "shape": {"doctype": "Task", "fields": ["name", "subject", "project", "status", "exp_end_date", "expected_time", "actual_time", "progress"], "filters": {"company": "$company", "status": ["!=", "Completed"], "project": ["in", "$projects"]}, "limit": "$int"},
+      "shape": {"doctype": "Task", "fields": ["name", "subject", "project", "status", "exp_end_date"], "filters": {"company": "$company", "status": ["!=", "Completed"], "project": ["in", "$projects"]}, "limit": "$int"},
       "fits": [
         {"doctype": "Task", "fields": ["name", "project", "exp_end_date"], "filters": {"company": "Acme", "status": ["!=", "Completed"], "project": ["in", ["PROJ-0001", "PROJ-0002"]]}, "limit": 500},
         {"doctype": "Task", "fields": ["name", "project", "exp_end_date"], "filters": {"company": "Acme", "status": ["!=", "Completed"], "project": ["in", ["PROJ-0001", "PROJ-0002", "PROJ-0003", "PROJ-0004", "PROJ-0005", "PROJ-0006", "PROJ-0007", "PROJ-0008", "PROJ-0009", "PROJ-0010", "PROJ-0011", "PROJ-0012", "PROJ-0013", "PROJ-0014", "PROJ-0015", "PROJ-0016", "PROJ-0017", "PROJ-0018", "PROJ-0019", "PROJ-0020", "PROJ-0021", "PROJ-0022", "PROJ-0023", "PROJ-0024", "PROJ-0025", "PROJ-0026", "PROJ-0027", "PROJ-0028", "PROJ-0029", "PROJ-0030", "PROJ-0031", "PROJ-0032", "PROJ-0033", "PROJ-0034", "PROJ-0035", "PROJ-0036", "PROJ-0037", "PROJ-0038", "PROJ-0039", "PROJ-0040", "PROJ-0041", "PROJ-0042", "PROJ-0043", "PROJ-0044", "PROJ-0045", "PROJ-0046", "PROJ-0047", "PROJ-0048", "PROJ-0049", "PROJ-0050"]]}, "limit": 500}
@@ -229,7 +229,7 @@
     "as_job_user": true,
     "reads": [
       {"tool": "list_records", "doctype": "Project", "fields": ["name", "project_name", "status", "percent_complete", "expected_start_date", "expected_end_date", "actual_time", "estimated_costing", "total_costing_amount", "total_billed_amount", "customer"], "filters": {"company": "$company", "status": ["!=", "Completed"]}, "limit": "$int"},
-      {"tool": "list_records", "doctype": "Task", "fields": ["name", "subject", "project", "status", "exp_end_date", "expected_time", "actual_time", "progress"], "filters": {"company": "$company", "status": ["!=", "Completed"], "project": ["in", "$projects"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Task", "fields": ["name", "subject", "project", "status", "exp_end_date"], "filters": {"company": "$company", "status": ["!=", "Completed"], "project": ["in", "$projects"]}, "limit": "$int"},
       {"tool": "list_records", "doctype": "Project Update", "fields": ["name", "project", "date", "users.project_status"], "filters": {"docstatus": 1, "date": [">=", "$date"], "project": ["in", "$projects"]}, "limit": "$int"}
     ]
   },
