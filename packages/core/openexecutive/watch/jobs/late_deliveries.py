@@ -165,6 +165,11 @@ ORDERS_CUT_LINE = (
 )
 RECORD_CUT_LINE = "Not every supplier's delivery record could be read this run; those are shown as not read."
 MORE_LINE = "{n} more late orders; the first {shown} are shown."
+HELD_LINE = (
+    "The late purchase orders couldn't all be read this run (more order lines than one read takes), so chase "
+    "tasks for {n} late orders were held back: a task is prepared only for an order whose lines were all "
+    "read. Raise min_days_late, or list suppliers chased another way in skip_suppliers, to narrow the job."
+)
 UNTASKED_LINE = (
     "Some orders shown couldn't get a task: their name or an item's doesn't fit the task's text. "
     "Chase them in the ERP."
@@ -575,6 +580,16 @@ def build(
     if untasked & {f.order.name for f in shown}:
         notes.append(UNTASKED_LINE)
     out: list[CardSpec | DraftSpec] = []
+    held = [f for f in found if f.order.name in cut]
+    if held:
+        # Never silent: the principal hears once a week that tasks were held back.
+        year, week, _ = today.isocalendar()
+        out.append(CardSpec(
+            key=f"orders-cut:{settings['company']}:{year}-W{week:02d}",
+            summary="Late deliveries held back tasks",
+            notes=(HELD_LINE.format(n=len(held)),),
+            to_principal=True,
+        ))
     if shown:
         out.append(CardSpec(
             key=f"late:{settings['company']}:{today.isoformat()}",
@@ -592,7 +607,7 @@ def assignee(settings: Settings | None = None) -> str:
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.people.store import get_person
     from openexecutive.watch import registry
-    from openexecutive.watch.settings import effective_settings, get_row
+    from openexecutive.watch.settings import assign_to_problem, effective_settings, get_row
 
     job = registry.get(JOB_ID)
     if job is None:
@@ -600,7 +615,8 @@ def assignee(settings: Settings | None = None) -> str:
     row = get_row(JOB_ID)
     given = str((settings if settings is not None else effective_settings(job, row)).get("assign_to") or "")
     if given:
-        return given
+        # Never the job's configurer nor a demo account, read fresh: no card.
+        return "" if assign_to_problem(given, row.configured_by_person_id) else given
     reviewer_id = getattr(row, "reviewer_person_id", None)
     if not isinstance(reviewer_id, int) or isinstance(reviewer_id, bool):
         return ""
@@ -623,9 +639,10 @@ def card_history(found: Sequence[Late]) -> tuple[set[str], dict[str, int]]:
     from openexecutive.memory.decision_ledger import STATUS_EXECUTING, STATUS_PROPOSED
     from openexecutive.watch.cards import held_key, kept_key
     from openexecutive.watch.runner import dedup_key
-    from openexecutive.watch.settings import told
+    from openexecutive.watch.settings import get_row, told
 
     this_week = {f.order.name: dedup_key(JOB_ID, f.key) for f in found}
+    reviewer_id = get_row(JOB_ID).reviewer_person_id
     waiting: set[str] = set()
     carded: dict[str, int] = {}
     for card in drafts.job_cards(JOB_ID, open_only=False):
@@ -641,10 +658,12 @@ def card_history(found: Sequence[Late]) -> tuple[set[str], dict[str, int]]:
         if card.status == STATUS_EXECUTING or (card.status == STATUS_PROPOSED and drafts.card_live(card)):
             waiting.add(name)
     held_last_week: dict[str, str] = {}
-    for f in found:
-        if f.order.name not in carded:
-            last = dedup_key(JOB_ID, f"po:{f.order.name}:{previous_week(f.week)}")
-            held_last_week[held_key(last)] = held_last_week[kept_key(last)] = f.order.name
+    if isinstance(reviewer_id, int) and not isinstance(reviewer_id, bool):
+        for f in found:
+            if f.order.name not in carded:
+                last = dedup_key(JOB_ID, f"po:{f.order.name}:{previous_week(f.week)}")
+                held_last_week[held_key(last, reviewer_id)] = f.order.name
+                held_last_week[kept_key(last, reviewer_id)] = f.order.name
     if held_last_week:
         for record in told(JOB_ID, list(held_last_week)):
             carded[held_last_week[record]] = HELD_RANK
@@ -660,15 +679,20 @@ def _build(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) 
     """``build`` with what this install knows: the findings told before, who
     the ToDos are for, and the orders' earlier cards (``card_history``)."""
     from openexecutive.watch.runner import told
+    from openexecutive.watch.settings import assign_to_notice
 
     found = candidates(merged(reads[0], reads[1])[0], settings, today)
     if not found:
         return []
     waiting, carded = card_history(found)
-    return build(
+    out = build(
         reads, settings, today, told=told(JOB, [f.key for f in found]), assignee=assignee(settings),
         on_card=waiting, carded=carded,
     )
+    # An assign_to that can't take the tasks: none are prepared, and the
+    # principal hears why.
+    notice = assign_to_notice(JOB, settings, today)
+    return [notice, *out] if notice is not None else out
 
 
 def check_fields(operation: str, doctype: str, fields: Mapping[str, Any], name: str = "") -> dict[str, Any] | str:
@@ -721,4 +745,6 @@ JOB: WatchJob = WatchJob(
     setting_bounds={"min_days_late": (1, 60)},
     card_noun="chase tasks",
     once=True,
+    # The week in each finding's key ends a refused check's hold.
+    periodic_keys=True,
 )

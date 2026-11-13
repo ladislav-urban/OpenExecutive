@@ -337,6 +337,10 @@ class WatchJob:
     # left for gets no second card, whatever became of the first
     # (``cards.leave_drafts``); one the day's cap held back gets it later.
     once: bool = False
+    # A once job whose finding keys carry their own period (late deliveries'
+    # ISO week): a hold written when ERPNext refused a finding's check ends
+    # with the period. Without one, such a hold lasts ``cards.HOLD_DAYS``.
+    periodic_keys: bool = False
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):

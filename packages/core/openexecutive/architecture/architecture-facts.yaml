@@ -11890,8 +11890,14 @@ watch:
     that ToDo is the follow-up); and a once job's finding whose check came
     back in cards.HELD_CHECK_CODES (check_already_open, or KEPT_CODES:
     kept from the reviewer, its row sent to the principal) is held by a
-    record of its own kind (cards.held_key held:<digest> for
-    check_already_open, cards.kept_key kept:<digest> for KEPT_CODES), so
+    record of its own kind (cards.held_key held:<reviewer id>:<digest> for
+    check_already_open, cards.kept_key kept:<reviewer id>:<digest> for
+    KEPT_CODES; a reviewer change reads none, so the new reviewer's check
+    runs at once; for a job without WatchJob.periodic_keys, a record older
+    than cards.HOLD_DAYS (7, by settings.told_days) is dropped and the
+    finding checked again, since quote follow-up's keys have no period and
+    the told store keeps rows 400 days; late deliveries sets periodic_keys,
+    its ISO week ending the hold), so
     it isn't checked again every run and can't use up the day's
     job_check_cap before the findings behind it; _once_held reads held:
     and kept: for every wanted key and never drops them (only card:
@@ -12347,8 +12353,20 @@ watch:
     row counted once); list_records Sales Order (name, customer, transaction_date,
     items.prevdoc_docname) with {company, docstatus ["<", 2], customer
     ["in", the counted quotations' customers, most pressing first, at most
-    50], transaction_date [">=", the oldest of their quotations, within
-    400 days]}, derived, skipped when none. No list in a list: status and
+    50], transaction_date [">=", the later of the oldest of their
+    quotations and today - ORDERS_DAYS (90)]}, derived, skipped when none
+    (its rows are order lines: reaching back to a year-old quotation cut it
+    every day on a busy site, holding back every task). When read 3 is
+    truncated (or its customer list was cut at 50), a to_principal CardSpec
+    orders-cut:<company>:<ISO week> (ORDERS_HELD_LINE, the count held
+    back) tells the principal once a week. An assign_to that is the job's
+    configurer's email or a demo person's (settings.assign_to_problem,
+    People and the row read fresh) is refused at PUT /watch/jobs/{id}
+    (400 bad_settings, ASSIGN_TO_SAVE) and makes assignee() "" at run and
+    check time: no card, and settings.assign_to_notice
+    (assign-to:<job>:<ISO week>, to_principal, ASSIGN_TO_LINES) tells the
+    principal. cards._mark_carded logs a running count of the card records
+    it couldn't write. No list in a list: status and
     the two date bounds are sorted in code. Rules: lapsing = status Open,
     Replied or Partially Ordered and valid_till today to today +
     days_ahead; lapsed = valid_till 1-7 days ago and status Expired, Open
@@ -12404,7 +12422,12 @@ watch:
     Closed and On Hold orders' unreceived lines and stopped every card);
     merged in code by merged(): an order in both keeps 1a's rows, and the
     orders read from a truncated list get no card (the other list's
-    still do); run_report Supplier Delivery Record with
+    still do; the read has no order_by, so which order a cut split can't
+    be told), and a to_principal CardSpec orders-cut:<company>:<ISO week>
+    (HELD_LINE, the count held back) tells the principal once a week; an
+    assign_to that is the configurer's or a demo person's email is no
+    assignee (settings.assign_to_problem, read fresh) and
+    settings.assign_to_notice tells the principal; run_report Supplier Delivery Record with
     {company, from_date today - 365, to_date today}, no limit (the
     tool's default), derived and skipped when no order counts. No list
     in a list, so no status list: Closed, On Hold and Completed are

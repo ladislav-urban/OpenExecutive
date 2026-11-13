@@ -27,7 +27,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -332,6 +332,27 @@ def told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> set[s
         conn.close()
 
 
+def told_days(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> dict[str, str]:
+    """Which of ``keys`` the job's told store holds, with the day each was
+    written."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return {}
+    conn = connect(path)
+    try:
+        found: dict[str, str] = {}
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            found.update((row[0], row[1]) for row in conn.execute(
+                f"SELECT key, day FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            ))
+        return found
+    finally:
+        conn.close()
+
+
 def mark_told(job_id: str, keys: Sequence[str], day: str, *, path: Path | None = None) -> None:
     """Record ``keys`` (dedupe digests) as told by a notice left on ``day``,
     and forget those told more than ``TOLD_KEEP_DAYS`` before it."""
@@ -446,6 +467,57 @@ def get_row(job_id: str, *, path: Path | None = None) -> JobRow:
         configured_by_person_id=row[2],
         configured_at=row[3],
         reviewer_person_id=row[4],
+    )
+
+
+# Why a job's assign_to can't take its tasks, by code: our words.
+ASSIGN_TO_SAVE: dict[str, str] = {
+    "configurer": "assign_to can't be the person who sets up the job: they never take its tasks.",
+    "demo": "assign_to can't be a demo account.",
+}
+ASSIGN_TO_LINES: dict[str, str] = {
+    "configurer": (
+        "The job's assign_to names the person who set it up, who never takes its tasks, so no tasks were "
+        "prepared. Name someone else in Settings → Watch jobs."
+    ),
+    "demo": "The job's assign_to names a demo account, so no tasks were prepared. Name someone else in Settings → Watch jobs.",
+}
+
+
+def assign_to_problem(value: object, configured_by_person_id: object) -> str:
+    """Why ``value`` (a job's ``assign_to``) can't take the job's tasks, as a
+    code in ``ASSIGN_TO_LINES``, or "": the email of the person who set the
+    job up (separation of duties), or of a demo person. People is read
+    fresh each time."""
+    from openexecutive.delegation.gmail import normalize_email
+    from openexecutive.people.store import find_person_by_own_address, get_person
+
+    email = normalize_email(value) if isinstance(value, str) else ""
+    if not email:
+        return ""
+    if isinstance(configured_by_person_id, int) and not isinstance(configured_by_person_id, bool):
+        configurer = get_person(configured_by_person_id)
+        if configurer is not None and normalize_email(configurer.email or "") == email:
+            return "configurer"
+    person = find_person_by_own_address(email)
+    if person is not None and person.demo:
+        return "demo"
+    return ""
+
+
+def assign_to_notice(job: registry.WatchJob, settings: Mapping[str, Any], today: date) -> registry.CardSpec | None:
+    """The principal's notice that the job's ``assign_to`` can't take its
+    tasks (read fresh against the job's configurer and People), once a week
+    for a once job; None when it can."""
+    problem = assign_to_problem(settings.get("assign_to"), get_row(job.id).configured_by_person_id)
+    if not problem:
+        return None
+    year, week, _ = today.isocalendar()
+    return registry.CardSpec(
+        key=f"assign-to:{job.id}:{year}-W{week:02d}",
+        summary="A setting of this job needs a change",
+        notes=(ASSIGN_TO_LINES[problem],),
+        to_principal=True,
     )
 
 
