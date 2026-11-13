@@ -15,9 +15,11 @@ the read (``None``); one cut to its first 50 says so (``Derived``).
 
 There is no way to add a job at run time: no settings row, chat turn or API
 names one. ``JOBS`` is read-only and holds what this module lists in
-``_LISTED``: phase 1's collections job (``watch.jobs.collections``) and its
-payment-checks job (``watch.jobs.payment_checks``), and phase 2's
-bank-matching job (``watch.jobs.bank_matching``) and invoice-capture job
+``_LISTED``: phase 1's collections job (``watch.jobs.collections``), its
+payment-checks job (``watch.jobs.payment_checks``), its quote-follow-up
+job (``watch.jobs.quote_follow_up``) and its late-deliveries job
+(``watch.jobs.late_deliveries``), and phase 2's bank-matching job
+(``watch.jobs.bank_matching``) and invoice-capture job
 (``watch.jobs.invoice_capture``). The test job,
 ``watch.jobs._example``, is put in by the tests alone.
 
@@ -194,6 +196,10 @@ class CardSpec:
     # reviewer approved, or a finding ERPNext kept from the reviewer (their
     # permissions, or separation of duties), never told back to them.
     to_principal: bool = False
+    # A ``once`` job's findings this notice counts without naming (the
+    # quote-follow-up job's quotations to leads): recorded as told with its
+    # rows once the notice is left. Keys only, never shown.
+    counted: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -304,6 +310,17 @@ class WatchJob:
     weekdays: frozenset[int] = frozenset(range(7))
     # Its notices from this install's own records (``ExtraNotices``), if any.
     extra_notices: ExtraNotices | None = None
+    # Each finding raised once, ever, rather than once a day: the runner
+    # records the findings a left notice told (its key, its rows' keys and
+    # ``counted``; ``settings.mark_told``) for the job's rules to leave out
+    # (``settings.told``) from the notice only, and a finding a card was ever
+    # left for gets no second card, whatever became of the first
+    # (``cards.leave_drafts``); one the day's cap held back gets it later.
+    once: bool = False
+    # A once job whose finding keys carry their own period (late deliveries'
+    # ISO week): a hold written when ERPNext refused a finding's check ends
+    # with the period. Without one, such a hold lasts ``cards.HOLD_DAYS``.
+    periodic_keys: bool = False
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -592,6 +609,9 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
             )
         if not ok:
             raise SettingsError(f"Setting {key} isn't of its type or is out of bounds.")
+        if key == "assign_to" and not value.isascii():
+            # An address in look-alike letters could pass for another's.
+            raise SettingsError("Setting assign_to must be a plain email address (ASCII letters only).")
         out[key] = list(value) if isinstance(value, list) else value
     return out
 
@@ -601,10 +621,13 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
 from openexecutive.watch.jobs import bank_matching as _bank_matching  # noqa: E402
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
 from openexecutive.watch.jobs import invoice_capture as _invoice_capture  # noqa: E402
+from openexecutive.watch.jobs import late_deliveries as _late_deliveries  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
+from openexecutive.watch.jobs import quote_follow_up as _quote_follow_up  # noqa: E402
 
 _LISTED: tuple[WatchJob, ...] = (
-    _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB,
+    _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB, _quote_follow_up.JOB,
+    _late_deliveries.JOB,
 )
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

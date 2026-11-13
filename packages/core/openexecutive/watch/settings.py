@@ -5,6 +5,9 @@ make and the notices they tried to leave, each counted in a transaction
 across slots and restarts, the amount its match cards proposed, and its one
 failure notice a day). ``watch_approved`` counts what each approver approved
 of a job's amount-capped cards a day (bank matching's), one row per card.
+``watch_told`` holds, for a job that raises each finding once
+(``WatchJob.once``), the findings its left notices told: their dedupe
+digests (``runner.dedup_key``), never ERPNext's text.
 
 One row per job: ``enabled`` (off until the principal turns it on), who
 configured it last and when, ``settings`` (JSON, exactly the job's
@@ -24,8 +27,9 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -54,6 +58,9 @@ _RUNS_DDL = """CREATE TABLE IF NOT EXISTS {table} (
 RUNS_TABLE = "watch_runs"
 DAYS_TABLE = "watch_days"
 APPROVED_TABLE = "watch_approved"
+TOLD_TABLE = "watch_told"
+# A told finding is forgotten after this many days.
+TOLD_KEEP_DAYS = 400
 
 _DDL = (
     f"""CREATE TABLE IF NOT EXISTS {JOBS_TABLE} (
@@ -94,6 +101,14 @@ _DDL = (
         decision_id INTEGER NOT NULL,
         amount REAL NOT NULL,
         PRIMARY KEY (job, day, decision_id)
+    )""",
+    # One row per finding a once job's notice told (its dedupe digest), with
+    # the company's day it was first told.
+    f"""CREATE TABLE IF NOT EXISTS {TOLD_TABLE} (
+        job TEXT NOT NULL,
+        key TEXT NOT NULL,
+        day TEXT NOT NULL,
+        PRIMARY KEY (job, key)
     )""",
 )
 # Columns added after the table first shipped: name -> its definition.
@@ -297,6 +312,90 @@ def take_approved_amount(
         conn.close()
 
 
+def told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> set[str]:
+    """Which of ``keys`` (dedupe digests) a notice of the job told before."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return set()
+    conn = connect(path)
+    try:
+        found: set[str] = set()
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            found.update(row[0] for row in conn.execute(
+                f"SELECT key FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            ))
+        return found
+    finally:
+        conn.close()
+
+
+def told_days(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> dict[str, str]:
+    """Which of ``keys`` the job's told store holds, with the day each was
+    written."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return {}
+    conn = connect(path)
+    try:
+        found: dict[str, str] = {}
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            found.update((row[0], row[1]) for row in conn.execute(
+                f"SELECT key, day FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            ))
+        return found
+    finally:
+        conn.close()
+
+
+def mark_told(job_id: str, keys: Sequence[str], day: str, *, path: Path | None = None) -> None:
+    """Record ``keys`` (dedupe digests) as told by a notice left on ``day``,
+    and forget those told more than ``TOLD_KEEP_DAYS`` before it."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return
+    oldest = (date.fromisoformat(day) - timedelta(days=TOLD_KEEP_DAYS)).isoformat()
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
+            f"INSERT OR IGNORE INTO {TOLD_TABLE} (job, key, day) VALUES (?, ?, ?)",  # noqa: S608
+            [(job_id, key, day) for key in wanted],
+        )
+        conn.execute(f"DELETE FROM {TOLD_TABLE} WHERE job = ? AND day < ?", (job_id, oldest))  # noqa: S608
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def forget_told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> None:
+    """Drop ``keys`` from the job's told rows (a card record whose card
+    expired or was closed by code)."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return
+    conn = connect(path)
+    try:
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            conn.execute(
+                f"DELETE FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            )
+    finally:
+        conn.close()
+
+
 def day_cards(job_id: str, day: str, *, path: Path | None = None) -> int:
     """The draft cards the job's runs took for ``day`` so far."""
     return day_count(job_id, day, "cards", path=path)
@@ -368,6 +467,90 @@ def get_row(job_id: str, *, path: Path | None = None) -> JobRow:
         configured_by_person_id=row[2],
         configured_at=row[3],
         reviewer_person_id=row[4],
+    )
+
+
+# Why a job's assign_to can't take its tasks, by code: our words.
+ASSIGN_TO_SAVE: dict[str, str] = {
+    "configurer": "assign_to can't be the person who sets up the job: they never take its tasks.",
+    "demo": "assign_to can't be a demo account.",
+    "not_ascii": "assign_to must be a plain email address (ASCII letters only).",
+}
+ASSIGN_TO_LINES: dict[str, str] = {
+    "configurer": (
+        "The job's assign_to names the person who set it up, who never takes its tasks, so no tasks were "
+        "prepared. Name someone else in Settings → Watch jobs."
+    ),
+    "demo": "The job's assign_to names a demo account, so no tasks were prepared. Name someone else in Settings → Watch jobs.",
+    "not_ascii": (
+        "The job's assign_to isn't a plain email address (ASCII letters only), so no tasks were prepared. "
+        "Correct it in Settings → Watch jobs."
+    ),
+}
+
+
+def _address(value: str) -> str:
+    """An address as assign_to is compared: trimmed and casefolded."""
+    return value.strip().casefold()
+
+
+def _demo_addresses() -> set[str]:
+    """Every address of every People row marked demo, its own and its
+    aliases, archived ones too, casefolded: a demo person is never masked by
+    another row sharing the address."""
+    from openexecutive.people import store
+
+    if not store._resolve_db_path(None).exists():
+        return set()
+    with store._get_conn(None) as conn:
+        if not store._table_exists(conn, "people"):
+            return set()
+        rows = [r[0] for r in conn.execute("SELECT email FROM people WHERE directory_demo = 1")]
+        if store._table_exists(conn, "person_emails"):
+            rows += [r[0] for r in conn.execute(
+                "SELECT pe.email FROM person_emails pe JOIN people p ON p.id = pe.person_id"
+                " WHERE p.directory_demo = 1"
+            )]
+    return {_address(r) for r in rows if isinstance(r, str) and r.strip()}
+
+
+def assign_to_problem(value: object, configured_by_person_id: object) -> str:
+    """Why ``value`` (a job's ``assign_to``) can't take the job's tasks, as a
+    code in ``ASSIGN_TO_LINES``, or "": not a plain ASCII address (a
+    look-alike of another), the address or an alias of the person who set
+    the job up (separation of duties), or of any person marked demo.
+    Compared casefolded; People is read fresh each time."""
+    from openexecutive.people.store import get_person
+
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    if not value.isascii():
+        return "not_ascii"
+    email = _address(value)
+    if isinstance(configured_by_person_id, int) and not isinstance(configured_by_person_id, bool):
+        configurer = get_person(configured_by_person_id)
+        if configurer is not None and email in {
+            _address(a) for a in [configurer.email or "", *configurer.email_aliases] if a
+        }:
+            return "configurer"
+    if email in _demo_addresses():
+        return "demo"
+    return ""
+
+
+def assign_to_notice(job: registry.WatchJob, settings: Mapping[str, Any], today: date) -> registry.CardSpec | None:
+    """The principal's notice that the job's ``assign_to`` can't take its
+    tasks (read fresh against the job's configurer and People), once a week
+    for a once job; None when it can."""
+    problem = assign_to_problem(settings.get("assign_to"), get_row(job.id).configured_by_person_id)
+    if not problem:
+        return None
+    year, week, _ = today.isocalendar()
+    return registry.CardSpec(
+        key=f"assign-to:{job.id}:{year}-W{week:02d}",
+        summary="A setting of this job needs a change",
+        notes=(ASSIGN_TO_LINES[problem],),
+        to_principal=True,
     )
 
 

@@ -11035,6 +11035,12 @@ integrations:
     last_error, attempts unchanged, closed_code changed_since_proposed),
     audits erpnext_draft_changed and answers 409 changed_since_proposed;
     asking again leaves a fresh card.
+    A watch job card's ToDo create refused with a ToolError starting
+    todo_already_open: (oe_connector's duplicate-ToDo guard: an Open ToDo
+    on the same document for the same user; chat and panel ToDos are
+    never refused; refused before its daily count and any insert): final
+    as handled, closed_code already_open, no attempt counted, no retry,
+    the person told ALREADY_OPEN_TEXT, never ERPNext's text.
     Any other failure:
     update_open_payload(while_executing=True) with last_error and attempts
     while the claim is still held, then release_claim, so a second tap
@@ -11805,8 +11811,11 @@ watch:
     the Executive's tool loop, no model picks a read, and no model writes a
     figure or a card's field (a model writes only reason lines). Listed:
     collections (watch.jobs.collections), payment checks
-    (watch.jobs.payment_checks) and bank matching
-    (watch.jobs.bank_matching, phase 2).
+    (watch.jobs.payment_checks), quote follow-up
+    (watch.jobs.quote_follow_up), late deliveries
+    (watch.jobs.late_deliveries), bank matching
+    (watch.jobs.bank_matching, phase 2) and invoice capture
+    (watch.jobs.invoice_capture, phase 2).
   registry: |
     watch.registry: WatchJob(id, title, reads, build, schedule,
     card_cap_day, default_settings, reason_schema=None, ..., slots=(),
@@ -11860,8 +11869,55 @@ watch:
     this install's own records, after build), card_noun, slots (the times a
     job runs each day, in order, the first its schedule; empty: once a day)
     and weekdays (0 Monday to 6 Sunday); due_slots(now, weekday) gives the
-    keys ("HH:MM", "" for a daily job) due by now. JOBS is a read-only
-    mapping of _LISTED (collections, payment-checks, bank-matching),
+    keys ("HH:MM", "" for a daily job) due by now. once (default False):
+    each finding raised once ever, not once a day (a job that wants once
+    a week puts the ISO week in the finding key, as late-deliveries does): after a notice of the
+    job is left, runner._mark_told records its key, its rows' keys and
+    CardSpec.counted (findings it counts without naming) as dedup_key
+    digests in watch_told; the job's rules read them back with
+    runner.told (raises when unreadable, so the run stops rather than tell
+    everything again) and leave them out of the notice only (their
+    DraftSpecs are still built); cards._once_held keeps a finding from a
+    new card while its card waits for the current reviewer and check_fields
+    still builds it unchanged, while it is executing, once its approval
+    was tried (payload tried, or attempts > 0 in the proposed or final
+    payload), once it was approved, executed, reversed or rejected
+    (dismissed by a person), or failed with the final payload's closed_code
+    no_answer or already_open (the ERP refused its ToDo as already open:
+    that ToDo is the follow-up); and a once job's finding whose check came
+    back in cards.HELD_CHECK_CODES (check_already_open, or KEPT_CODES:
+    kept from the reviewer, its row sent to the principal) is held by a
+    record of its own kind (cards.held_key held:<reviewer id>:<digest> for
+    check_already_open, cards.kept_key kept:<reviewer id>:<digest> for
+    KEPT_CODES; a reviewer change reads none, so the new reviewer's check
+    runs at once; for a job without WatchJob.periodic_keys, a record older
+    than cards.HOLD_DAYS (7, by settings.told_days) is dropped and the
+    finding checked again, since quote follow-up's keys have no period and
+    the told store keeps rows 400 days; late deliveries sets periodic_keys,
+    its ISO week ending the hold), so
+    it isn't checked again every run and can't use up the day's
+    job_check_cap before the findings behind it; _once_held reads held:
+    and kept: for every wanted key and never drops them (only card:
+    records, written when a card was left, go with a card that doesn't
+    hold), and returns the kept ones apart: leave_drafts adds those to
+    kept_from_reviewer and unproposed on every later run, so the runner
+    strips their rows from the reviewer's notice and offers their notices
+    to the principal until runner.told says one was left (one the day's
+    notice cap held back is told on a later day, never to the reviewer); a never-tried waiting card that expired or code would now
+    refuse is closed (expired / job_changed) with
+    decision_ledger.close_externally(proposed_only=True), and one that
+    turned executing meanwhile (the close returns False) holds;
+    closed_externally or other failed cards don't hold, so the finding is
+    carded again while due. A finding
+    job_cards' 5000-card listing no longer shows is held by a watch_told
+    row card:<digest> (cards.carded_key, written when a new card is left,
+    dropped by settings.forget_told when its card is seen not holding).
+    runner: a once job's DraftSpec.notice is told only for a finding in
+    kept_from_reviewer (to the principal, its row stripped from the
+    reviewer's notices by runner._without_rows), and a notice whose key was
+    told before isn't left again. JOBS is a read-only
+    mapping of _LISTED (collections, payment-checks, bank-matching,
+    invoice-capture, quote-follow-up, late-deliveries),
     imported at the
     module's end (watch.jobs imports the registry first); the test job
     watch.jobs._example is put in by tests only.
@@ -11886,6 +11942,10 @@ watch:
     setting keys changed, reviewer changed, person id). No app_control
     action targets /watch/jobs (a test checks), so a turn can't turn a job
     on. ERPNEXT_WATCH_JOBS_ENABLED (off) is the operator's master switch.
+    watch_told (job, key, day; primary key job, key): a once job's told
+    findings as dedupe digests (never ERPNext text), written by
+    settings.mark_told in one BEGIN IMMEDIATE transaction that also drops
+    the job's rows older than TOLD_KEEP_DAYS (400), read by settings.told.
   caller: |
     erpnext_caller.watch_run(job, tool, arguments, today=): a ContextVar
     marker (WatchCall: job, gateway tool, arguments digest) bound to a
@@ -11913,6 +11973,11 @@ watch:
     Reader service view, and puts {kind, job, as_job_user, user} in the
     result's top-level `acting` (a refused call has none).
   runner: |
+    The run's own lines (route reason, cards waiting, caps, refusals;
+    cards.DraftOutcome.lines) go on the first notice it leaves that isn't
+    to_principal (runner._lines_target over the notices still due), else
+    the first it leaves: the weekly principal notices come first and are
+    skipped once told.
     watch.runner.maybe_run, from scheduler.runner._maybe_run_watch_jobs each
     tick: for each job on (master switch and row), on its weekdays, with a
     slot due in the company's zone (get_user_timezone), claim(job, day,
@@ -12274,6 +12339,168 @@ watch:
     block via erpnext_block.block_fields. A finding is raised once a day:
     a notice whose external_id <key>:<day> exists is a repeat
     (runner._raised_today), as is a card left that run_day.
+  quote_follow_up: |
+    watch.jobs.quote_follow_up: 07:30, weekdays 0-4, company time;
+    card_cap_day 5; once True; no reason_schema (no model call); card_noun
+    "follow-up tasks"; settings company, days_ahead 5 (1-30), min_amount 0
+    (0-1e9), assign_to "" (an ERPNext user; empty: the reviewer). Three
+    reads (in watch_job_vectors.json, with shape cases, matching
+    oe_connector's): list_records Quotation (name, party_name,
+    customer_name, transaction_date, valid_till, grand_total, currency,
+    status, order_type, amended_from) with {company, docstatus 1,
+    quotation_to "Customer", valid_till [">=", today - 7]}, limit 500;
+    list_records Quotation (name, valid_till, grand_total, currency,
+    status) with {company, docstatus 1, quotation_to "Lead", valid_till
+    [">=", today - 7]}, limit 500 (no party, name or contact field; each
+    row counted once); list_records Sales Order (name, customer, transaction_date,
+    items.prevdoc_docname) with {company, docstatus ["<", 2], customer
+    ["in", the counted quotations' customers, most pressing first, at most
+    50], transaction_date [">=", the later of the oldest of their
+    quotations and today - ORDERS_DAYS (90)]}, derived, skipped when none
+    (its rows are order lines: reaching back to a year-old quotation cut it
+    every day on a busy site, holding back every task). When read 3 is
+    truncated (or its customer list was cut at 50), a to_principal CardSpec
+    orders-cut:<company>:<ISO week> (ORDERS_HELD_LINE, the count held
+    back) tells the principal once a week. An assign_to that isn't ASCII
+    (registry.check_settings refuses it too), or that casefolded is the
+    job's configurer's address or alias or any directory_demo person's
+    address or alias, every matching row (settings.assign_to_problem,
+    _demo_addresses; People and the row read fresh), is refused at PUT
+    /watch/jobs/{id} whenever settings are sent and on every PUT that
+    leaves the job on (turning it off is never refused), against the
+    effective settings (the body's, else the stored ones) (400 bad_settings, ASSIGN_TO_SAVE) and makes assignee() "" at run and
+    check time: no card, and settings.assign_to_notice
+    (assign-to:<job>:<ISO week>, to_principal, ASSIGN_TO_LINES) tells the
+    principal. cards._mark_carded logs a running count of the card records
+    it couldn't write. No list in a list: status and
+    the two date bounds are sorted in code. Rules: lapsing = status Open,
+    Replied or Partially Ordered and valid_till today to today +
+    days_ahead; lapsed = valid_till 1-7 days ago and status Expired, Open
+    or Replied; grand_total >= min_amount; a quotation named in another's
+    amended_from is dropped (a revision counts once, as its latest); a
+    Sales Order line's prevdoc_docname naming it or its amended_from
+    closes it whatever its status; lapsed first, then grand_total / (1 +
+    |days|) descending, then name. Lead quotations (read 2) are counted
+    only ("N more to leads, not named."; LEADS_CUT_LINE when read 2 is
+    cut), never named or carded. No read relies on list_records' titles.
+    Known residual, as payment checks: a row reaches the reviewer's notice
+    when its card's check doesn't run that run. Outputs: one CardSpec "Quotations to
+    follow up" (key quotes:<company>:<day>, up to 10 rows keyed
+    q:<name>:<lapsing|lapsed> with customer, quotation, value, quoted,
+    valid till, days left / lapsed N days ago, status; count the new named
+    ones; counted the new lead keys; notes for more than 10, read 1
+    truncated, orders unchecked); a DraftSpec ToDo create per named
+    quotation (key q:<name>:<state>, fields description from TEMPLATE
+    with the customer through runner.clean(140), allocated_to assign_to or
+    the reviewer's normalized email (quote_follow_up.assignee), priority
+    High for the 3 largest grand_total else Medium, date max(today,
+    valid_till - 1), reference_type Quotation, reference_name; expect
+    reference "Quotation <name>" and the description), none when the
+    customer was beyond the 50 asked, its id failed the $customers slot
+    (registry._slot_holds, so it's never asked) or read 2 was truncated,
+    nor for a name not nameable (_DOC_RE, no whitespace as the template's
+    \S needs, and its own settled clean); the
+    ToDo's currency only as [A-Z]{3}. Each DraftSpec carries its row as
+    notice with KEPT_LINE, told only when ERPNext kept it from the reviewer. check_fields:
+    create ToDo only, exactly erpnext_drafts' six ToDo fields, reference a
+    Quotation, priority High or Medium, description matching _TEMPLATE_RE
+    (currency [A-Z]{3}, customer equal to its settled clean, reference
+    nameable) naming reference_name (one line, no control characters, at most 1000),
+    allocated_to equal to assignee() now, and _todo's output unchanged.
+  late_deliveries: |
+    watch.jobs.late_deliveries: 07:15, weekdays 0-4, company time;
+    card_cap_day 5; once True with the finding key po:<name>:<ISO week>
+    (YYYY-Www), so an order is raised once a week while late; no
+    reason_schema (no model call); card_noun "chase tasks"; settings
+    company, min_days_late 2 (1-60), assign_to "" (an ERPNext user;
+    empty: the reviewer), skip_suppliers [] (0-50 names). Three reads (in
+    watch_job_vectors.json with shape cases, and the shared
+    watch_shape_vectors.json cases, matching oe_connector's
+    watch_shape_vectors and watch_users.JOB_ACCESS["late-deliveries"]:
+    read Purchase Order, Purchase Receipt, Supplier, Company; report
+    Supplier Delivery Record): reads 1a and 1b, list_records Purchase Order (name,
+    supplier, status, transaction_date, schedule_date, per_received,
+    grand_total, currency, items.item_code, items.qty,
+    items.received_qty, items.schedule_date) with {company, docstatus 1,
+    status "To Receive and Bill" (1a) or "To Receive" (1b), per_received
+    ["<", 100], schedule_date ["<", today]}, limit 500 each, a row per
+    order and line (one read of every status filled its 500 rows with
+    Closed and On Hold orders' unreceived lines and stopped every card);
+    merged in code by merged(): an order in both keeps 1a's rows, and the
+    orders read from a truncated list get no card (the other list's
+    still do; the read has no order_by, so which order a cut split can't
+    be told), and a to_principal CardSpec orders-cut:<company>:<ISO week>
+    (HELD_LINE, the count held back) tells the principal once a week; an
+    assign_to that is the configurer's or a demo person's email is no
+    assignee (settings.assign_to_problem, read fresh) and
+    settings.assign_to_notice tells the principal; run_report Supplier Delivery Record with
+    {company, from_date today - 365, to_date today}, no limit (the
+    tool's default), derived and skipped when no order counts. No list
+    in a list, so no status list: Closed, On Hold and Completed are
+    still dropped in code from status, as a belt. Read 1's call asks CALL_FIELDS, the shape's fields less the
+    header's schedule_date (a subset, which the shape's top-level fields
+    allow): frappe's child-field select keeps the bare column name, so
+    asking both made the line's date win only by column order; now a
+    bare schedule_date is only the line's. Every ERPNext string (name,
+    supplier, item code, status, currency) is capped by _name at 140
+    before settled/clean, which are slow on long input. Rules: a line is late when
+    qty - received_qty > 0 and its schedule_date < today; an order's
+    days = today - its oldest late line's date, counted when >=
+    min_days_late; skip_suppliers dropped; ranked: orders with no card
+    from an earlier ISO week first, then by that latest card's ledger id
+    ascending (card_history over job_cards' bounded listing), then days
+    desc, grand_total desc, name, for rows and cards alike (otherwise
+    the weekly key reset re-carded the most-late every week and starved
+    the rest past the day's cap). The supplier's record from the report's lines_received,
+    lines_late and average_days_late (whole counts, late <= lines,
+    finite average, else the row is left out): RECORD_LATE "late on N of
+    M lines in 12 months, X days on average", RECORD_ON_TIME, RECORD_NONE
+    "no receipts in 12 months" (no row or no lines), RECORD_UNREAD "not
+    read this run" when the report was truncated. Outputs: one CardSpec
+    "Late deliveries" (key late:<company>:<day>, up to 10 rows keyed
+    po:<name>:<week> with supplier, order, days late, due, missing (3
+    lines, then a count), value, status, record; count the new ones;
+    notes for more than 10, read 1 cut, record cut); a DraftSpec ToDo
+    create per late order not from a cut list (fields description from TEMPLATE with the
+    supplier and the first late line's item through settled (runner.clean
+    until stable, 140), allocated_to assign_to or the reviewer's
+    normalized email (late_deliveries.assignee, read again at check),
+    priority High when days > 7 else Medium, date today, reference_type
+    Purchase Order, reference_name; expect reference "Purchase Order
+    <name>" and the description; notice its row with KEPT_LINE, told
+    only when ERPNext kept it from the reviewer). No DraftSpec for an order
+    from a truncated read 1a or 1b, for a description fits_template refuses (the same
+    gate check_fields applies: a name not nameable, an item code holding
+    the template's words so the order's place is misread, a quantity past
+    10 digits; the notice then carries UNTASKED_LINE), or for
+    an order on_earlier_card finds (a live or executing card of the job
+    on that Purchase Order whose dedup_key isn't this week's), so a card
+    left late one week isn't doubled the next. Within the week the card
+    store's once rules hold (tried, approved, dismissed and no_answer
+    hold; expired and job_changed are re-carded). check_fields: create
+    ToDo only, exactly the six ToDo fields, reference a Purchase Order,
+    High or Medium, description matching _TEMPLATE_RE (the record one of
+    code's four forms) naming reference_name, supplier and item equal to
+    their settled clean, reference nameable, one line, no control
+    characters, at most 1000, allocated_to equal to assignee() now, and
+    _todo's output unchanged. The chase note is text the buyer sends
+    from their own mail: no mail path. Not done here: a ToDo still open
+    in ERPNext for the order isn't seen here (no read of ToDo):
+    oe_connector's duplicate-ToDo guard refuses a job card's ToDo while an
+    Open ToDo on the same document is allocated to the same user, with a
+    ToolError starting todo_already_open: (erpnext_drafts.already_open:
+    at the start, or right after one of mcp_gateway._ERROR_TEXT_PREFIXES,
+    "... tool <name>: " for those naming the tool, never after other
+    text). card_history ranks an order held last week without a card
+    (its previous-week key's held: or kept: record) as carded most recently
+    (HELD_RANK). At the check:
+    cards.CHECK_LINES check_already_open, no card. At approval
+    (_carry_out, job cards' ToDo creates only): STATUS_FAILED with
+    closed_code already_open, no attempt counted, no retry,
+    ApproveRefused(409, already_open, ALREADY_OPEN_TEXT), our own words,
+    ERPNext's text kept in last_error only; _CLOSED_SAYS has the line. Known residual, as payment checks:
+    a row reaches the reviewer's notice when its card's check doesn't run
+    that run.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds
