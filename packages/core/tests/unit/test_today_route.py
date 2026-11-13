@@ -2405,8 +2405,11 @@ async def test_the_rewrite_reports_its_steps_and_clears_them(
 
 def test_progress_counts_new_mail_since_the_served_header(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.briefing import live_signals
+    from openexecutive.memory.workspace_settings import get_user_timezone
 
-    written = datetime.now(UTC) - timedelta(minutes=20)
+    # Noon today in the workspace's zone: always the same local day as the
+    # route's own "today", even on a run that crosses midnight.
+    written = datetime.now(get_user_timezone()).replace(hour=12, minute=0, second=0, microsecond=0).astimezone(UTC)
     asked: list[datetime] = []
 
     def _own(since: datetime, tz: object, now: object) -> object:
