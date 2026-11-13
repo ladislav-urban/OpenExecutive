@@ -388,8 +388,11 @@ def test_the_notice_lists_each_late_order_with_its_record() -> None:
 
 def test_a_cut_read_is_said_and_a_cut_order_list_gets_no_task() -> None:
     specs = _specs(orders_cut=True)
-    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    [held, notice] = [s for s in specs if isinstance(s, CardSpec)]
     assert ld.ORDERS_CUT_LINE in notice.notes and _cards_of(specs) == []
+    # Never silent: the principal hears that four late orders' tasks were held back.
+    assert held.to_principal and held.key == "orders-cut:Acme:2026-W46"
+    assert held.notes == (ld.HELD_LINE.format(n=4),)
     # The record cut: a supplier missing from it is "not read", never "no receipts".
     specs = _specs(record=[RECORD[0]], record_cut=True)
     [notice] = [s for s in specs if isinstance(s, CardSpec)]
@@ -839,7 +842,8 @@ def test_the_two_open_statuses_merge_and_a_cut_list_holds_back_only_its_own_orde
     # 1b cut while 1a isn't: 1a's orders still get their cards, 1b's don't.
     specs = _specs(to_receive=receive, to_receive_cut=True)
     assert [c.fields["reference_name"] for c in _cards_of(specs)] == ["PO-1", "PO-2", "PO-3", "PO-9"]
-    [notice] = [s for s in specs if isinstance(s, CardSpec)]
+    [held, notice] = [s for s in specs if isinstance(s, CardSpec)]
+    assert held.to_principal and held.notes == (ld.HELD_LINE.format(n=1),)
     assert ld.ORDERS_CUT_LINE in notice.notes and "PO-R" in [dict(i.values)["Order"] for i in notice.items]
     # 1a cut: its orders get none, 1b's do.
     specs = _specs(to_receive=receive, orders_cut=True)
@@ -1114,3 +1118,45 @@ def test_kept_findings_past_the_card_cap_are_counted_once_in_the_subject(
     # Six rows on Cara's notice, and the two kept findings offered to the principal.
     assert mine.headline == f"Late deliveries: 8 found on {NEXT_DAY}"
     assert "PO-K" not in mine.body
+
+
+# --------------------------------------------------------------------------- #
+# A cut status read told to the principal, and assign_to
+# --------------------------------------------------------------------------- #
+
+
+def test_a_cut_status_read_is_told_to_the_principal_once_a_week(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _auto_checks(erp)
+    receive = [_line("PO-R", "Kepler", "K", 2.0, 0.0, -6, status="To Receive")]
+    erp.replies.extend([_list(ORDERS[3:5]), _list(receive, truncated=True), _report([])])
+    outcome = _run()
+    # 1a's order is carded; 1b's is held back, and the principal hears of it.
+    assert outcome.draft_cards == 1
+    theirs = [a for a in _alerts() if a.routed_to_person_id == team.principal]
+    assert len(theirs) == 1 and "chase tasks for 1 late orders were held back" in theirs[0].body
+    erp.replies.extend([_list(ORDERS[3:5]), _list(receive, truncated=True), _report([])])
+    _run(NEXT_DAY)
+    assert len([a for a in _alerts() if a.routed_to_person_id == team.principal]) == 1
+
+
+def test_late_deliveries_assign_to_is_never_the_configurer_nor_a_demo_account(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from openexecutive.people import store as people_store
+    from openexecutive.watch.settings import ASSIGN_TO_LINES
+
+    _save(team.principal, reviewer=team.cara, settings={**SETTINGS, "assign_to": OWNER})
+    assert ld.assignee() == ""
+    erp.replies.extend([_list(ORDERS[3:5]), _list([]), _report([])])
+    outcome = _run()
+    assert (outcome.draft_cards, outcome.checks) == (0, 0)
+    theirs = [a for a in _alerts() if a.routed_to_person_id == team.principal]
+    assert len(theirs) == 1 and ASSIGN_TO_LINES["configurer"] in theirs[0].body
+    # A demo account, read fresh at check time.
+    _save(team.principal, reviewer=team.cara, settings={**SETTINGS, "assign_to": "dan@co.example"})
+    assert ld.assignee() == "dan@co.example"
+    with people_store._get_conn(None) as conn:
+        conn.execute("UPDATE people SET directory_demo = 1 WHERE id = ?", (team.dan,))
+    assert ld.assignee() == ""

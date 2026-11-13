@@ -971,3 +971,53 @@ def test_an_assign_to_that_cant_take_the_tasks_leaves_none_and_tells_the_princip
     assert (outcome.draft_cards, outcome.checks) == (0, 0)
     theirs = [a for a in _alerts() if a.routed_to_person_id == team.principal]
     assert len(theirs) == 1 and ASSIGN_TO_LINES[who] in theirs[0].body
+
+
+# --------------------------------------------------------------------------- #
+# A refused check's hold: a week for keys with no period, and per reviewer
+# --------------------------------------------------------------------------- #
+
+
+def _kept_then(erp: FakeErpnext, day: str, *, refuse: bool) -> runner.RunOutcome:
+    row = _q("QTN-H", "Orion Switchgear", 12, 4000.0)
+    settings = {**SETTINGS, "days_ahead": 30}
+    erp.replies.extend([_list([row]), _list([]), _list([], "Sales Order")])
+    if refuse:
+        erp.replies.append(json.dumps({"error": "You are not permitted to read Quotation QTN-H."}))
+    else:
+        [spec] = [s for s in qfu.build(_results([row], []), settings, date.fromisoformat(day), assignee=REVIEWER)
+                  if isinstance(s, DraftSpec)]
+        erp.replies.append(_checked(dict(spec.fields)))
+    return _run(day)
+
+
+def test_a_kept_quotation_is_checked_again_after_a_week(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _save(team.principal, reviewer=team.cara, settings={**SETTINGS, "days_ahead": 30})
+    first = _kept_then(erp, DAY, refuse=True)
+    assert (first.checks, first.draft_cards) == (1, 0)
+    # Within the week: held, no check.
+    erp.replies.extend([_list([_q("QTN-H", "Orion Switchgear", 12, 4000.0)]), _list([]), _list([], "Sales Order")])
+    assert _run((TODAY + timedelta(days=3)).isoformat()).checks == 0
+    # Cara is given access; on day 8 the hold has ended: checked again, and carded.
+    day8 = (TODAY + timedelta(days=8)).isoformat()
+    eighth = _kept_then(erp, day8, refuse=False)
+    assert (eighth.checks, eighth.draft_cards) == (1, 1)
+
+
+def test_a_new_reviewer_is_checked_at_once(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _save(team.principal, reviewer=team.cara, settings={**SETTINGS, "days_ahead": 30})
+    assert _kept_then(erp, DAY, refuse=True).checks == 1
+    # Dan reviews now: his own check runs the next day.
+    _save(team.principal, reviewer=team.dan, settings={**SETTINGS, "days_ahead": 30})
+    row = _q("QTN-H", "Orion Switchgear", 12, 4000.0)
+    erp.replies.extend([_list([row]), _list([]), _list([], "Sales Order")])
+    [spec] = [s for s in qfu.build(_results([row], []), {**SETTINGS, "days_ahead": 30},
+                                   date.fromisoformat(NEXT_DAY), assignee="dan@co.example")
+              if isinstance(s, DraftSpec)]
+    erp.replies.append(_checked(dict(spec.fields)))
+    second = _run(NEXT_DAY)
+    assert (second.checks, second.draft_cards) == (1, 1)

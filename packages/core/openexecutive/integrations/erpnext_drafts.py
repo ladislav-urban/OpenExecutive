@@ -1362,8 +1362,8 @@ CONFIGURER_TEXT = (
     "run proposes it again while it's still due."
 )
 # oe_connector's duplicate-ToDo guard: a job card's ToDo is refused while an
-# Open ToDo already references the same document and is allocated to the
-# same user, with a ToolError that starts with this stable code (chat and
+# Open ToDo already references the same document, whoever it is allocated
+# to, with a ToolError that starts with this stable code (chat and
 # panel ToDos are never refused). Refused before its daily count and before
 # any insert, so nothing was made: the card closes as handled
 # (CLOSED_ALREADY_OPEN), never a retried failure. The code counts only at

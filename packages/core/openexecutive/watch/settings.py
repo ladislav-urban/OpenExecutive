@@ -332,6 +332,27 @@ def told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> set[s
         conn.close()
 
 
+def told_days(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> dict[str, str]:
+    """Which of ``keys`` the job's told store holds, with the day each was
+    written."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return {}
+    conn = connect(path)
+    try:
+        found: dict[str, str] = {}
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            found.update((row[0], row[1]) for row in conn.execute(
+                f"SELECT key, day FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            ))
+        return found
+    finally:
+        conn.close()
+
+
 def mark_told(job_id: str, keys: Sequence[str], day: str, *, path: Path | None = None) -> None:
     """Record ``keys`` (dedupe digests) as told by a notice left on ``day``,
     and forget those told more than ``TOLD_KEEP_DAYS`` before it."""

@@ -11887,8 +11887,14 @@ watch:
     that ToDo is the follow-up); and a once job's finding whose check came
     back in cards.HELD_CHECK_CODES (check_already_open, or KEPT_CODES:
     kept from the reviewer, its row sent to the principal) is held by a
-    record of its own kind (cards.held_key held:<digest> for
-    check_already_open, cards.kept_key kept:<digest> for KEPT_CODES), so
+    record of its own kind (cards.held_key held:<reviewer id>:<digest> for
+    check_already_open, cards.kept_key kept:<reviewer id>:<digest> for
+    KEPT_CODES; a reviewer change reads none, so the new reviewer's check
+    runs at once; for a job without WatchJob.periodic_keys, a record older
+    than cards.HOLD_DAYS (7, by settings.told_days) is dropped and the
+    finding checked again, since quote follow-up's keys have no period and
+    the told store keeps rows 400 days; late deliveries sets periodic_keys,
+    its ISO week ending the hold), so
     it isn't checked again every run and can't use up the day's
     job_check_cap before the findings behind it; _once_held reads held:
     and kept: for every wanted key and never drops them (only card:
@@ -12413,7 +12419,12 @@ watch:
     Closed and On Hold orders' unreceived lines and stopped every card);
     merged in code by merged(): an order in both keeps 1a's rows, and the
     orders read from a truncated list get no card (the other list's
-    still do); run_report Supplier Delivery Record with
+    still do; the read has no order_by, so which order a cut split can't
+    be told), and a to_principal CardSpec orders-cut:<company>:<ISO week>
+    (HELD_LINE, the count held back) tells the principal once a week; an
+    assign_to that is the configurer's or a demo person's email is no
+    assignee (settings.assign_to_problem, read fresh) and
+    settings.assign_to_notice tells the principal; run_report Supplier Delivery Record with
     {company, from_date today - 365, to_date today}, no limit (the
     tool's default), derived and skipped when no order counts. No list
     in a list, so no status list: Closed, On Hold and Completed are
