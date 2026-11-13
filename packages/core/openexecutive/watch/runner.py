@@ -43,7 +43,8 @@ A run (``run_job``, its own task):
    finding ids it was shown; anything else is dropped. Its input is the
    findings' bounded facts, wrapped as untrusted. A reason is labelled on the
    notice as the model's, never as a figure, and never used in a key, title
-   or routing.
+   or routing. A finding with no facts (a project with no update this
+   week) is never shown to the model, so it gets no line.
 4. **Who it goes to** (``watch.cards.route``): the job's reviewer only when
    every read ran as the job's own ERP user and the reviewer may approve,
    else the principal, with notices only and the reason recorded.
@@ -71,6 +72,7 @@ import json
 import logging
 import math
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass, field
@@ -99,10 +101,16 @@ REASON_TIMEOUT_S = 60.0
 STALE_AFTER = timedelta(minutes=30)
 # The first claim, then one retry of a stale run.
 MAX_ATTEMPTS = 2
-MAX_VALUE_CHARS = 120
+# A value's length on a notice and a text fact's for the model, unless the
+# job's ReasonSchema.max_fact_chars says longer (``value_chars``).
+MAX_VALUE_CHARS = registry.DEFAULT_FACT_CHARS
 MAX_LABEL_CHARS = 40
 MAX_REASON_CHARS = 200
 MAX_REASON_FINDINGS = 20
+# The reason call's output bound: one call for all a job's findings, or
+# one per finding (ReasonSchema.per_finding), a single short line.
+REASON_MAX_TOKENS = 1200
+PER_FINDING_MAX_TOKENS = 150
 MAX_FACTS = 8
 # The most findings a run takes from a job's rules.
 MAX_FINDINGS = 200
@@ -240,12 +248,21 @@ _URL_RE = re.compile(
     r"|\b[\w-]+(?:\.[\w-]+)*\.[^\W\d_][\w-]+\b(?::\d+)?(?:[/?#]\S*)?"
 )
 _MARKDOWN_RE = re.compile(r"[*_`#>\[\]()|~<>\\!]")
+# clean's bounds, as multiples of the output's length: the raw text kept
+# before it is normalised, and the normalised text kept before any pattern.
+CLEAN_RAW_FACTOR = 4
+CLEAN_FLAT_FACTOR = 2
 
 
 def clean(text: object, limit: int = MAX_VALUE_CHARS) -> str:
     """ERPNext's (or the model's) text as a notice may show it: control
     characters and line breaks gone, links and addresses replaced by
-    "[link]", markdown characters dropped, one line, at most ``limit``."""
+    "[link]", markdown characters dropped, one line, at most ``limit``.
+
+    Bounded whatever comes in: cut to ``CLEAN_RAW_FACTOR`` times ``limit``
+    before it is normalised and to ``CLEAN_FLAT_FACTOR`` times after (NFKC
+    can grow one character into many), so the link pattern, which
+    backtracks, never runs over more than twice the output's length."""
     from openexecutive.utils.prompt_blocks import plain
 
     if isinstance(text, bool) or text is None:
@@ -254,7 +271,8 @@ def clean(text: object, limit: int = MAX_VALUE_CHARS) -> str:
         text = str(text)
     if not isinstance(text, str):
         return ""
-    flat = " ".join(plain(text).split())
+    width = max(limit, 1)
+    flat = " ".join(plain(text[:width * CLEAN_RAW_FACTOR]).split())[:width * CLEAN_FLAT_FACTOR]
     flat = _MARKDOWN_RE.sub("", flat)
     flat = _URL_RE.sub("[link]", flat)
     flat = " ".join(flat.split())
@@ -747,8 +765,9 @@ async def _one_read(
 
 
 def _reasoned(notices: Sequence[registry.CardSpec]) -> list[registry.CardSpec]:
-    """What the reason step is shown: each notice's rows, or the notice."""
-    return [item for spec in notices for item in (spec.items or (spec,))]
+    """What the reason step is shown: each notice's rows, or the notice,
+    those with facts only (with none, the model has nothing to sum up)."""
+    return [item for spec in notices for item in (spec.items or (spec,)) if item.facts]
 
 
 def _found(notices: Sequence[registry.CardSpec]) -> int:
@@ -761,7 +780,14 @@ def _found(notices: Sequence[registry.CardSpec]) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _facts(spec: registry.CardSpec) -> dict[str, str | int | float]:
+def value_chars(job: registry.WatchJob) -> int:
+    """How long a text fact (for the model) and a notice's value may be for
+    ``job``: its ``ReasonSchema.max_fact_chars``, else ``MAX_VALUE_CHARS``."""
+    schema = job.reason_schema
+    return schema.max_fact_chars if schema is not None else MAX_VALUE_CHARS
+
+
+def _facts(spec: registry.CardSpec, limit: int = MAX_VALUE_CHARS) -> dict[str, str | int | float]:
     out: dict[str, str | int | float] = {}
     for key, value in list(spec.facts.items())[:MAX_FACTS]:
         name = clean(key, MAX_LABEL_CHARS)
@@ -774,7 +800,7 @@ def _facts(spec: registry.CardSpec) -> dict[str, str | int | float]:
                 continue
             out[name] = value
         else:
-            out[name] = clean(value)
+            out[name] = clean(value, limit)
     return out
 
 
@@ -792,7 +818,7 @@ def reason_turn(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> t
     for n, spec in enumerate(specs[:limit], 1):
         fid = f"f{n}"
         ids[fid] = spec.key
-        findings.append({"id": fid, "facts": _facts(spec)})
+        findings.append({"id": fid, "facts": _facts(spec, value_chars(job))})
     data = json.dumps({"findings": findings}, ensure_ascii=False, sort_keys=True)
     turn = (
         f"Instruction from the job's code: {schema.instruction}\n\n"
@@ -826,36 +852,153 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
     return out
 
 
-async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> dict[str, str]:
-    """One tool-less model call for the job's reason lines, by the specs'
-    keys; {} when it fails or says nothing usable. Never raises."""
+def has_digit(line: str) -> bool:
+    """Whether ``line`` holds any digit at all: an ASCII or other Unicode
+    decimal digit, a superscript, subscript or circled one, or any other
+    character with a numeric value (dingbat numbers, CJK numerals)."""
+    return any(
+        ch.isdigit() or ch.isdecimal() or unicodedata.digit(ch, None) is not None
+        or unicodedata.numeric(ch, None) is not None
+        for ch in line
+    )
+
+
+# Numbers in words, whole words only, any case: a line naming one is
+# dropped like a line holding a digit (``ReasonSchema.no_digits``).
+_NUMBER_WORDS = (
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "eleven", "twelve",
+    "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen", "nineteen", "twenty", "thirty",
+    "forty", "fifty", "sixty", "seventy", "eighty", "ninety", "hundreds?", "thousands?", "millions?",
+    "billions?", "half", "halves", "quarters?", "thirds?", "dozens?", "percent", r"per\s+cent", "once", "twice",
+    "first", "second", "fourth", "fifth", "sixth", "seventh", "eighth", "ninth", "tenth",
+)
+_NUMBER_WORD_RE = re.compile(r"(?<![^\W_])(?:" + "|".join(_NUMBER_WORDS) + r")(?![^\W_])", re.IGNORECASE)
+
+
+def has_number_word(line: str) -> bool:
+    """Whether ``line`` names a number in words (``_NUMBER_WORDS``, whole
+    words: "often" and "someone" don't count)."""
+    return _NUMBER_WORD_RE.search(line) is not None
+
+
+# Words a project-status line never needs: links and addresses, money and
+# payment, and the language of instructions (a line that narrates an
+# injected request echoes it). Whole words, any case, on the cleaned line;
+# with the currency signs anywhere. A fixed constant, never settings.
+BARRED_WORDS: frozenset[str] = frozenset({
+    "link", "links", "url", "urls", "http", "https", "www", "click", "email", "e-mail",
+    "pay", "paid", "payment", "payments", "approve", "approved", "approval", "transfer", "invoice", "wire",
+    "instruction", "instructions", "ignore", "ignored", "ignoring", "request", "requested", "prompt",
+    "euro", "euros", "eur", "dollar", "dollars", "usd", "pound", "pounds", "gbp", "yen", "cents", "currency",
+})
+BARRED_SIGNS: frozenset[str] = frozenset({"\u20ac", "$", "\u00a3", "\u00a5"})
+_BARRED_RE = re.compile(
+    r"(?<![^\W_])(?:" + "|".join(re.escape(w) for w in sorted(BARRED_WORDS, key=len, reverse=True))
+    + r")(?![^\W_])",
+    re.IGNORECASE,
+)
+
+
+def has_barred_word(line: str) -> bool:
+    """Whether ``line`` holds a ``BARRED_WORDS`` word (whole word, any case)
+    or a ``BARRED_SIGNS`` currency sign anywhere."""
+    return _BARRED_RE.search(line) is not None or any(sign in line for sign in BARRED_SIGNS)
+
+
+def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
+    """``reasons`` without each line that holds any digit, names a number
+    in words or holds a barred word or currency sign (``has_barred_word``;
+    ``ReasonSchema.no_digits``): the notice's own lines carry every figure,
+    so the model's line may only say in words what they mean, and never
+    link, money, payment or a request it was shown.
+    Returns the lines kept and how many were dropped. The number words are
+    a fixed English list matched as whole words, so plurals, run-together
+    words, other languages, Roman numerals and letters that look like digits
+    are a known residual."""
+    kept = {
+        key: line for key, line in reasons.items()
+        if not has_digit(line) and not has_number_word(line) and not has_barred_word(line)
+    }
+    return kept, len(reasons) - len(kept)
+
+
+async def _ask(job: registry.WatchJob, specs: Sequence[registry.CardSpec], max_tokens: int) -> dict[str, str]:
+    """One tool-less call on the fast model for ``specs``' lines, by their
+    keys. Raises when the call fails."""
     from openexecutive.agents.utility_fast import get_fast_model
     from openexecutive.audit.usage import log_model_usage
     from openexecutive.providers import get_provider
 
+    turn, ids = reason_turn(job, specs)
+    if not ids:
+        return {}
+    model = get_fast_model()
+    response = await asyncio.wait_for(
+        get_provider(model).messages_create(
+            model=model,
+            max_tokens=max_tokens,
+            system=REASON_SYSTEM,
+            messages=[{"role": "user", "content": turn}],
+        ),
+        timeout=REASON_TIMEOUT_S,
+    )
+    log_model_usage(response, model=model, actor=f"watch:{job.id}")
+    text = "".join(
+        getattr(b, "text", "") for b in getattr(response, "content", None) or []
+        if getattr(b, "type", "") == "text"
+    )
+    return parse_reasons(text, ids)
+
+
+async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> dict[str, str]:
+    """The job's reason lines, by the specs' keys: one tool-less model call
+    for all, or, for a job whose ``ReasonSchema.per_finding`` is set, one
+    call per finding (up to its ``max_findings``), each shown that finding's
+    facts alone, so one finding's outside text never reaches another's
+    line; a call that fails drops only its own line. {} when nothing usable
+    comes back. Never raises."""
+    kept, _dropped = await reason_lines(job, specs)
+    return kept
+
+
+async def reason_lines(
+    job: registry.WatchJob, specs: Sequence[registry.CardSpec],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """``reason_step``'s work: the lines kept, and those its ``no_digits``
+    filter dropped (never shown on a notice; the eval runner's
+    ``watch_reason`` scenarios report them), both by the specs' keys.
+    Never raises."""
+    schema = job.reason_schema
+    if schema is None:
+        return {}, {}
+    reasons: dict[str, str] = {}
     try:
-        turn, ids = reason_turn(job, specs)
-        if not ids:
-            return {}
-        model = get_fast_model()
-        response = await asyncio.wait_for(
-            get_provider(model).messages_create(
-                model=model,
-                max_tokens=1200,
-                system=REASON_SYSTEM,
-                messages=[{"role": "user", "content": turn}],
-            ),
-            timeout=REASON_TIMEOUT_S,
-        )
-        log_model_usage(response, model=model, actor=f"watch:{job.id}")
-        text = "".join(
-            getattr(b, "text", "") for b in getattr(response, "content", None) or []
-            if getattr(b, "type", "") == "text"
-        )
-        return parse_reasons(text, ids)
+        if schema.per_finding:
+            limit = max(0, min(schema.max_findings, MAX_REASON_FINDINGS))
+            asked = await asyncio.gather(
+                *(_ask(job, [spec], PER_FINDING_MAX_TOKENS) for spec in specs[:limit]), return_exceptions=True,
+            )
+            failed = 0
+            for got in asked:
+                if isinstance(got, BaseException):
+                    failed += 1
+                else:
+                    reasons.update(got)
+            if failed:
+                logger.warning("watch: job %s's reason step failed for %d finding(s); they go without reasons",
+                               job.id, failed)
+        else:
+            reasons = await _ask(job, specs, REASON_MAX_TOKENS)
     except Exception:
         logger.warning("watch: job %s's reason step failed; its notices go without reasons", job.id)
-        return {}
+        return {}, {}
+    if not schema.no_digits:
+        return reasons, {}
+    kept, dropped = without_digits(reasons)
+    if dropped:
+        # A count only: never the line, which may quote outside text.
+        logger.warning("watch: job %s dropped %d reason line(s) holding a number or a barred word", job.id, dropped)
+    return kept, {key: line for key, line in reasons.items() if key not in kept}
 
 
 # --------------------------------------------------------------------------- #
@@ -915,15 +1058,17 @@ def notice_body(
     notes and the run's (``notes``)."""
     from openexecutive.orchestrator.content_trust import wrap_untrusted
 
+    # The job's own cap (a project's quoted update), else MAX_VALUE_CHARS.
+    width = value_chars(job)
     lines = [clean(spec.summary)]
     for label, value in spec.values:
-        lines.append(f"{clean(label, MAX_LABEL_CHARS)}: {clean(value)}")
+        lines.append(f"{clean(label, MAX_LABEL_CHARS)}: {clean(value, width)}")
     if reason:
         lines.append(f"Reason (a model's words, not a figure): {clean(reason, MAX_REASON_CHARS)}")
     for number, item in enumerate(spec.items, 1):
         lines.append(f"{number}. {clean(item.summary)}")
         for label, value in item.values:
-            lines.append(f"   {clean(label, MAX_LABEL_CHARS)}: {clean(value)}")
+            lines.append(f"   {clean(label, MAX_LABEL_CHARS)}: {clean(value, width)}")
         why = (reasons or {}).get(item.key, "")
         if why:
             lines.append(f"   Why now (a model's words, not a figure): {clean(why, MAX_REASON_CHARS)}")

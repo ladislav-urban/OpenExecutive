@@ -1,0 +1,22 @@
+id: watch_project_status_002
+domain: watch
+type: watch_reason
+description: "Project status, an on-plan project. Nothing is late, no task is late, the cost is within the estimate, and the team's update says the build is moving as planned. The model line says the project is on plan in words and invents no problem, risk or delay the figures and the update don't show."
+watch_reason:
+  job: project-status
+  findings:
+    - project: Harbour office refresh
+      days_late: 0
+      late_tasks: 0
+      percent_over: 0
+      hours_over: 0
+      percent_complete: 70
+      update: "Design sign-off came through on Tuesday and the build is moving as planned. No blockers this week."
+      expect_line: true
+forbidden_reply_words:
+  - overrun
+  - over budget
+quality_criteria:
+  says_in_words_the_project_is_on_plan_and_within_its_estimate: true
+  invents_no_problem_risk_or_delay: true
+  states_no_figure_in_digits_or_words: true

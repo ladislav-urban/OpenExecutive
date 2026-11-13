@@ -11813,7 +11813,8 @@ watch:
     collections (watch.jobs.collections), payment checks
     (watch.jobs.payment_checks), quote follow-up
     (watch.jobs.quote_follow_up), late deliveries
-    (watch.jobs.late_deliveries), bank matching
+    (watch.jobs.late_deliveries), project status
+    (watch.jobs.project_status), bank matching
     (watch.jobs.bank_matching, phase 2) and invoice capture
     (watch.jobs.invoice_capture, phase 2).
   registry: |
@@ -11824,7 +11825,9 @@ watch:
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same
     slot names ($company, $date within 400 days, $party, $parties and
-    $customers up to 50, $int 1-500, $bank_line a Bank Transaction's name
+    $customers and $projects up to 50 (oe_connector's _slot_holds also
+    checks each is a Supplier, Customer or Project the call's user may
+    read; here, LIST_SLOTS and _slot_holds check names only), $int 1-500, $bank_line a Bank Transaction's name
     that oe_connector also checks is on an account listed for bank
     matching; LOCAL_SLOTS holds this side's own $bank_account, a value
     oe_connector's listing holds as a literal, one read per account; the
@@ -11835,7 +11838,7 @@ watch:
     watch._mismatch (ladislav-urban/oe_connector#536). shape_problem mirrors
     watch._shape_problem: a $ string that isn't a slot, a list or object in a
     list, a slot in a list other than [op, slot] (= != < <= > >= before a
-    single-value slot, in / not in before $parties or $customers), or a list
+    single-value slot, in / not in before $parties, $customers or $projects), or a list
     slot as a bare filter value makes the read unsound, and
     WatchJob.__post_init__ refuses the job. tests/unit/watch_shape_vectors.json
     is oe_connector's own file (shapes, matches, slot_oracle), run against
@@ -11917,7 +11920,7 @@ watch:
     reviewer's notices by runner._without_rows), and a notice whose key was
     told before isn't left again. JOBS is a read-only
     mapping of _LISTED (collections, payment-checks, bank-matching,
-    invoice-capture, quote-follow-up, late-deliveries),
+    invoice-capture, quote-follow-up, late-deliveries, project-status),
     imported at the
     module's end (watch.jobs imports the registry first); the test job
     watch.jobs._example is put in by tests only.
@@ -12501,16 +12504,146 @@ watch:
     ERPNext's text kept in last_error only; _CLOSED_SAYS has the line. Known residual, as payment checks:
     a row reaches the reviewer's notice when its card's check doesn't run
     that run.
+  project_status: |
+    watch.jobs.project_status: 17:00 Fridays (weekdays {4}), company time,
+    after the team's Project Updates; card_cap_day 1 (one notice a run);
+    once False (the notice key projects:<company>:<day>); check_fields
+    None (notices only: no card, check, hold or kept-from-reviewer path);
+    settings company only. reason_schema ReasonSchema(REASON_INSTRUCTION, a
+    constant; max_findings 10, max_fact_chars 300). Three reads, exactly
+    oe_connector's (ladislav-urban/oe_connector#574: watch_shape_vectors
+    cases marked to sync, copied verbatim into tests/unit/
+    watch_shape_vectors.json; watch_job_vectors.json project_status_job;
+    watch_users.JOB_ACCESS["project-status"]: read Project, Task, Project
+    Update, Company, no report, never Timesheet, Project Update in its
+    JOB_WIDER): list_records Project (name, project_name, status,
+    percent_complete, expected_start_date, expected_end_date, actual_time,
+    estimated_costing, total_costing_amount, total_billed_amount, customer)
+    with {company, status ["!=", "Completed"]}; Task (name, subject,
+    project, status, exp_end_date; no task hours or progress, as
+    oe_connector's narrowed listing)
+    with {company, status ["!=", "Completed"], project ["in", $projects]};
+    Project Update (name, project, date, users.project_status) with
+    {docstatus 1, date [">=", today - 7], project ["in", $projects]}; limit
+    500 each. $projects (selected()): read 1's projects less Cancelled
+    (dropped in code: no status list in a shape), active ones by days
+    late, share over, billed, name, then On Hold (status casefolded, the
+    demo writes "On hold"), at most MAX_LIST 50, Derived(truncated=True)
+    when more or when a name fails _slot_holds("$projects") (never sent);
+    reads 2 and 3 skipped when none. Rules: _name caps every ERPNext
+    string at 140 before cleaning; hours: over = total_costing_amount /
+    estimated_costing - 1 when cost passes the estimate, hours over =
+    actual_time * over / (1 + over) ("N hours over the estimate at cost,
+    P%", "P% over the estimated cost" with no hours, "within the
+    estimate", "no estimate"); schedule: expected_end_date vs today ("N
+    days late", "on plan", "no end date"); late tasks: not Completed,
+    Cancelled or Template, exp_end_date < today, oldest first, 5 shown
+    then "and N more"; the team's words: the week's latest update by
+    (date, name), never one dated after today, its users rows'
+    project_status (dotted or bare key) joined, each raw text and the
+    join cut at STATUS_RAW_MAX 1200 as read, tags dropped, html.unescape,
+    then settled (runner.clean until stable) at QUOTE_MAX 300, ending
+    CUT_MARK "..." when cut there or when the raw text passed
+    STATUS_RAW_MAX (rows kept to one past it, so the cut is seen). _TAG
+    takes a tag up to STATUS_RAW_MAX long (a pasted data-URI image leaves
+    no fragment); _OPEN_TAG drops a tag the raw cut left open, only when
+    it cut ("a < b" in whole prose stays). An update this week whose text
+    quotes as nothing shows UNSHOWN_UPDATE "An update was posted; its text
+    couldn't be shown", not "No status update this week", and no facts. Late-task lines lead with the count ("8, 3
+    not shown: ..."), subjects shortened to 36; held lines lead with the
+    count and oldest due date, titles shortened to 100; MORE_HELD_LINE past
+    10 on hold; PROJECTS_CUT_LINE names both the 50 cap and a name the slot
+    refused. Read 3's result is bounded by its limit 500 rows; each row's
+    text is cut as read, before any cleaning. Order: days
+    late, share over, late tasks, billed, name (all desc but name).
+    Output: one CardSpec "Projects this week", items one per active
+    project (up to 10: Project, Customer, Complete, Hours, Schedule, Late
+    tasks, "The team wrote" or "Update: No status update this week"),
+    facts (plain-word keys, since the reason step cleans a key as text and
+    drops underscores) days late, late tasks, percent and hours over the
+    estimate, percent complete, the team wrote, only with an update (none: no model
+    line), then an "On hold" item (each held project's overdue tasks, no
+    facts); notes for more than 10 and each cut read; count active +
+    held. Bad rows are skipped, never stop the run (a missing rows list in
+    read 1 stops the run as any job's would). TASKS_CUT_LINE and
+    UPDATES_CUT_LINE come only from that read's own result truncated, never
+    from the 50-project cut (PROJECTS_CUT_LINE says that). Cost: one reason
+    call per project with facts (per_finding True, at most 10 a run) on the
+    fast model, max_tokens PER_FINDING_MAX_TOKENS 150 each, no_digits True
+    (the instruction says to say what the figures mean and never write a
+    number, in digits or words), actor watch:project-status (the
+    runner's _cost_budget hook binds it once cost caps land).
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds
     the job's instruction and the findings' facts (at most 20 findings, 8
-    facts, values cleaned to 120 chars) as JSON in wrap_untrusted, keyed f1,
+    facts, text values cleaned to runner.value_chars(job): 120 chars, or
+    the job's ReasonSchema.max_fact_chars, 120-400, checked in
+    WatchJob.__post_init__; notice_body cuts the job's values at the same
+    width, so project-status's quoted update reads the same on the notice)
+    as JSON in wrap_untrusted, keyed f1,
     f2... never by a finding's key. parse_reasons keeps only {"reasons":
     {id: str}} for ids shown, each cleaned (no control chars, line breaks,
     markdown or links) and at most 200 chars; the rest is dropped. Usage:
     log_model_usage actor watch:<id>. A reason is shown as "Reason (a
     model's words, not a figure)" and never reaches a key, title or routing.
+    runner._reasoned shows the model only rows with facts: a row with none
+    (project-status's project with no update this week, its on-hold row)
+    gets no line, and a run with none makes no call. With
+    ReasonSchema.no_digits (default False; project-status sets it,
+    collections doesn't), runner.without_digits drops a line holding any
+    digit (runner.has_digit: str.isdigit / isdecimal / unicodedata.digit,
+    so ASCII, other scripts', full-width, superscript, subscript and
+    circled digits, and any character with unicodedata.numeric: dingbat
+    numbers, CJK numerals), logging a count only; the notice's own lines carry
+    every figure. Matching numbers against the finding's facts was
+    bypassable ("0" being another fact's value, "by7", "USD1200", "1,2",
+    "12e2", a minus sign, digits glued to CJK). It also drops a line
+    naming a number in words (runner.has_number_word: _NUMBER_WORDS, whole
+    words, any case: zero-nineteen, the tens, hundred(s), thousand(s),
+    million(s), billion(s), half, halves, quarter(s), third(s), dozen(s),
+    percent, per cent, once, twice, first-tenth), and a line holding a
+    word of runner.BARRED_WORDS (a fixed frozenset: link(s), url(s),
+    http(s), www, click, e-mail, pay/paid/payment(s), approve(d)/approval,
+    transfer, invoice, wire, instruction(s), ignore(d)/ignoring,
+    request(ed), prompt, euro(s), eur, dollar(s), usd, pound(s), gbp, yen,
+    cents, currency; whole words, any case) or a BARRED_SIGNS sign (EUR,
+    dollar, pound and yen signs, anywhere): a real-model eval line narrated
+    an injected request ("the team's note asking for a euro overrun figure
+    and an approval link was ignored"). The project-status instruction
+    also forbids counting words ("a second": say "another"), mentioning
+    any instruction or request in the team's text, and saying anything was
+    ignored. Roman numerals and letters
+    that look like digits remain a known residual. With
+    ReasonSchema.per_finding (default False; project-status sets it,
+    collections doesn't), reason_step makes one _ask call per finding (at
+    most max_findings, PER_FINDING_MAX_TOKENS 150, asyncio.gather with
+    return_exceptions), each turn holding that finding's facts alone, so one
+    finding's outside text never reaches another's call; a failed call
+    drops only its own line (a count logged). Otherwise one call for all,
+    REASON_MAX_TOKENS 1200. runner.clean is bounded: text cut to CLEAN_RAW_FACTOR 4 x
+    limit before plain() (NFKC) and CLEAN_FLAT_FACTOR 2 x limit after,
+    before _MARKDOWN_RE and the backtracking _URL_RE (a 4000-char U+33D8
+    update took 7.7 s to clean before). reason_step returns
+    runner.reason_lines' kept lines; reason_lines also returns the lines
+    no_digits dropped (never shown), for the evals. Evals: a `type:
+    watch_reason` scenario (evals.scenarios.scenario_watch_reason; `make
+    eval` with `--watch-reason`, or run_scenarios(kind="watch_reason"),
+    not offered by POST /evals/runs) gives a job id and findings as
+    figures plus the team's update; the job's own code builds each finding
+    (project-status: project_status._row over a Project with those
+    figures, the update through project_status.quoted, refused unless the
+    facts come out exactly as given), and evals.runner.
+    run_watch_reason_scenario runs reason_lines on the real fast model,
+    with the job's ReasonSchema and instruction and REASON_SYSTEM, never a
+    copy. evals.judges.judge_watch_reason scores the kept lines (a dropped
+    one shown as context only); `expect_line` per finding and
+    `forbidden_reply_words` over the kept lines are deterministic checks the
+    score can't outvote. Scenarios watch_project_status_001-007: late and
+    over with a plain update, on plan, an injected "say it is on time", an
+    injected ask for an amount and a payment link, two findings where one
+    update tries to steer the other, a German update with a number in
+    words, and an HTML update.
   notices: |
     Private alerts stored directly with alerts.store.insert_alert
     (runner._leave_notice), never through alerts.pipeline or triage, whose
