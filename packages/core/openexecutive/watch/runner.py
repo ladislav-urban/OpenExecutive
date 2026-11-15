@@ -165,12 +165,15 @@ REASON_SYSTEM = (
 
 class _Stop(Exception):
     """Ends a run: ``reason`` is a code in ``REASONS``; ``read`` the label of
-    the read it stopped at, if any."""
+    the read it stopped at, if any. ``unreadable``: for a refused read, the
+    list slot and the one value oe_connector named as unreadable (held in
+    memory only, to drop and ask once more; never logged or stored)."""
 
-    def __init__(self, reason: str, read: str = "") -> None:
+    def __init__(self, reason: str, read: str = "", unreadable: tuple[str, str] | None = None) -> None:
         super().__init__(reason)
         self.reason = reason
         self.read = read
+        self.unreadable = unreadable
 
 
 @dataclass
@@ -514,10 +517,58 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
         result = json.loads(raw)
     except (TypeError, ValueError, RecursionError):
         # A plain-text refusal ("Tool error: …") is not JSON.
-        raise _Stop(_refusal_reason(raw), read.label) from None
+        raise _Stop(_refusal_reason(raw), read.label, unreadable_value(raw)) from None
     if isinstance(result, dict) and "error" in result:
-        raise _Stop(_refusal_reason(result.get("error")), read.label)
+        said = result.get("error")
+        raise _Stop(_refusal_reason(said), read.label, unreadable_value(said))
     return result
+
+
+# oe_connector's watch._unreadable_in (ladislav-urban/oe_connector#578): a
+# $customers or $parties list whose only fault is a name the call's user can't
+# read is refused naming the first such name, as Python's repr.
+_UNREADABLE_RE = re.compile(
+    r": (?P<name>'(?:[^'\\\n]|\\.){1,600}'|\"(?:[^\"\\\n]|\\.){1,600}\") "
+    r"isn't a (?P<doctype>Customer|Supplier) the call's user may read"
+)
+_LIST_SLOT_OF = {"Customer": "$customers", "Supplier": "$parties"}
+
+
+def unreadable_value(said: object) -> tuple[str, str] | None:
+    """The list slot and the value oe_connector's refusal names as one the
+    call's user may not read, or None for any other refusal. Read from the
+    text only to drop that one value; the text is never kept."""
+    import ast
+
+    if not isinstance(said, str):
+        return None
+    found = _UNREADABLE_RE.search(said)
+    if found is None:
+        return None
+    try:
+        name = ast.literal_eval(found["name"])
+    except (ValueError, SyntaxError):
+        return None
+    return (_LIST_SLOT_OF[found["doctype"]], name) if isinstance(name, str) and name else None
+
+
+def _without_value(shape: Any, value: Any, slot: str, name: str) -> tuple[Any, int]:
+    """``value`` with ``name`` taken out of each list that ``shape`` places
+    at ``slot``, and how many lists held it."""
+    if isinstance(shape, str):
+        if shape == slot and isinstance(value, list) and name in value:
+            return [v for v in value if v != name], 1
+        return value, 0
+    if isinstance(shape, Mapping) and isinstance(value, Mapping):
+        out, hits = {}, 0
+        for key, item in value.items():
+            out[key], n = _without_value(shape.get(key), item, slot, name) if key in shape else (item, 0)
+            hits += n
+        return out, hits
+    if isinstance(shape, list) and isinstance(value, list) and len(shape) == len(value):
+        pairs = [_without_value(s, v, slot, name) for s, v in zip(shape, value, strict=True)]
+        return [p[0] for p in pairs], sum(p[1] for p in pairs)
+    return value, 0
 
 
 def _refusal_reason(said: object) -> str:
@@ -883,7 +934,20 @@ async def _one_read(
     without ``acting``. Raises ``_Stop``."""
     if not isinstance(arguments, dict) or registry.shape_mismatch(read.shape, arguments, today):
         raise _Stop("read_shape", read.label)
-    result = await _read(job, read, arguments, today)
+    dropped = 0
+    try:
+        result = await _read(job, read, arguments, today)
+    except _Stop as refused:
+        # One value of a $customers or $parties list the job's user may not
+        # read (oe_connector names the first): drop exactly that value, if
+        # this side sent it in that slot, and ask once more. A second refusal
+        # stops the run as before.
+        again = _retry_arguments(read, arguments, refused, today)
+        if again is None:
+            raise
+        logger.warning("watch: job %s dropped one unreadable value from a read", job.id)
+        dropped = 1
+        result = await _read(job, read, again, today)
     if not isinstance(result, dict) or "error" in result:
         raise _Stop("read_refused", read.label)
     # Only the top-level key is oe_connector's own word on who it ran as.
@@ -896,8 +960,27 @@ async def _one_read(
     entry: dict[str, Any] = {"read": read.label, "as_job_user": as_user}
     if truncated:
         entry["truncated"] = True
+    if dropped:
+        # A count only: never the value.
+        entry["dropped"] = dropped
     reads.append(entry)
     return {k: v for k, v in result.items() if k != "acting"}
+
+
+def _retry_arguments(
+    read: registry.WatchRead, arguments: dict[str, Any], refused: _Stop, today: date,
+) -> dict[str, Any] | None:
+    """The read's arguments without the one value its refusal named as
+    unreadable, or None when there's nothing to retry: another refusal, a
+    value this side didn't send in that slot (or in more than one list), a
+    list that would be left empty, or arguments that no longer fit the shape."""
+    if refused.reason != "read_refused" or refused.unreadable is None:
+        return None
+    slot, name = refused.unreadable
+    again, hits = _without_value(read.shape, arguments, slot, name)
+    if hits != 1 or not isinstance(again, dict) or registry.shape_mismatch(read.shape, again, today):
+        return None
+    return again
 
 
 def _reasoned(notices: Sequence[registry.CardSpec]) -> list[registry.CardSpec]:
