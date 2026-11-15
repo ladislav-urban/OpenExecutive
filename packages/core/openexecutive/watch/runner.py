@@ -397,15 +397,20 @@ def _run_now_busy(conn: Any, job_id: str, now: datetime, stamp: str) -> tuple[bo
     """Inside a claim's transaction: whether a run-now of ``job_id`` (any
     day) is still fresh, and the ``(day, slot)`` of each one past
     ``STALE_AFTER``, marked failed (``run_stalled``) here; the caller
-    reports them once committed (``_stalled_now``)."""
+    reports them once committed (``_stalled_now``). While this process's
+    task for the job is alive, a run-now past ``STALE_AFTER`` is only slow:
+    it stays busy, never marked or reported, since its own ``_finish``
+    would overwrite the mark after a stall notice had gone out."""
     busy = False
     stalled: list[tuple[str, str]] = []
+    running = _tasks.get(job_id)
+    alive = running is not None and not running.done()
     for day, slot, started_at in conn.execute(
         f"SELECT day, slot, started_at FROM {RUNS_TABLE} "  # noqa: S608
         "WHERE job = ? AND status = 'running' AND substr(slot, 1, 4) = ?",
         (job_id, RUN_NOW_PREFIX),
     ).fetchall():
-        if _stale(started_at, now):
+        if _stale(started_at, now) and not alive:
             conn.execute(
                 f"UPDATE {RUNS_TABLE} SET status = 'failed', error = 'run_stalled', finished_at = ? "  # noqa: S608
                 "WHERE job = ? AND day = ? AND slot = ? AND status = 'running'",
