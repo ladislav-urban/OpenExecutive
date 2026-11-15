@@ -22,6 +22,11 @@ if TYPE_CHECKING:
     from openexecutive.memory.workspace_settings import PrincipalRole
 
 
+# A watch job's model "reason" line (``type: watch_reason``): the scenario's
+# findings go through the job's own reason step.
+WATCH_REASON = "watch_reason"
+
+
 def _scenarios_dir() -> Path:
     env_path = os.environ.get("EVAL_SCENARIOS_PATH")
     if env_path:
@@ -39,6 +44,8 @@ def scenario_kind(s: dict[str, Any]) -> str:
         return "inbox"
     if s.get("type") == "supplier":
         return "supplier"
+    if s.get("type") == WATCH_REASON:
+        return WATCH_REASON
     if s.get("requires_mcp"):
         return "mcp"
     return "chat"
@@ -613,6 +620,165 @@ def scenario_supplier(scenario: dict[str, Any]) -> SupplierCase | None:
     return SupplierCase(str(raw["name"]), message.strip(), docs["orders"], docs["invoices"])
 
 
+@dataclass
+class WatchReasonFinding:
+    # The scenario's name for the finding (for the judge and the result;
+    # the model never sees it).
+    label: str
+    # The finding as the job's own code builds it (a ``CardSpec``).
+    spec: Any
+    # True: a line must reach the notice; False: none may; None: either.
+    expect_line: bool | None
+
+
+@dataclass
+class WatchReasonCase:
+    job: Any  # the registered ``WatchJob``
+    findings: list[WatchReasonFinding]
+
+
+# What a project-status finding gives, as the job's facts name them.
+_PROJECT_KEYS = frozenset({
+    "project", "days_late", "late_tasks", "percent_over", "hours_over", "percent_complete", "update", "expect_line",
+})
+# A scenario's late tasks are at most this many (only their count is a fact).
+_MAX_LATE_TASKS = 50
+
+
+def _whole(raw: dict[str, Any], key: str, high: int, *, required: bool) -> int | None:
+    value = raw.get(key)
+    if value is None and not required:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= high:
+        raise ValueError(f"`{key}`: a whole number from 0 to {high}")
+    return value
+
+
+def _project_status_finding(raw: dict[str, Any], today: Any) -> Any:
+    """One project-status finding, built by the job's own code
+    (``project_status._row``) from a project with these figures and the
+    team's update, quoted as the job quotes it (``project_status.quoted``:
+    tags dropped, cleaned, cut at 300). Raises ValueError when the job
+    would not give the finding exactly these facts, or none at all."""
+    from datetime import timedelta
+
+    from openexecutive.watch.jobs import project_status as ps
+
+    unknown = set(raw) - _PROJECT_KEYS
+    if unknown:
+        raise ValueError(f"unknown key(s) {sorted(map(str, unknown))}; allowed: {', '.join(sorted(_PROJECT_KEYS))}")
+    name = raw.get("project")
+    if not isinstance(name, str) or not name.strip() or name != name.strip() or len(name) > ps.TEXT_MAX:
+        raise ValueError("`project`: the project's name")
+    days = _whole(raw, "days_late", ps.DAYS_MAX, required=True) or 0
+    late = _whole(raw, "late_tasks", _MAX_LATE_TASKS, required=True) or 0
+    over = _whole(raw, "percent_over", 1000, required=False)
+    hours_over = raw.get("hours_over")
+    if hours_over is not None:
+        if isinstance(hours_over, bool) or not isinstance(hours_over, int | float) or not 0 <= hours_over <= 100000:
+            raise ValueError("`hours_over`: a number of hours, 0 or more")
+        if not over and hours_over:
+            raise ValueError("`hours_over` needs a `percent_over` above 0")
+    complete = raw.get("percent_complete")
+    if complete is not None and (
+        isinstance(complete, bool) or not isinstance(complete, int | float) or not 0 <= complete <= 100
+    ):
+        raise ValueError("`percent_complete`: 0 to 100")
+    update = raw.get("update")
+    words = ps.quoted(update) if isinstance(update, str) else ""
+    if not words:
+        raise ValueError("`update`: the team's text, which must quote as something (the job gives no line without)")
+    # A project with these figures: an estimate at cost passed by the share
+    # over, and the hours used that make the hours over that share of them.
+    share = over / 100 if over is not None else None
+    hours = float(hours_over) * (1 + share) / share if share and hours_over else None
+    project = ps.Project(
+        name=name, title=name, status="Open", customer="",
+        percent=float(complete) if complete is not None else None,
+        end=today - timedelta(days=days) if days else today + timedelta(days=14),
+        hours=hours,
+        estimate=10000.0 if share is not None else None,
+        cost=10000.0 * (1 + share) if share is not None else None,
+        billed=0.0,
+    )
+    tasks = tuple(ps.LateTask(f"Task {n}", today - timedelta(days=1)) for n in range(1, late + 1))
+    spec = ps._row(ps.Status(project, tasks, words, posted=True), today)
+    wanted: dict[str, Any] = {"days late": days, "late tasks": late}
+    if over is not None:
+        wanted["percent over the estimate"] = over
+        wanted["hours over the estimate"] = round(float(hours_over or 0), 1)
+    if complete is not None:
+        wanted["percent complete"] = round(complete)
+    got = {k: v for k, v in spec.facts.items() if k != "the team wrote"}
+    if got != wanted:
+        raise ValueError(f"the job's figures come to {got}, not {wanted}")
+    return spec
+
+
+# How a scenario gives one finding of each job it can run: (block, today) ->
+# the job's own CardSpec. Only a job listed here has watch_reason scenarios.
+_WATCH_FINDINGS: dict[str, Any] = {"project-status": _project_status_finding}
+
+
+def scenario_watch_reason(scenario: dict[str, Any]) -> WatchReasonCase | None:
+    """The scenario's ``watch_reason`` block (a watch job's model line,
+    ``type: watch_reason``) as a ``WatchReasonCase``, or None when it has
+    none.
+
+    Shape::
+
+        watch_reason:
+          job: project-status
+          findings:                 # one or more, each its own call
+            - project: Riverside fit-out
+              days_late: 12         # 0: on plan
+              late_tasks: 3
+              percent_over: 40      # optional: no estimate without it
+              hours_over: 48        # optional, needs percent_over
+              percent_complete: 55  # optional
+              update: "..."         # the team's words, as written
+              expect_line: true     # optional: a line must (true) or
+                                    # must not (false) reach the notice
+
+    Each finding is built by the job's own code, so the model is shown its
+    facts exactly as a run shows them. Raises ValueError on a malformed
+    block."""
+    from datetime import date
+
+    from openexecutive.watch import registry
+    from openexecutive.watch.runner import MAX_REASON_FINDINGS
+
+    raw = scenario.get(WATCH_REASON)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"job", "findings"}:
+        raise ValueError("watch_reason must be a mapping of job and findings")
+    job = registry.get(raw.get("job"))
+    build = _WATCH_FINDINGS.get(str(raw.get("job")))
+    if job is None or job.reason_schema is None or build is None:
+        raise ValueError(f"watch_reason.job must be one of {sorted(_WATCH_FINDINGS)}")
+    found = raw.get("findings")
+    limit = min(job.reason_schema.max_findings, MAX_REASON_FINDINGS)
+    if not isinstance(found, list) or not 1 <= len(found) <= limit:
+        raise ValueError(f"watch_reason.findings: a list of 1 to {limit} findings")
+    today = date.today()
+    findings: list[WatchReasonFinding] = []
+    for n, item in enumerate(found, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"watch_reason.findings[{n}] must be a mapping")
+        expect = item.get("expect_line")
+        if expect is not None and not isinstance(expect, bool):
+            raise ValueError(f"watch_reason.findings[{n}]: `expect_line` must be true or false")
+        try:
+            spec = build(item, today)
+        except ValueError as e:
+            raise ValueError(f"watch_reason.findings[{n}]: {e}") from e
+        findings.append(WatchReasonFinding(str(item["project"]), spec, expect))
+    if len({f.spec.key for f in findings}) != len(findings):
+        raise ValueError("watch_reason.findings: each finding needs its own project")
+    return WatchReasonCase(job, findings)
+
+
 def builtin_scenario_ids() -> set[str]:
     return {s["id"] for s in _load_builtin_scenarios()}
 
@@ -717,6 +883,11 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_supplier(s)
         except ValueError as e:
             raise ValueError(f"`supplier`: {e}") from e
+    if s.get(WATCH_REASON) is not None:
+        try:
+            scenario_watch_reason(s)
+        except ValueError as e:
+            raise ValueError(f"`watch_reason`: {e}") from e
 
     scenario_routing(s)
 
@@ -729,6 +900,8 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         raise ValueError("inbox scenarios require an `inbox` block")
     if k == "supplier" and s.get("supplier") is None:
         raise ValueError("supplier scenarios require a `supplier` block")
+    if k == WATCH_REASON and s.get(WATCH_REASON) is None:
+        raise ValueError("watch_reason scenarios require a `watch_reason` block")
     if k == "triage" and not s.get("event"):
         raise ValueError("triage scenarios require an `event` field")
 
