@@ -143,7 +143,7 @@ def test_a_watch_reason_scenario_needs_its_block() -> None:
 def test_the_shipped_scenarios_are_their_own_kind_and_build() -> None:
     shipped = load_scenarios(kind=WATCH_REASON)
     ids = {s["id"] for s in shipped}
-    assert {f"watch_project_status_00{n}" for n in range(1, 8)} <= ids
+    assert {f"watch_project_status_00{n}" for n in range(1, 9)} <= ids
     assert not ids & {s["id"] for s in load_scenarios(kind="chat")}
     for scenario in shipped:
         assert scenario_kind(scenario) == WATCH_REASON
