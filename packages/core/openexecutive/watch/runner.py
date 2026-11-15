@@ -1050,7 +1050,8 @@ def has_number_word(line: str) -> bool:
 BARRED_WORDS: frozenset[str] = frozenset({
     "link", "links", "url", "urls", "http", "https", "www", "click", "email", "e-mail",
     "pay", "paid", "payment", "payments", "approve", "approved",
-    "remit", "remits", "remitted", "remittance", "settle", "settled", "settles", "settling", "transferring",
+    # Not settle(d)/settling ("concrete settling") or any transfer form: ordinary words.
+    "remit", "remits", "remitted", "remittance",
     "instruction", "instructions", "ignore", "ignored", "ignoring", "disregard", "disregarded", "disregarding",
     "prompt",
     "euro", "euros", "eur", "dollar", "dollars", "usd", "pound", "pounds", "gbp", "yen", "jpy", "cents",
@@ -1066,28 +1067,57 @@ _BARRED_RE = re.compile(
 )
 
 
+# Latin letters that don't decompose to an ASCII one but read as it.
+_LOOK_ALIKES = {"\u0131": "i", "\u0251": "a", "\u029f": "l", "\u0269": "i", "\u0261": "g", "\u0278": "f"}
+# Letters of real names that stay themselves after folding (Straße, Łódź, Søren).
+_KEPT_LETTERS = frozenset("ßøæœłđþðŋ")
+# The micro sign is a unit, not a Greek letter.
+_MICRO = "\u00b5"
+
+
+def _fold_letter(ch: str) -> str:
+    """One character as the word list should read it: accents and other
+    marks dropped (NFKD), compatibility forms folded, a small capital or a
+    look-alike Latin letter as its ASCII letter."""
+    name = unicodedata.name(ch, "")
+    if name.startswith("LATIN LETTER SMALL CAPITAL "):
+        tail = name.removeprefix("LATIN LETTER SMALL CAPITAL ")
+        if len(tail) == 1:
+            return tail.lower()
+    if ch in _LOOK_ALIKES:
+        return _LOOK_ALIKES[ch]
+    return "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+
+
+def _folded(line: str) -> str:
+    return "".join(_fold_letter(ch) for ch in line)
+
+
 def has_barred_word(line: str) -> bool:
     """Whether ``line`` holds a ``BARRED_WORDS`` word (whole word, any case),
-    any currency sign (Unicode category Sc: ₹ ₩ ₽ ₣ ¢ as much as € and $), or
-    a letter outside the Latin script: a look-alike ("lіnk" with a Cyrillic і)
-    would otherwise pass the word list. Latin letters with accents are kept."""
-    if _BARRED_RE.search(line) is not None:
+    as written or once accents and look-alike letters are folded ("pày",
+    "pɑy", small capitals); any currency sign (Unicode category Sc: ₹ ₩ ₽ ₣ ¢
+    as much as € and $); or a letter that is still not ASCII once folded,
+    outside a few letters of real names (ß, ø, æ, œ, ł, đ, þ, ð, ŋ), so a
+    Cyrillic or Greek look-alike ("lіnk") can't pass the word list.
+
+    Kept: accented names (café, Müller, Łódź, Straße) and the micro sign.
+    A project named in another script (Greek, Cyrillic, CJK, Arabic) has its
+    model line dropped every run, by design: its notice still carries its
+    own figures, and the run's detail counts the drop."""
+    folded = _folded(line)
+    if _BARRED_RE.search(line) is not None or _BARRED_RE.search(folded) is not None:
         return True
     for ch in line:
         category = unicodedata.category(ch)
         if category == "Sc":
             return True
-        if category.startswith("L") and not _latin(ch):
+        if ch == _MICRO or not category.startswith("L") or ch.isascii():
+            continue
+        base = _fold_letter(ch)
+        if not (base.isascii() or all(c.lower() in _KEPT_LETTERS for c in base)):
             return True
     return False
-
-
-def _latin(ch: str) -> bool:
-    """Whether a letter is Latin: ASCII, or an ASCII letter under accents."""
-    if ch.isascii():
-        return True
-    base = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
-    return (base.isascii() and base.isalpha()) or unicodedata.name(ch, "").startswith("LATIN ")
 
 
 def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:

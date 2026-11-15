@@ -12701,14 +12701,21 @@ watch:
     percent, per cent, once, twice, first-tenth), and a line holding a
     word of runner.BARRED_WORDS (a fixed frozenset: link(s), url(s),
     http(s), www, click, e-mail, pay/paid/payment(s), approve(d), remit/
-    remittance, settle(d)/settling, transferring, instruction(s),
+    remittance, instruction(s),
     ignore(d)/ignoring, disregard(ed)/disregarding, prompt, and currency
     words: euro(s), eur, dollar(s), usd, pound(s), gbp, yen, jpy, cents,
     franc(s), chf, krona/kronor/krone/kroner, rupee(s), inr, yuan, cny,
-    buck(s), aud, cad, currency; whole words, any case), any currency sign
-    (Unicode category Sc, anywhere), or any letter outside the Latin script
-    (a look-alike Cyrillic i or a; accented Latin letters are kept).
-    request(ed), approval, invoice, wire and transfer are no longer barred:
+    buck(s), aud, cad, currency; whole words, any case, on the line as
+    written and once folded: NFKD with marks dropped, small capitals and
+    look-alike Latin letters as ASCII, so pay with an accent or a Latin
+    alpha is caught), any currency sign (Unicode category Sc, anywhere), or
+    any letter still not ASCII once folded, outside a few letters of real
+    names (ss, o-slash, ae, oe, l-stroke, d-stroke, thorn, eth, eng) and the
+    micro sign: a Cyrillic or Greek look-alike is caught, and cafe, Muller,
+    Lodz and Strasse with their accents are kept. A project named in another
+    script has its model line dropped every run, by design.
+    request(ed), approval, invoice, wire, settle(d)/settling and every
+    transfer form are not barred:
     ordinary project words (the review of #232, the owner's 5.a). The run's
     detail counts the reason lines dropped (reasons_dropped). The rule came from
     a real-model eval line that narrated
