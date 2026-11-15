@@ -186,7 +186,13 @@ def _check_reviewer(person_id: int) -> None:
 def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> WatchJobOut:
     from openexecutive.audit import log_event
     from openexecutive.watch import registry
-    from openexecutive.watch.settings import effective_settings, save
+    from openexecutive.watch.settings import (
+        ASSIGN_TO_SAVE,
+        assign_to_problem,
+        effective_settings,
+        get_row,
+        save,
+    )
 
     principal = _principal(request)
     job = registry.get(job_id)
@@ -198,6 +204,18 @@ def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> Wat
             settings = registry.check_settings(job, body.settings)
         except registry.SettingsError as bad:
             raise _refuse(400, "bad_settings", str(bad)) from None
+    # The settings the job will run with (the body's, else the stored ones):
+    # its tasks never go to whoever sets it up, nor to a demo account. Checked
+    # whenever settings are sent, and on every PUT that leaves the job on;
+    # turning a job off without new settings is never refused, though its
+    # stored assign_to went bad since.
+    row = get_row(job.id)
+    stays_on = body.enabled if body.enabled is not None else row.enabled
+    effective = settings if settings is not None else effective_settings(job, row)
+    checked = settings is not None or stays_on
+    problem = assign_to_problem(effective.get("assign_to"), int(principal.id)) if checked else ""
+    if problem:
+        raise _refuse(400, "bad_settings", ASSIGN_TO_SAVE[problem])
     set_reviewer = "reviewer_person_id" in body.model_fields_set
     if set_reviewer and body.reviewer_person_id is not None:
         _check_reviewer(body.reviewer_person_id)

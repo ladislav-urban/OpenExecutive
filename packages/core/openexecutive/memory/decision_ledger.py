@@ -359,12 +359,15 @@ def close_externally(
     instance_id: int,
     *,
     reason: str,
+    proposed_only: bool = False,
     db_path: Path | None = None,
 ) -> bool:
     """proposed | executing → closed_externally, compare-and-set: something
     outside the app settled it. ``reason`` is a short code, kept in
-    ``reversal_reason``."""
+    ``reversal_reason``. ``proposed_only``: never a card being carried out
+    (an approval in flight), so False when it turned ``executing``."""
     now = datetime.now(UTC).isoformat()
+    statuses = (STATUS_PROPOSED, STATUS_PROPOSED) if proposed_only else tuple(OPEN_STATUSES)
     with _get_conn(db_path or _db_path()) as conn:
         result = conn.execute(
             """
@@ -372,7 +375,7 @@ def close_externally(
             SET status = ?, resolved_at = ?, reversal_reason = ?
             WHERE id = ? AND status IN (?, ?)
             """,
-            (STATUS_CLOSED_EXTERNALLY, now, reason[:200], instance_id, *OPEN_STATUSES),
+            (STATUS_CLOSED_EXTERNALLY, now, reason[:200], instance_id, *statuses),
         )
         return result.rowcount == 1
 

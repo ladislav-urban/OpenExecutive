@@ -84,6 +84,7 @@ slice, the assignee, and the approver's day cap).
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import json
 import logging
@@ -1017,6 +1018,9 @@ def earlier_cards(person_id: int, session_id: Any, *, leaving: int) -> list[dict
 # never the ERP's words; the note below reads them through _CLOSED_SAYS only.
 CLOSED_CHANGED = "changed_since_proposed"
 CLOSED_NO_ANSWER = "no_answer"
+# A job card's ToDo the ERP refused because one is already open for it
+# (ALREADY_OPEN_CODE): nothing new was made, and the open one is the follow-up.
+CLOSED_ALREADY_OPEN = "already_open"
 # How far back, and how many, the turn's note looks: a card's own lifetime.
 DECIDED_WINDOW = CARD_TTL
 DECIDED_MAX = 5
@@ -1034,6 +1038,9 @@ _CLOSED_SAYS: dict[str, str] = {
     CLOSED_NO_ANSWER: (
         "closed when they approved it: the approval didn't go through after several tries, "
         "and whether a draft was made isn't recorded: check in the ERP before asking again"
+    ),
+    CLOSED_ALREADY_OPEN: (
+        "closed when they approved it: a task for this was already open in the ERP, so nothing new was made"
     ),
 }
 _REPLACED_SAYS = "closed: replaced by a newer card because the ERP now reads the draft differently"
@@ -1351,9 +1358,37 @@ SOD_JOB_TEXT = "You set up this job, so someone else approves its cards. Nothing
 CONFIGURER_MARKERS = ("ERPNext records no one as having set up the job", "in oe_connector_watch_jobs. Nothing was made")
 CONFIGURER_TEXT = (
     "The ERP doesn't record the person who set up this job as the one this card names, so nothing was made and "
-    "the card is closed. An ERP operator records the job's configurer; the next "
-    "run proposes it again."
+    "the card is closed. An ERP operator records the job's configurer; a later "
+    "run proposes it again while it's still due."
 )
+# oe_connector's duplicate-ToDo guard: a job card's ToDo is refused while an
+# Open ToDo already references the same document, whoever it is allocated
+# to, with a ToolError that starts with this stable code (chat and
+# panel ToDos are never refused). Refused before its daily count and before
+# any insert, so nothing was made: the card closes as handled
+# (CLOSED_ALREADY_OPEN), never a retried failure. The code counts only at
+# the start of the error, or right after one of the gateway's own error
+# wrappers (mcp_gateway._ERROR_TEXT_PREFIXES; "... tool <name>: " for those
+# that name the tool), never after other text.
+ALREADY_OPEN_CODE = "todo_already_open:"
+ALREADY_OPEN_TEXT = "A task for this is already open in the ERP, so nothing new was made."
+
+
+@functools.lru_cache(maxsize=1)
+def _already_open_re() -> re.Pattern[str]:
+    from openexecutive.orchestrator.mcp_gateway import _ERROR_TEXT_PREFIXES
+
+    wrappers = [
+        re.escape(p) + (r"[A-Za-z0-9_-]{1,80}: " if p.endswith("tool ") else r"\s*") for p in _ERROR_TEXT_PREFIXES
+    ]
+    return re.compile(r"(?:" + "|".join(wrappers) + r")?" + re.escape(ALREADY_OPEN_CODE))
+
+
+def already_open(reason: str) -> bool:
+    """Whether ERPNext refused a job card's ToDo as already open
+    (``ALREADY_OPEN_CODE``). Matched by its code only; its text is never
+    shown."""
+    return isinstance(reason, str) and _already_open_re().match(reason) is not None
 
 
 def _job_title(payload: dict[str, Any]) -> str:
@@ -2371,6 +2406,18 @@ async def _carry_out(
                 "reason": filled[0], **_identities(payload),
             })
             raise ApproveRefused(409, filled[0], filled[1])
+    if wire is not None and doctype == "ToDo" and operation == "create" and already_open(reason):
+        # A ToDo for this is already open in the ERP: handled, not failed.
+        # No attempt is counted and nothing is retried; ERPNext's words are
+        # kept in the record only, never shown.
+        finish_execution(
+            instance.id, STATUS_FAILED,
+            final_payload={**payload, "last_error": reason, "closed_code": CLOSED_ALREADY_OPEN},
+        )
+        audit("erpnext_draft_already_open", f"Person {person.id}'s ERPNext ToDo was already open; its card closed", {
+            "person_id": person.id, "decision_id": instance.id, "doctype": doctype, **_identities(payload),
+        })
+        raise ApproveRefused(409, CLOSED_ALREADY_OPEN, ALREADY_OPEN_TEXT)
     if wire is not None and any(marker in reason for marker in CONFIGURER_MARKERS):
         # The site records another configurer for the job, or none: final.
         finish_execution(instance.id, STATUS_FAILED, final_payload={**payload, "last_error": reason})

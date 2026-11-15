@@ -58,7 +58,8 @@ A run (``run_job``, its own task):
    code's own lines (how many cards wait, why none were prepared) after it.
    At most ``card_cap_day`` attempts a day across the job's slots and
    restarts (``watch_days.notices``), and a finding whose notice is still
-   open isn't raised again.
+   open isn't raised again. A ``once`` job's left notices record what they
+   told (``settings.mark_told``), which its rules leave out of later runs.
 """
 from __future__ import annotations
 
@@ -612,9 +613,16 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # ERPNext refused the reviewer's check, the cap) is told as its notice.
     # One ERPNext kept from the reviewer is told to the principal, never back
     # to the reviewer it was kept from.
+    # A finding already shown as a notice's row isn't told again on its own,
+    # unless ERPNext kept it from the reviewer: then its row comes off the
+    # reviewer's notice and its own notice goes to the principal. A once
+    # job's finding is told on its own only then: its rows say the rest.
+    notices = _without_rows(notices, made.kept_from_reviewer)
+    rows = {item.key for spec in notices for item in spec.items}
     notices = notices + [
         dataclasses.replace(s.notice, to_principal=True) if s.key in made.kept_from_reviewer else s.notice
-        for s in made.unproposed if s.notice is not None
+        for s in made.unproposed
+        if s.notice is not None and (s.key in made.kept_from_reviewer or (s.key not in rows and not job.once))
     ]
     # The cap counts attempts a day across the job's slots (watch_days), not
     # successes, so a notice that fails to store never lets another finding
@@ -622,21 +630,88 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # The principal's notices take their places first, so a morning's
     # findings never use up the day before a check kept from the reviewer.
     ordered = principal_first(notices)
+    told_before = told(job, [spec.key for spec in ordered]) if job.once and ordered else set()
+    due = [
+        spec for spec in ordered
+        if not (
+            _still_open(dedup_key(job.id, spec.key)) or _raised_today(dedup_key(job.id, spec.key), day)
+            or spec.key in told_before
+        )
+    ]
+    # The run's own lines (its route, its cards, the caps) go on the first
+    # notice left that isn't one of the principal's: those come first and
+    # may be a weekly notice told and skipped on later days. With none, on
+    # the first notice left.
+    target = _lines_target(due)
     for n, spec in enumerate(ordered):
         key = dedup_key(job.id, spec.key)
-        if _still_open(key) or _raised_today(key, day):
+        if spec not in due:
             outcome.repeats += 1
             continue
         if take_day(job.id, day, "notices", 1, job.card_cap_day) == 0:
             outcome.capped = len(ordered) - n
             break
-        if _leave_notice(
+        left = _leave_notice(
             job, day, spec, reason=reasons.get(spec.key, ""), key=key, found=_found(notices),
-            reasons=reasons, notes=tuple(made.lines) if spec is notices[0] else (),
+            reasons=reasons, notes=tuple(made.lines) if spec is target else (),
             to=_principal_id() if spec.to_principal else to,
-        ) is not None:
+        ) is not None
+        if left:
             outcome.cards += 1
+            if job.once:
+                _mark_told(job, day, spec)
+        elif spec is target:
+            # Not left after all: the next one due takes the lines.
+            target = _lines_target(due[due.index(spec) + 1:])
     return outcome
+
+
+def _lines_target(due: Sequence[registry.CardSpec]) -> registry.CardSpec | None:
+    """The notice the run's own lines go on: the first of ``due`` that isn't
+    the principal's, else the first of ``due``, else None."""
+    return next((spec for spec in due if not spec.to_principal), due[0] if due else None)
+
+
+def _without_rows(notices: list[registry.CardSpec], kept: set[str]) -> list[registry.CardSpec]:
+    """``notices`` without the rows of findings ERPNext kept from the
+    reviewer (``DraftOutcome.kept_from_reviewer``); a notice left with no
+    row and nothing it counts is dropped."""
+    if not kept:
+        return notices
+    out: list[registry.CardSpec] = []
+    for spec in notices:
+        items = tuple(item for item in spec.items if item.key not in kept)
+        if len(items) == len(spec.items):
+            out.append(spec)
+            continue
+        if not items and not spec.counted:
+            continue
+        gone = len(spec.items) - len(items)
+        out.append(dataclasses.replace(spec, items=items, count=max(spec.count - gone, 0) if spec.count else 0))
+    return out
+
+
+def _mark_told(job: registry.WatchJob, day: str, spec: registry.CardSpec) -> None:
+    """A once job's findings this left notice told: its own key, its rows'
+    and those it counts (``CardSpec.counted``), as dedupe digests. One that
+    can't be recorded is told again on the next run, never lost."""
+    from openexecutive.watch.settings import mark_told
+
+    keys = [spec.key, *(item.key for item in spec.items), *spec.counted]
+    try:
+        mark_told(job.id, [dedup_key(job.id, k) for k in keys], day)
+    except Exception:
+        logger.warning("watch: job %s's told findings couldn't be recorded", job.id)
+
+
+def told(job: registry.WatchJob, keys: Sequence[str]) -> set[str]:
+    """Which of a once job's finding ``keys`` a notice told before (its
+    rules leave them out). Raises when they can't be read: the run stops
+    rather than tell them all again."""
+    from openexecutive.watch.settings import told as told_digests
+
+    digests = {dedup_key(job.id, k): k for k in keys}
+    return {digests[d] for d in told_digests(job.id, list(digests))}
 
 
 def principal_first(notices: list[registry.CardSpec]) -> list[registry.CardSpec]:
