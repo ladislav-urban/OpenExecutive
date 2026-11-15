@@ -85,6 +85,10 @@ def alerts_db(db: Path, monkeypatch: pytest.MonkeyPatch) -> Path:  # noqa: F811
     monkeypatch.setattr("openexecutive.memory.workspace_settings.get_user_timezone", lambda *_a: ZoneInfo("UTC"))
     for var in ("OE_LOCAL_LOGIN", "OE_PUBLIC_DEPLOYMENT", "CALLER_ASSERTION_PUBLIC_KEYS"):
         monkeypatch.delenv(var, raising=False)
+    # The scheduler's own holds, which a run-now also keeps: open.
+    monkeypatch.setattr("openexecutive.scheduler.pause.is_paused", lambda: False)
+    monkeypatch.setattr("openexecutive.scheduler.runner._company_profile_active", lambda: True)
+    monkeypatch.setattr("openexecutive.scheduler.runner._rotation_pause_active", lambda: False)
     return db
 
 
@@ -1056,3 +1060,388 @@ def test_no_app_control_action_targets_the_watch_jobs_routes() -> None:
     for source in sources:
         assert "watch_jobs" not in source and "/watch/jobs" not in source
         assert "update_watch_job" not in source and "openexecutive.watch" not in source
+
+
+# --------------------------------------------------------------------------- #
+# Run once now (POST /watch/jobs/{id}/run, runner.start_now)
+# --------------------------------------------------------------------------- #
+
+NOW = datetime(2026, 11, 10, 8, 0, tzinfo=UTC)
+NOW_SLOT = "now@08:00:00"
+
+
+def _rows(job_id: str = "example") -> list[tuple[str, str, str, str]]:
+    conn = watch_settings.connect()
+    try:
+        return [tuple(r) for r in conn.execute(
+            "SELECT day, slot, status, COALESCE(error, '') FROM watch_runs WHERE job = ? ORDER BY day, started_at",
+            (job_id,),
+        )]
+    finally:
+        conn.close()
+
+
+def _start_now(job: WatchJob, now: datetime = NOW, *, inside: Any = None) -> tuple[str, str, runner.RunOutcome]:
+    """``start_now`` as the route calls it, on a loop, optionally inside
+    ``inside`` (a context manager standing for the request's own context),
+    and the run awaited."""
+
+    async def go() -> tuple[str, str, runner.RunOutcome]:
+        if inside is None:
+            day, slot = runner.start_now(job, now)
+        else:
+            with inside:
+                day, slot = runner.start_now(job, now)
+        return day, slot, await runner._tasks[job.id]
+
+    return asyncio.run(go())
+
+
+def test_run_now_reads_go_out_as_the_job_not_the_principal(
+    example: WatchJob, erp: FakeErpnext, roster: SimpleNamespace, triage: list[Any], model: SimpleNamespace,  # noqa: F811
+) -> None:
+    from openexecutive.audit.context import set_turn
+
+    erp.replies.append(_ar(("Acme Retail", 10.0)))
+    # Started from inside a principal's turn: a session bound, a turn id set.
+    # Inherited, the watch marker would refuse the read (a turn's session is
+    # bound) and rows would be filed under the request's turn.
+    with set_session(_owner_turn(roster)), set_turn(turn_id="chat:request-turn"):
+        day, slot, outcome = _start_now(example)
+    assert (day, slot) == (DAY, NOW_SLOT)
+    assert (outcome.status, outcome.cards) == ("done", 1)
+    run_now_claims = erp.claims()
+    assert (run_now_claims["kind"], run_now_claims["sub"], run_now_claims["tool"]) == ("watch", "example", "run_report")
+    usage = _audit_rows("cache_event")
+    assert [r.turn_id for r in usage] == [f"watch:example:{DAY}:{NOW_SLOT}"]
+    assert [r.actor for r in usage] == ["watch:example"]
+    # A scheduled run the next day sends its read as the very same caller
+    # (its arguments differ only by the report's date).
+    erp.replies.append(_ar(("Acme Retail", 10.0)))
+    _run(example, "2026-11-11")
+    scheduled = erp.claims()
+    assert {k: scheduled[k] for k in ("kind", "sub", "tool")} == {
+        k: run_now_claims[k] for k in ("kind", "sub", "tool")
+    }
+
+
+def test_run_now_task_has_no_request_scope(
+    example: WatchJob, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    from openexecutive.audit import context as audit_context
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    seen: dict[str, Any] = {}
+
+    async def fake_run_job(job: WatchJob, day: str, *, slot: str = "", path: Any = None) -> runner.RunOutcome:
+        seen.update(
+            session=current_session.get(), turn=audit_context._audit_turn_id.get(),
+            private=audit_context._rows_private.get(), owner=audit_context._rows_owner.get(),
+            slot=slot,
+        )
+        return runner.RunOutcome("done")
+
+    monkeypatch.setattr(runner, "run_job", fake_run_job)
+    token = audit_context._rows_private.set(True)
+    try:
+        with set_session(_owner_turn(roster)), audit_context.set_turn(turn_id="chat:request-turn"):
+            _start_now(example)
+    finally:
+        audit_context._rows_private.reset(token)
+    assert seen == {"session": None, "turn": None, "private": False, "owner": None, "slot": NOW_SLOT}
+
+
+def test_run_now_registers_its_task(
+    example: WatchJob, erp: FakeErpnext, triage: list[Any], model: SimpleNamespace,  # noqa: F811
+) -> None:
+    erp.replies.extend([_ar(("Acme Retail", 10.0))] * 2)
+
+    async def go() -> None:
+        runner.start_now(example, NOW)
+        task = runner._tasks["example"]
+        assert not task.done()
+        # While it lives: no scheduled run of the job, no second run-now.
+        assert runner.maybe_run(NOW + timedelta(minutes=1)) == 0
+        with pytest.raises(runner.RunNowRefused) as refused:
+            runner.start_now(example, NOW + timedelta(seconds=5))
+        assert refused.value.code == "already_running"
+        await task
+
+    asyncio.run(go())
+    assert len(erp.calls) == 1
+    assert _rows() == [(DAY, NOW_SLOT, "done", "")]
+
+
+def test_run_now_refused_while_running(example: WatchJob) -> None:
+    # A scheduled run still fresh.
+    assert runner.claim("example", DAY, NOW) == "run"
+    with pytest.raises(runner.RunNowRefused) as refused:
+        runner.claim_now("example", DAY, NOW_SLOT, NOW + timedelta(minutes=5))
+    assert refused.value.code == "already_running"
+    # The day's run, still fresh past midnight, holds the next day too.
+    late = datetime(2026, 11, 10, 23, 58, tzinfo=UTC)
+    conn = watch_settings.connect()
+    conn.execute("UPDATE watch_runs SET started_at = ?", (late.isoformat(),))
+    conn.close()
+    with pytest.raises(runner.RunNowRefused):
+        runner.claim_now("example", "2026-11-11", "now@00:01:00", late + timedelta(minutes=3))
+    assert [r for r in _rows() if r[1].startswith("now@")] == []
+
+
+def test_scheduled_claim_waits_for_run_now(example: WatchJob) -> None:
+    late = datetime(2026, 11, 10, 23, 58, tzinfo=UTC)
+    runner.claim_now("example", DAY, "now@23:58:00", late)
+    assert runner.claim("example", DAY, late) is None
+    # Past midnight it's another day's fresh row, and still holds the slot.
+    next_day = late + timedelta(minutes=3)
+    assert runner.claim("example", "2026-11-11", next_day) is None
+    # Once stale it's failed, never retried, and the slot runs.
+    stale = late + runner.STALE_AFTER
+    assert runner.claim("example", "2026-11-11", stale) == "run"
+    assert _rows() == [(DAY, "now@23:58:00", "failed", "run_stalled"), ("2026-11-11", "", "running", "")]
+
+
+def test_run_now_stale_row_is_failed_not_retried(
+    example: WatchJob, roster: SimpleNamespace, triage: list[Any],  # noqa: F811
+) -> None:
+    runner.claim_now("example", DAY, NOW_SLOT, NOW)
+    later = NOW + runner.STALE_AFTER
+    runner.claim_now("example", DAY, "now@08:30:00", later)
+    assert _rows() == [(DAY, NOW_SLOT, "failed", "run_stalled"), (DAY, "now@08:30:00", "running", "")]
+    # Reported as a stalled slot is: its audit row and the day's one notice.
+    [audit] = [r for r in _audit_rows("watch_run") if r.details["job"] == "example"]
+    assert audit.details["status"] == "failed" and audit.details.get("slot") == NOW_SLOT
+    assert len(_alerts()) == 1
+
+
+def test_a_run_now_whose_task_cant_start_frees_its_row(
+    example: WatchJob, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def go() -> None:
+        loop = asyncio.get_running_loop()
+
+        def broken(*_a: Any, **_k: Any) -> Any:
+            raise RuntimeError("no task")
+
+        with monkeypatch.context() as patched:
+            patched.setattr(loop, "create_task", broken)
+            with pytest.raises(RuntimeError):
+                runner.start_now(example, NOW)
+
+    asyncio.run(go())
+    assert _rows() == [(DAY, NOW_SLOT, "failed", "run_failed")] and runner._tasks == {}
+    assert runner.claim("example", DAY, NOW + timedelta(minutes=1)) == "run"
+
+
+def test_run_now_cap_per_day(example: WatchJob) -> None:
+    conn = watch_settings.connect()
+    for minute in range(runner.RUN_NOW_CAP_DAY):
+        runner.claim_now("example", DAY, f"now@08:0{minute}:00", NOW + timedelta(minutes=minute))
+        conn.execute("UPDATE watch_runs SET status = 'done' WHERE status = 'running'")
+    conn.close()
+    with pytest.raises(runner.RunNowRefused) as refused:
+        runner.claim_now("example", DAY, "now@09:00:00", NOW + timedelta(hours=1))
+    assert refused.value.code == "run_now_cap"
+    # Each company day has its own: the next one starts afresh.
+    runner.claim_now("example", "2026-11-11", "now@09:00:00", NOW + timedelta(days=1))
+    assert len([r for r in _rows() if r[1].startswith("now@")]) == runner.RUN_NOW_CAP_DAY + 1
+
+
+def test_run_now_and_the_scheduled_run_share_the_days_caps_and_make_one_card_per_finding(
+    erp: FakeErpnext, roster: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    job = _job(specs=3, cap=2)
+    monkeypatch.setitem(registry._JOBS, job.id, job)
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    _enable(job, roster.principal)
+    erp.replies.extend([_ar(("Acme Retail", 10.0), acting=None)] * 2)
+    _day, _slot, first = _start_now(job)
+    assert (first.cards, first.capped, first.repeats) == (2, 1, 0)
+    # The day's slot after it: nothing raised twice, and the cap already used.
+    runner._tasks.clear()
+    assert runner.claim(job.id, DAY, NOW + timedelta(minutes=1)) == "run"
+    second = asyncio.run(runner.run_job(job, DAY))
+    assert (second.cards, second.repeats) == (0, 2)
+    assert len(_alerts()) == 2
+
+
+def test_run_now_stops_if_job_turned_off_before_reads(
+    example: WatchJob, erp: FakeErpnext, roster: SimpleNamespace,  # noqa: F811
+) -> None:
+    async def go() -> runner.RunOutcome:
+        runner.start_now(example, NOW)
+        watch_settings.save(example, enabled=False, settings=None, reviewer_person_id=None, set_reviewer=False,
+                            configured_by_person_id=roster.principal, now=datetime.now(UTC))
+        return await runner._tasks["example"]
+
+    outcome = asyncio.run(go())
+    assert (outcome.status, outcome.error) == ("failed", "watch-job-off")
+    assert erp.calls == []
+
+
+def test_run_now_refused_when_job_or_master_off_or_the_scheduler_holds(
+    example: WatchJob, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    async def go() -> str:
+        try:
+            runner.start_now(example, NOW)
+        except runner.RunNowRefused as refused:
+            return refused.code
+        return "started"
+
+    # The scheduler's holds: paused, no company profile, a client rotation.
+    monkeypatch.setattr("openexecutive.scheduler.pause.is_paused", lambda: True)
+    assert asyncio.run(go()) == "paused"
+    monkeypatch.setattr("openexecutive.scheduler.pause.is_paused", lambda: False)
+    monkeypatch.setattr("openexecutive.scheduler.runner._company_profile_active", lambda: False)
+    assert asyncio.run(go()) == "held"
+    monkeypatch.setattr("openexecutive.scheduler.runner._company_profile_active", lambda: True)
+    monkeypatch.setattr("openexecutive.scheduler.runner._rotation_pause_active", lambda: True)
+    assert asyncio.run(go()) == "held"
+    monkeypatch.setattr("openexecutive.scheduler.runner._rotation_pause_active", lambda: False)
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "false")
+    assert asyncio.run(go()) == "job_off"
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    watch_settings.save(example, enabled=False, settings=None, reviewer_person_id=None, set_reviewer=False,
+                        configured_by_person_id=roster.principal, now=datetime.now(UTC))
+    assert asyncio.run(go()) == "job_off"
+    assert _rows() == [] and runner._tasks == {}
+
+
+@pytest.fixture
+def started(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
+    """For the route's tests: ``run_job`` stubbed (``slots``: the slots it
+    ran, ``done``: set once it has), and the route's clock at ``NOW``."""
+    import threading
+
+    state = SimpleNamespace(slots=[], done=threading.Event())
+
+    async def fake_run_job(job: WatchJob, day: str, *, slot: str = "", path: Any = None) -> runner.RunOutcome:
+        state.slots.append(slot)
+        state.done.set()
+        return runner.RunOutcome("done")
+
+    monkeypatch.setattr(runner, "run_job", fake_run_job)
+    monkeypatch.setattr(watch_route, "datetime", SimpleNamespace(now=lambda tz=None: NOW))
+    return state
+
+
+def test_run_now_route_is_the_principals_alone(
+    client: TestClient, roster: SimpleNamespace, started: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    response = client.post("/watch/jobs/example/run")
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "caller_signing_required"
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    response = client.post("/watch/jobs/example/run", headers={"x-caller-email": "ben@co.example"})
+    assert response.status_code == 403 and response.json()["detail"]["code"] == "not_yours"
+    teammate = _signed_client("ben@co.example", monkeypatch)
+    assert teammate.post("/watch/jobs/example/run").status_code == 403
+    assert started.slots == [] and _rows() == [] and _audit_rows("watch_job_run_now") == []
+
+
+def test_run_now_route_starts_one_run_answers_202_and_is_audited(
+    example: WatchJob, roster: SimpleNamespace, started: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    from fastapi import FastAPI
+
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    app = FastAPI()
+    app.include_router(watch_route.router)
+    with TestClient(app) as client:
+        # A body is never read: nothing in it reaches the run.
+        response = client.post("/watch/jobs/example/run", json={"settings": {"company": "Bolt"}, "reads": []})
+        assert response.status_code == 202, response.text
+        assert response.json() == {"day": DAY, "slot": NOW_SLOT}
+        assert started.done.wait(5)
+        again = client.post("/watch/jobs/example/run")
+    assert started.slots == [NOW_SLOT]
+    # The fake left the row running: the second ask is refused.
+    assert again.status_code == 409 and again.json()["detail"]["code"] == "already_running"
+    rows = {r.details["outcome"]: r for r in _audit_rows("watch_job_run_now")}
+    first, second = rows["started"], rows["already_running"]
+    assert first.private and first.actor == "api"
+    assert first.details == {
+        "job": "example", "outcome": "started", "day": DAY, "slot": NOW_SLOT, "person_id": roster.principal,
+    }
+    assert second.details["outcome"] == "already_running" and second.details["slot"] == ""
+
+
+def test_run_now_route_refusals_and_a_store_error(
+    client: TestClient, example: WatchJob, roster: SimpleNamespace, started: SimpleNamespace,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sqlite3
+
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+
+    def broken(*_a: Any, **_k: Any) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+    real = runner.claim_now
+    monkeypatch.setattr(runner, "claim_now", broken)
+    response = client.post("/watch/jobs/example/run")
+    assert response.status_code == 503 and response.json()["detail"]["code"] == "run_now_unavailable"
+    assert "locked" not in response.text
+    monkeypatch.setattr(runner, "claim_now", real)
+    watch_settings.save(example, enabled=False, settings=None, reviewer_person_id=None, set_reviewer=False,
+                        configured_by_person_id=roster.principal, now=datetime.now(UTC))
+    response = client.post("/watch/jobs/example/run")
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "job_off"
+    assert sorted(r.details["outcome"] for r in _audit_rows("watch_job_run_now")) == ["job_off", "unavailable"]
+    assert _rows() == [] and runner._tasks == {}
+
+
+def test_run_now_route_cap_answers_429(
+    client: TestClient, example: WatchJob, started: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    conn = watch_settings.connect()
+    for minute in range(runner.RUN_NOW_CAP_DAY):
+        runner.claim_now("example", DAY, f"now@07:0{minute}:00", NOW - timedelta(minutes=50 - minute))
+        conn.execute("UPDATE watch_runs SET status = 'done' WHERE status = 'running'")
+    conn.close()
+    response = client.post("/watch/jobs/example/run")
+    assert response.status_code == 429 and response.json()["detail"]["code"] == "run_now_cap"
+    assert started.slots == []
+
+
+@pytest.mark.parametrize("path", [
+    "/watch/jobs/%20bank-matching/run",
+    "/watch/jobs/bank-matching%20/run",
+    "/watch/jobs/Bank-Matching/run",
+    "/watch/jobs/bank-matching%C2%A0/run",
+    "/watch/jobs/bank%E2%80%90matching/run",
+    "/watch/jobs/bank-matching%2F/run",
+    "/watch/jobs/bank-matching//run",
+    "/watch/jobs/payment-check/run",
+])
+def test_run_now_unknown_or_padded_job_is_404(
+    client: TestClient, started: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, path: str,
+) -> None:
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    response = client.post(path)
+    assert response.status_code == 404, (path, response.status_code)
+    assert "bank" not in response.text.lower() and "payment" not in response.text.lower()
+    assert started.slots == [] and _audit_rows("watch_job_run_now") == []
+    # The real id is found (and refused only because it's off).
+    exact = client.post("/watch/jobs/bank-matching/run")
+    assert exact.status_code == 409 and exact.json()["detail"]["code"] == "job_off"
+
+
+def test_the_settings_list_shows_a_run_now_as_one(
+    client: TestClient, example: WatchJob, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    assert runner.claim("example", DAY, NOW - timedelta(hours=1)) == "run"
+    conn = watch_settings.connect()
+    conn.execute("UPDATE watch_runs SET status = 'done'")
+    conn.close()
+    runner.claim_now("example", DAY, NOW_SLOT, NOW)
+    response = client.get("/watch/jobs")
+    assert response.status_code == 200
+    [job] = [j for j in response.json()["jobs"] if j["id"] == "example"]
+    assert job["last_run"] == {
+        "day": DAY, "slot": "", "status": "running", "cards": 0, "error": "", "run_now": True,
+    }
+    assert job["slots"] == [] or all(not s.startswith("now@") for s in job["slots"])

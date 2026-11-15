@@ -11,6 +11,15 @@ Routes:
                           principal or a demo person, else 400). Records who
                           configured it and writes a ``watch_job_configured``
                           audit row.
+  POST /watch/jobs/{id}/run — run a job once now (202, the run's day and
+                          slot), so a fix in ERPNext needn't wait for its
+                          next slot: one ordinary run (``runner.start_now``),
+                          sharing the day's caps with its slots. 409
+                          ``job_off`` / ``paused`` / ``held`` /
+                          ``already_running``, 429
+                          ``run_now_cap`` (3 a day), 503 when the store
+                          can't be read; each writes a ``watch_job_run_now``
+                          audit row of codes only.
 
 The reviewer gets the job's notices and its draft cards
 (``watch.cards.route``); ``REVIEWER_NOTE`` says so, for Settings to show.
@@ -22,7 +31,7 @@ Both need the API to know the caller is the principal
 login's operator): 409 ``caller_signing_required`` when it can't tell,
 403 ``not_yours`` when it's someone else. A job is defined in code only, so
 there is no route that adds one, and no chat action calls these
-(``app_control``): a job is turned on by a tap, never a turn.
+(``app_control``): a job is turned on, or run now, by a tap, never a turn.
 """
 from __future__ import annotations
 
@@ -65,11 +74,21 @@ def _principal(request: Request) -> Any:
 
 class WatchRunOut(BaseModel):
     day: str
-    # Its slot that day ("HH:MM"); "" for a job that runs once a day.
+    # Its slot that day ("HH:MM"); "" for a job that runs once a day or a
+    # run the principal asked for (``run_now``).
     slot: str = ""
     status: str
     cards: int
     error: str
+    # A run started with POST /watch/jobs/{id}/run, not at a slot.
+    run_now: bool = False
+
+
+class RunNowOut(BaseModel):
+    # The company's day the run counts towards, and its run's key that day
+    # ("now@HH:MM:SS", company time).
+    day: str
+    slot: str
 
 
 # What Settings shows beside a job's reviewer, in its own words.
@@ -125,14 +144,20 @@ def _last_run(job_id: str) -> WatchRunOut | None:
     try:
         row = conn.execute(
             f"SELECT day, slot, status, cards, error FROM {RUNS_TABLE} "  # noqa: S608
-            "WHERE job = ? AND status != 'skipped' ORDER BY day DESC, slot DESC LIMIT 1",
+            "WHERE job = ? AND status != 'skipped' ORDER BY day DESC, started_at DESC, slot DESC LIMIT 1",
             (job_id,),
         ).fetchone()
     finally:
         conn.close()
+    if not row:
+        return None
+    from openexecutive.watch.runner import RUN_NOW_PREFIX
+
+    run_now = str(row[1] or "").startswith(RUN_NOW_PREFIX)
     return WatchRunOut(
-        day=row[0], slot=row[1] or "", status=row[2], cards=int(row[3] or 0), error=row[4] or "",
-    ) if row else None
+        day=row[0], slot="" if run_now else row[1] or "", status=row[2], cards=int(row[3] or 0),
+        error=row[4] or "", run_now=run_now,
+    )
 
 
 def _job_out(job: Any) -> WatchJobOut:
@@ -245,3 +270,48 @@ def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> Wat
         private=True,
     )
     return _job_out(job)
+
+
+# What a refused run-now answers, by code: status and our words.
+_RUN_NOW_REFUSALS: dict[str, tuple[int, str]] = {
+    "job_off": (409, "Turn the job on first: only a job that's on runs."),
+    "paused": (409, "Autonomous work is paused. Resume it first."),
+    "held": (409, "Jobs are on hold until the company is set up, or while it's being switched."),
+    "already_running": (409, "The job is running now. Try again once it's done."),
+    "run_now_cap": (429, "The job has already been run on request 3 times today."),
+}
+
+
+@router.post("/watch/jobs/{job_id}/run", status_code=202, response_model=RunNowOut)
+async def run_watch_job_now(job_id: str, request: Request) -> RunNowOut:
+    """Run the job once now, for the principal alone. The run goes on after
+    the answer: its outcome is the job's next ``last_run``."""
+    from openexecutive.audit import log_event
+    from openexecutive.watch import registry, runner
+
+    principal = _principal(request)
+    job = registry.get(job_id)
+    if job is None:
+        raise _refuse(404, "unknown_job", "There's no such watch job.")
+    day = slot = ""
+    try:
+        day, slot = runner.start_now(job, datetime.now(UTC))
+        outcome = "started"
+    except runner.RunNowRefused as refused:
+        outcome = refused.code
+    except Exception:
+        logger.error("watch: couldn't start job %s on request", job.id)
+        outcome = "unavailable"
+    log_event(
+        "watch_job_run_now",
+        f"Watch job {job.id} run on request: {outcome}",
+        actor=api_caller.actor(request),
+        details={"job": job.id, "outcome": outcome, "day": day, "slot": slot, "person_id": principal.id},
+        private=True,
+    )
+    if outcome == "unavailable":
+        raise _refuse(503, "run_now_unavailable", "The job couldn't be started. Try again in a minute.")
+    if outcome != "started":
+        status_code, message = _RUN_NOW_REFUSALS[outcome]
+        raise _refuse(status_code, outcome, message)
+    return RunNowOut(day=day, slot=slot)
