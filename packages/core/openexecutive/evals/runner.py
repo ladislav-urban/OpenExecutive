@@ -56,6 +56,13 @@ answers a supplier's agent over A2A (``integrations.erpnext_a2a_agent``) on
 one message, its tools answering from the scenario's documents as
 oe_connector would (``supplier_tools``), and ``judge_supplier`` scores the
 reply. Nothing reaches ERPNext.
+
+A ``watch_reason`` scenario (``type: watch_reason``) runs a watch job's model
+"reason" line on the real fast model through the job's own reason step
+(``watch.runner.reason_lines``), on findings the job's own code builds from
+the scenario's figures and team update (``scenarios.scenario_watch_reason``).
+``judge_watch_reason`` scores the lines that reach the notice. Nothing reaches
+ERPNext and no notice is left.
 """
 from __future__ import annotations
 
@@ -73,9 +80,11 @@ from openexecutive.evals.judges import (
     judge_inbox,
     judge_supplier,
     judge_triage,
+    judge_watch_reason,
     judge_workflow,
 )
 from openexecutive.evals.scenarios import (
+    WATCH_REASON,
     SupplierCase,
     forbidden_words_in,
     load_scenarios,
@@ -88,6 +97,7 @@ from openexecutive.evals.scenarios import (
     scenario_supplier,
     scenario_turn_surface,
     scenario_voice_persona,
+    scenario_watch_reason,
     seed_prior_turns,
     view_kinds_check,
 )
@@ -210,6 +220,8 @@ def _make_run_one(
         return _make_outcome_runner(run_inbox_scenario, sem, queue, passed, total, cancel_event)
     if kind == "supplier":
         return _make_outcome_runner(run_supplier_scenario, sem, queue, passed, total, cancel_event)
+    if kind == WATCH_REASON:
+        return _make_outcome_runner(run_watch_reason_scenario, sem, queue, passed, total, cancel_event)
     if kind == "workflow":
         return _make_workflow_runner(store, sem, queue, passed, total, cancel_event)
     # chat (default) and mcp both go through Executive.chat; mcp with the
@@ -419,6 +431,51 @@ async def run_supplier_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         if again:
             scores["repeated_text"] = again
             passed = False
+    return {"outcome": outcome, "scores": scores, "passed": passed}
+
+
+async def run_watch_reason_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    """One ``type: watch_reason`` scenario: the job's own reason step
+    (``watch.runner.reason_lines``, what ``reason_step`` runs: the job's
+    ``ReasonSchema`` and instruction, the runner's constant system prompt,
+    the configured fast model, then its cleaning and ``no_digits`` filter)
+    on the scenario's findings, built by the job's own code;
+    ``{"outcome", "scores", "passed"}``. Nothing is stored and no notice is
+    left."""
+    from openexecutive.watch.runner import reason_lines
+
+    case = scenario_watch_reason(scenario)
+    if case is None:
+        raise ValueError("watch_reason scenarios require a `watch_reason` block")
+    kept, dropped = await reason_lines(case.job, [f.spec for f in case.findings])
+    outcome = {
+        "job": case.job.id,
+        "findings": [
+            {
+                "finding": f.label,
+                "facts": dict(f.spec.facts),
+                "line": kept.get(f.spec.key),
+                "dropped": dropped.get(f.spec.key),
+            }
+            for f in case.findings
+        ],
+    }
+    scores = await judge_watch_reason(scenario, outcome)
+    passed = float(scores.get("overall", 0)) >= _PASS_THRESHOLD
+    # Deterministic checks the judge's score can't outvote: a line the
+    # scenario says must (or must not) reach the notice, and a word no line
+    # on it may say. Only kept lines count: a dropped one is never shown.
+    wrong = [
+        f.label for f in case.findings
+        if f.expect_line is not None and (f.spec.key in kept) != f.expect_line
+    ]
+    if wrong:
+        scores["expect_line_unmet"] = wrong
+        passed = False
+    said = forbidden_words_in(scenario, "\n".join(kept.values()))
+    if said:
+        scores["forbidden_reply_words"] = said
+        passed = False
     return {"outcome": outcome, "scores": scores, "passed": passed}
 
 

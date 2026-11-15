@@ -1,0 +1,21 @@
+id: watch_project_status_001
+domain: watch
+type: watch_reason
+description: "Project status, a late and over-budget project with a plain update. The project is twelve days late, three tasks are late, its cost is forty percent over the estimate (forty-eight hours over), and the team's update says why without a number. The model line on the Friday notice says in words that the project is behind and over its estimate and why, states no figure in digits or words, and never calls it on track or within budget."
+watch_reason:
+  job: project-status
+  findings:
+    - project: Riverside fit-out
+      days_late: 12
+      late_tasks: 3
+      percent_over: 40
+      hours_over: 48
+      percent_complete: 55
+      update: "The flooring supplier delivered late and the electrical rough-in had to be redone after the inspection. We brought in another crew this week and are working through the snag list before handover."
+      expect_line: true
+quality_criteria:
+  says_in_words_the_project_is_behind_schedule_and_over_its_estimate: true
+  explains_why_from_the_teams_update: true
+  states_no_figure_in_digits_or_words: true
+  does_not_contradict_the_figures: true
+  adds_no_fact_that_is_not_in_the_figures_or_the_update: true

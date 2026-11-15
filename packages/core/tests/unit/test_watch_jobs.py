@@ -203,6 +203,7 @@ def test_jobs_are_code_only_and_phases_1_to_3_list_theirs() -> None:
         invoice_capture,
         late_deliveries,
         payment_checks,
+        project_status,
         quote_follow_up,
     )
 
@@ -211,7 +212,7 @@ def test_jobs_are_code_only_and_phases_1_to_3_list_theirs() -> None:
         registry.JOBS["x"] = _example.JOB  # type: ignore[index]
     assert registry._LISTED == (
         collections.JOB, payment_checks.JOB, bank_matching.JOB, invoice_capture.JOB, quote_follow_up.JOB,
-        late_deliveries.JOB, bank_rules.JOB,
+        late_deliveries.JOB, project_status.JOB, bank_rules.JOB,
     )
     # The test job is put in by the tests alone.
     assert _example.JOB_ID not in registry.JOBS
@@ -935,7 +936,7 @@ def test_the_principal_configures_a_job_and_it_is_recorded(
     assert listed["master_switch"] is True
     assert [j["id"] for j in listed["jobs"]] == [
         "bank-matching", "bank-rules", "collections", "example", "invoice-capture", "late-deliveries",
-        "payment-checks", "quote-follow-up",
+        "payment-checks", "project-status", "quote-follow-up",
     ]
     response = client.put("/watch/jobs/example", json={
         "enabled": False, "settings": {"company": "Bolt Industries", "limit": 50}, "reviewer_person_id": roster.teammate,
