@@ -1067,26 +1067,49 @@ _BARRED_RE = re.compile(
 )
 
 
-# Latin letters that don't decompose to an ASCII one but read as it.
-_LOOK_ALIKES = {"\u0131": "i", "\u0251": "a", "\u029f": "l", "\u0269": "i", "\u0261": "g", "\u0278": "f"}
-# Letters of real names that stay themselves after folding (Straße, Łódź, Søren).
-_KEPT_LETTERS = frozenset("ßøæœłđþðŋ")
-# The micro sign is a unit, not a Greek letter.
-_MICRO = "\u00b5"
+# Latin letters that don't decompose to an ASCII one but read as it, for
+# the folded copy the word list is matched on. The letters of real names
+# (ß ø æ œ ł đ þ ð ŋ) are here too: kept on the line itself, folded for the
+# words ("apprøve", "łink" are caught). The micro sign, which plain() has
+# made Greek mu by now, folds to "u" ("μrl" is caught as "url").
+_LOOK_ALIKES = {
+    "\u0131": "i", "\u0251": "a", "\u029f": "l", "\u0269": "i", "\u0261": "g", "\u0278": "f",
+    "\u00f8": "o", "\u00d8": "o", "\u0142": "l", "\u0141": "l", "\u0111": "d", "\u0110": "d",
+    "\u00e6": "ae", "\u00c6": "ae", "\u0153": "oe", "\u0152": "oe", "\u00df": "ss", "\u1e9e": "ss",
+    "\u00fe": "th", "\u00de": "th", "\u00f0": "d", "\u00d0": "d", "\u014b": "n", "\u014a": "n",
+    "\u03bc": "u", "\u00b5": "u",
+}
+# Letters that may stay on a kept line though they aren't ASCII: the letters
+# of real names (Straße, Łódź, Søren), and the micro sign as plain() leaves it.
+_KEPT_LETTERS = frozenset("ßẞøØæÆœŒłŁđĐþÞðÐŋŊ\u03bc\u00b5")
+# A letter inside a symbol: "NEGATIVE SQUARED LATIN CAPITAL LETTER P" (🅿),
+# "CIRCLED LATIN SMALL LETTER A", "REGIONAL INDICATOR SYMBOL LETTER Y".
+_SYMBOL_LETTER_RE = re.compile(r"(?:LATIN (?:CAPITAL|SMALL) LETTER|SYMBOL LETTER) ([A-Z])$")
 
 
 def _fold_letter(ch: str) -> str:
-    """One character as the word list should read it: accents and other
-    marks dropped (NFKD), compatibility forms folded, a small capital or a
-    look-alike Latin letter as its ASCII letter."""
+    """One character as the word list should read it: every mark dropped
+    (Unicode category M, after NFKD), compatibility forms folded, a small
+    capital, a look-alike or a name's letter, or a letter inside a symbol as
+    its ASCII letter."""
+    if ch in _LOOK_ALIKES:
+        return _LOOK_ALIKES[ch]
+    if unicodedata.category(ch).startswith("M"):
+        return ""
     name = unicodedata.name(ch, "")
     if name.startswith("LATIN LETTER SMALL CAPITAL "):
         tail = name.removeprefix("LATIN LETTER SMALL CAPITAL ")
         if len(tail) == 1:
             return tail.lower()
-    if ch in _LOOK_ALIKES:
-        return _LOOK_ALIKES[ch]
-    return "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+    base = "".join(
+        _LOOK_ALIKES.get(c, c) for c in unicodedata.normalize("NFKD", ch)
+        if not unicodedata.category(c).startswith("M")
+    )
+    if not base.isascii():
+        symbol = _SYMBOL_LETTER_RE.search(name)
+        if symbol is not None:
+            return symbol.group(1).lower()
+    return base
 
 
 def _folded(line: str) -> str:
@@ -1101,7 +1124,8 @@ def has_barred_word(line: str) -> bool:
     outside a few letters of real names (ß, ø, æ, œ, ł, đ, þ, ð, ŋ), so a
     Cyrillic or Greek look-alike ("lіnk") can't pass the word list.
 
-    Kept: accented names (café, Müller, Łódź, Straße) and the micro sign.
+    Kept: accented names (café, Müller, Łódź, Straße) and the micro sign;
+    their letters still fold for the word list ("apprøve", "łink" are caught).
     A project named in another script (Greek, Cyrillic, CJK, Arabic) has its
     model line dropped every run, by design: its notice still carries its
     own figures, and the run's detail counts the drop."""
@@ -1112,10 +1136,9 @@ def has_barred_word(line: str) -> bool:
         category = unicodedata.category(ch)
         if category == "Sc":
             return True
-        if ch == _MICRO or not category.startswith("L") or ch.isascii():
+        if ch in _KEPT_LETTERS or not category.startswith("L") or ch.isascii():
             continue
-        base = _fold_letter(ch)
-        if not (base.isascii() or all(c.lower() in _KEPT_LETTERS for c in base)):
+        if not _fold_letter(ch).isascii():
             return True
     return False
 
