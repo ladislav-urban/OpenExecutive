@@ -1214,6 +1214,34 @@ def test_run_now_stale_row_is_failed_not_retried(
     assert len(_alerts()) == 1
 
 
+def test_a_slow_run_now_whose_task_lives_is_never_marked_stalled(
+    example: WatchJob, roster: SimpleNamespace, triage: list[Any],  # noqa: F811
+) -> None:
+    """The review of ladislav-urban/OpenExecutive#239 (LOW): a run-now past
+    STALE_AFTER whose task is still alive in this process is slow, not
+    stalled. Marking it would leave a run_stalled notice that its own
+    _finish then contradicts."""
+    later = NOW + runner.STALE_AFTER + timedelta(minutes=5)
+
+    async def go() -> None:
+        gate = asyncio.Event()
+        runner.claim_now("example", DAY, NOW_SLOT, NOW)
+        runner._tasks["example"] = asyncio.get_running_loop().create_task(gate.wait())  # type: ignore[assignment]
+        with pytest.raises(runner.RunNowRefused) as refused:
+            runner.claim_now("example", DAY, "now@08:40:00", later)
+        assert refused.value.code == "already_running"
+        assert runner.claim("example", DAY, later) is None
+        gate.set()
+        await runner._tasks["example"]
+
+    asyncio.run(go())
+    assert _rows() == [(DAY, NOW_SLOT, "running", "")]
+    assert [r for r in _audit_rows("watch_run") if r.details["job"] == "example"] == [] and _alerts() == []
+    # Once its task is gone, the same row is stalled as before.
+    runner.claim_now("example", DAY, "now@08:40:00", later)
+    assert _rows()[0] == (DAY, NOW_SLOT, "failed", "run_stalled")
+
+
 def test_a_run_now_whose_task_cant_start_frees_its_row(
     example: WatchJob, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
