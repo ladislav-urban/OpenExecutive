@@ -539,20 +539,24 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
         result = json.loads(raw)
     except (TypeError, ValueError, RecursionError):
         # A plain-text refusal ("Tool error: …") is not JSON.
-        raise _Stop(_refusal_reason(raw), read.label, unreadable_value(raw)) from None
+        raise _Stop(_refusal_reason(raw), read.label, unreadable_value(raw, job.id, read.tool)) from None
     if isinstance(result, dict) and "error" in result:
         said = result.get("error")
-        raise _Stop(_refusal_reason(said), read.label, unreadable_value(said))
+        raise _Stop(_refusal_reason(said), read.label, unreadable_value(said, job.id, read.tool))
     return result
 
 
 # oe_connector's watch._unreadable_in (ladislav-urban/oe_connector#578): a
 # $customers, $parties or $projects list whose only fault is a name the call's
 # user can't read is refused naming the first such name, as Python's repr,
-# cut to its first MAX_NAMED characters.
+# cut to its first MAX_NAMED characters. The whole text must be its
+# WatchRefused (watch.check_scope) for this job and read: a record's own
+# string echoed elsewhere in some other error can't name a value to drop.
 _UNREADABLE_RE = re.compile(
-    r": (?P<name>'(?:[^'\\\n]|\\.){1,600}'|\"(?:[^\"\\\n]|\\.){1,600}\") "
-    r"isn't a (?P<doctype>Customer|Supplier|Project) the call's user may read"
+    r"The watch job '(?P<job>[a-z0-9-]{1,40})' lists (?P<tool>[a-z0-9_]{1,64}), "
+    r"but not with these arguments: (?P<where>[A-Za-z0-9_.\[\]]{1,200}): "
+    r"(?P<name>'(?:[^'\\\n]|\\.){1,600}'|\"(?:[^\"\\\n]|\\.){1,600}\") "
+    r"isn't a (?P<doctype>Customer|Supplier|Project) the call's user may read\."
 )
 _LIST_SLOT_OF = {"Customer": "$customers", "Supplier": "$parties", "Project": "$projects"}
 # oe_connector's MAX_NAMED: a name this long may have been cut, so it can't
@@ -560,16 +564,17 @@ _LIST_SLOT_OF = {"Customer": "$customers", "Supplier": "$parties", "Project": "$
 MAX_NAMED = 140
 
 
-def unreadable_value(said: object) -> tuple[str, str] | None:
-    """The list slot and the value oe_connector's refusal names as one the
-    call's user may not read, or None for any other refusal. Read from the
-    text only to drop that one value; the text is never kept."""
+def unreadable_value(said: object, job_id: str, tool: str) -> tuple[str, str] | None:
+    """The list slot and the value oe_connector's refusal of ``job_id``'s
+    ``tool`` call names as one the call's user may not read, or None for any
+    other text: the whole of it must be that refusal (``fullmatch``), for
+    this job and tool. Read only to drop that one value; never kept."""
     import ast
 
     if not isinstance(said, str):
         return None
-    found = _UNREADABLE_RE.search(said)
-    if found is None:
+    found = _UNREADABLE_RE.fullmatch(said)
+    if found is None or found["job"] != job_id or found["tool"] != tool:
         return None
     try:
         name = ast.literal_eval(found["name"])

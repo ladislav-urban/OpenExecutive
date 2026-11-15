@@ -1160,27 +1160,64 @@ def test_the_run_day_check_count_survives_into_the_detail(
 # --------------------------------------------------------------------------- #
 
 
+RECORD_TOOL = "customer_payment_record"
+
+
+def _unreadable_text(name: str, doctype: str = "Customer", *, job: str = "collections", tool: str = RECORD_TOOL,
+             where: str = "customers") -> str:
+    """oe_connector's WatchRefused text for an unreadable list value
+    (watch.check_scope and _unreadable_in, ladislav-urban/oe_connector#578)."""
+    return (f"The watch job '{job}' lists {tool}, but not with these arguments: "
+            f"{where}: {name[:140]!r} isn't a {doctype} the call's user may read.")
+
+
 def _unreadable(name: str, doctype: str = "Customer") -> str:
-    return json.dumps({"error": f"watch_arguments: customers: {name!r} isn't a {doctype} the call's user may read"})
+    return json.dumps({"error": _unreadable_text(name, doctype)})
+
+
+def _named(said: object, job: str = "collections", tool: str = RECORD_TOOL) -> tuple[str, str] | None:
+    return runner.unreadable_value(said, job, tool)
 
 
 def test_a_refusal_names_one_unreadable_value_and_nothing_else() -> None:
-    assert runner.unreadable_value(json.loads(_unreadable("Big Old Ltd"))["error"]) == ("$customers", "Big Old Ltd")
-    assert runner.unreadable_value(json.loads(_unreadable("O'Brien & Sons"))["error"]) == ("$customers", "O'Brien & Sons")
-    assert runner.unreadable_value(json.loads(_unreadable("Lumen", "Supplier"))["error"]) == ("$parties", "Lumen")
-    assert runner.unreadable_value(json.loads(_unreadable("Northgate", "Project"))["error"]) == ("$projects", "Northgate")
-    # oe_connector's own text, with the field's path in front.
-    assert runner.unreadable_value(
-        "filters.project: 'PROJ-0007' isn't a Project the call's user may read"
-    ) == ("$projects", "PROJ-0007")
+    assert _named(_unreadable_text("Big Old Ltd")) == ("$customers", "Big Old Ltd")
+    assert _named(_unreadable_text("O'Brien & Sons")) == ("$customers", "O'Brien & Sons")
+    assert _named(_unreadable_text('Say "hi" O\'Neil')) == ("$customers", 'Say "hi" O\'Neil')
+    assert _named(_unreadable_text("Lumen", "Supplier")) == ("$parties", "Lumen")
+    project = _unreadable_text("PROJ-0007", "Project", job="project-status", tool="list_records", where="filters.project[1]")
+    assert _named(project, "project-status", "list_records") == ("$projects", "PROJ-0007")
     # A name oe_connector may have cut (140 characters) is never retried: its
     # first 140 characters could be another name the job sent.
-    assert runner.unreadable_value(json.loads(_unreadable("x" * 139))["error"]) == ("$customers", "x" * 139)
-    assert runner.unreadable_value(json.loads(_unreadable("x" * 140))["error"]) is None
+    assert _named(_unreadable_text("x" * 139)) == ("$customers", "x" * 139)
+    assert _named(_unreadable_text("x" * 141)) is None
     for said in ("customers isn't a customers", "Permission denied", "", None,
-                 "customers: 'x' isn't a Employee the call's user may read",
-                 "customers: x isn't a Customer the call's user may read"):
-        assert runner.unreadable_value(said) is None, said
+                 _unreadable_text("x", "Employee"),
+                 _unreadable_text("x").replace("'x'", "x"),
+                 # Only this job's refusal of this read.
+                 _unreadable_text("x", job="late-deliveries"),
+                 _unreadable_text("x", tool="list_records"),
+                 # The whole text, nothing before or after it.
+                 "Error: " + _unreadable_text("x"),
+                 _unreadable_text("x") + " Also: 'y'",
+                 _unreadable_text("x")[:-1]):
+        assert _named(said) is None, said
+
+
+def test_a_record_string_echoed_in_another_error_never_names_a_value() -> None:
+    """The review of ladislav-urban/OpenExecutive#237 (LOW): a project named
+    "X: 'Y' isn't a Project the call's user may read" echoed in some other
+    error must not steer the runner into dropping Y, a value it did send."""
+    planted = "X: 'Y' isn't a Customer the call's user may read"
+    for said in (
+        f"Could not read {planted}",
+        f"customers: {planted}",
+        f"The watch job 'collections' lists {RECORD_TOOL}, but not with these arguments: customers: {planted}.",
+        _unreadable_text("A") + " " + _unreadable_text("Y"),
+    ):
+        assert _named(said) is None, said
+    # The value a real refusal names may itself hold the phrase: it's the
+    # whole repr, so the name is all of it.
+    assert _named(_unreadable_text(planted)) == ("$customers", planted)
 
 
 def test_one_unreadable_customer_is_dropped_and_the_read_asked_once_more(
