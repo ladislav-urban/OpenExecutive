@@ -195,9 +195,10 @@ def _job(job_id: str = "capped", *, specs: int = 3, cap: int = 1, reason: bool =
 # --------------------------------------------------------------------------- #
 
 
-def test_jobs_are_code_only_and_phases_1_and_2_list_theirs() -> None:
+def test_jobs_are_code_only_and_phases_1_to_3_list_theirs() -> None:
     from openexecutive.watch.jobs import (
         bank_matching,
+        bank_rules,
         collections,
         invoice_capture,
         late_deliveries,
@@ -210,7 +211,7 @@ def test_jobs_are_code_only_and_phases_1_and_2_list_theirs() -> None:
         registry.JOBS["x"] = _example.JOB  # type: ignore[index]
     assert registry._LISTED == (
         collections.JOB, payment_checks.JOB, bank_matching.JOB, invoice_capture.JOB, quote_follow_up.JOB,
-        late_deliveries.JOB,
+        late_deliveries.JOB, bank_rules.JOB,
     )
     # The test job is put in by the tests alone.
     assert _example.JOB_ID not in registry.JOBS
@@ -933,8 +934,8 @@ def test_the_principal_configures_a_job_and_it_is_recorded(
     listed = client.get("/watch/jobs").json()
     assert listed["master_switch"] is True
     assert [j["id"] for j in listed["jobs"]] == [
-        "bank-matching", "collections", "example", "invoice-capture", "late-deliveries", "payment-checks",
-        "quote-follow-up",
+        "bank-matching", "bank-rules", "collections", "example", "invoice-capture", "late-deliveries",
+        "payment-checks", "quote-follow-up",
     ]
     response = client.put("/watch/jobs/example", json={
         "enabled": False, "settings": {"company": "Bolt Industries", "limit": 50}, "reviewer_person_id": roster.teammate,
