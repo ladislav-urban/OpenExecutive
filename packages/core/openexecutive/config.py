@@ -1635,7 +1635,9 @@ class Settings(BaseSettings):
     # The demo company `openexecutive demo-reset --bundle <dir>` may load
     # (cli/demo_reset.py): its bundle must name exactly this company.
     # Empty (the default) refuses every bundle, so a real company is never
-    # replaced by one.
+    # replaced by one. It also lets the invoice-capture job accept the demo's
+    # simulated supplier mail ("demo-simulated") for exactly this company
+    # (integrations/erpnext_fill.demo_simulated); empty, never.
     demo_reset_company: str = Field("", max_length=200, alias="DEMO_RESET_COMPANY")
     # The web app's SSO issuer, read here only so the sync can refuse a
     # directory other than the one people sign in through.

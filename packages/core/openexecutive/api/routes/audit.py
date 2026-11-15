@@ -448,10 +448,17 @@ class AuditLogRequest(BaseModel):
     details: dict[str, Any] | None = None
 
 
+CODE_ONLY_EVENT_TYPES = frozenset({"watch_proposal", "watch_run", "watch_job_configured"})
+
+
 @router.post("/audit/log", status_code=201)
 def create_audit_log(body: AuditLogRequest, request: Request) -> dict[str, int | None]:
     if body.event_type not in EVENT_TYPES:
         raise HTTPException(status_code=422, detail=f"Unknown event_type: {body.event_type!r}")
+    if body.event_type in CODE_ONLY_EVENT_TYPES:
+        # Rows only a watch job's own code writes (a proposal's seal, a run's
+        # counts): never posted, or the record that checks ERPNext's log could be padded.
+        raise HTTPException(status_code=422, detail=f"{body.event_type!r} is written by the app itself")
     audit = _resolve_logger(request)
     row_id = audit.log(
         body.event_type,

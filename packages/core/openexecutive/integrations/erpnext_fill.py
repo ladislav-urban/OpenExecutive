@@ -22,6 +22,16 @@ card only when the mail's own From address was confirmed as it arrived
 or to quarantine it with the account's own authserv-id check passed for
 this mail. oe_connector refuses the same cases (``draft_fill.fills``).
 
+**The demo's simulated supplier** (``demo_simulated``,
+ladislav-urban/oe_connector#564): a demo installation's "Do it" hands a mail
+from a ``.example`` supplier to ERPNext's own receiving code, and oe_connector
+marks it ``sender_checked: "demo-simulated"``, its policy never looked up.
+This side accepts that value only when ``DEMO_RESET_COMPANY`` is set and the
+draft's company is exactly it, read again at every check, approval included;
+anywhere else it is a notice, never a card. The card says the sender is
+simulated. This only decides whether a card is shown: oe_connector's own gate
+runs again at fill, and that is what decides.
+
 **Off two ways besides the job,** each checked again at approval
 (``approval_refusal``): ``ERPNEXT_INVOICE_FILL`` on this server, and the pin
 (``draft_fill_purchase_invoice`` pinned and found with that definition).
@@ -62,7 +72,16 @@ SOURCES = ("Purchase Order", "Purchase Receipt")
 # oe_connector's draft_fill._BILL_NO_RE: what a bill number may be.
 BILL_NO_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9 ./_\-]{0,39}")
 DMARC_CHECKED = "dmarc-enforced"
-POLICIES = ("reject", "quarantine", "none", "missing", "lookup_failed")
+# oe_connector's mail_simulated: the demo's simulated supplier mail, and its
+# policy, never looked up (a .example domain has no DMARC record).
+DEMO_SIMULATED = "demo-simulated"
+SIMULATED_POLICY = "not checked: simulated"
+_SIMULATED_FROM_RE = re.compile(r"[a-z0-9._%+-]{1,64}@(?:[a-z0-9-]{1,63}\.)+example")
+SIMULATED_LINE = (
+    "Sender simulated for the demo: on a real installation, only a mail whose sender's domain is "
+    "DMARC-checked can fill an invoice."
+)
+POLICIES = ("reject", "quarantine", "none", "missing", "lookup_failed", SIMULATED_POLICY)
 MAX_ROWS = 100
 MAX_PEOPLE = 20
 # The job's amount_cap_day: its default and the most it may be set to.
@@ -164,14 +183,37 @@ def company_today() -> date:
 # --------------------------------------------------------------------------- #
 
 
+def demo_simulated(facts: Mapping[str, Any]) -> bool:
+    """Whether ``facts`` are the demo's simulated supplier mail on this demo
+    installation: ``demo-simulated`` with its unchecked policy and a
+    reserved ``.example`` From (RFC 2606, never a real domain), and the draft's company exactly this server's
+    ``DEMO_RESET_COMPANY`` (set only on a demo installation), read now. No
+    other setting turns it on."""
+    from openexecutive.config import get_settings
+
+    if not isinstance(facts, Mapping) or facts.get("sender_checked") != DEMO_SIMULATED:
+        return False
+    demo = (get_settings().demo_reset_company or "").strip()
+    company, sender_from = facts.get("company"), facts.get("sender_from")
+    return (
+        bool(demo) and isinstance(company, str) and company.strip() == demo
+        and facts.get("sender_policy") == SIMULATED_POLICY
+        # Only a reserved .example address (RFC 2606): no real domain, ever.
+        and isinstance(sender_from, str) and _SIMULATED_FROM_RE.fullmatch(sender_from.strip().lower()) is not None
+    )
+
+
 def fill_allowed(facts: Mapping[str, Any]) -> bool:
     """The owner's gate (Nov 11, 2026), the one rule both the card and its
     approval use: the account's server enforces DMARC and the mail's own
     From was confirmed, and the From domain asks it to reject failing mail,
     or to quarantine it with the account's authserv-id check passed. A
-    missing or malformed key is never enough."""
+    missing or malformed key is never enough. On a demo installation, the
+    demo's simulated supplier too (``demo_simulated``)."""
     if not isinstance(facts, Mapping):
         return False
+    if facts.get("sender_checked") == DEMO_SIMULATED:
+        return demo_simulated(facts)
     sender_from, authserv = facts.get("sender_from"), facts.get("authserv_id")
     if facts.get("sender_checked") != DMARC_CHECKED or not isinstance(sender_from, str) or not sender_from.strip():
         return False
@@ -186,6 +228,11 @@ def gate_reason(facts: Mapping[str, Any]) -> str:
     if not got.get("sender_from"):
         why = got.get("sender_from_reason")
         return f"The mail's own From address wasn't confirmed: {_text(why) or 'no reason given'}"
+    if got.get("sender_checked") == DEMO_SIMULATED:
+        return (
+            "The mail's sender is simulated for the demo, and this server isn't that demo company's "
+            "installation (DEMO_RESET_COMPANY)"
+        )
     if got.get("sender_checked") != DMARC_CHECKED:
         why = got.get("sender_checked_reason")
         return f"The mail's sender wasn't checked by DMARC: {_text(why) or 'no reason given'}"
@@ -329,7 +376,9 @@ def slice_of(summary: Any) -> dict[str, Any] | None:
     if (
         (sender_from is not None and _email(sender_from) is None)
         or (authserv is not None and (not isinstance(authserv, str) or not _text(authserv)))
-        or (checked is not None and checked != DMARC_CHECKED)
+        or (checked is not None and checked not in (DMARC_CHECKED, DEMO_SIMULATED))
+        # The simulated policy only with the simulated sender, and the other way round.
+        or ((checked == DEMO_SIMULATED) != (policy == SIMULATED_POLICY))
     ):
         return None
     for row in rows:
@@ -457,14 +506,21 @@ def card_view(summary: Any) -> dict[str, Any]:
     totals = got.get("totals") if isinstance(got.get("totals"), dict) else {}
     assert isinstance(source, dict) and isinstance(supplier, dict) and isinstance(totals, dict)
     authserv = got.get("authserv_id")
+    simulated = got.get("sender_checked") == DEMO_SIMULATED
     shown: list[dict[str, str]] = [
+        # Above the fill: who sent it was simulated, for the demo only.
+        *([{"label": "Sender", "value": SIMULATED_LINE}] if simulated else []),
         {"label": "Draft invoice", "value": f"{DOCTYPE} {_shown(got.get('name'))}"},
         {"label": "Company", "value": _shown(got.get("company"))},
         {"label": "Supplier", "value": f"{_shown(supplier.get('supplier_name'))} ({_shown(supplier.get('name'))})"},
         {"label": "Sent from (the mail's own From)", "value": _shown(got.get("sender_from"))},
-        {"label": "Sender's domain policy",
-         "value": f"{_shown(got.get('sender_policy'))} ({_shown(got.get('sender_policy_domain'))})"},
-        {"label": "Checked by", "value": _shown(authserv) if authserv else "the account's mail server (stated)"},
+        *([] if simulated else [
+            {"label": "Sender's domain policy",
+             "value": f"{_shown(got.get('sender_policy'))} ({_shown(got.get('sender_policy_domain'))})"},
+            {"label": "Checked by", "value": _shown(authserv) if authserv else "the account's mail server (stated)"},
+        ]),
+        # The simulated mail was checked by no server: the card says so.
+        *([{"label": "Checked by", "value": "not checked (simulated for the demo)"}] if simulated else []),
         {"label": "Bills", "value": f"{_shown(source.get('doctype'))} {_shown(source.get('name'))}"},
         {"label": "Supplier's invoice no.", "value": _one_line(got.get("bill_no"), 60)},
         {"label": "Supplier's invoice date", "value": _shown(got.get("bill_date"))},
