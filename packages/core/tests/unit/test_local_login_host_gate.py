@@ -128,3 +128,12 @@ def test_a_public_deployment_never_runs_local_login(monkeypatch: pytest.MonkeyPa
     assert _is_local_login() is False
     resp = _request("GET", "exec.example.com", "/openapi.json", {"x-api-key": "s" * 32})
     assert resp.status_code == 200
+
+
+def test_a_watch_job_run_now_posted_from_another_page_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """POST /watch/jobs/{id}/run starts a job's run as the principal; under
+    local login a page in the owner's browser can't make it."""
+    monkeypatch.setenv("OE_LOCAL_LOGIN", "1")
+    resp = _request("POST", "localhost:8000", "/watch/jobs/bank-matching/run", {"sec-fetch-site": "cross-site"})
+    assert resp.status_code == 403
+    assert resp.json() == {"error": _CROSS_SITE_ERROR}

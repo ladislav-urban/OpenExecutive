@@ -17,6 +17,11 @@ with no row for it. The day's draft cards are counted across its slots
 (``settings.take_day_cards``), and a job leaves at most one failure notice a
 calendar day (``settings.take_failure_notice``).
 
+The principal can also run a job once now (``start_now``, from POST
+/watch/jobs/{id}/run): a row keyed ``now@HH:MM:SS`` of the company's day
+(``claim_now``), the same ``run_job``, sharing the day's caps with the
+slots; a slot's claim waits while it is fresh (``_run_now_busy``).
+
 A run (``run_job``, its own task):
 
 1. **Reads.** Each read's arguments are built by the job's code from its
@@ -65,6 +70,7 @@ A run (``run_job``, its own task):
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import dataclasses
 import hashlib
 import importlib
@@ -153,6 +159,12 @@ FAIL_LINES: dict[str, str] = {
 _REFUSAL_SETTINGS: dict[str, str] = {"oe_connector_bank_facts": "bank_facts_off"}
 
 _tasks: dict[str, asyncio.Task[RunOutcome]] = {}
+
+# A run the principal asked for (``start_now``): its row's slot is this
+# prefix and the company's time, "now@HH:MM:SS", never a schedule time.
+RUN_NOW_PREFIX = "now@"
+# At most this many a job a company day, so a stuck button can't loop.
+RUN_NOW_CAP_DAY = 3
 
 # The reason step's system prompt: a constant, cached as is, never formatted.
 REASON_SYSTEM = (
@@ -326,7 +338,9 @@ def claim(
                 (job_id, day),
             )
         }
-        busy = False
+        # A run-now of this job, of any day, still fresh holds every slot; one
+        # gone stale is failed, never retried (``claim_now``).
+        busy = _run_now_busy(conn, job_id, now, stamp)
         for slot in earlier:
             held = rows.get(slot)
             if held is None:
@@ -373,6 +387,115 @@ def claim(
         raise
     finally:
         conn.close()
+
+
+def _run_now_busy(conn: Any, job_id: str, now: datetime, stamp: str) -> bool:
+    """Inside a claim's transaction: whether a run-now of ``job_id`` (any
+    day) is still fresh. One past ``STALE_AFTER`` is marked failed
+    (``run_stalled``)."""
+    busy = False
+    for day, slot, started_at in conn.execute(
+        f"SELECT day, slot, started_at FROM {RUNS_TABLE} "  # noqa: S608
+        "WHERE job = ? AND status = 'running' AND substr(slot, 1, 4) = ?",
+        (job_id, RUN_NOW_PREFIX),
+    ).fetchall():
+        if _stale(started_at, now):
+            conn.execute(
+                f"UPDATE {RUNS_TABLE} SET status = 'failed', error = 'run_stalled', finished_at = ? "  # noqa: S608
+                "WHERE job = ? AND day = ? AND slot = ? AND status = 'running'",
+                (stamp, job_id, day, slot),
+            )
+        else:
+            busy = True
+    return busy
+
+
+class RunNowRefused(Exception):
+    """Why a run-now didn't start, as a code: ``job_off``,
+    ``already_running`` or ``run_now_cap``."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def claim_now(job_id: str, day: str, slot: str, now: datetime, *, path: Path | None = None) -> None:
+    """Take a run-now row (``slot`` "now@HH:MM:SS" of the company's ``day``)
+    for ``job_id``, atomically, or raise ``RunNowRefused``: ``already_running``
+    while any run of the job (any day, any slot) is still fresh, or the slot
+    is taken this second; ``run_now_cap`` after ``RUN_NOW_CAP_DAY`` run-now
+    rows that day. A run-now left running past ``STALE_AFTER`` is failed
+    first, never retried; a stale scheduled row is left to ``claim``."""
+    stamp = now.astimezone(UTC).isoformat()
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        busy = _run_now_busy(conn, job_id, now, stamp)
+        for (started_at,) in conn.execute(
+            f"SELECT started_at FROM {RUNS_TABLE} WHERE job = ? AND status = 'running'",  # noqa: S608
+            (job_id,),
+        ).fetchall():
+            busy = busy or not _stale(started_at, now)
+        taken = conn.execute(
+            f"SELECT COUNT(*) FROM {RUNS_TABLE} WHERE job = ? AND day = ? AND substr(slot, 1, 4) = ?",  # noqa: S608
+            (job_id, day, RUN_NOW_PREFIX),
+        ).fetchone()[0]
+        clash = conn.execute(
+            f"SELECT 1 FROM {RUNS_TABLE} WHERE job = ? AND day = ? AND slot = ?",  # noqa: S608
+            (job_id, day, slot),
+        ).fetchone()
+        refused = (
+            "already_running" if busy or clash is not None
+            else "run_now_cap" if int(taken) >= RUN_NOW_CAP_DAY
+            else ""
+        )
+        if not refused:
+            conn.execute(
+                f"INSERT INTO {RUNS_TABLE} (job, day, slot, status, started_at, attempts) "  # noqa: S608
+                "VALUES (?, ?, ?, 'running', ?, 1)",
+                (job_id, day, slot, stamp),
+            )
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+    if refused:
+        raise RunNowRefused(refused)
+
+
+def start_now(job: registry.WatchJob, now: datetime) -> tuple[str, str]:
+    """Start one run of ``job`` now, at the principal's request (the route
+    checks who asks): the job's ``(day, slot)``. Raises ``RunNowRefused``
+    (``job_off`` unless the master switch and its row are on;
+    ``already_running`` while this process's task for it is alive, or as
+    ``claim_now``), or the store's error, having started nothing. Call it
+    on the event loop.
+
+    The run is a scheduled run's in all but its slot: ``run_job`` as is, so
+    it shares the day's caps, its one failure notice and its findings'
+    dedup with the job's slots, and reads as the job's own user. Its task
+    starts in an empty context, so nothing of the request that asked for it
+    (its caller, session, turn or audit scope) reaches its reads or rows,
+    and it is kept in ``_tasks``, so neither ``maybe_run`` nor another
+    run-now starts the job while it lives."""
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    if not job_enabled(job.id):
+        raise RunNowRefused("job_off")
+    running = _tasks.get(job.id)
+    if running is not None and not running.done():
+        raise RunNowRefused("already_running")
+    local = now.astimezone(get_user_timezone())
+    day, slot = local.date().isoformat(), RUN_NOW_PREFIX + local.strftime("%H:%M:%S")
+    claim_now(job.id, day, slot, now)
+    task = asyncio.get_running_loop().create_task(
+        run_job(job, day, slot=slot), context=contextvars.Context(),
+    )
+    _tasks[job.id] = task
+    return day, slot
 
 
 def _stale(started_at: object, now: datetime) -> bool:
