@@ -54,7 +54,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "draft_update": "e1508efc4843b8d36ea5f2fb45c5e8c2ddc337bb3dcd470fa93485f333ce2b9f",
     "get_record": "4d486bf8e9cc6afce155b722b3565f4908563b4580838722a3ee7d28841c3698",
     "list_records": "11b5293628e6c26937a4b8c568231f1bec8e41b977de0a05675fa492aa34f387",
-    "mail_invoices_to_fill": "f892687842ae916c0b2c68812a0381c11ddb023063732463577c21b7dbddfd9a",
+    "mail_invoices_to_fill": "99c8085c2e698b8c927aa148155e99eb0a5dac03f1ecd0b3920c8dc5b00196f7",
     "propose_rule": "8fd8fa429b8fcf10ff53fd2ecd93cf9b8a1a4db91b12e649ec0590c2bb09b3a0",
     "proposed_rules": "049ba1c46f1bc9bb431c4e7b1e66dc22daf34b55102a876fa6af7d4a2950373b",
     "read_attachment": "e2890a5ed9875146b5af0ee563f24ba76c0b390cea1bee9481a40a762f14773d",
@@ -67,7 +67,7 @@ TOOL_DIGESTS: dict[str, str] = {
     "supplier_orders": "abfa94e11de532f9cf1531c221dd4f8e8120816c215fb4b2780fd2edc338c1f8",
 }
 # oe_connector's protocol.TOOLS_DIGEST for the definitions pinned above.
-TOOLS_DIGEST = "abbbe63072ec1c1906832d6a0b2455d3ba3f9ad29057a0fd82e3f56c41862d2a"
+TOOLS_DIGEST = "1e3c00b2728eb1cdbd99c7ac084179ab1207a6a54b4a7563cc9384e79b0631ef"
 
 # The supplier tools as oe_connector serves them (its mcp/protocol.py
 # SUPPLIER_TOOLS), offered to the A2A agent from this copy rather than from
