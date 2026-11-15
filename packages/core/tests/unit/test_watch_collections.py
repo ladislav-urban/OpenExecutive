@@ -1168,6 +1168,15 @@ def test_a_refusal_names_one_unreadable_value_and_nothing_else() -> None:
     assert runner.unreadable_value(json.loads(_unreadable("Big Old Ltd"))["error"]) == ("$customers", "Big Old Ltd")
     assert runner.unreadable_value(json.loads(_unreadable("O'Brien & Sons"))["error"]) == ("$customers", "O'Brien & Sons")
     assert runner.unreadable_value(json.loads(_unreadable("Lumen", "Supplier"))["error"]) == ("$parties", "Lumen")
+    assert runner.unreadable_value(json.loads(_unreadable("Northgate", "Project"))["error"]) == ("$projects", "Northgate")
+    # oe_connector's own text, with the field's path in front.
+    assert runner.unreadable_value(
+        "filters.project: 'PROJ-0007' isn't a Project the call's user may read"
+    ) == ("$projects", "PROJ-0007")
+    # A name oe_connector may have cut (140 characters) is never retried: its
+    # first 140 characters could be another name the job sent.
+    assert runner.unreadable_value(json.loads(_unreadable("x" * 139))["error"]) == ("$customers", "x" * 139)
+    assert runner.unreadable_value(json.loads(_unreadable("x" * 140))["error"]) is None
     for said in ("customers isn't a customers", "Permission denied", "", None,
                  "customers: 'x' isn't a Employee the call's user may read",
                  "customers: x isn't a Customer the call's user may read"):

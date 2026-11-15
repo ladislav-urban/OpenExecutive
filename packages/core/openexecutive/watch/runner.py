@@ -547,13 +547,17 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
 
 
 # oe_connector's watch._unreadable_in (ladislav-urban/oe_connector#578): a
-# $customers or $parties list whose only fault is a name the call's user can't
-# read is refused naming the first such name, as Python's repr.
+# $customers, $parties or $projects list whose only fault is a name the call's
+# user can't read is refused naming the first such name, as Python's repr,
+# cut to its first MAX_NAMED characters.
 _UNREADABLE_RE = re.compile(
     r": (?P<name>'(?:[^'\\\n]|\\.){1,600}'|\"(?:[^\"\\\n]|\\.){1,600}\") "
-    r"isn't a (?P<doctype>Customer|Supplier) the call's user may read"
+    r"isn't a (?P<doctype>Customer|Supplier|Project) the call's user may read"
 )
-_LIST_SLOT_OF = {"Customer": "$customers", "Supplier": "$parties"}
+_LIST_SLOT_OF = {"Customer": "$customers", "Supplier": "$parties", "Project": "$projects"}
+# oe_connector's MAX_NAMED: a name this long may have been cut, so it can't
+# be told from another name it starts; no retry for it.
+MAX_NAMED = 140
 
 
 def unreadable_value(said: object) -> tuple[str, str] | None:
@@ -571,7 +575,9 @@ def unreadable_value(said: object) -> tuple[str, str] | None:
         name = ast.literal_eval(found["name"])
     except (ValueError, SyntaxError):
         return None
-    return (_LIST_SLOT_OF[found["doctype"]], name) if isinstance(name, str) and name else None
+    if not isinstance(name, str) or not name or len(name) >= MAX_NAMED:
+        return None
+    return _LIST_SLOT_OF[found["doctype"]], name
 
 
 def _without_value(shape: Any, value: Any, slot: str, name: str) -> tuple[Any, int]:
@@ -960,8 +966,8 @@ async def _one_read(
     try:
         result = await _read(job, read, arguments, today)
     except _Stop as refused:
-        # One value of a $customers or $parties list the job's user may not
-        # read (oe_connector names the first): drop exactly that value, if
+        # One value of a $customers, $parties or $projects list the job's
+        # user may not read (oe_connector names the first): drop exactly that value, if
         # this side sent it in that slot, and ask once more. A second refusal
         # stops the run as before.
         again = _retry_arguments(read, arguments, refused, today)
