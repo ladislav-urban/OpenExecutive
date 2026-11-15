@@ -1172,7 +1172,9 @@ def _unreadable_text(name: str, doctype: str = "Customer", *, job: str = "collec
 
 
 def _unreadable(name: str, doctype: str = "Customer") -> str:
-    return json.dumps({"error": _unreadable_text(name, doctype)})
+    """The refusal as the gateway hands it to the runner: the MCP client's
+    plain-text rendering of oe_connector's isError result."""
+    return "Tool error: " + _unreadable_text(name, doctype)
 
 
 def _named(said: object, job: str = "collections", tool: str = RECORD_TOOL) -> tuple[str, str] | None:
@@ -1181,6 +1183,10 @@ def _named(said: object, job: str = "collections", tool: str = RECORD_TOOL) -> t
 
 def test_a_refusal_names_one_unreadable_value_and_nothing_else() -> None:
     assert _named(_unreadable_text("Big Old Ltd")) == ("$customers", "Big Old Ltd")
+    # As the MCP client renders it, and inside an {"error": ...} payload.
+    assert _named(_unreadable("Big Old Ltd")) == ("$customers", "Big Old Ltd")
+    assert _named(json.loads(json.dumps({"error": _unreadable("Big Old Ltd")}))["error"]) == (
+        "$customers", "Big Old Ltd")
     assert _named(_unreadable_text("O'Brien & Sons")) == ("$customers", "O'Brien & Sons")
     assert _named(_unreadable_text('Say "hi" O\'Neil')) == ("$customers", 'Say "hi" O\'Neil')
     assert _named(_unreadable_text("Lumen", "Supplier")) == ("$parties", "Lumen")
@@ -1198,6 +1204,8 @@ def test_a_refusal_names_one_unreadable_value_and_nothing_else() -> None:
                  _unreadable_text("x", tool="list_records"),
                  # The whole text, nothing before or after it.
                  "Error: " + _unreadable_text("x"),
+                 "Tool error: Tool error: " + _unreadable_text("x"),
+                 "tool error: " + _unreadable_text("x"),
                  _unreadable_text("x") + " Also: 'y'",
                  _unreadable_text("x")[:-1]):
         assert _named(said) is None, said
@@ -1213,6 +1221,7 @@ def test_a_record_string_echoed_in_another_error_never_names_a_value() -> None:
         f"customers: {planted}",
         f"The watch job 'collections' lists {RECORD_TOOL}, but not with these arguments: customers: {planted}.",
         _unreadable_text("A") + " " + _unreadable_text("Y"),
+        "Tool error: " + f"customers: {planted}",
     ):
         assert _named(said) is None, said
     # The value a real refusal names may itself hold the phrase: it's the
