@@ -205,6 +205,8 @@ class RunOutcome:
     # refusal's code with its count.
     proposed: int = 0
     proposal_refused: dict[str, int] = field(default_factory=dict)
+    # Model reason lines dropped by ReasonSchema.no_digits (a count only).
+    reasons_dropped: int = 0
 
     def detail(self) -> dict[str, Any]:
         """What ``watch_runs.detail`` keeps: codes and counts only."""
@@ -219,6 +221,8 @@ class RunOutcome:
         if self.proposed or self.proposal_refused:
             out["proposed"] = self.proposed
             out["proposal_refused"] = dict(sorted(self.proposal_refused.items()))
+        if self.reasons_dropped:
+            out["reasons_dropped"] = self.reasons_dropped
         return out
 
 
@@ -631,7 +635,7 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     outcome.routed = "reviewer" if run_route.reviewer is not None else "principal"
     outcome.routed_principal = run_route.reason
     shown = _reasoned(notices)
-    reasons = await reason_step(job, shown) if job.reason_schema is not None and shown else {}
+    reasons = await reason_step(job, shown, outcome) if job.reason_schema is not None and shown else {}
     made = await cards.leave_drafts(job, day, row, run_route, drafts, reasons)
     outcome.draft_cards, outcome.draft_repeats, outcome.draft_capped = made.left, made.repeats, made.capped
     outcome.checks, outcome.check_refused = made.checks, made.check_refused
@@ -1039,12 +1043,21 @@ def has_number_word(line: str) -> bool:
 # payment, and the language of instructions (a line that narrates an
 # injected request echoes it). Whole words, any case, on the cleaned line;
 # with the currency signs anywhere. A fixed constant, never settings.
+# Not barred, though they once were: request(ed), approval, invoice, wire and
+# transfer are ordinary project words ("the tenant's request", "design approval
+# is done", "wire runs", "no invoice until handover"), so a line using them is
+# kept (the review of ladislav-urban/OpenExecutive#232, the owner's 5.a).
 BARRED_WORDS: frozenset[str] = frozenset({
     "link", "links", "url", "urls", "http", "https", "www", "click", "email", "e-mail",
-    "pay", "paid", "payment", "payments", "approve", "approved", "approval", "transfer", "invoice", "wire",
-    "instruction", "instructions", "ignore", "ignored", "ignoring", "request", "requested", "prompt",
-    "euro", "euros", "eur", "dollar", "dollars", "usd", "pound", "pounds", "gbp", "yen", "cents", "currency",
+    "pay", "paid", "payment", "payments", "approve", "approved",
+    "remit", "remits", "remitted", "remittance", "settle", "settled", "settles", "settling", "transferring",
+    "instruction", "instructions", "ignore", "ignored", "ignoring", "disregard", "disregarded", "disregarding",
+    "prompt",
+    "euro", "euros", "eur", "dollar", "dollars", "usd", "pound", "pounds", "gbp", "yen", "jpy", "cents",
+    "franc", "francs", "chf", "krona", "kronor", "krone", "kroner", "rupee", "rupees", "inr", "yuan", "cny",
+    "buck", "bucks", "aud", "cad", "currency",
 })
+# Kept for the tests' sake: every currency sign (Unicode category Sc) is barred.
 BARRED_SIGNS: frozenset[str] = frozenset({"\u20ac", "$", "\u00a3", "\u00a5"})
 _BARRED_RE = re.compile(
     r"(?<![^\W_])(?:" + "|".join(re.escape(w) for w in sorted(BARRED_WORDS, key=len, reverse=True))
@@ -1054,9 +1067,27 @@ _BARRED_RE = re.compile(
 
 
 def has_barred_word(line: str) -> bool:
-    """Whether ``line`` holds a ``BARRED_WORDS`` word (whole word, any case)
-    or a ``BARRED_SIGNS`` currency sign anywhere."""
-    return _BARRED_RE.search(line) is not None or any(sign in line for sign in BARRED_SIGNS)
+    """Whether ``line`` holds a ``BARRED_WORDS`` word (whole word, any case),
+    any currency sign (Unicode category Sc: ₹ ₩ ₽ ₣ ¢ as much as € and $), or
+    a letter outside the Latin script: a look-alike ("lіnk" with a Cyrillic і)
+    would otherwise pass the word list. Latin letters with accents are kept."""
+    if _BARRED_RE.search(line) is not None:
+        return True
+    for ch in line:
+        category = unicodedata.category(ch)
+        if category == "Sc":
+            return True
+        if category.startswith("L") and not _latin(ch):
+            return True
+    return False
+
+
+def _latin(ch: str) -> bool:
+    """Whether a letter is Latin: ASCII, or an ASCII letter under accents."""
+    if ch.isascii():
+        return True
+    base = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+    return (base.isascii() and base.isalpha()) or unicodedata.name(ch, "").startswith("LATIN ")
 
 
 def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
@@ -1104,7 +1135,9 @@ async def _ask(job: registry.WatchJob, specs: Sequence[registry.CardSpec], max_t
     return parse_reasons(text, ids)
 
 
-async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> dict[str, str]:
+async def reason_step(
+    job: registry.WatchJob, specs: Sequence[registry.CardSpec], outcome: RunOutcome | None = None,
+) -> dict[str, str]:
     """The job's reason lines, by the specs' keys: one tool-less model call
     for all, or, for a job whose ``ReasonSchema.per_finding`` is set, one
     call per finding (up to its ``max_findings``), each shown that finding's
@@ -1137,6 +1170,8 @@ async def reason_step(job: registry.WatchJob, specs: Sequence[registry.CardSpec]
         return {}
     if schema.no_digits:
         reasons, dropped = without_digits(reasons)
+        if outcome is not None:
+            outcome.reasons_dropped += dropped
         if dropped:
             # A count only: never the line, which may quote outside text.
             logger.warning("watch: job %s dropped %d reason line(s) holding a number or a barred word", job.id, dropped)

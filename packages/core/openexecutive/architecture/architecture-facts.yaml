@@ -12700,11 +12700,18 @@ watch:
     million(s), billion(s), half, halves, quarter(s), third(s), dozen(s),
     percent, per cent, once, twice, first-tenth), and a line holding a
     word of runner.BARRED_WORDS (a fixed frozenset: link(s), url(s),
-    http(s), www, click, e-mail, pay/paid/payment(s), approve(d)/approval,
-    transfer, invoice, wire, instruction(s), ignore(d)/ignoring,
-    request(ed), prompt, euro(s), eur, dollar(s), usd, pound(s), gbp, yen,
-    cents, currency; whole words, any case) or a BARRED_SIGNS sign (EUR,
-    dollar, pound and yen signs, anywhere): a real-model eval line narrated
+    http(s), www, click, e-mail, pay/paid/payment(s), approve(d), remit/
+    remittance, settle(d)/settling, transferring, instruction(s),
+    ignore(d)/ignoring, disregard(ed)/disregarding, prompt, and currency
+    words: euro(s), eur, dollar(s), usd, pound(s), gbp, yen, jpy, cents,
+    franc(s), chf, krona/kronor/krone/kroner, rupee(s), inr, yuan, cny,
+    buck(s), aud, cad, currency; whole words, any case), any currency sign
+    (Unicode category Sc, anywhere), or any letter outside the Latin script
+    (a look-alike Cyrillic i or a; accented Latin letters are kept).
+    request(ed), approval, invoice, wire and transfer are no longer barred:
+    ordinary project words (the review of #232, the owner's 5.a). The run's
+    detail counts the reason lines dropped (reasons_dropped). The rule came from
+    a real-model eval line that narrated
     an injected request ("the team's note asking for a euro overrun figure
     and an approval link was ignored"). The project-status instruction
     also forbids counting words ("a second": say "another"), mentioning
