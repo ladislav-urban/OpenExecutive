@@ -550,10 +550,11 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
 # $customers, $parties or $projects list whose only fault is a name the call's
 # user can't read is refused naming the first such name, as Python's repr,
 # cut to its first MAX_NAMED characters. The whole text must be its
-# WatchRefused (watch.check_scope) for this job and read: a record's own
+# WatchRefused (watch.check_scope) for this job and read, as the MCP client
+# renders a tool error ("Tool error: " before it) or bare: a record's own
 # string echoed elsewhere in some other error can't name a value to drop.
 _UNREADABLE_RE = re.compile(
-    r"The watch job '(?P<job>[a-z0-9-]{1,40})' lists (?P<tool>[a-z0-9_]{1,64}), "
+    r"(?:Tool error: )?The watch job '(?P<job>[a-z0-9-]{1,40})' lists (?P<tool>[a-z0-9_]{1,64}), "
     r"but not with these arguments: (?P<where>[A-Za-z0-9_.\[\]]{1,200}): "
     r"(?P<name>'(?:[^'\\\n]|\\.){1,600}'|\"(?:[^\"\\\n]|\\.){1,600}\") "
     r"isn't a (?P<doctype>Customer|Supplier|Project) the call's user may read\."
