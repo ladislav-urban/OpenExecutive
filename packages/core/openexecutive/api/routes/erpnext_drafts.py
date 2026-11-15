@@ -20,6 +20,13 @@ Routes:
                         card is left (a raise's for whoever approves it,
                         ``integrations.erpnext_credit``). ``decision_id`` is
                         null when no card was left and ``message`` says why.
+  GET /erpnext/proposed-rules — the proposed rules waiting for a System
+                        Manager in ERPNext (the bank-rules job's,
+                        ``integrations.erpnext_rule_proposals``), for the
+                        principal alone, read as their own ERPNext user (so
+                        only a System Manager gets any); [] for anyone else.
+                        Each links to its proposal in ERPNext's desk, where
+                        it is enabled or dismissed.
   GET /erpnext/drafts/oversight — one oversight record per ERPNext draft card
                         (``integrations.erpnext_oversight``), for the principal
                         alone: ``since`` / ``until`` (ISO dates or times),
@@ -63,6 +70,17 @@ def _waiting_drafts(person: Any) -> int:
 
 
 register_waiting_cards("erpnext_drafts", _waiting_drafts)
+
+
+def _waiting_rules(person: Any) -> int:
+    """Proposed rules waiting for the principal, for Home's Needs you count:
+    the last GET /erpnext/proposed-rules read, never an ERPNext call here."""
+    from openexecutive.integrations.erpnext_rule_proposals import waiting_count
+
+    return waiting_count(person)
+
+
+register_waiting_cards("erpnext_rules", _waiting_rules)
 
 
 class DraftFieldOut(BaseModel):
@@ -142,6 +160,43 @@ async def get_erpnext_drafts(request: Request) -> DraftCardsOut:
     except Exception:
         logger.warning("erpnext_drafts: reading the credit raises again failed", exc_info=True)
     return DraftCardsOut(cards=[DraftCardOut(**asdict(card)) for card in found])
+
+
+class ProposedRuleOut(BaseModel):
+    name: str
+    kind: str
+    company: str
+    account: str
+    transaction_type: str
+    # The word the rule would match in a bank line's description: bank-line
+    # text, shown as text only.
+    word: str
+    lines: int
+    misses: int
+    url: str
+    proposed: str = ""
+
+
+class ProposedRulesOut(BaseModel):
+    rules: list[ProposedRuleOut]
+
+
+@router.get("/erpnext/proposed-rules", response_model=ProposedRulesOut)
+async def get_erpnext_proposed_rules(request: Request) -> ProposedRulesOut:
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.integrations.erpnext_rule_proposals import waiting
+    from openexecutive.people.store import get_person
+
+    person_id = _resolve_caller_person_id(request)
+    person = get_person(person_id) if person_id is not None else None
+    if person is None or not person.is_principal:
+        return ProposedRulesOut(rules=[])
+    try:
+        found = await waiting(person)
+    except Exception:
+        logger.warning("erpnext_drafts: reading the proposed rules failed", exc_info=True)
+        found = ()
+    return ProposedRulesOut(rules=[ProposedRuleOut(**asdict(rule)) for rule in found])
 
 
 class AlertDraftOut(BaseModel):

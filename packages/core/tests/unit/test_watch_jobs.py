@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import json
-import logging
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -48,6 +47,7 @@ from openexecutive.watch.registry import CardSpec, ReasonSchema, WatchJob, Watch
 
 # A temp DB, a fresh turn pin, the fake ERPNext and the roster, as the other
 # ERPNext tests use them.
+from ._log_capture import recording
 from .test_delegation_tools import db, fresh_turn_state  # noqa: F401
 from .test_erpnext_caller import VECTOR_PRIVATE_KEY, _claims
 from .test_erpnext_drafts import FakeErpnext, _owner_turn, erp, roster  # noqa: F401
@@ -195,9 +195,10 @@ def _job(job_id: str = "capped", *, specs: int = 3, cap: int = 1, reason: bool =
 # --------------------------------------------------------------------------- #
 
 
-def test_jobs_are_code_only_and_phases_1_and_2_list_theirs() -> None:
+def test_jobs_are_code_only_and_phases_1_to_3_list_theirs() -> None:
     from openexecutive.watch.jobs import (
         bank_matching,
+        bank_rules,
         collections,
         invoice_capture,
         late_deliveries,
@@ -211,7 +212,7 @@ def test_jobs_are_code_only_and_phases_1_and_2_list_theirs() -> None:
         registry.JOBS["x"] = _example.JOB  # type: ignore[index]
     assert registry._LISTED == (
         collections.JOB, payment_checks.JOB, bank_matching.JOB, invoice_capture.JOB, quote_follow_up.JOB,
-        late_deliveries.JOB, project_status.JOB,
+        late_deliveries.JOB, project_status.JOB, bank_rules.JOB,
     )
     # The test job is put in by the tests alone.
     assert _example.JOB_ID not in registry.JOBS
@@ -574,25 +575,29 @@ def test_a_refused_read_gives_one_notice_and_no_cards_and_never_erpnexts_text(
     example: WatchJob, erp: FakeErpnext, triage: list[Any], model: SimpleNamespace, reply: str,  # noqa: F811
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    caplog.set_level(logging.DEBUG)
-    erp.replies.append(reply)
-    outcome = _run(example)
-    assert (outcome.status, outcome.error, outcome.cards) == ("failed", "read_refused", 0)
-    [notice] = _alerts()
-    assert "the receivables report" in notice.body and "ERPNext refused the read" in notice.body
-    assert triage == [] and model.calls == []
-    row = _run_row("example")
-    assert (row["status"], row["error"]) == ("failed", "read_refused")
-    # A second try the same day leaves no second notice.
-    conn = watch_settings.connect()
-    try:
-        conn.execute("UPDATE watch_runs SET status = 'running', started_at = '2000-01-01T00:00:00+00:00'")
-    finally:
-        conn.close()
-    erp.replies.append(reply)
-    assert runner.claim("example", DAY, datetime.now(UTC)) == "run"
-    asyncio.run(runner.run_job(example, DAY))
-    assert len(_alerts()) == 1
+    # The package's own loggers recorded directly: caplog's root handler hears
+    # nothing once another test on this worker built the app.
+    with recording(caplog, "openexecutive"):
+        erp.replies.append(reply)
+        outcome = _run(example)
+        assert (outcome.status, outcome.error, outcome.cards) == ("failed", "read_refused", 0)
+        [notice] = _alerts()
+        assert "the receivables report" in notice.body and "ERPNext refused the read" in notice.body
+        assert triage == [] and model.calls == []
+        row = _run_row("example")
+        assert (row["status"], row["error"]) == ("failed", "read_refused")
+        # A second try the same day leaves no second notice.
+        conn = watch_settings.connect()
+        try:
+            conn.execute("UPDATE watch_runs SET status = 'running', started_at = '2000-01-01T00:00:00+00:00'")
+        finally:
+            conn.close()
+        erp.replies.append(reply)
+        assert runner.claim("example", DAY, datetime.now(UTC)) == "run"
+        asyncio.run(runner.run_job(example, DAY))
+        assert len(_alerts()) == 1
+    # Something was captured, or the log check below would pass on nothing.
+    assert "stopped (read_refused)" in caplog.text
     everything = json.dumps([
         [r.summary, r.details] for r in audit_logger.get_audit_logger().query(limit=500)
     ]) + json.dumps([[a.headline, a.body] for a in alert_store.list_alerts(limit=100)]) + caplog.text + json.dumps(row)
@@ -930,8 +935,8 @@ def test_the_principal_configures_a_job_and_it_is_recorded(
     listed = client.get("/watch/jobs").json()
     assert listed["master_switch"] is True
     assert [j["id"] for j in listed["jobs"]] == [
-        "bank-matching", "collections", "example", "invoice-capture", "late-deliveries", "payment-checks",
-        "project-status", "quote-follow-up",
+        "bank-matching", "bank-rules", "collections", "example", "invoice-capture", "late-deliveries",
+        "payment-checks", "project-status", "quote-follow-up",
     ]
     response = client.put("/watch/jobs/example", json={
         "enabled": False, "settings": {"company": "Bolt Industries", "limit": 50}, "reviewer_person_id": roster.teammate,
