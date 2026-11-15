@@ -1,0 +1,33 @@
+id: erpnext_094
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Accounts Receivable
+prior_turns:
+- page:
+    report: Accounts Receivable
+  user: How much cash do we have across all our accounts, and what will it look like week by week for the next 13 weeks?
+  assistant: 'By the books, cash in the bank and cash accounts covers every week of the next 13, from what is due in and out today (no sales still to come). The lowest week is the one where payroll and rent fall together. Metro Transit Works owes the largest share of what customers have due, part of it already overdue.'
+description: 'Cash outlook step 2 (oe_connector''s help/try-cash-outlook.md) in ERPNext''s panel as a demo person, beside Accounts Receivable, following step 1. Asked what changes if Metro pays as late as it usually does, the reply moves Metro''s open invoices by its usual delay and shows the weeks that change. Beside the panel it opens Accounts Receivable for Metro alone, filtered the way that report takes a party: party_type Customer with party a list of names. A ''customer'' filter isn''t one of that report''s, so oe_connector refuses it and nothing opens. expected_report_filters checks the Accounts Receivable view ERPNext accepted.'
+query: What if Metro pays as late as it usually does?
+expected_report_filters:
+  Accounts Receivable:
+    party_type: Customer
+    party:
+    - Metro Transit Works
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- beside the panel
+quality_criteria:
+  moves_metros_open_invoices_by_its_usual_payment_delay_with_dates: true
+  shows_the_weeks_that_change_with_their_figures: true
+  says_the_outlook_is_an_estimate_from_the_books_today: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

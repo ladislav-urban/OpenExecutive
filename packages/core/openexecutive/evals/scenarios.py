@@ -677,6 +677,19 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             raise ValueError(f"`{key}`: a list of non-empty strings")
         if scenario_surface(s) != SURFACE_ERPNEXT_PANEL:
             raise ValueError(f"`{key}`: only a scenario with surface: erpnext_panel opens views")
+    if s.get("expected_report_filters") is not None:
+        wanted = s["expected_report_filters"]
+        if (
+            not isinstance(wanted, dict)
+            or not wanted
+            or not all(isinstance(name, str) and name.strip() and _report_filters_ok(needed) for name, needed in wanted.items())
+        ):
+            raise ValueError(
+                "`expected_report_filters`: a mapping of report name to a list of filter names, "
+                "or to a mapping of filter name to its value (a string, or a list of strings it must hold)"
+            )
+        if scenario_surface(s) != SURFACE_ERPNEXT_PANEL:
+            raise ValueError("`expected_report_filters`: only a scenario with surface: erpnext_panel opens views")
     for flag in ("demo_viewer", "forbid_principal_name", "forbid_repeated_text"):
         if s.get(flag) is not None and not isinstance(s[flag], bool):
             raise ValueError(f"`{flag}` must be true or false")
@@ -722,21 +735,78 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
     return s
 
 
+def _report_filters_ok(needed: Any) -> bool:
+    """A report's expected filters: a list of names, or names with values."""
+    if isinstance(needed, list):
+        return bool(needed) and all(isinstance(f, str) and f.strip() for f in needed)
+    if isinstance(needed, dict):
+        return bool(needed) and all(
+            isinstance(f, str)
+            and f.strip()
+            and (
+                (isinstance(v, str) and v.strip())
+                or (isinstance(v, list) and v and all(isinstance(x, str) and x.strip() for x in v))
+            )
+            for f, v in needed.items()
+        )
+    return False
+
+
+def _report_filters_met(needed: list[str] | dict[str, Any], filters: dict[str, Any]) -> bool:
+    """Whether a view's filters hold every expected name, and each expected
+    value: a string equal to the filter's, or a list whose every item is in
+    the filter's list."""
+    if isinstance(needed, list):
+        return all(f in filters for f in needed)
+    for name, value in needed.items():
+        got = filters.get(name)
+        if isinstance(value, list):
+            if not isinstance(got, list) or not all(v in got for v in value):
+                return False
+        elif got != value:
+            return False
+    return True
+
+
 def view_kinds_check(scenario: dict[str, Any], views: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Whether a panel turn opened the kinds of view the scenario expects
     beside the panel, from what ``erpnext_panel.note_erpnext_call`` kept (the
     show calls ERPNext accepted): deterministic, since the judge reads only the
-    reply. ``None`` when the scenario sets neither ``expected_view_kinds`` nor
-    ``forbidden_view_kinds``; otherwise ``{"kinds", "missing", "forbidden",
-    "ok"}``."""
+    reply. ``None`` when the scenario sets none of ``expected_view_kinds``,
+    ``forbidden_view_kinds`` and ``expected_report_filters``; otherwise
+    ``{"kinds", "missing", "forbidden", "ok"}``, with ``"reports_unmet"`` (the
+    reports never opened with their expected filters) when the scenario
+    sets ``expected_report_filters``."""
     expected = [k.strip() for k in scenario.get("expected_view_kinds") or []]
     banned = [k.strip() for k in scenario.get("forbidden_view_kinds") or []]
-    if not expected and not banned:
+    wanted = scenario.get("expected_report_filters") or {}
+    if not expected and not banned and not wanted:
         return None
     kinds = sorted({str(v.get("kind")) for v in views if isinstance(v, dict) and v.get("kind")})
     missing = [k for k in expected if k not in kinds]
     forbidden = [k for k in banned if k in kinds]
-    return {"kinds": kinds, "missing": missing, "forbidden": forbidden, "ok": not missing and not forbidden}
+    out: dict[str, Any] = {"kinds": kinds, "missing": missing, "forbidden": forbidden}
+    ok = not missing and not forbidden
+    if wanted:
+        # A report the turn must open with these filters among its own, and
+        # their values where given (oe_connector refuses a name the report
+        # doesn't declare, so a refused show never counts).
+        unmet = [
+            name
+            for name, needed in wanted.items()
+            if not any(
+                isinstance(v, dict)
+                and v.get("kind") == "report"
+                and v.get("report_name") == name
+                and isinstance(v.get("filters"), dict)
+                and _report_filters_met(needed, v["filters"])
+                for v in views
+            )
+        ]
+        out["reports_unmet"] = unmet
+        ok = ok and not unmet
+    out["ok"] = ok
+    return out
 
 
 def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:

@@ -17,6 +17,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -463,7 +464,7 @@ def _assemble_plan(ctx: _APCtx) -> str:
         _ensure_heading(ctx.cadence, "## Checkpoint Cadence"),
         "",
         "---",
-        "*Drafted by Open Executive. Stress-test with the leadership team "
+        f"*Drafted by {product_name()}. Stress-test with the leadership team "
         "before locking. Every placeholder should be filled in with the "
         "function-head owner before the board sees it.*",
     ]

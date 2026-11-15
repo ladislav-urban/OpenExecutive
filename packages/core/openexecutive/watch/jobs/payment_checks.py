@@ -321,7 +321,11 @@ def hold_comment(original: str, confidence: str) -> str:
 
 
 def _clean_comment(text: str) -> str:
-    return " ".join(_CONTROL.sub(" ", text).split())[:HOLD_COMMENT_MAX].strip()
+    """One line, made plain (as the card shows it and approval checks it:
+    erpnext_changes._as_shown), at most HOLD_COMMENT_MAX."""
+    from openexecutive.utils.prompt_blocks import plain
+
+    return " ".join(_CONTROL.sub(" ", plain(text)).split())[:HOLD_COMMENT_MAX].strip()
 
 
 # --------------------------------------------------------------------------- #
@@ -497,6 +501,11 @@ def check_fields(operation: str, doctype: str, fields: Mapping[str, Any], name: 
         return "The payment-checks job leaves holds only."
     if not isinstance(name, str) or not _DOC_RE.fullmatch(name):
         return "A hold card names the draft invoice it holds."
+    from openexecutive.integrations.erpnext_changes import _as_shown
+
+    if _as_shown(name) != name:
+        # As approval's check_change refuses it: no card is left that can't be approved.
+        return "A hold card's invoice name has a hidden or folded character."
     held = fields.get("set") if isinstance(fields, Mapping) and set(fields) == {"set"} else None
     if not isinstance(held, Mapping) or set(held) != {"on_hold", "hold_comment"}:
         return "A hold card sets on_hold and hold_comment only."

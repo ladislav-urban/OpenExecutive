@@ -17,6 +17,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -374,7 +375,7 @@ def _assemble_memo(ctx: _PSCtx) -> str:
         _ensure_heading(ctx.success, "## Success Criteria"),
         "",
         "---",
-        "*Drafted by Open Executive. The product team should treat this as "
+        f"*Drafted by {product_name()}. The product team should treat this as "
         "a starting point, debate the bets vs. non-bets explicitly, and "
         "publish the final version with founder + CPO sign-off.*",
     ]
