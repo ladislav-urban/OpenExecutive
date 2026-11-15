@@ -618,9 +618,9 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     outcome.draft_cards, outcome.draft_repeats, outcome.draft_capped = made.left, made.repeats, made.capped
     outcome.checks, outcome.check_refused = made.checks, made.check_refused
     if job.proposals is not None:
-        told = await _propose_all(job, day, tuple(results), settings, today, outcome)
-        if told is not None:
-            notices = [*notices, told]
+        proposed_notice = await _propose_all(job, day, tuple(results), settings, today, outcome)
+        if proposed_notice is not None:
+            notices = [*notices, proposed_notice]
     to = run_route.person_id
     if made.all_refused_for_permissions:
         # Nothing the reviewer could act on: the principal hears of it.
