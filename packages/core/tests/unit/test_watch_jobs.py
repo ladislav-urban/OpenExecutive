@@ -85,6 +85,10 @@ def alerts_db(db: Path, monkeypatch: pytest.MonkeyPatch) -> Path:  # noqa: F811
     monkeypatch.setattr("openexecutive.memory.workspace_settings.get_user_timezone", lambda *_a: ZoneInfo("UTC"))
     for var in ("OE_LOCAL_LOGIN", "OE_PUBLIC_DEPLOYMENT", "CALLER_ASSERTION_PUBLIC_KEYS"):
         monkeypatch.delenv(var, raising=False)
+    # The scheduler's own holds, which a run-now also keeps: open.
+    monkeypatch.setattr("openexecutive.scheduler.pause.is_paused", lambda: False)
+    monkeypatch.setattr("openexecutive.scheduler.runner._company_profile_active", lambda: True)
+    monkeypatch.setattr("openexecutive.scheduler.runner._rotation_pause_active", lambda: False)
     return db
 
 
@@ -1197,11 +1201,36 @@ def test_scheduled_claim_waits_for_run_now(example: WatchJob) -> None:
     assert _rows() == [(DAY, "now@23:58:00", "failed", "run_stalled"), ("2026-11-11", "", "running", "")]
 
 
-def test_run_now_stale_row_is_failed_not_retried(example: WatchJob) -> None:
+def test_run_now_stale_row_is_failed_not_retried(
+    example: WatchJob, roster: SimpleNamespace, triage: list[Any],  # noqa: F811
+) -> None:
     runner.claim_now("example", DAY, NOW_SLOT, NOW)
     later = NOW + runner.STALE_AFTER
     runner.claim_now("example", DAY, "now@08:30:00", later)
     assert _rows() == [(DAY, NOW_SLOT, "failed", "run_stalled"), (DAY, "now@08:30:00", "running", "")]
+    # Reported as a stalled slot is: its audit row and the day's one notice.
+    [audit] = [r for r in _audit_rows("watch_run") if r.details["job"] == "example"]
+    assert audit.details["status"] == "failed" and audit.details.get("slot") == NOW_SLOT
+    assert len(_alerts()) == 1
+
+
+def test_a_run_now_whose_task_cant_start_frees_its_row(
+    example: WatchJob, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def go() -> None:
+        loop = asyncio.get_running_loop()
+
+        def broken(*_a: Any, **_k: Any) -> Any:
+            raise RuntimeError("no task")
+
+        with monkeypatch.context() as patched:
+            patched.setattr(loop, "create_task", broken)
+            with pytest.raises(RuntimeError):
+                runner.start_now(example, NOW)
+
+    asyncio.run(go())
+    assert _rows() == [(DAY, NOW_SLOT, "failed", "run_failed")] and runner._tasks == {}
+    assert runner.claim("example", DAY, NOW + timedelta(minutes=1)) == "run"
 
 
 def test_run_now_cap_per_day(example: WatchJob) -> None:
@@ -1250,7 +1279,7 @@ def test_run_now_stops_if_job_turned_off_before_reads(
     assert erp.calls == []
 
 
-def test_run_now_refused_when_job_or_master_off(
+def test_run_now_refused_when_job_or_master_off_or_the_scheduler_holds(
     example: WatchJob, roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,  # noqa: F811
 ) -> None:
     async def go() -> str:
@@ -1260,6 +1289,16 @@ def test_run_now_refused_when_job_or_master_off(
             return refused.code
         return "started"
 
+    # The scheduler's holds: paused, no company profile, a client rotation.
+    monkeypatch.setattr("openexecutive.scheduler.pause.is_paused", lambda: True)
+    assert asyncio.run(go()) == "paused"
+    monkeypatch.setattr("openexecutive.scheduler.pause.is_paused", lambda: False)
+    monkeypatch.setattr("openexecutive.scheduler.runner._company_profile_active", lambda: False)
+    assert asyncio.run(go()) == "held"
+    monkeypatch.setattr("openexecutive.scheduler.runner._company_profile_active", lambda: True)
+    monkeypatch.setattr("openexecutive.scheduler.runner._rotation_pause_active", lambda: True)
+    assert asyncio.run(go()) == "held"
+    monkeypatch.setattr("openexecutive.scheduler.runner._rotation_pause_active", lambda: False)
     monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "false")
     assert asyncio.run(go()) == "job_off"
     monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")

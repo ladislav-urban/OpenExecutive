@@ -15,7 +15,8 @@ Routes:
                           slot), so a fix in ERPNext needn't wait for its
                           next slot: one ordinary run (``runner.start_now``),
                           sharing the day's caps with its slots. 409
-                          ``job_off`` / ``already_running``, 429
+                          ``job_off`` / ``paused`` / ``held`` /
+                          ``already_running``, 429
                           ``run_now_cap`` (3 a day), 503 when the store
                           can't be read; each writes a ``watch_job_run_now``
                           audit row of codes only.
@@ -274,6 +275,8 @@ def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> Wat
 # What a refused run-now answers, by code: status and our words.
 _RUN_NOW_REFUSALS: dict[str, tuple[int, str]] = {
     "job_off": (409, "Turn the job on first: only a job that's on runs."),
+    "paused": (409, "Autonomous work is paused. Resume it first."),
+    "held": (409, "Jobs are on hold until the company is set up, or while it's being switched."),
     "already_running": (409, "The job is running now. Try again once it's done."),
     "run_now_cap": (429, "The job has already been run on request 3 times today."),
 }

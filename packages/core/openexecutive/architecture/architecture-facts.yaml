@@ -11955,14 +11955,18 @@ watch:
     POST /watch/jobs/{id}/run (same principal check; runner.start_now) runs
     a job once now, 202 {day, slot}: claim_now inserts a watch_runs row with
     slot "now@HH:MM:SS" (company time) under BEGIN IMMEDIATE, refusing
-    job_off (job_enabled false), already_running (any fresh running row of
+    job_off (job_enabled false), paused (scheduler.pause.is_paused) and held
+    (no company profile or a client rotation, the scheduler's own holds),
+    already_running (any fresh running row of
     the job, any day or slot, or this process's _tasks entry alive) and
     run_now_cap (RUN_NOW_CAP_DAY = 3 a job a company day; 429). The task is
     run_job unchanged (day caps, failure notice, dedup and told() shared
     with the slots), created with context=contextvars.Context() so the
     request's session, caller, turn and audit scope never reach its reads,
     and kept in _tasks. claim() treats a fresh now@ row of the job as busy
-    (_run_now_busy) and fails a stale one (run_stalled), never retried.
+    (_run_now_busy) and fails a stale one (run_stalled), never retried,
+    reported as a stalled slot is (watch_run audit row, failure notice);
+    a task that can't be created fails its row (run_failed).
     Each ask writes a private watch_job_run_now audit row (job, outcome
     code, day, slot, person id). Why - the owner asked that a data fix in
     ERPNext needn't wait a day for the job's next slot.
