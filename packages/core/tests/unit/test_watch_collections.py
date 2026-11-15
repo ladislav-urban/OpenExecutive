@@ -1154,3 +1154,90 @@ def test_the_run_day_check_count_survives_into_the_detail(
     [audit] = [r for r in _audit_rows("watch_run") if r.details["job"] == "collections"]
     assert audit.details["draft_cards"] == 3 and audit.details["routed"] == "reviewer"
 
+
+# --------------------------------------------------------------------------- #
+# One unreadable customer: dropped and asked once more (ladislav-urban/oe_connector#578)
+# --------------------------------------------------------------------------- #
+
+
+def _unreadable(name: str, doctype: str = "Customer") -> str:
+    return json.dumps({"error": f"watch_arguments: customers: {name!r} isn't a {doctype} the call's user may read"})
+
+
+def test_a_refusal_names_one_unreadable_value_and_nothing_else() -> None:
+    assert runner.unreadable_value(json.loads(_unreadable("Big Old Ltd"))["error"]) == ("$customers", "Big Old Ltd")
+    assert runner.unreadable_value(json.loads(_unreadable("O'Brien & Sons"))["error"]) == ("$customers", "O'Brien & Sons")
+    assert runner.unreadable_value(json.loads(_unreadable("Lumen", "Supplier"))["error"]) == ("$parties", "Lumen")
+    assert runner.unreadable_value(json.loads(_unreadable("Northgate", "Project"))["error"]) == ("$projects", "Northgate")
+    # oe_connector's own text, with the field's path in front.
+    assert runner.unreadable_value(
+        "filters.project: 'PROJ-0007' isn't a Project the call's user may read"
+    ) == ("$projects", "PROJ-0007")
+    # A name oe_connector may have cut (140 characters) is never retried: its
+    # first 140 characters could be another name the job sent.
+    assert runner.unreadable_value(json.loads(_unreadable("x" * 139))["error"]) == ("$customers", "x" * 139)
+    assert runner.unreadable_value(json.loads(_unreadable("x" * 140))["error"]) is None
+    for said in ("customers isn't a customers", "Permission denied", "", None,
+                 "customers: 'x' isn't a Employee the call's user may read",
+                 "customers: x isn't a Customer the call's user may read"):
+        assert runner.unreadable_value(said) is None, said
+
+
+def test_one_unreadable_customer_is_dropped_and_the_read_asked_once_more(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], model: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from openexecutive.alerts import store as alert_store
+    from openexecutive.audit import logger as audit_logger
+
+    from ._log_capture import recording
+
+    secret = "Big Old Ltd"
+    erp.replies.extend([_ar(), _list(SENT), _list([]), _unreadable(secret),
+                        _records([r for r in RECORDS if r["customer"] != secret])])
+    _checks(erp)
+    with recording(caplog, "openexecutive"):
+        outcome = _run(job_on)
+    assert outcome.status == "done"
+    first, second = _calls(erp, "erpnext__customer_payment_record")
+    assert secret in first["customers"] and secret not in second["customers"]
+    assert [c for c in first["customers"] if c != secret] == second["customers"]
+    assert _run_row("collections")["reads"][3] == {"read": "the customers' payment records", "as_job_user": True,
+                                                   "dropped": 1}
+    # The log says what happened, never the name, and neither does the run's record. The
+    # refusal's own text reaches no log, notice or audit row (the receivables notice may
+    # still name the customer from its own read).
+    assert "dropped one unreadable value" in caplog.text
+    assert secret not in caplog.text and secret not in json.dumps(_run_row("collections"))
+    everything = caplog.text + json.dumps(_run_row("collections")) + json.dumps(
+        [[a.headline, a.body] for a in alert_store.list_alerts(limit=100)]
+    ) + json.dumps([[r.summary, r.details] for r in audit_logger.get_audit_logger().query(limit=500)])
+    assert "may read" not in everything and "watch_arguments" not in everything
+
+
+@pytest.mark.parametrize("second", ["refused again", "a value it didn't send"])
+def test_a_second_refusal_or_a_value_not_sent_stops_the_run_as_before(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], model: SimpleNamespace, second: str,
+) -> None:
+    replies = [_ar(), _list(SENT), _list([])]
+    if second == "refused again":
+        replies += [_unreadable("Big Old Ltd"), _unreadable("Prompt Co")]
+    else:
+        replies += [_unreadable("Nobody Asked Ltd")]
+    erp.replies.extend(replies)
+    outcome = _run(job_on)
+    assert (outcome.status, outcome.error) == ("failed", "read_refused")
+    expected = 2 if second == "refused again" else 1
+    assert len(_calls(erp, "erpnext__customer_payment_record")) == expected
+
+
+def test_a_list_the_drop_would_empty_is_never_sent_empty(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], model: SimpleNamespace,
+) -> None:
+    only = AR_ROWS[0][0]
+    erp.replies.extend([_ar([AR_ROWS[0]]), _list(SENT), _list([]), _unreadable(only)])
+    outcome = _run(job_on)
+    assert (outcome.status, outcome.error) == ("failed", "read_refused")
+    [record] = _calls(erp, "erpnext__customer_payment_record")
+    assert record["customers"] == [only]
+
