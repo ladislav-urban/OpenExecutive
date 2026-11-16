@@ -185,7 +185,9 @@ def _card_text(view: Any) -> str:
     parts = [f"{f.get('label')}: {f.get('value')}" for f in view.get("fields") or [] if isinstance(f, dict)]
     for line in view.get("lines") or []:
         if isinstance(line, dict):
-            parts.append(" ".join(str(line.get(k, "")) for k in ("item_code", "qty", "warehouse", "rate", "amount")).strip())
+            # Every kind's line as it was stored: items, an invoice fill's
+            # rows, a bank match's vouchers.
+            parts.append(" ".join(str(v) for v in line.values() if v not in (None, "")).strip())
     parts.extend(str(n) for n in view.get("notes") or [])
     return " | ".join(p for p in parts if p)
 
