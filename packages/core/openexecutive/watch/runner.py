@@ -129,6 +129,11 @@ NOTICE_SEVERITY = "medium"
 # notice each, which flooded the reviewer and used up the day's notices.
 UNCARDED_ITEMS_MAX = 60
 UNCARDED_PREFIX = "uncarded:"
+# A grouped notice's own lines from its findings (each job's notes, merged
+# without repeats): at most this many, and this many characters in all,
+# the rest counted in fixed words (_capped_notes).
+UNCARDED_NOTES_MAX = 10
+UNCARDED_NOTES_CHARS = 2000
 UNCARDED_LINE = "These weren't left as cards this run; the run's lines below say why. Each is found again on a later run while it's still open."
 
 # What a notice says stopped a run, by reason code: our words, never ERPNext's.
@@ -1216,9 +1221,10 @@ def _uncarded(job: registry.WatchJob, found: list[registry.CardSpec], day: str) 
     # named over the following runs, not the same rows every day.
     found = sorted(fresh, key=lambda s: _uncarded_told_key(job, s.key) in told_on)
     shown = found[:UNCARDED_ITEMS_MAX]
-    notes: list[str] = [UNCARDED_LINE]
+    merged: list[str] = []
     for spec in found:
-        notes.extend(n for n in spec.notes if n not in notes)
+        merged.extend(n for n in spec.notes if n not in merged)
+    notes: list[str] = [UNCARDED_LINE, *_capped_notes(merged)]
     if len(found) > len(shown):
         notes.append(f"{len(found) - len(shown)} more aren't listed here.")
     # Each row's own digest, joined: no separator inside a key can make two
@@ -1233,6 +1239,24 @@ def _uncarded(job: registry.WatchJob, found: list[registry.CardSpec], day: str) 
         notes=tuple(notes),
         count=len(found),
     )]
+
+
+def _capped_notes(notes: list[str]) -> list[str]:
+    """``notes`` as far as ``UNCARDED_NOTES_MAX`` lines and
+    ``UNCARDED_NOTES_CHARS`` characters allow, in order, then one line in
+    fixed words counting the rest: one long notice never grows without
+    bound however many kinds of finding it groups."""
+    kept: list[str] = []
+    used = 0
+    for note in notes:
+        if len(kept) >= UNCARDED_NOTES_MAX or used + len(note) > UNCARDED_NOTES_CHARS:
+            break
+        kept.append(note)
+        used += len(note)
+    rest = len(notes) - len(kept)
+    if rest:
+        kept.append(f"{rest} more {'note isn' if rest == 1 else 'notes aren'}'t shown here.")
+    return kept
 
 
 def _mark_uncarded_told(job: registry.WatchJob, day: str, spec: registry.CardSpec) -> None:
