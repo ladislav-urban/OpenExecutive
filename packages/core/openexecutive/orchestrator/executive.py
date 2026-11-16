@@ -1230,6 +1230,11 @@ EMPTY_ROUND_CONTINUE_NOTE = (
 )
 
 
+# A reply that ends like this is whole: a trailing call after it (progress,
+# a follow-up) and a silent end are no reason to ask for more.
+_WHOLE_REPLY_END = re.compile(r"[.!?)\]\"'*_`]\s*$")
+
+
 def _round_separator(tail: str, text: str) -> str:
     """What goes between the text already streamed (its last characters,
     ``tail``) and a new round's first ``text``: a paragraph break, less what
@@ -2959,16 +2964,23 @@ class Executive:
                     and not any(
                         b.get("type") == "text" and str(b.get("text", "")).strip() for b in response_content
                     )
+                    and not _WHOLE_REPLY_END.search(reply_so_far)
                 ):
-                    # The round after tool results ended with no text: ask
-                    # once more, so the reply isn't empty or cut off where
-                    # it stopped before its last call.
+                    # The round after tool results ended with no text, and
+                    # the reply is empty or stopped mid-sentence before its
+                    # last call: ask once more.
                     empty_retried = True
                     logger.warning(
                         "empty round after tool results at iter %d; asking once more (reply so far %d chars)",
                         iteration, len(reply_so_far),
                     )
                     note = EMPTY_ROUND_CONTINUE_NOTE if reply_so_far.strip() else EMPTY_ROUND_NOTE
+                    # A hand-over the person asked for meanwhile is taken
+                    # here: the extra round writes up, and runs no tool.
+                    if inbox is not None and inbox.take_hand_over():
+                        handing_over = True
+                        yield {"type": "handing_over"}
+                        note = HAND_OVER_NOTE
                     current_messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
                     continue
                 # Do what it says: a reply that claims a change no call this

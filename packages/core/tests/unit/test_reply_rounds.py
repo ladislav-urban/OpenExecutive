@@ -225,6 +225,14 @@ def test_an_empty_round_is_asked_once_only_and_never_without_tools() -> None:
         FinalMsg([], "end_turn"),
     ])
     assert reply == "" and len(calls) == 3
+    # A whole reply before a trailing call isn't asked to go on.
+    # Past the short-note length, so it streams as the reply.
+    whole = "Metro pays 55 days late on average, so its receipts move out by about eight weeks; the lowest week still holds at $41,200."
+    reply, calls = _reply_and_calls([
+        FinalMsg([TextBlock(whole), ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "end_turn"),
+    ])
+    assert reply == whole and len(calls) == 2
     # A first round with no text and no tool call is left as it is.
     reply, calls = _reply_and_calls([FinalMsg([], "end_turn")])
     assert reply == "" and len(calls) == 1
