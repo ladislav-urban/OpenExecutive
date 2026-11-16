@@ -1248,3 +1248,68 @@ def test_a_draft_without_a_seal_is_not_in_the_export(
     erp.replies.append(json.dumps(CREATED))
     _approve(card)
     assert drafts.recorded_seals() == {}
+
+
+# --- Every watch-job card kind is listed (a match card's voucher lines once
+# failed the whole list, so Home counted cards it never showed) ---
+
+_MATCH_SUMMARY = {
+    "line": {
+        "name": "ACC-BTN-2026-00007", "date": "2026-11-14", "direction": "in", "amount": 1200,
+        "unallocated_amount": 1200, "currency": "USD", "reference": "PE-0042", "description": "Transfer",
+    },
+    "bank_account": "Main - Bank", "company": "Demo Co",
+    "vouchers": [{
+        "doctype": "Payment Entry", "name": "ACC-PAY-2026-00042", "posting_date": "2026-11-13",
+        "parties": [["Customer", "Metro Transit Works"]], "allocated": 1200, "clears_on": "2026-11-14",
+        "existing_bank_allocations": [], "creator": "accounts@example.com",
+    }],
+    "total": 1200, "after": {"status": "Reconciled"}, "importer": "accounts@example.com",
+}
+_FILL_SUMMARY = {
+    "currency": "USD", "source": {"doctype": "Purchase Order", "name": "PUR-ORD-2026-00003"},
+    "rows": [{"row": 1, "item_code": "SENSOR-01", "qty": 10, "rate": 12.5, "amount": 125}],
+}
+
+
+def _job_card(decision_id: int, doctype: str, operation: str, view: dict[str, Any]) -> Any:
+    from openexecutive.integrations.erpnext_drafts import DraftCard
+
+    return DraftCard(
+        decision_id=decision_id, created_at="2026-11-16T12:17:00+00:00", expires_at="2026-11-19T12:17:00+00:00",
+        why="x", doctype=doctype, fields=view["fields"], lines=view["lines"], notes=view["notes"],
+        operation=operation, job_title="Bank matching" if operation == "match" else "Invoice capture",
+    )
+
+
+def test_every_watch_card_kind_is_listed_with_its_lines(
+    roster: SimpleNamespace, client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.integrations import erpnext_fill, erpnext_match
+
+    match = _job_card(20, "Bank Transaction", "match", erpnext_match.card_view(_MATCH_SUMMARY))
+    fill = _job_card(21, "Purchase Invoice", "fill", erpnext_fill.card_view(_FILL_SUMMARY))
+    monkeypatch.setattr("openexecutive.integrations.erpnext_drafts.cards", lambda person: [match, fill])
+    resp = client.get("/erpnext/drafts", headers={"x-caller-email": OWNER})
+    assert resp.status_code == 200
+    listed = {c["decision_id"]: c for c in resp.json()["cards"]}
+    assert set(listed) == {20, 21}
+    voucher = listed[20]["lines"][0]
+    assert voucher["voucher"] == "Payment Entry ACC-PAY-2026-00042"
+    assert voucher["party"] == "Metro Transit Works" and voucher["allocated"].startswith("1,200.00")
+    assert voucher["clears_on"] == "2026-11-14"
+    row = listed[21]["lines"][0]
+    assert row["row"] == "1" and row["item"] == "SENSOR-01" and row["qty"] == "10"
+
+
+def test_a_card_that_doesnt_fit_never_empties_the_list(
+    roster: SimpleNamespace, client: TestClient, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.integrations import erpnext_match
+
+    good = _job_card(22, "Bank Transaction", "match", erpnext_match.card_view(_MATCH_SUMMARY))
+    bad = _job_card(23, "Bank Transaction", "match", {"fields": [{"label": 1}], "lines": [], "notes": []})
+    monkeypatch.setattr("openexecutive.integrations.erpnext_drafts.cards", lambda person: [bad, good])
+    resp = client.get("/erpnext/drafts", headers={"x-caller-email": OWNER})
+    assert resp.status_code == 200
+    assert [c["decision_id"] for c in resp.json()["cards"]] == [22]

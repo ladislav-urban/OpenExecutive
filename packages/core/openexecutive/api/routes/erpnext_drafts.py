@@ -50,7 +50,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from openexecutive.briefing.home_rules import register_waiting_cards
 
@@ -89,13 +89,28 @@ class DraftFieldOut(BaseModel):
 
 
 class DraftLineOut(BaseModel):
-    item_code: str
-    qty: str
-    warehouse: str
+    # One line of a card's table, whichever kind of card it is. Every key is
+    # optional, so a card of one kind never fails the whole list.
+    # A Material Request's, Quotation's or Purchase Order's line.
+    item_code: str = ""
+    qty: str = ""
+    warehouse: str = ""
     # A Quotation's or Purchase Order's line (ERPNext's figures, formatted);
     # "" on the others and where ERPNext gave none.
     rate: str = ""
     amount: str = ""
+    # An invoice-fill card's row (integrations.erpnext_fill.card_view): its
+    # row number and item (with qty, rate and amount above).
+    row: str = ""
+    item: str = ""
+    # A bank-match card's voucher (integrations.erpnext_match.card_view).
+    voucher: str = ""
+    dated: str = ""
+    party: str = ""
+    allocated: str = ""
+    clears_on: str = ""
+    matched_elsewhere: str = ""
+    created_by: str = ""
 
 
 class DraftCardOut(BaseModel):
@@ -159,7 +174,21 @@ async def get_erpnext_drafts(request: Request) -> DraftCardsOut:
         await recheck(person, found, api_caller.caller(request))
     except Exception:
         logger.warning("erpnext_drafts: reading the credit raises again failed", exc_info=True)
-    return DraftCardsOut(cards=[DraftCardOut(**asdict(card)) for card in found])
+    return DraftCardsOut(cards=_listed(found))
+
+
+def _listed(found: list[Any]) -> list[DraftCardOut]:
+    """The cards as the list gives them. One that doesn't fit the list's
+    shape is left out and logged, never the reason the person sees none:
+    Home counts every card (``_waiting_drafts``), and a list that failed
+    whole left that count with nothing under it."""
+    out: list[DraftCardOut] = []
+    for card in found:
+        try:
+            out.append(DraftCardOut(**asdict(card)))
+        except ValidationError:
+            logger.error("erpnext_drafts: card %s doesn't fit the list; left out", getattr(card, "decision_id", "?"))
+    return out
 
 
 class ProposedRuleOut(BaseModel):
