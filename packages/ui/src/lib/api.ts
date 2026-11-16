@@ -3049,14 +3049,26 @@ export interface ErpnextDraftField {
 }
 
 export interface ErpnextDraftLine {
-  item_code: string;
-  qty: string;
+  item_code?: string;
+  qty?: string;
   // "" when the line names none (a Quotation's may not).
-  warehouse: string;
+  warehouse?: string;
   // A Quotation's or Purchase Order's ERPNext rate and amount, formatted;
   // "" or absent on the others and where ERPNext gave none.
   rate?: string;
   amount?: string;
+  // An invoice-fill card's row: its number and item.
+  row?: string;
+  item?: string;
+  // A bank-match card's voucher: what it is, its date and party, what is
+  // allocated and the date it clears (lib/draftLines.ts picks the columns).
+  voucher?: string;
+  dated?: string;
+  party?: string;
+  allocated?: string;
+  clears_on?: string;
+  matched_elsewhere?: string;
+  created_by?: string;
 }
 
 export interface ErpnextDraftCard {
