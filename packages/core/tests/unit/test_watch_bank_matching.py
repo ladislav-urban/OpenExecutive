@@ -995,3 +995,136 @@ def test_the_principals_notices_take_the_days_places_first() -> None:
 
     notices = [spec("a"), spec("b"), spec("kept", True), spec("c"), spec("month", True)]
     assert [s.key for s in runner.principal_first(notices)] == ["kept", "month", "a", "b", "c"]
+
+
+# --------------------------------------------------------------------------- #
+# Findings left without a card: one notice, never one each
+# --------------------------------------------------------------------------- #
+
+def _many_matches(n: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """``n`` lines, each with one clear match: Harbor's, the same amount (no shared
+    reference, which ERPNext's own rules would take)."""
+    lines = [
+        _line(f"BT-{100 + i}", 1000.0 + i, days_ago=3, party=HARBOR, reference=f"RCPT-{900000 + i}",
+              description="Payment from Harbor")
+        for i in range(n)
+    ]
+    cands = {
+        row["name"]: [_cand(PE, f"PE-{100 + i}", row["amount"], party=HARBOR, days_ago=4)]
+        for i, row in enumerate(lines)
+    }
+    return lines, cands
+
+
+def test_forty_matches_with_no_reviewer_leave_one_notice_not_forty(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    # No reviewer: every match is told to the principal, none left as a card.
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(42)
+    _reads(erp, lines=lines, cands=cands)
+    outcome = _run(job_on)
+    assert (outcome.status, outcome.routed, outcome.draft_cards) == ("done", "principal", 0)
+    assert outcome.findings == 42
+    [notice] = _alerts()
+    assert notice.routed_to_person_id == team.principal
+    assert "42 found, not left as cards" in notice.body
+    assert all(f"BT-{100 + i}" in notice.body for i in range(42))
+    assert runner.UNCARDED_LINE in notice.body and bank_matching.MATCH_LINE in notice.body
+    # One notice, one card counted: the day's notices aren't used up.
+    assert outcome.cards == 1 and outcome.capped == 0
+    assert notice.headline == f"Bank matching: 42 found on {DAY}"
+
+
+def test_one_match_left_without_a_card_is_still_its_own_notice(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(1)
+    _reads(erp, lines=lines, cands=cands)
+    _run(job_on)
+    [notice] = _alerts()
+    assert "Likely match for bank line BT-100" in notice.body
+    assert runner.UNCARDED_LINE not in notice.body
+
+
+
+def _run_again(job: WatchJob, at: str) -> runner.RunOutcome:
+    """A second run the same day (a Run now)."""
+    runner.claim_now(job.id, DAY, f"now@{at}", datetime.now(UTC))
+    return asyncio.run(runner.run_job(job, DAY, slot=f"now@{at}"))
+
+
+def test_a_later_run_the_same_day_tells_only_what_is_new(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(3)
+    _reads(erp, lines=lines, cands=cands, invoices=None)
+    _run(job_on)
+    [first] = _alerts()
+    assert "3 found, not left as cards" in first.body
+    # The same three and two new: only the two new are told, on a notice of their own.
+    more, more_cands = _many_matches(5)
+    _reads(erp, lines=more, cands=more_cands, invoices=None)
+    _run_again(job_on, "12:00:00")
+    second = [a for a in _alerts() if a.id != first.id]
+    assert len(second) == 1
+    assert "2 found, not left as cards" in second[0].body
+    assert "BT-103" in second[0].body and "BT-104" in second[0].body
+    assert not any(f"BT-{100 + i}" in second[0].body for i in range(3))
+    # Nothing new: nothing told.
+    _reads(erp, lines=more, cands=more_cands, invoices=None)
+    _run_again(job_on, "13:00:00")
+    assert len(_alerts()) == 2
+
+
+def test_a_finding_whose_own_notice_is_open_is_never_a_row(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    # BT-100's own notice (say ERPNext kept it from the reviewer, told to the
+    # principal) is open: no later grouped notice names it, whoever it goes to.
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(3)
+    key = f"match{bank_matching._SEP}BT-100{bank_matching._SEP}{PE}{bank_matching._SEP}PE-100"
+    kept = registry.CardSpec(key=key, summary="Likely match for bank line BT-100", to_principal=True)
+    assert runner._leave_notice(job_on, DAY, kept, "", runner.dedup_key(job_on.id, key), found=1,
+                                to=team.principal) is not None
+    _reads(erp, lines=lines, cands=cands)
+    _run(job_on)
+    grouped = [a for a in _alerts() if "found, not left as cards" in a.body]
+    assert len(grouped) == 1 and "2 found, not left as cards" in grouped[0].body
+    assert "BT-100" not in grouped[0].body
+
+
+def _keys(n: int) -> list[registry.CardSpec]:
+    return [registry.CardSpec(key=f"k{i}", summary=f"row {i}") for i in range(n)]
+
+
+def test_a_row_told_yesterday_is_told_again_today_and_then_not_again_today(
+    job_on: WatchJob, team: SimpleNamespace,
+) -> None:
+    next_day = (TODAY + timedelta(days=1)).isoformat()
+    [first] = runner._uncarded(job_on, _keys(3), DAY)
+    runner._mark_uncarded_told(job_on, DAY, first)
+    assert runner._uncarded(job_on, _keys(3), DAY) == []
+    # The next day they're told again, once: the record moves to that day.
+    [again] = runner._uncarded(job_on, _keys(3), next_day)
+    runner._mark_uncarded_told(job_on, next_day, again)
+    assert runner._uncarded(job_on, _keys(3), next_day) == []
+    # A new one that day is told on its own, without the three.
+    [new] = runner._uncarded(job_on, _keys(4), next_day)
+    assert new.key == "k3"
+
+
+def test_rows_never_told_come_first_past_the_shown_limit(
+    job_on: WatchJob, team: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner, "UNCARDED_ITEMS_MAX", 2)
+    [first] = runner._uncarded(job_on, _keys(4), DAY)
+    assert [s.key for s in first.items] == ["k0", "k1"]
+    runner._mark_uncarded_told(job_on, DAY, first)
+    next_day = (TODAY + timedelta(days=1)).isoformat()
+    [second] = runner._uncarded(job_on, _keys(4), next_day)
+    assert [s.key for s in second.items] == ["k2", "k3"]
+

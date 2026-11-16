@@ -8,7 +8,10 @@ export interface WatchRun {
   // "HH:MM" for a scheduled slot, "" for a once-a-day job or a run on request.
   slot: string;
   status: string;
+  // The notices it left.
   cards: number;
+  // The draft cards it left for approval; absent on an older backend.
+  draft_cards?: number;
   // A reason code (watch/runner.py REASONS), never ERPNext's text.
   error: string;
   run_now?: boolean;
@@ -78,6 +81,19 @@ function whenLine(run: WatchRun): string {
   return slot ? `${run.day} at ${slot}` : run.day;
 }
 
+const count = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+
+/** What a run left: its cards to approve and its notices. */
+function leftLine(run: WatchRun): string {
+  const drafts = typeof run.draft_cards === "number" && run.draft_cards > 0 ? run.draft_cards : 0;
+  const notices = run.cards > 0 ? run.cards : 0;
+  if (!drafts && !notices) return "nothing new";
+  return [
+    drafts ? count(drafts, "card to approve", "cards to approve") : "",
+    notices ? count(notices, "notice", "notices") : "",
+  ].filter(Boolean).join(", ");
+}
+
 /** The job's last run in one line, or that it hasn't run yet. */
 export function lastRunLine(run: WatchRun | null): string {
   if (!run) return "Hasn't run yet.";
@@ -88,8 +104,7 @@ export function lastRunLine(run: WatchRun | null): string {
     return `Last run ${when}: didn't finish, ${why}.`;
   }
   if (run.status === "done") {
-    const cards = run.cards === 1 ? "1 card" : `${run.cards} cards`;
-    return `Last run ${when}: done, ${cards}.`;
+    return `Last run ${when}: done, ${leftLine(run)}.`;
   }
   return `Last run ${when}.`;
 }
