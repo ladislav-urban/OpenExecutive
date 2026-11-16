@@ -233,7 +233,59 @@ def test_an_empty_round_is_asked_once_only_and_never_without_tools() -> None:
         FinalMsg([], "end_turn"),
     ])
     assert reply == whole and len(calls) == 2
-    # A first round with no text and no tool call is left as it is.
-    reply, calls = _reply_and_calls([FinalMsg([], "end_turn")])
-    assert reply == "" and len(calls) == 1
+    # A first round with no text is asked once more too.
+    reply, calls = _reply_and_calls([FinalMsg([], "end_turn"), FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn")])
+    assert reply == "ITEM-1 has 12." and len(calls) == 2
+
+
+def test_an_empty_round_at_the_output_limit_is_asked_once_more() -> None:
+    reply, calls = _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "max_tokens"),
+        FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn"),
+    ])
+    assert reply == "ITEM-1 has 12." and len(calls) == 3
+    # That retry is offered no tool: it must write, not fill the limit again.
+    assert calls[2].get("tool_choice") == {"type": "none"}
+
+
+def test_a_refusal_after_some_text_ends_the_turn_unretried(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator import claim_check
+
+    async def unbacked(model: str, turn: str) -> dict[str, Any]:
+        return {"unbacked": True, "claim": "Done"}
+
+    monkeypatch.setenv("CLAIM_CHECK_ENABLED", "true")
+    monkeypatch.setattr(claim_check, "_call_model", unbacked)
+    reply, calls = _reply_and_calls([FinalMsg([TextBlock("Done.")], "refusal")])
+    assert reply == "Done." and len(calls) == 1
+
+
+def test_a_refusal_with_nothing_written_says_so_and_is_never_retried() -> None:
+    from openexecutive.orchestrator.executive import REFUSED_REPLY
+
+    reply, calls = _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "refusal"),
+    ])
+    assert reply == REFUSED_REPLY and len(calls) == 2
+
+
+def test_an_empty_turn_logs_why_without_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator import executive
+
+    # The executive's own warnings, captured at the call: caplog depends on
+    # logging set-up another test in the same worker may have changed.
+    logged: list[str] = []
+    monkeypatch.setattr(
+        executive.logger, "warning", lambda msg, *args, **_kw: logged.append(msg % args if args else msg),
+    )
+    _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "end_turn"),
+        FinalMsg([], "end_turn"),
+    ])
+    assert any(
+        "turn ended with no reply: stop_reason=end_turn iter=3/15 empty_retried=True" in line for line in logged
+    ), logged
 
