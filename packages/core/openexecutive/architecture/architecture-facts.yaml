@@ -12129,8 +12129,9 @@ watch:
     UNCARDED_ITEMS_MAX rows, the rest counted), never a notice each. A run
     for the principal with 45 bank matches once left 30 identical notices
     A non-once job keeps that too: a check as reviewer R returning exactly
-    one of cards.KEPT_CODES writes kept_key(key, R) (person id, job digest)
-    to watch_told; for HOLD_DAYS every run with R treats the finding as
+    one of cards.KEPT_CODES writes _kept_code_key(code, key, R) (the code,
+    person id, job digest) to watch_told; for HOLD_DAYS every run with R
+    counts the finding as that refusal again and treats it as
     kept (cards._kept_now), unchecked, told to the principal at most once
     a day. A failed check writes nothing; unreadable means a check again.
     until card_cap_day stopped it. One ERPNext kept from the reviewer still

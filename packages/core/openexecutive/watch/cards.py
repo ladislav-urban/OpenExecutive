@@ -419,7 +419,7 @@ async def leave_drafts(
             if drafts._payload(c).get("run_day") == day
         }
         # A finding ERPNext kept from this reviewer on an earlier run (its
-        # kept_key record, HOLD_DAYS at most): told to the principal, never
+        # _kept_code_key record, HOLD_DAYS at most): told to the principal, never
         # this reviewer, and not checked as them again meanwhile.
         kept_codes = _kept_now(job, reviewer.id, specs, day)
         kept_now = set(kept_codes)
@@ -662,7 +662,15 @@ def _kept_now(
             except Exception:
                 logger.warning("watch: job %s's old kept records couldn't be dropped", job.id)
             written = {record: at for record, at in written.items() if at >= oldest}
-    return {records[record][0]: records[record][1] for record in written if record in records}
+    out: dict[str, str] = {}
+    for record in sorted(written):
+        if record in records:
+            key, code = records[record]
+            # Two records for one finding (a re-check gave another code):
+            # a permission one wins, so the run goes where a check would send it.
+            if key not in out or code in ("check_permission", "check_not_theirs"):
+                out[key] = code
+    return out
 
 
 def kept_key(key: str, reviewer_id: int) -> str:
