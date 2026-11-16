@@ -995,3 +995,54 @@ def test_the_principals_notices_take_the_days_places_first() -> None:
 
     notices = [spec("a"), spec("b"), spec("kept", True), spec("c"), spec("month", True)]
     assert [s.key for s in runner.principal_first(notices)] == ["kept", "month", "a", "b", "c"]
+
+
+# --------------------------------------------------------------------------- #
+# Findings left without a card: one notice, never one each
+# --------------------------------------------------------------------------- #
+
+def _many_matches(n: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """``n`` lines, each with one clear match: Harbor's, the same amount (no shared
+    reference, which ERPNext's own rules would take)."""
+    lines = [
+        _line(f"BT-{100 + i}", 1000.0 + i, days_ago=3, party=HARBOR, reference=f"RCPT-{900000 + i}",
+              description="Payment from Harbor")
+        for i in range(n)
+    ]
+    cands = {
+        row["name"]: [_cand(PE, f"PE-{100 + i}", row["amount"], party=HARBOR, days_ago=4)]
+        for i, row in enumerate(lines)
+    }
+    return lines, cands
+
+
+def test_forty_matches_with_no_reviewer_leave_one_notice_not_forty(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    # No reviewer: every match is told to the principal, none left as a card.
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(42)
+    _reads(erp, lines=lines, cands=cands)
+    outcome = _run(job_on)
+    assert (outcome.status, outcome.routed, outcome.draft_cards) == ("done", "principal", 0)
+    assert outcome.findings == 42
+    [notice] = _alerts()
+    assert notice.routed_to_person_id == team.principal
+    assert "42 found, not left as cards" in notice.body
+    assert all(f"BT-{100 + i}" in notice.body for i in range(42))
+    assert runner.UNCARDED_LINE in notice.body and bank_matching.MATCH_LINE in notice.body
+    # One notice, one card counted: the day's notices aren't used up.
+    assert outcome.cards == 1 and outcome.capped == 0
+    assert notice.headline == f"Bank matching: 42 found on {DAY}"
+
+
+def test_one_match_left_without_a_card_is_still_its_own_notice(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(1)
+    _reads(erp, lines=lines, cands=cands)
+    _run(job_on)
+    [notice] = _alerts()
+    assert "Likely match for bank line BT-100" in notice.body
+    assert runner.UNCARDED_LINE not in notice.body

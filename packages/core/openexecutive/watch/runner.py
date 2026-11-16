@@ -122,6 +122,11 @@ MAX_FACTS = 8
 MAX_FINDINGS = 200
 # Every job notice's severity, chosen here, never by a model.
 NOTICE_SEVERITY = "medium"
+# Findings a run found but left no card for (no reviewer, a cap, a refusal),
+# told together on one notice when there are several (_uncarded): never a
+# notice each, which flooded the reviewer and used up the day's notices.
+UNCARDED_ITEMS_MAX = 60
+UNCARDED_LINE = "These weren't left as cards this run; the run's lines below say why. Each is found again on a later run while it's still open."
 
 # What a notice says stopped a run, by reason code: our words, never ERPNext's.
 REASONS: dict[str, str] = {
@@ -884,10 +889,14 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     notices = _without_rows(notices, made.kept_from_reviewer)
     rows = {item.key for spec in notices for item in spec.items}
     notices = notices + [
-        dataclasses.replace(s.notice, to_principal=True) if s.key in made.kept_from_reviewer else s.notice
+        dataclasses.replace(s.notice, to_principal=True)
         for s in made.unproposed
-        if s.notice is not None and (s.key in made.kept_from_reviewer or (s.key not in rows and not job.once))
-    ]
+        if s.notice is not None and s.key in made.kept_from_reviewer
+    ] + _uncarded([
+        s.notice
+        for s in made.unproposed
+        if s.notice is not None and s.key not in made.kept_from_reviewer and s.key not in rows and not job.once
+    ], day)
     # The cap counts attempts a day across the job's slots (watch_days), not
     # successes, so a notice that fails to store never lets another finding
     # through in its place, and an hourly job's slots share one bound.
@@ -1071,6 +1080,28 @@ def _lines_target(due: Sequence[registry.CardSpec]) -> registry.CardSpec | None:
     """The notice the run's own lines go on: the first of ``due`` that isn't
     the principal's, else the first of ``due``, else None."""
     return next((spec for spec in due if not spec.to_principal), due[0] if due else None)
+
+
+def _uncarded(found: list[registry.CardSpec], day: str) -> list[registry.CardSpec]:
+    """The notices of findings a run left no card for: one as it is, several
+    as one notice with a row each (``UNCARDED_ITEMS_MAX`` of them, the rest
+    counted). Each row keeps its own key, so its reason line and the run's
+    dedupe still see it."""
+    if len(found) <= 1:
+        return found
+    shown = found[:UNCARDED_ITEMS_MAX]
+    notes: list[str] = [UNCARDED_LINE]
+    for spec in found:
+        notes.extend(n for n in spec.notes if n not in notes)
+    if len(found) > len(shown):
+        notes.append(f"{len(found) - len(shown)} more aren't listed here.")
+    return [registry.CardSpec(
+        key=f"uncarded:{day}",
+        summary=f"{len(found)} found, not left as cards",
+        items=tuple(shown),
+        notes=tuple(notes),
+        count=len(found),
+    )]
 
 
 def _without_rows(notices: list[registry.CardSpec], kept: set[str]) -> list[registry.CardSpec]:

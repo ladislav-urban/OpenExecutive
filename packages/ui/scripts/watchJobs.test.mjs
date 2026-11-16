@@ -33,14 +33,20 @@ test("an unknown, missing or inherited code gets the fixed fallback, never the s
 });
 
 test("a run on request reads as such, with its time, never as a schedule slot", () => {
-  assert.equal(lastRunLine({ ...RUN, slot: "now@14:05:09" }), "Last run 2026-11-16, run on request at 14:05: done, 2 cards.");
-  assert.equal(lastRunLine({ ...RUN, run_now: true }), "Last run 2026-11-16, run on request: done, 2 cards.");
+  assert.equal(lastRunLine({ ...RUN, slot: "now@14:05:09" }), "Last run 2026-11-16, run on request at 14:05: done, 2 notices.");
+  assert.equal(lastRunLine({ ...RUN, run_now: true }), "Last run 2026-11-16, run on request: done, 2 notices.");
   assert.doesNotMatch(lastRunLine({ ...RUN, slot: "now@14:05:09" }), /now@|at now/);
 });
 
+test("a run says its cards to approve and its notices apart", () => {
+  assert.equal(lastRunLine({ ...RUN, cards: 1, draft_cards: 5 }), "Last run 2026-11-16: done, 5 cards to approve, 1 notice.");
+  assert.equal(lastRunLine({ ...RUN, cards: 0, draft_cards: 1 }), "Last run 2026-11-16: done, 1 card to approve.");
+  assert.equal(lastRunLine({ ...RUN, cards: 0, draft_cards: 0 }), "Last run 2026-11-16: done, nothing new.");
+});
+
 test("a scheduled run names its slot, and a once-a-day run its day", () => {
-  assert.equal(lastRunLine({ ...RUN, slot: "09:00", cards: 1 }), "Last run 2026-11-16 at 09:00: done, 1 card.");
-  assert.equal(lastRunLine(RUN), "Last run 2026-11-16: done, 2 cards.");
+  assert.equal(lastRunLine({ ...RUN, slot: "09:00", cards: 1 }), "Last run 2026-11-16 at 09:00: done, 1 notice.");
+  assert.equal(lastRunLine(RUN), "Last run 2026-11-16: done, 2 notices.");
   assert.equal(lastRunLine(null), "Hasn't run yet.");
   assert.equal(lastRunLine({ ...RUN, status: "running" }), "Running now (started 2026-11-16).");
 });
@@ -73,5 +79,5 @@ test("the re-reads stop once a new finished run shows", () => {
 });
 
 test("a missing slot reads as a once-a-day run, never a crash", () => {
-  assert.equal(lastRunLine({ ...RUN, slot: null }), "Last run 2026-11-16: done, 2 cards.");
+  assert.equal(lastRunLine({ ...RUN, slot: null }), "Last run 2026-11-16: done, 2 notices.");
 });

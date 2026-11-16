@@ -78,8 +78,11 @@ class WatchRunOut(BaseModel):
     # run the principal asked for (``run_now``).
     slot: str = ""
     status: str
+    # The notices the run left (watch_runs.cards).
     cards: int
     error: str
+    # The draft cards it left (a match, a hold, a dunning…), from its detail.
+    draft_cards: int = 0
     # A run started with POST /watch/jobs/{id}/run, not at a slot.
     run_now: bool = False
 
@@ -143,7 +146,7 @@ def _last_run(job_id: str) -> WatchRunOut | None:
     conn = connect()
     try:
         row = conn.execute(
-            f"SELECT day, slot, status, cards, error FROM {RUNS_TABLE} "  # noqa: S608
+            f"SELECT day, slot, status, cards, error, detail FROM {RUNS_TABLE} "  # noqa: S608
             "WHERE job = ? AND status != 'skipped' ORDER BY day DESC, started_at DESC, slot DESC LIMIT 1",
             (job_id,),
         ).fetchone()
@@ -156,8 +159,21 @@ def _last_run(job_id: str) -> WatchRunOut | None:
     run_now = str(row[1] or "").startswith(RUN_NOW_PREFIX)
     return WatchRunOut(
         day=row[0], slot="" if run_now else row[1] or "", status=row[2], cards=int(row[3] or 0),
-        error=row[4] or "", run_now=run_now,
+        error=row[4] or "", run_now=run_now, draft_cards=_draft_cards(row[5]),
     )
+
+
+def _draft_cards(detail: object) -> int:
+    """The run's draft cards from its ``detail`` (codes and counts only); 0
+    when it has none or can't be read."""
+    import json
+
+    try:
+        got = json.loads(detail) if isinstance(detail, str) and detail else {}
+    except ValueError:
+        return 0
+    value = got.get("draft_cards") if isinstance(got, dict) else None
+    return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else 0
 
 
 def _job_out(job: Any) -> WatchJobOut:

@@ -1470,6 +1470,6 @@ def test_the_settings_list_shows_a_run_now_as_one(
     assert response.status_code == 200
     [job] = [j for j in response.json()["jobs"] if j["id"] == "example"]
     assert job["last_run"] == {
-        "day": DAY, "slot": "", "status": "running", "cards": 0, "error": "", "run_now": True,
+        "day": DAY, "slot": "", "status": "running", "cards": 0, "error": "", "run_now": True, "draft_cards": 0,
     }
     assert job["slots"] == [] or all(not s.startswith("now@") for s in job["slots"])
