@@ -1218,6 +1218,23 @@ LAST_ROUND_NOTE = (
 )
 
 
+# Added when a round after tool results ended with no text at all: the
+# model sometimes stops there, and the reply would be nothing (or only what
+# it wrote before its last call, cut off mid-sentence). Asked once a turn.
+EMPTY_ROUND_NOTE = (
+    "You ended without writing anything for the person. Write your answer now from what you have read."
+)
+EMPTY_ROUND_CONTINUE_NOTE = (
+    "Your reply stopped before it was finished. Carry on from where it stopped, without repeating what you "
+    "already wrote, and finish it from what you have read."
+)
+
+
+# A reply that ends like this is whole: a trailing call after it (progress,
+# a follow-up) and a silent end are no reason to ask for more.
+_WHOLE_REPLY_END = re.compile(r"[.!?)\]\"'*_`]\s*$")
+
+
 def _round_separator(tail: str, text: str) -> str:
     """What goes between the text already streamed (its last characters,
     ``tail``) and a new round's first ``text``: a paragraph break, less what
@@ -2726,6 +2743,9 @@ class Executive:
         # it was asked to do, since a result's first line rarely says it all.
         claim_calls: list[tuple[str, str]] = []
         claim_checked = False
+        # Whether a round with no text after tool results was asked once more
+        # (EMPTY_ROUND_NOTE): once a turn.
+        empty_retried = False
         # The reply as it stood when the claim check asked for one more round:
         # that round's text is held and only a short line of what the reply
         # doesn't already say is kept (utils.repeats), so a rewritten answer
@@ -2937,6 +2957,32 @@ class Executive:
                 # synced excerpts checked, so what they tried is flagged to
                 # the person (outside_content.settle).
                 await outside_content.settle()
+                if (
+                    final_msg.stop_reason == "end_turn" and iteration > 1
+                    and iteration < max_iterations and not empty_retried and not handing_over
+                    and reply_before_nudge is None
+                    and not any(
+                        b.get("type") == "text" and str(b.get("text", "")).strip() for b in response_content
+                    )
+                    and not _WHOLE_REPLY_END.search(reply_so_far)
+                ):
+                    # The round after tool results ended with no text, and
+                    # the reply is empty or stopped mid-sentence before its
+                    # last call: ask once more.
+                    empty_retried = True
+                    logger.warning(
+                        "empty round after tool results at iter %d; asking once more (reply so far %d chars)",
+                        iteration, len(reply_so_far),
+                    )
+                    note = EMPTY_ROUND_CONTINUE_NOTE if reply_so_far.strip() else EMPTY_ROUND_NOTE
+                    # A hand-over the person asked for meanwhile is taken
+                    # here: the extra round writes up, and runs no tool.
+                    if inbox is not None and inbox.take_hand_over():
+                        handing_over = True
+                        yield {"type": "handing_over"}
+                        note = HAND_OVER_NOTE
+                    current_messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
+                    continue
                 # Do what it says: a reply that claims a change no call this
                 # turn made gets one more round to make it or say it can't.
                 if claim_checked or handing_over or iteration >= max_iterations:
