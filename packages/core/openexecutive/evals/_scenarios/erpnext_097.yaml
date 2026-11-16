@@ -1,0 +1,20 @@
+id: erpnext_097
+domain: mcp
+speaker: principal
+requires_mcp: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+prior_turns:
+- user: Quote Lakeside Hospital Trust 200 motion sensors.
+  assistant: 'I''ve prepared a draft Quotation for Lakeside Hospital Trust: 200 motion sensors (DEMO-SNS-01) at the Standard Selling price. Approve it on the card to create it in the ERP.'
+description: 'Draft-and-approve step (dynocortex_demo''s help/try-draft-and-approve.md) in Conversations, after a first quote for 200: the second ask quotes 150 motion sensors (DEMO-SNS-01) for Lakeside Hospital Trust, Aurora Components (Demo). When the reply says what stock on hand means for the quote, it gives the shortfall itself, the quantity asked for less the stock on hand it read, with both figures. On-hand stock moves with the demo''s day, so the shortfall is judged against the on-hand figure the reply gives, never a fixed number. Found on the pilot (S14 shot 3, OpenExecutive 32d0d14e): 54 on hand "leaves the order short of 150", where it was 96 short.'
+query: Quote Lakeside Hospital Trust 150 motion sensors.
+forbidden_reply_words:
+- ERPNext
+- short of 150
+- short of the 150
+quality_criteria:
+  prepares_or_offers_the_quotation_for_150_motion_sensors_for_lakeside: true
+  if_it_mentions_stock_it_gives_the_shortfall_as_150_less_the_on_hand_figure_it_states_with_both_figures: true
+  never_states_the_ordered_quantity_as_the_shortfall: true
