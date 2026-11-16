@@ -1047,9 +1047,20 @@ def test_no_text_is_no_template(said: Any) -> None:
 
 def test_a_refused_read_keeps_no_name_in_the_run_record_audit_or_log(
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
-    caplog: pytest.LogCaptureFixture,
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from openexecutive.audit import logger as audit_logger
+
+    # The runner's own log lines, captured at the call: caplog depends on
+    # logging set-up another test in the same worker may have changed.
+    logged: list[str] = []
+    real_warning = runner.logger.warning
+
+    def warning(msg: str, *args: Any, **kwargs: Any) -> None:
+        logged.append(msg % args if args else msg)
+        real_warning(msg, *args, **kwargs)
+
+    monkeypatch.setattr(runner.logger, "warning", warning)
 
     said = ("The watch job 'bank-matching' lists bank_lines_to_match, but not with these arguments: "
             "bank_account: 'O'Brien Ltd - Acme Ltd' isn't the Bank Account's exact name, 'Beta GmbH'")
@@ -1067,6 +1078,6 @@ def test_a_refused_read_keeps_no_name_in_the_run_record_audit_or_log(
     assert json.loads(detail)["refusal"] == outcome.refusal
     audit = json.dumps([[r.summary, r.details] for r in audit_logger.get_audit_logger().query(limit=500)])
     assert "not_exact_name" in audit
-    for kept in (detail, audit, caplog.text, *(a.body for a in _alerts())):
+    for kept in (detail, audit, caplog.text, "\n".join(logged), *(a.body for a in _alerts())):
         assert not any(part in kept for name in _NAMES for part in (name, name.split()[0])), kept
-    assert "template=arguments why=not_exact_name" in caplog.text
+    assert any("template=arguments why=not_exact_name" in line for line in logged)
