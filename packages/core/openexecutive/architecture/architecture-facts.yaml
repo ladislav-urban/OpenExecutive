@@ -11970,6 +11970,13 @@ watch:
     Each ask writes a private watch_job_run_now audit row (job, outcome
     code, day, slot, person id). Why - the owner asked that a data fix in
     ERPNext needn't wait a day for the job's next slot.
+    The web app's Settings page for the system lists the jobs (GET) with
+    a Run once now button per job (components/settings/WatchJobsCard.tsx,
+    lib/watchJobs.ts), shown only when GET answers 200, i.e. to the
+    principal. It shows refusals and a failed run's reason from fixed
+    maps of codes, never the API's text, and re-reads the jobs at most 5
+    times after a start. Neither route is on the host list (host-list.json,
+    test_host_list), so a host origin's page can't read jobs or start runs.
     watch_told (job, key, day; primary key job, key): a once job's told
     findings as dedupe digests (never ERPNext text), written by
     settings.mark_told in one BEGIN IMMEDIATE transaction that also drops
