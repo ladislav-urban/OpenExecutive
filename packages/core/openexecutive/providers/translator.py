@@ -841,7 +841,9 @@ def from_openai_response(body: dict[str, Any]) -> SimpleNamespace:
             )
         )
     stop_reason = _stop_reason_from_openai(choice.get("finish_reason"))
-    if skipped_server_calls and not any(b.type == "tool_use" for b in content_blocks):
+    # A content filter stays a refusal, whatever tools ran: never relabelled
+    # a natural end (the loop never asks a refusal again).
+    if stop_reason != "refusal" and skipped_server_calls and not any(b.type == "tool_use" for b in content_blocks):
         # Every tool call was server-side: nothing is left for the caller
         # to run, so the turn is complete, not waiting on tool results.
         stop_reason = "end_turn"
@@ -1094,6 +1096,7 @@ class StreamAccumulator:
             stop_reason=(
                 "end_turn"
                 if self._server_tool_indices and not self._tool_calls
+                and _stop_reason_from_openai(self._finish_reason) != "refusal"
                 else _stop_reason_from_openai(self._finish_reason)
             ),
             stop_sequence=None,

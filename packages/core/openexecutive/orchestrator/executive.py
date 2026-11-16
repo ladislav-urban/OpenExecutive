@@ -2752,6 +2752,9 @@ class Executive:
         # Whether a round with no text after tool results was asked once more
         # (EMPTY_ROUND_NOTE): once a turn.
         empty_retried = False
+        # The next round is offered no tool: a retry after a max_tokens stop
+        # with no text must write, not repeat the call that filled it.
+        no_tools_next = False
         # The reply as it stood when the claim check asked for one more round:
         # that round's text is held and only a short line of what the reply
         # doesn't already say is kept (utils.repeats), so a rewritten answer
@@ -2837,7 +2840,7 @@ class Executive:
                 # ending on "unable to complete". The tools and system
                 # blocks stay cached; the messages are read uncached this
                 # once, as tool_choice changes. Only a turn at its cap pays it.
-                **({"tool_choice": {"type": "none"}} if iteration == max_iterations else {}),
+                **({"tool_choice": {"type": "none"}} if iteration == max_iterations or no_tools_next else {}),
             ) as stream:
                 async for event in stream:
                     if (
@@ -2989,6 +2992,7 @@ class Executive:
                         final_msg.stop_reason, iteration, len(reply_so_far),
                     )
                     note = EMPTY_ROUND_CONTINUE_NOTE if reply_so_far.strip() else EMPTY_ROUND_NOTE
+                    no_tools_next = final_msg.stop_reason == "max_tokens"
                     # A hand-over the person asked for meanwhile is taken
                     # here: the extra round writes up, and runs no tool.
                     if inbox is not None and inbox.take_hand_over():
@@ -2997,10 +3001,12 @@ class Executive:
                         note = HAND_OVER_NOTE
                     current_messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
                     continue
-                if final_msg.stop_reason == "refusal" and round_empty and not reply_so_far.strip():
-                    # Declined, with nothing written: say so, never nothing.
-                    for chunk in _flush_held(REFUSED_REPLY, streamed_tail):
-                        yield chunk
+                if final_msg.stop_reason == "refusal":
+                    # Declined: the turn ends here, never asked again (not by
+                    # the claim check either). With nothing written, say so.
+                    if round_empty and not reply_so_far.strip():
+                        for chunk in _flush_held(REFUSED_REPLY, streamed_tail):
+                            yield chunk
                     return
                 # Do what it says: a reply that claims a change no call this
                 # turn made gets one more round to make it or say it can't.

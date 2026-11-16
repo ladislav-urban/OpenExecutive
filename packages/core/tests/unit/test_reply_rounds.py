@@ -245,6 +245,20 @@ def test_an_empty_round_at_the_output_limit_is_asked_once_more() -> None:
         FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn"),
     ])
     assert reply == "ITEM-1 has 12." and len(calls) == 3
+    # That retry is offered no tool: it must write, not fill the limit again.
+    assert calls[2].get("tool_choice") == {"type": "none"}
+
+
+def test_a_refusal_after_some_text_ends_the_turn_unretried(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator import claim_check
+
+    async def unbacked(model: str, turn: str) -> dict[str, Any]:
+        return {"unbacked": True, "claim": "Done"}
+
+    monkeypatch.setenv("CLAIM_CHECK_ENABLED", "true")
+    monkeypatch.setattr(claim_check, "_call_model", unbacked)
+    reply, calls = _reply_and_calls([FinalMsg([TextBlock("Done.")], "refusal")])
+    assert reply == "Done." and len(calls) == 1
 
 
 def test_a_refusal_with_nothing_written_says_so_and_is_never_retried() -> None:
