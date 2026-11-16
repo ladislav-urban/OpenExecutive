@@ -883,6 +883,8 @@ def test_a_long_reason_is_cut_at_a_word_never_mid_word() -> None:
     line = got["k"]
     assert len(line) <= runner.MAX_REASON_CHARS
     assert long_line.startswith(line) and long_line[len(line)] == " "
+    # One token past the limit is dropped, never cut into a stem the filter wouldn't know.
+    assert runner.parse_reasons('{"reasons": {"f1": "' + "a" * 400 + '"}}', {"f1": "k"}) == {}
 
 
 def test_the_instruction_asks_for_the_cost_position_english_and_the_teams_own_words() -> None:

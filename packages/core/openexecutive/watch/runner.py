@@ -1470,12 +1470,15 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
 
 def _at_word(line: str, limit: int) -> str:
     """``line`` at most ``limit`` characters, cut at the last whole word
-    (and its trailing comma or semicolon) rather than mid-word."""
+    (and its trailing comma or semicolon) rather than mid-word; "" when the
+    cut would fall inside a single token (no space before ``limit``), which
+    could leave a stem of a barred word the filter wouldn't know."""
     if len(line) <= limit:
         return line
     cut = line[:limit]
-    head = cut.rsplit(" ", 1)[0] if " " in cut else cut
-    return head.rstrip(" ,;:")
+    if " " not in cut:
+        return ""
+    return cut.rsplit(" ", 1)[0].rstrip(" ,;:")
 
 
 def has_digit(line: str) -> bool:
