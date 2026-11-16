@@ -1117,14 +1117,20 @@ def _uncarded(job: registry.WatchJob, found: list[registry.CardSpec], day: str) 
     fresh = [s for s in fresh if told_on.get(_uncarded_told_key(job, s.key)) != day]
     if len(fresh) <= 1:
         return fresh
-    found = fresh
+    # Rows never told yet first, so a backlog past UNCARDED_ITEMS_MAX is
+    # named over the following runs, not the same rows every day.
+    found = sorted(fresh, key=lambda s: _uncarded_told_key(job, s.key) in told_on)
     shown = found[:UNCARDED_ITEMS_MAX]
     notes: list[str] = [UNCARDED_LINE]
     for spec in found:
         notes.extend(n for n in spec.notes if n not in notes)
     if len(found) > len(shown):
         notes.append(f"{len(found) - len(shown)} more aren't listed here.")
-    rows = hashlib.sha256("\n".join(sorted(s.key for s in shown)).encode("utf-8")).hexdigest()[:16]
+    # Each row's own digest, joined: no separator inside a key can make two
+    # row sets read alike.
+    rows = hashlib.sha256(
+        "".join(sorted(dedup_key(job.id, s.key) for s in shown)).encode("utf-8")
+    ).hexdigest()[:16]
     return [registry.CardSpec(
         key=f"{UNCARDED_PREFIX}{day}:{rows}",
         summary=f"{len(found)} found, not left as cards",
@@ -1137,10 +1143,14 @@ def _uncarded(job: registry.WatchJob, found: list[registry.CardSpec], day: str) 
 def _mark_uncarded_told(job: registry.WatchJob, day: str, spec: registry.CardSpec) -> None:
     """Record a grouped notice's rows as told today; the counted rest past
     ``UNCARDED_ITEMS_MAX`` aren't, so a later run names them."""
-    from openexecutive.watch.settings import mark_told
+    from openexecutive.watch.settings import forget_told, mark_told
 
+    keys = [_uncarded_told_key(job, item.key) for item in spec.items]
     try:
-        mark_told(job.id, [_uncarded_told_key(job, item.key) for item in spec.items], day)
+        # Told today, whatever day it was told before: mark_told keeps a
+        # key's first day, so the old record goes first.
+        forget_told(job.id, keys)
+        mark_told(job.id, keys, day)
     except Exception:
         logger.warning("watch: job %s's told rows couldn't be recorded", job.id)
 

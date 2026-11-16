@@ -1095,3 +1095,36 @@ def test_a_finding_whose_own_notice_is_open_is_never_a_row(
     grouped = [a for a in _alerts() if "found, not left as cards" in a.body]
     assert len(grouped) == 1 and "2 found, not left as cards" in grouped[0].body
     assert "BT-100" not in grouped[0].body
+
+
+def _keys(n: int) -> list[registry.CardSpec]:
+    return [registry.CardSpec(key=f"k{i}", summary=f"row {i}") for i in range(n)]
+
+
+def test_a_row_told_yesterday_is_told_again_today_and_then_not_again_today(
+    job_on: WatchJob, team: SimpleNamespace,
+) -> None:
+    next_day = (TODAY + timedelta(days=1)).isoformat()
+    [first] = runner._uncarded(job_on, _keys(3), DAY)
+    runner._mark_uncarded_told(job_on, DAY, first)
+    assert runner._uncarded(job_on, _keys(3), DAY) == []
+    # The next day they're told again, once: the record moves to that day.
+    [again] = runner._uncarded(job_on, _keys(3), next_day)
+    runner._mark_uncarded_told(job_on, next_day, again)
+    assert runner._uncarded(job_on, _keys(3), next_day) == []
+    # A new one that day is told on its own, without the three.
+    [new] = runner._uncarded(job_on, _keys(4), next_day)
+    assert new.key == "k3"
+
+
+def test_rows_never_told_come_first_past_the_shown_limit(
+    job_on: WatchJob, team: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(runner, "UNCARDED_ITEMS_MAX", 2)
+    [first] = runner._uncarded(job_on, _keys(4), DAY)
+    assert [s.key for s in first.items] == ["k0", "k1"]
+    runner._mark_uncarded_told(job_on, DAY, first)
+    next_day = (TODAY + timedelta(days=1)).isoformat()
+    [second] = runner._uncarded(job_on, _keys(4), next_day)
+    assert [s.key for s in second.items] == ["k2", "k3"]
+
