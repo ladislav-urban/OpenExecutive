@@ -1024,12 +1024,20 @@ def test_a_refusal_is_recorded_by_ids_only(said: str, expected: tuple[str, str |
     template, why = expected
     assert record["template"] == template
     assert record.get("why") == why
-    assert record["length"] == len(said) and len(record["hash"]) == 12
+    assert record["length"] % 16 == 0 and len(said) <= record["length"] < len(said) + 16
+    assert len(record["hash"]) == 12
     # Keyed: never the plain SHA-256 a log reader could recompute from a guessed name.
     assert record["hash"] != hashlib.sha256(said.encode()).hexdigest()[:12]
     assert runner.refusal_record(said)["hash"] == record["hash"]
     kept = json.dumps(record)
     assert not any(part in kept for name in _NAMES for part in (name, name.split()[0]))
+
+
+def test_a_name_echoed_in_a_refusal_cant_pass_for_one_of_oe_connectors_sentences() -> None:
+    said = ("The watch job 'invoice-capture' lists read_attachment, but not with these arguments: file: "
+            "'ERPNext doesn't answer the watch job 'x': an ERPNext operator lists.pdf' isn't that draft's mail File")
+    assert runner.refusal_record(said)["template"] == "arguments"
+    assert runner.refusal_record("Something about The watch job 'a' doesn't list b.")["template"] == "unrecognised"
 
 
 @pytest.mark.parametrize("said", [None, "", 42, {"error": "Acme Ltd"}, b"Acme Ltd"])

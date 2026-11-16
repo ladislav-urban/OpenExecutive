@@ -740,9 +740,12 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
 # held only in memory, so a log reader can't confirm a guessed name by hashing
 # a template with it; two refusals in one process's life still compare.
 _REFUSAL_KEY = secrets.token_bytes(32)
+# oe_connector's own sentences are matched at the start of the text only,
+# so a record's name echoed later in it can't pass for one of them; Frappe's
+# generic errors are searched anywhere, and say so (a hint, not a fact).
 _REFUSAL_TEMPLATES: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("job_not_listed", re.compile(r"ERPNext doesn't answer the watch job '[a-z0-9-]{1,40}': an ERPNext operator lists")),
-    ("never_for_a_job", re.compile(r"is never available to a job nobody is watching\.")),
+    ("never_for_a_job", re.compile(r"[a-z0-9_]{1,64} is never available to a job nobody is watching\.")),
     ("tool_not_listed", re.compile(r"The watch job '[a-z0-9-]{1,40}' doesn't list [a-z0-9_]{1,64}\.")),
     ("arguments", re.compile(r"The watch job '[a-z0-9-]{1,40}' lists [a-z0-9_]{1,64}, but not with these arguments: ")),
     ("permission", re.compile(r"\b(?:Permission ?Error|[Nn]ot permitted|[Pp]ermission denied|[Ii]nsufficient [Pp]ermission)")),
@@ -770,6 +773,10 @@ _ARGUMENT_REASONS: tuple[tuple[str, str], ...] = (
 )
 
 
+_ANYWHERE_TEMPLATES = frozenset({"permission", "not_found"})
+REFUSAL_LENGTH_STEP = 16
+
+
 def refusal_record(said: object) -> dict[str, Any]:
     """A refused read's record: its template id (``_REFUSAL_TEMPLATES``),
     for "not with these arguments" its reason id, and a 12-character keyed
@@ -777,11 +784,19 @@ def refusal_record(said: object) -> dict[str, Any]:
     if not isinstance(said, str) or not said:
         return {"template": "none"}
     text = said[len("Tool error: "):] if said.startswith("Tool error: ") else said
-    template = next((tid for tid, pattern in _REFUSAL_TEMPLATES if pattern.search(text)), "unrecognised")
+    template = next(
+        (
+            tid for tid, pattern in _REFUSAL_TEMPLATES
+            if (pattern.search(text) if tid in _ANYWHERE_TEMPLATES else pattern.match(text))
+        ),
+        "unrecognised",
+    )
     out: dict[str, Any] = {
         "template": template,
         "hash": hmac.new(_REFUSAL_KEY, said.encode("utf-8", "replace"), hashlib.sha256).hexdigest()[:12],
-        "length": len(said),
+        # Rounded up to REFUSAL_LENGTH_STEP: the exact length less a
+        # template's fixed words would be the name's length.
+        "length": -(-len(said) // REFUSAL_LENGTH_STEP) * REFUSAL_LENGTH_STEP,
     }
     if template == "arguments":
         out["why"] = next((rid for rid, words in _ARGUMENT_REASONS if words in text), "other")
