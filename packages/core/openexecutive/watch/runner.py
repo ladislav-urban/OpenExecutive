@@ -1462,10 +1462,23 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
     for fid, reason in reasons.items():
         if fid not in ids or not isinstance(reason, str):
             continue
-        line = clean(reason, MAX_REASON_CHARS)
+        line = _at_word(clean(reason, MAX_REASON_CHARS + 1), MAX_REASON_CHARS)
         if line:
             out[ids[fid]] = line
     return out
+
+
+def _at_word(line: str, limit: int) -> str:
+    """``line`` at most ``limit`` characters, cut at the last whole word
+    (and its trailing comma or semicolon) rather than mid-word; "" when the
+    cut would fall inside a single token (no space before ``limit``), which
+    could leave a stem of a barred word the filter wouldn't know."""
+    if len(line) <= limit:
+        return line
+    cut = line[:limit]
+    if " " not in cut:
+        return ""
+    return cut.rsplit(" ", 1)[0].rstrip(" ,;:")
 
 
 def has_digit(line: str) -> bool:
@@ -1601,6 +1614,27 @@ def has_barred_word(line: str) -> bool:
     return False
 
 
+# Why ``without_digits`` drops a line, by rule (drop_rule): kept with a
+# dropped line in the eval's record and counted in the log, never the text.
+DROP_RULES = ("digit", "number_word", "barred_word", "currency_sign", "script")
+
+
+def drop_rule(line: str) -> str | None:
+    """The first ``DROP_RULES`` rule ``line`` breaks, or None when it's kept."""
+    if has_digit(line):
+        return "digit"
+    if has_number_word(line):
+        return "number_word"
+    folded = _folded(line)
+    if _BARRED_RE.search(line) is not None or _BARRED_RE.search(folded) is not None:
+        return "barred_word"
+    if any(unicodedata.category(ch) == "Sc" for ch in line):
+        return "currency_sign"
+    if has_barred_word(line):
+        return "script"
+    return None
+
+
 def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
     """``reasons`` without each line that holds any digit, names a number
     in words or holds a barred word or currency sign (``has_barred_word``;
@@ -1697,8 +1731,16 @@ async def reason_lines(
         return reasons, {}
     kept, dropped = without_digits(reasons)
     if dropped:
-        # A count only: never the line, which may quote outside text.
-        logger.warning("watch: job %s dropped %d reason line(s) holding a number or a barred word", job.id, dropped)
+        # Counts by rule only: never the line, which may quote outside text.
+        rules: dict[str, int] = {}
+        for key, line in reasons.items():
+            if key not in kept:
+                rule = drop_rule(line) or "other"
+                rules[rule] = rules.get(rule, 0) + 1
+        logger.warning(
+            "watch: job %s dropped %d reason line(s): %s", job.id, dropped,
+            " ".join(f"{rule}={n}" for rule, n in sorted(rules.items())),
+        )
     return kept, {key: line for key, line in reasons.items() if key not in kept}
 
 
