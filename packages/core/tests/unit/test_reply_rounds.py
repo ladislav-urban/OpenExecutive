@@ -249,7 +249,8 @@ def test_an_empty_round_at_the_output_limit_is_asked_once_more() -> None:
     assert calls[2].get("tool_choice") == {"type": "none"}
     # Every round has room past its thinking; only the retry runs at low
     # effort, and only on a model that takes effort (claude-test doesn't).
-    assert all(c["max_tokens"] == 32000 for c in calls)
+    # claude-test is no Claude 4.5+ name: the smaller cap.
+    assert all(c["max_tokens"] == 8192 for c in calls)
     assert "output_config" not in calls[2]
 
 
@@ -258,10 +259,11 @@ def test_a_thinking_only_max_tokens_round_is_retried_at_low_effort_on_claude_5(
 ) -> None:
     from openexecutive.orchestrator.executive import _TAKES_EFFORT_RE
 
-    for model in ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "anthropic/claude-sonnet-5-5"):
-        assert _TAKES_EFFORT_RE.match(model), model
-    for model in ("claude-sonnet-4-6", "claude-haiku-4-5", "gpt-5", "llama3.3", "claude-test"):
-        assert not _TAKES_EFFORT_RE.match(model), model
+    for model in ("claude-sonnet-5-5", "claude-opus-5-5", "claude-opus-5", "anthropic/claude-sonnet-5-5"):
+        assert _TAKES_EFFORT_RE.fullmatch(model), model
+    for model in ("claude-haiku-5-5", "claude-sonnet-4-6", "claude-haiku-4-5", "gpt-5", "llama3.3", "claude-test",
+                  "claude-opus-5\n", "claude-opus-50"):
+        assert not _TAKES_EFFORT_RE.fullmatch(model), model
     provider = StreamingProvider([
         FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
         FinalMsg([], "max_tokens"),
@@ -328,4 +330,56 @@ def test_an_empty_turn_logs_why_without_text(monkeypatch: pytest.MonkeyPatch) ->
     assert any(
         "turn ended with no reply: stop_reason=end_turn iter=3/15 empty_retried=True" in line for line in logged
     ), logged
+
+
+def _calls_for(model: str, rounds: list[FinalMsg]) -> list[dict[str, Any]]:
+    provider = StreamingProvider(rounds)
+
+    async def go() -> None:
+        with (
+            patch("openexecutive.orchestrator.executive.get_provider", return_value=provider),
+            patch("openexecutive.orchestrator.executive.audit_log", lambda *_a, **_k: None),
+            set_session(Session()),
+        ):
+            async for _item in Executive()._stream_agent_loop(
+                system_blocks=[], messages=[{"role": "user", "content": "x"}],
+                model=model, workspace_mode="team", principal_role_tag="", turn_id="t-1",
+            ):
+                pass
+
+    asyncio.run(go())
+    return provider.calls
+
+
+def test_a_model_other_than_claude_keeps_the_smaller_cap() -> None:
+    for model in (
+        "llama3.3", "gpt-5", "openrouter/mistral-large", "claude-3-5-sonnet-20241022", "claude-3-haiku-20240307",
+    ):
+        calls = _calls_for(model, [FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn")])
+        assert calls[0]["max_tokens"] == 8192, model
+    for model in ("claude-sonnet-5-5", "claude-opus-4-8", "claude-sonnet-4-6", "claude-haiku-4-5-20251001"):
+        calls = _calls_for(model, [FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn")])
+        assert calls[0]["max_tokens"] == 32000, model
+
+
+def test_haiku_never_gets_low_effort_on_the_retry() -> None:
+    calls = _calls_for("claude-haiku-5-5", [
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "max_tokens"),
+        FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn"),
+    ])
+    assert calls[2]["tool_choice"] == {"type": "none"} and "output_config" not in calls[2]
+
+
+def test_the_retrys_settings_last_one_round() -> None:
+    long_text = "I checked the stock in every warehouse and compared it with the reorder levels for each item now."
+    calls = _calls_for("claude-sonnet-5-5", [
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "max_tokens"),
+        # A backend that ignores tool_choice none and calls a tool anyway.
+        FinalMsg([TextBlock(long_text), ToolUseBlock("tu2", "no_such_tool", {})], "tool_use"),
+        FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn"),
+    ])
+    assert calls[2]["output_config"] == {"effort": "low"} and calls[2]["tool_choice"] == {"type": "none"}
+    assert "output_config" not in calls[3] and "tool_choice" not in calls[3]
 
