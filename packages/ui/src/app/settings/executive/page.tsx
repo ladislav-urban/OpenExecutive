@@ -9,6 +9,7 @@ import VoicePicker from "@/components/executive/VoicePicker";
 import OutsideContentCard from "@/components/settings/OutsideContentCard";
 import SettingsCard from "@/components/settings/SettingsCard";
 import SettingsSubpage from "@/components/settings/SettingsSubpage";
+import WatchJobsCard from "@/components/settings/WatchJobsCard";
 
 // What it always does without asking: no switch, only Pause stops these.
 const ALWAYS_DOES: { title: string; text: string }[] = [
@@ -23,8 +24,9 @@ const ALWAYS_DOES: { title: string; text: string }[] = [
 ];
 
 // Settings → Your Executive: Pause, when it checks with you after reading
-// outside content (the owner only), what it always does without asking, and
-// the voice it answers in. Pause stops everything it does on its own,
+// outside content (the owner only), what it always does without asking, its
+// watch jobs (the owner only) and the voice it answers in. Pause stops
+// everything it does on its own,
 // including Take the lead and booking meetings, which live under Delegate
 // with what it sends as you. /settings/on-its-own lands here.
 export default function ExecutiveSettingsPage() {
@@ -63,6 +65,8 @@ export default function ExecutiveSettingsPage() {
         </Link>
         .
       </p>
+
+      <WatchJobsCard />
 
       <SettingsCard title="Voice" description="How it sounds when it answers you.">
         <VoicePicker variant="card" />

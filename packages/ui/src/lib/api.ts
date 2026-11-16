@@ -4,6 +4,7 @@ import type { DirectoryListing, DirectoryOption } from "@/lib/chatDirectory";
 import type { HistoryNote, HistoryState } from "@/lib/history";
 import type { NotificationSettings, NotificationSettingsUpdate } from "@/lib/notifications";
 import type { SetupStatus } from "@/lib/setupStatus";
+import type { WatchJobs } from "@/lib/watchJobs";
 
 const API_BASE = "/api/backend";
 
@@ -7478,4 +7479,26 @@ export async function undoMemoryChange(change: MemoryChange): Promise<void> {
     case "note":
       return forgetHistoryNote(change.id);
   }
+}
+
+// ---- Watch jobs (Settings → <product>, the account owner only) ----
+
+/** The watch jobs, or null when this caller may not see them (403/409) or
+ * they couldn't be read: the card then shows nothing. */
+export async function getWatchJobs(signal?: AbortSignal): Promise<WatchJobs | null> {
+  const res = await fetch(`${API_BASE}/watch/jobs`, { signal, cache: "no-store" });
+  if (!res.ok) return null;
+  const body = (await res.json().catch(() => null)) as WatchJobs | null;
+  return body && Array.isArray(body.jobs) ? body : null;
+}
+
+/** Run a watch job once now. `id` is a job id GET /watch/jobs returned.
+ * Resolves to null once started, else the refusal's code ("" when the answer
+ * carried none). */
+export async function runWatchJobNow(id: string): Promise<string | null> {
+  const res = await fetch(`${API_BASE}/watch/jobs/${encodeURIComponent(id)}/run`, { method: "POST" });
+  if (res.status === 202) return null;
+  const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  const detail = (body.detail && typeof body.detail === "object" ? body.detail : {}) as Record<string, unknown>;
+  return typeof detail.code === "string" ? detail.code : "";
 }
