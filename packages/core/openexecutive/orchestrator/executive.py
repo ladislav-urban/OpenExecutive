@@ -1232,10 +1232,17 @@ REFUSED_REPLY = "I can't answer that one as it's asked. Try putting it another w
 # result and stop at max_tokens with no text (erpnext_094 at 45bd9197: 5 of
 # 10 replies empty). Streaming takes a larger cap; it limits, never spends.
 ROUND_MAX_TOKENS = 32000
+# Any other model keeps the old cap: a smaller completion limit or context
+# window (an OpenRouter or local model) could refuse the larger one.
+OTHER_ROUND_MAX_TOKENS = 8192
+# Claude models the larger cap goes to: any Claude, by name.
+_CLAUDE_RE = re.compile(r"(?:anthropic/)?claude-[a-z0-9.-]+")
 # Claude models that take output_config.effort (the 5 generation): a retry
 # after a round that stopped at max_tokens with no text runs at low effort,
 # so it thinks less and writes.
-_TAKES_EFFORT_RE = re.compile(r"^(?:anthropic/)?claude-(?:opus|sonnet|haiku|fable|mythos)-5(?:[-.]\d+)?(?:-\d{8})?$")
+# Not Haiku: the loop sends no thinking, so a Haiku round already runs with
+# thinking off (feature_gate), and effort there gains nothing.
+_TAKES_EFFORT_RE = re.compile(r"(?:anthropic/)?claude-(?:opus|sonnet|fable|mythos)-5(?:[-.]\d{1,2})?")
 # The stop reasons an empty round is asked once more after: a natural end,
 # or the output limit reached with no text. Never a refusal.
 _EMPTY_RETRY_STOPS = frozenset({"end_turn", "max_tokens"})
@@ -2842,10 +2849,10 @@ class Executive:
             flushed = False
             async with get_provider(stream_model).messages_stream(
                 model=stream_model,
-                max_tokens=ROUND_MAX_TOKENS,
+                max_tokens=ROUND_MAX_TOKENS if _CLAUDE_RE.fullmatch(stream_model.lower()) else OTHER_ROUND_MAX_TOKENS,
                 **(
                     {"output_config": {"effort": "low"}}
-                    if low_effort_next and _TAKES_EFFORT_RE.match(stream_model.lower())
+                    if low_effort_next and _TAKES_EFFORT_RE.fullmatch(stream_model.lower())
                     else {}
                 ),
                 system=system_blocks,  # type: ignore[arg-type]
@@ -2881,6 +2888,8 @@ class Executive:
                             held, flushed = "", True
 
                 final_msg = await stream.get_final_message()
+            # The retry's settings were for that one round only.
+            no_tools_next = low_effort_next = False
             if reply_before_nudge is not None:
                 # After the claim check's nudge, everything the model writes,
                 # before a tool call or after it, is gathered and trimmed once
