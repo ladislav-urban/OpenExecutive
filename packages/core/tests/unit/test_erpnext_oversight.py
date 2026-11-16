@@ -453,5 +453,5 @@ def test_the_csv_line_keeps_every_kind_of_card_line() -> None:
     }
     text = _card_text(view)
     assert "Payment Entry PE-1" in text and "accounts@example.com" in text and "Harbor Ltd" in text
-    assert "1 SENSOR-01 10 125.00 EUR" in text
-    assert "SENSOR-01 150 Stores" in text and text.endswith("Check it.")
+    assert "row=1 item=SENSOR-01 qty=10 amount=125.00 EUR" in text and "created_by=accounts@example.com" in text
+    assert "item_code=SENSOR-01 qty=150 warehouse=Stores" in text and text.endswith("Check it.")
