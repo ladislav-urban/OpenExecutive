@@ -118,7 +118,9 @@ MAX_REASON_FINDINGS = 20
 # The reason call's output bound: one call for all a job's findings, or
 # one per finding (ReasonSchema.per_finding), a single short line.
 REASON_MAX_TOKENS = 1200
-PER_FINDING_MAX_TOKENS = 150
+# Room for one complete sentence and its JSON, so a line is never cut off
+# by the output cap mid-sentence.
+PER_FINDING_MAX_TOKENS = 300
 MAX_FACTS = 8
 # The most findings a run takes from a job's rules.
 MAX_FINDINGS = 200
@@ -1462,19 +1464,29 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
     for fid, reason in reasons.items():
         if fid not in ids or not isinstance(reason, str):
             continue
-        # Cleaned at a wider bound, so the length check sees past the limit.
-        line = _at_word(clean(reason, MAX_REASON_CHARS * 2), MAX_REASON_CHARS)
+        line = _within_limit(reason, MAX_REASON_CHARS)
         if line:
             out[ids[fid]] = line
     return out
 
 
-def _at_word(line: str, limit: int) -> str:
-    """``line`` when it is at most ``limit`` characters, else "": a line
-    past the limit is dropped, never cut. A cut could keep a line whose
+def _within_limit(reason: str, limit: int) -> str:
+    """The model's ``reason`` cleaned, when it fits ``limit``; else "": a
+    line past the limit is dropped, never cut. A cut could keep a line whose
     barred word sat in its last token, or show only a reassuring head
     without the qualifier after it; the instruction asks for less, so a
-    longer line is rare."""
+    longer line is rare.
+
+    The raw text and its normalised form are bounded first (``2 × limit``),
+    so ``clean``'s own cuts (of the raw text, and of the normalised one,
+    which NFKC can grow) never fire: a reply padded with markup, spaces or
+    wide characters can't be cut down to its head that way either."""
+    from openexecutive.utils.prompt_blocks import plain
+
+    bound = 2 * limit
+    if len(reason) > bound or len(plain(reason)) > bound:
+        return ""
+    line = clean(reason, bound)
     return line if len(line) <= limit else ""
 
 
@@ -1613,7 +1625,31 @@ def has_barred_word(line: str) -> bool:
 
 # Why ``without_digits`` drops a line, by rule (drop_rule): kept with a
 # dropped line in the eval's record and counted in the log, never the text.
-DROP_RULES = ("digit", "number_word", "barred_word", "currency_sign", "script")
+DROP_RULES = ("digit", "number_word", "barred_word", "currency_sign", "script", "meta")
+
+# A line that talks about the update's own text rather than the project: the
+# team's note, request or instruction, something "not acted on" or "not
+# reflected", the model speaking for itself, or the words of an injected
+# note's asks (guidance, finance, a shared page). A line that refuses an
+# injected note still echoes it (watch_project_status_008 at f2a34399:
+# "the note's requests are not reflected here"). "request" alone stays an
+# ordinary project word ("the tenant's request"); only one aimed at the
+# team's or the update's own text is meta.
+_META_RE = re.compile(
+    r"(?:\b(?:the|this|its|their|that|a|an)\s+(?:team'?s\s+|team\u2019s\s+|update'?s\s+|update\u2019s\s+)?"
+    r"(?:note|notes|instruction|instructions|message|comment)\b)"
+    r"|(?:\b(?:note|notes|update|team)(?:'s|\u2019s)\s+(?:request|requests|ask|asks|note|notes)\b)"
+    r"|(?:\bnot\s+(?:been\s+)?(?:acted\s+on|reflected|followed|actioned|applied|included)\b)"
+    r"|(?:\b(?:I|I've|I'm|I'd|me|my)\b)"
+    r"|(?:\b(?:guidance|finance|shared|page|pages)\b)",
+    re.IGNORECASE,
+)
+
+
+def has_meta(line: str) -> bool:
+    """Whether ``line`` talks about the update's own text or the model
+    itself rather than the project (``_META_RE``), as written or folded."""
+    return _META_RE.search(line) is not None or _META_RE.search(_folded(line)) is not None
 
 
 def drop_rule(line: str) -> str | None:
@@ -1629,6 +1665,8 @@ def drop_rule(line: str) -> str | None:
         return "currency_sign"
     if has_barred_word(line):
         return "script"
+    if has_meta(line):
+        return "meta"
     return None
 
 
@@ -1644,7 +1682,7 @@ def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
     are a known residual."""
     kept = {
         key: line for key, line in reasons.items()
-        if not has_digit(line) and not has_number_word(line) and not has_barred_word(line)
+        if not has_digit(line) and not has_number_word(line) and not has_barred_word(line) and not has_meta(line)
     }
     return kept, len(reasons) - len(kept)
 
