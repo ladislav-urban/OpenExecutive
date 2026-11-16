@@ -69,12 +69,13 @@ function whenLine(run: WatchRun): string {
   // The API gives a run on request as run_now with no slot; a raw
   // "now@HH:MM:SS" key, if one ever reaches here, is read the same way and
   // never shown as a schedule slot.
-  if (run.slot.startsWith(RUN_NOW_PREFIX)) {
-    const at = run.slot.slice(RUN_NOW_PREFIX.length).slice(0, 5);
+  const slot = String(run.slot ?? "");
+  if (slot.startsWith(RUN_NOW_PREFIX)) {
+    const at = slot.slice(RUN_NOW_PREFIX.length).slice(0, 5);
     return /^\d\d:\d\d$/.test(at) ? `${run.day}, run on request at ${at}` : `${run.day}, run on request`;
   }
   if (run.run_now) return `${run.day}, run on request`;
-  return run.slot ? `${run.day} at ${run.slot}` : run.day;
+  return slot ? `${run.day} at ${slot}` : run.day;
 }
 
 /** The job's last run in one line, or that it hasn't run yet. */

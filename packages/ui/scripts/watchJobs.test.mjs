@@ -71,3 +71,7 @@ test("the re-reads stop once a new finished run shows", () => {
   assert.equal(runSettled(RUN, RUN), false);
   assert.equal(runSettled({ ...RUN, slot: "09:00" }, { ...RUN, run_now: true }), true);
 });
+
+test("a missing slot reads as a once-a-day run, never a crash", () => {
+  assert.equal(lastRunLine({ ...RUN, slot: null }), "Last run 2026-11-16: done, 2 cards.");
+});
