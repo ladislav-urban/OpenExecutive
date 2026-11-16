@@ -23,6 +23,10 @@ const VOUCHER: LineColumn[] = [
   { key: "party", label: "Party" },
   { key: "allocated", label: "Allocated", numeric: true },
   { key: "clears_on", label: "Clears on" },
+  // How many other bank lines the voucher is already matched with, and who
+  // made it: what only the approver can weigh.
+  { key: "matched_elsewhere", label: "Matched elsewhere", numeric: true },
+  { key: "created_by", label: "Created by" },
 ];
 
 const FILL: LineColumn[] = [
