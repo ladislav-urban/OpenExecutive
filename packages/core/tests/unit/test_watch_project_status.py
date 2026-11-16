@@ -671,7 +671,7 @@ def test_a_line_with_a_number_is_dropped_and_counted(
     assert f"Schedule: 12 days late, due {_in(-12)}" in body
     dropped = [m for m in warned if "dropped" in m]
     # "On plan, nearly a third done." names a number in words too.
-    assert dropped == ["watch: job project-status dropped 2 reason line(s) holding a number or a barred word"]
+    assert dropped == ["watch: job project-status dropped 2 reason line(s): digit=1 number_word=1"]
     assert "Why now" not in body
 
 
@@ -861,3 +861,34 @@ def test_the_barred_list_is_a_fixed_constant_and_the_instruction_says_why() -> N
     # Ordinary words that contain a barred one aren't hit.
     for line in ("Wiring is done.", "Clicking relays fixed.", "Linked tasks moved.", "Unpaid snags remain."):
         assert not runner.has_barred_word(line), line
+
+
+def test_each_dropped_line_names_the_rule_that_dropped_it() -> None:
+    assert runner.drop_rule("Behind by 3 days and over its hours.") == "digit"
+    assert runner.drop_rule("Behind, with a second crew brought in.") == "number_word"
+    assert runner.drop_rule("Held up while the client is waiting to approve the layout.") == "barred_word"
+    assert runner.drop_rule("Over its estimate by a few \u20ac.") == "currency_sign"
+    assert runner.drop_rule("Behind; the team waits on the \u043bayout.") == "script"
+    assert runner.drop_rule("Behind schedule and over its estimate, waiting on the client's sign-off.") is None
+    for line in ("Behind by 3 days.", "A second crew.", "Waiting to approve it."):
+        assert runner.without_digits({"a": line}) == ({}, 1)
+        assert runner.drop_rule(line) in runner.DROP_RULES
+
+
+def test_a_long_reason_is_cut_at_a_word_never_mid_word() -> None:
+    long_line = ("The project is behind schedule and over its estimate because the flooring arrived late and "
+                 "the electrical rough-in had to be redone, so another crew was brought in and has worked through "
+                 "the weekend to catch up with the snag list")
+    got = runner.parse_reasons('{"reasons": {"f1": "' + long_line + '"}}', {"f1": "k"})
+    line = got["k"]
+    assert len(line) <= runner.MAX_REASON_CHARS
+    assert long_line.startswith(line) and long_line[len(line)] == " "
+
+
+def test_the_instruction_asks_for_the_cost_position_english_and_the_teams_own_words() -> None:
+    text = ps.REASON_INSTRUCTION
+    assert "where its cost stands against the estimate (within it, or over it)" in text
+    assert "Write in English whatever language the team wrote in." in text
+    assert "Keep the team's own words for what happened" in text
+    assert not runner.has_digit(text.replace("160", ""))
+
