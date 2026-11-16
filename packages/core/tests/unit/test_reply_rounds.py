@@ -162,3 +162,70 @@ def test_a_collected_reply_is_rewritten_not_corrected(monkeypatch: pytest.Monkey
     assert "write your whole reply again" in nudge
     assert claim_check.nudge("x") != claim_check.nudge("x", rewrite=True)
 
+
+# --- A round after tool results that ends with no text (eval runs: an empty
+# reply, or one cut off at "...after every failed review:") ---
+
+def _reply_and_calls(rounds: list[FinalMsg]) -> tuple[str, list[dict[str, Any]]]:
+    provider = StreamingProvider(rounds)
+    text: list[str] = []
+
+    async def go() -> None:
+        with (
+            patch("openexecutive.orchestrator.executive.get_provider", return_value=provider),
+            patch("openexecutive.orchestrator.executive.audit_log", lambda *_a, **_k: None),
+            set_session(Session()),
+        ):
+            async for item in Executive()._stream_agent_loop(
+                system_blocks=[], messages=[{"role": "user", "content": "x"}],
+                model="claude-test", workspace_mode="team", principal_role_tag="", turn_id="t-1",
+            ):
+                if isinstance(item, str) and item != Executive._THINKING:
+                    text.append(item)
+
+    asyncio.run(go())
+    return "".join(text), provider.calls
+
+
+def _last_user_text(call: dict[str, Any]) -> str:
+    last = call["messages"][-1]
+    content = last["content"]
+    return content if isinstance(content, str) else " ".join(b.get("text", "") for b in content if isinstance(b, dict))
+
+
+def test_an_empty_round_after_tools_is_asked_once_more() -> None:
+    from openexecutive.orchestrator.executive import EMPTY_ROUND_NOTE
+
+    reply, calls = _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "end_turn"),
+        FinalMsg([TextBlock("Metro pays 55 days late; the lowest week holds.")], "end_turn"),
+    ])
+    assert reply == "Metro pays 55 days late; the lowest week holds."
+    assert len(calls) == 3 and EMPTY_ROUND_NOTE in _last_user_text(calls[2])
+
+
+def test_a_reply_cut_off_before_its_last_call_is_continued_not_repeated() -> None:
+    from openexecutive.orchestrator.executive import EMPTY_ROUND_CONTINUE_NOTE
+
+    before = "We keep failing because most late deliveries are back orders. The minutes record the same decision:"
+    reply, calls = _reply_and_calls([
+        FinalMsg([TextBlock(before), ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "end_turn"),
+        FinalMsg([TextBlock("order earlier from the second supplier.")], "end_turn"),
+    ])
+    assert reply == before + "\n\norder earlier from the second supplier."
+    assert EMPTY_ROUND_CONTINUE_NOTE in _last_user_text(calls[2])
+
+
+def test_an_empty_round_is_asked_once_only_and_never_without_tools() -> None:
+    reply, calls = _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "end_turn"),
+        FinalMsg([], "end_turn"),
+    ])
+    assert reply == "" and len(calls) == 3
+    # A first round with no text and no tool call is left as it is.
+    reply, calls = _reply_and_calls([FinalMsg([], "end_turn")])
+    assert reply == "" and len(calls) == 1
+
