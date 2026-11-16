@@ -1224,6 +1224,12 @@ LAST_ROUND_NOTE = (
 EMPTY_ROUND_NOTE = (
     "You ended without writing anything for the person. Write your answer now from what you have read."
 )
+# What a turn says when the model declined to answer (stop reason
+# "refusal") and nothing was written: never an empty reply.
+REFUSED_REPLY = "I can't answer that one as it's asked. Try putting it another way."
+# The stop reasons an empty round is asked once more after: a natural end,
+# or the output limit reached with no text. Never a refusal.
+_EMPTY_RETRY_STOPS = frozenset({"end_turn", "max_tokens"})
 EMPTY_ROUND_CONTINUE_NOTE = (
     "Your reply stopped before it was finished. Carry on from where it stopped, without repeating what you "
     "already wrote, and finish it from what you have read."
@@ -2957,22 +2963,30 @@ class Executive:
                 # synced excerpts checked, so what they tried is flagged to
                 # the person (outside_content.settle).
                 await outside_content.settle()
+                round_empty = not any(
+                    b.get("type") == "text" and str(b.get("text", "")).strip() for b in response_content
+                )
+                if round_empty and not reply_so_far.strip():
+                    # Why a turn came back with nothing: codes and counts
+                    # only, never the text (none was written).
+                    logger.warning(
+                        "turn ended with no reply: stop_reason=%s iter=%d/%d empty_retried=%s blocks=%s",
+                        final_msg.stop_reason, iteration, max_iterations, empty_retried,
+                        ",".join(sorted({str(getattr(b, "type", "?")) for b in final_msg.content})) or "none",
+                    )
                 if (
-                    final_msg.stop_reason == "end_turn" and iteration > 1
+                    final_msg.stop_reason in _EMPTY_RETRY_STOPS
                     and iteration < max_iterations and not empty_retried and not handing_over
                     and reply_before_nudge is None
-                    and not any(
-                        b.get("type") == "text" and str(b.get("text", "")).strip() for b in response_content
-                    )
+                    and round_empty
                     and not _WHOLE_REPLY_END.search(reply_so_far)
                 ):
-                    # The round after tool results ended with no text, and
-                    # the reply is empty or stopped mid-sentence before its
-                    # last call: ask once more.
+                    # The round ended with no text, and the reply is empty or
+                    # stopped mid-sentence before its last call: ask once more.
                     empty_retried = True
                     logger.warning(
-                        "empty round after tool results at iter %d; asking once more (reply so far %d chars)",
-                        iteration, len(reply_so_far),
+                        "empty round (stop_reason=%s) at iter %d; asking once more (reply so far %d chars)",
+                        final_msg.stop_reason, iteration, len(reply_so_far),
                     )
                     note = EMPTY_ROUND_CONTINUE_NOTE if reply_so_far.strip() else EMPTY_ROUND_NOTE
                     # A hand-over the person asked for meanwhile is taken
@@ -2983,6 +2997,11 @@ class Executive:
                         note = HAND_OVER_NOTE
                     current_messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
                     continue
+                if final_msg.stop_reason == "refusal" and round_empty and not reply_so_far.strip():
+                    # Declined, with nothing written: say so, never nothing.
+                    for chunk in _flush_held(REFUSED_REPLY, streamed_tail):
+                        yield chunk
+                    return
                 # Do what it says: a reply that claims a change no call this
                 # turn made gets one more round to make it or say it can't.
                 if claim_checked or handing_over or iteration >= max_iterations:

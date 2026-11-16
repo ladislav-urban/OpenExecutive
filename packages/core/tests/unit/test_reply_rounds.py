@@ -233,7 +233,38 @@ def test_an_empty_round_is_asked_once_only_and_never_without_tools() -> None:
         FinalMsg([], "end_turn"),
     ])
     assert reply == whole and len(calls) == 2
-    # A first round with no text and no tool call is left as it is.
-    reply, calls = _reply_and_calls([FinalMsg([], "end_turn")])
-    assert reply == "" and len(calls) == 1
+    # A first round with no text is asked once more too.
+    reply, calls = _reply_and_calls([FinalMsg([], "end_turn"), FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn")])
+    assert reply == "ITEM-1 has 12." and len(calls) == 2
+
+
+def test_an_empty_round_at_the_output_limit_is_asked_once_more() -> None:
+    reply, calls = _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "max_tokens"),
+        FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn"),
+    ])
+    assert reply == "ITEM-1 has 12." and len(calls) == 3
+
+
+def test_a_refusal_with_nothing_written_says_so_and_is_never_retried() -> None:
+    from openexecutive.orchestrator.executive import REFUSED_REPLY
+
+    reply, calls = _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "refusal"),
+    ])
+    assert reply == REFUSED_REPLY and len(calls) == 2
+
+
+def test_an_empty_turn_logs_why_without_text(caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="openexecutive.orchestrator.executive"):
+        _reply_and_calls([
+            FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+            FinalMsg([], "end_turn"),
+            FinalMsg([], "end_turn"),
+        ])
+    assert "turn ended with no reply: stop_reason=end_turn iter=3/15 empty_retried=True" in caplog.text
 
