@@ -73,11 +73,13 @@ import asyncio
 import contextvars
 import dataclasses
 import hashlib
+import hmac
 import importlib
 import json
 import logging
 import math
 import re
+import secrets
 import unicodedata
 from collections.abc import Mapping, Sequence
 from contextlib import AbstractContextManager, nullcontext
@@ -189,11 +191,17 @@ class _Stop(Exception):
     list slot and the one value oe_connector named as unreadable (held in
     memory only, to drop and ask once more; never logged or stored)."""
 
-    def __init__(self, reason: str, read: str = "", unreadable: tuple[str, str] | None = None) -> None:
+    def __init__(
+        self, reason: str, read: str = "", unreadable: tuple[str, str] | None = None,
+        refusal: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(reason)
         self.reason = reason
         self.read = read
         self.unreadable = unreadable
+        # A refused read's record (refusal_record): ids, a hash and a length,
+        # never the text.
+        self.refusal = refusal
 
 
 @dataclass
@@ -222,6 +230,8 @@ class RunOutcome:
     proposal_refused: dict[str, int] = field(default_factory=dict)
     # Model reason lines dropped by ReasonSchema.no_digits (a count only).
     reasons_dropped: int = 0
+    # Why a read was refused (refusal_record): ids, a hash and a length only.
+    refusal: dict[str, Any] = field(default_factory=dict)
 
     def detail(self) -> dict[str, Any]:
         """What ``watch_runs.detail`` keeps: codes and counts only."""
@@ -238,6 +248,8 @@ class RunOutcome:
             out["proposal_refused"] = dict(sorted(self.proposal_refused.items()))
         if self.reasons_dropped:
             out["reasons_dropped"] = self.reasons_dropped
+        if self.refusal:
+            out["refusal"] = dict(self.refusal)
         return out
 
 
@@ -640,8 +652,16 @@ async def run_job(job: registry.WatchJob, day: str, *, slot: str = "", path: Pat
         try:
             outcome = await _run(job, day, reads)
         except _Stop as stop:
-            logger.warning("watch: job %s stopped (%s)", job.id, stop.reason)
-            outcome = RunOutcome("failed", error=stop.reason)
+            if stop.refusal:
+                # Ids, a hash and a length only: never oe_connector's text,
+                # which can name a record (refusal_record).
+                logger.warning(
+                    "watch: job %s stopped (%s) at %s: refusal %s", job.id, stop.reason, stop.read,
+                    " ".join(f"{k}={v}" for k, v in sorted(stop.refusal.items())),
+                )
+            else:
+                logger.warning("watch: job %s stopped (%s)", job.id, stop.reason)
+            outcome = RunOutcome("failed", error=stop.reason, refusal=dict(stop.refusal or {}))
             if stop.reason not in _QUIET and _take_failure_notice(job.id, day, path=path):
                 _fail_notice(job, day, stop.reason, stop.read)
         except Exception:
@@ -701,11 +721,71 @@ async def _read(job: registry.WatchJob, read: registry.WatchRead, arguments: dic
         result = json.loads(raw)
     except (TypeError, ValueError, RecursionError):
         # A plain-text refusal ("Tool error: …") is not JSON.
-        raise _Stop(_refusal_reason(raw), read.label, unreadable_value(raw, job.id, read.tool)) from None
+        raise _Stop(
+            _refusal_reason(raw), read.label, unreadable_value(raw, job.id, read.tool), refusal_record(raw),
+        ) from None
     if isinstance(result, dict) and "error" in result:
         said = result.get("error")
-        raise _Stop(_refusal_reason(said), read.label, unreadable_value(said, job.id, read.tool))
+        raise _Stop(_refusal_reason(said), read.label, unreadable_value(said, job.id, read.tool), refusal_record(said))
     return result
+
+
+# What a refused read's text is, by oe_connector's own fixed words
+# (oe_connector/watch.py check_scope, job_spec, _mismatch; Frappe's own
+# errors): an id per template, and for "not with these arguments" an id per
+# reason. Only the ids are kept, with a hash and length to tell one text from
+# another across runs: the text itself can name a record, quoted or not, so
+# it is never stored, logged or shown. Unknown text is "unrecognised".
+# The hash is keyed (HMAC-SHA256) with a key made when the process starts and
+# held only in memory, so a log reader can't confirm a guessed name by hashing
+# a template with it; two refusals in one process's life still compare.
+_REFUSAL_KEY = secrets.token_bytes(32)
+_REFUSAL_TEMPLATES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("job_not_listed", re.compile(r"ERPNext doesn't answer the watch job '[a-z0-9-]{1,40}': an ERPNext operator lists")),
+    ("never_for_a_job", re.compile(r"is never available to a job nobody is watching\.")),
+    ("tool_not_listed", re.compile(r"The watch job '[a-z0-9-]{1,40}' doesn't list [a-z0-9_]{1,64}\.")),
+    ("arguments", re.compile(r"The watch job '[a-z0-9-]{1,40}' lists [a-z0-9_]{1,64}, but not with these arguments: ")),
+    ("permission", re.compile(r"\b(?:Permission ?Error|[Nn]ot permitted|[Pp]ermission denied|[Ii]nsufficient [Pp]ermission)")),
+    ("not_found", re.compile(r"\b(?:DoesNotExistError|not found|does not exist)\b")),
+)
+_ARGUMENT_REASONS: tuple[tuple[str, str], ...] = (
+    ("unreadable_value", "the call's user may read"),
+    ("mail_company", "limited to exactly one Company by User Permission"),
+    ("mail_only", "the mail slots are only for read_attachment"),
+    ("mail_slot", "a mail slot never goes in a list"),
+    ("not_draft_file", "isn't that draft's mail File"),
+    ("nested", "a list inside a list or an object inside one"),
+    ("slot_pair", "a slot in a list only as [operator, slot]"),
+    ("slot_operator", "can't follow"),
+    ("not_a_slot", "isn't a slot"),
+    ("mail_slot_place", "stands only as the read's"),
+    ("no_such_name", "on this site"),
+    ("not_exact_name", "exact name"),
+    ("not_listed_field", "isn't among the listed fields"),
+    ("extra_key", "isn't listed"),
+    ("missing_key", "is missing"),
+    ("list_of_fields", "should be a list of fields"),
+    ("object", "should be an object"),
+    ("list_length", "should be a list of"),
+)
+
+
+def refusal_record(said: object) -> dict[str, Any]:
+    """A refused read's record: its template id (``_REFUSAL_TEMPLATES``),
+    for "not with these arguments" its reason id, and a 12-character keyed
+    hash (``_REFUSAL_KEY``) and the length of the text. Never any of the text."""
+    if not isinstance(said, str) or not said:
+        return {"template": "none"}
+    text = said[len("Tool error: "):] if said.startswith("Tool error: ") else said
+    template = next((tid for tid, pattern in _REFUSAL_TEMPLATES if pattern.search(text)), "unrecognised")
+    out: dict[str, Any] = {
+        "template": template,
+        "hash": hmac.new(_REFUSAL_KEY, said.encode("utf-8", "replace"), hashlib.sha256).hexdigest()[:12],
+        "length": len(said),
+    }
+    if template == "arguments":
+        out["why"] = next((rid for rid, words in _ARGUMENT_REASONS if words in text), "other")
+    return out
 
 
 # oe_connector's watch._unreadable_in (ladislav-urban/oe_connector#578): a

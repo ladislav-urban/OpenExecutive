@@ -8,6 +8,7 @@ bank reads the gateway opens to this job alone (orchestrator/mcp_gateway.py)."""
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 from datetime import UTC, date, datetime, time, timedelta
 from types import SimpleNamespace
@@ -995,3 +996,69 @@ def test_the_principals_notices_take_the_days_places_first() -> None:
 
     notices = [spec("a"), spec("b"), spec("kept", True), spec("c"), spec("month", True)]
     assert [s.key for s in runner.principal_first(notices)] == ["kept", "month", "a", "b", "c"]
+
+
+# --------------------------------------------------------------------------- #
+# Why a read was refused: ids, a hash and a length, never the text
+# --------------------------------------------------------------------------- #
+
+_NAMES = ("O'Brien Ltd", "Acme Ltd", "Beta GmbH")
+_REFUSALS = {
+    # oe_connector's own words, with names quoted, unquoted, in a list and
+    # with an apostrophe that ends a plain quote early.
+    "Tool error: The watch job 'bank-matching' lists bank_line_candidates, but not with these arguments: "
+    "customers[0]: 'Acme Ltd' isn't a Customer the call's user may read.": ("arguments", "unreadable_value"),
+    "The watch job 'bank-matching' lists bank_line_candidates, but not with these arguments: "
+    "customer: no Customer ['Acme Ltd', 'Beta GmbH'] on this site": ("arguments", "no_such_name"),
+    "Customer 'O'Brien Ltd' was not found": ("not_found", None),
+    "Customer Acme Ltd not found": ("not_found", None),
+    "Not permitted to read Customer Acme Ltd": ("permission", None),
+    "The watch job 'bank-matching' doesn't list erpnext_list_records.": ("tool_not_listed", None),
+    "Something new about O'Brien Ltd and 'Beta GmbH": ("unrecognised", None),
+}
+
+
+@pytest.mark.parametrize(("said", "expected"), list(_REFUSALS.items()))
+def test_a_refusal_is_recorded_by_ids_only(said: str, expected: tuple[str, str | None]) -> None:
+    record = runner.refusal_record(said)
+    template, why = expected
+    assert record["template"] == template
+    assert record.get("why") == why
+    assert record["length"] == len(said) and len(record["hash"]) == 12
+    # Keyed: never the plain SHA-256 a log reader could recompute from a guessed name.
+    assert record["hash"] != hashlib.sha256(said.encode()).hexdigest()[:12]
+    assert runner.refusal_record(said)["hash"] == record["hash"]
+    kept = json.dumps(record)
+    assert not any(part in kept for name in _NAMES for part in (name, name.split()[0]))
+
+
+@pytest.mark.parametrize("said", [None, "", 42, {"error": "Acme Ltd"}, b"Acme Ltd"])
+def test_no_text_is_no_template(said: Any) -> None:
+    assert runner.refusal_record(said) == {"template": "none"}
+
+
+def test_a_refused_read_keeps_no_name_in_the_run_record_audit_or_log(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from openexecutive.audit import logger as audit_logger
+
+    said = ("The watch job 'bank-matching' lists bank_lines_to_match, but not with these arguments: "
+            "bank_account: 'O'Brien Ltd - Acme Ltd' isn't the Bank Account's exact name, 'Beta GmbH'")
+    erp.replies.append(json.dumps({"error": said}))
+    with caplog.at_level("DEBUG"):
+        outcome = _run(job_on)
+    assert (outcome.status, outcome.error) == ("failed", "read_refused")
+    assert outcome.refusal["template"] == "arguments" and outcome.refusal["why"] == "not_exact_name"
+    conn = watch_settings.connect()
+    try:
+        detail = conn.execute(f"SELECT detail FROM {watch_settings.RUNS_TABLE} WHERE job = ?",  # noqa: S608
+                              (job_on.id,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert json.loads(detail)["refusal"] == outcome.refusal
+    audit = json.dumps([[r.summary, r.details] for r in audit_logger.get_audit_logger().query(limit=500)])
+    assert "not_exact_name" in audit
+    for kept in (detail, audit, caplog.text, *(a.body for a in _alerts())):
+        assert not any(part in kept for name in _NAMES for part in (name, name.split()[0])), kept
+    assert "template=arguments why=not_exact_name" in caplog.text

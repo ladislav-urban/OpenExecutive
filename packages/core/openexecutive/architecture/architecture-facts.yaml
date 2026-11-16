@@ -12117,6 +12117,12 @@ watch:
     private watch_job_check audit row (job, day, operation, person_id,
     result code). Refusals are counted (permission ones apart, read from
     the refusal in memory only) and told on the notice in code's words.
+    A refused read (runner._read) keeps runner.refusal_record(said): a
+    template id matched on oe_connector's own fixed words, a reason id for
+    "not with these arguments", an HMAC-SHA256[:12] under a per-process key
+    (_REFUSAL_KEY, memory only) and the text's length, in watch_runs.detail
+    ["refusal"], the watch_run audit row and the log. Never the text: a
+    refusal can name a record quoted, unquoted or in a list.
     DraftOutcome.unproposed lists the findings no card was left for (none
     waiting): the runner leaves each one's DraftSpec.notice, if it has one.
   job_cards: |
