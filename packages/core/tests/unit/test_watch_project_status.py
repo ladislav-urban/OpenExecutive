@@ -904,16 +904,20 @@ def test_each_dropped_line_names_the_rule_that_dropped_it() -> None:
         assert runner.drop_rule(line) in runner.DROP_RULES
 
 
-def test_a_long_reason_is_cut_at_a_word_never_mid_word() -> None:
+def test_a_reason_past_the_limit_is_dropped_never_cut() -> None:
     long_line = ("The project is behind schedule and over its estimate because the flooring arrived late and "
                  "the electrical rough-in had to be redone, so another crew was brought in and has worked through "
                  "the weekend to catch up with the snag list")
-    got = runner.parse_reasons('{"reasons": {"f1": "' + long_line + '"}}', {"f1": "k"})
-    line = got["k"]
-    assert len(line) <= runner.MAX_REASON_CHARS
-    assert long_line.startswith(line) and long_line[len(line)] == " "
-    # One token past the limit is dropped, never cut into a stem the filter wouldn't know.
+    assert len(long_line) > runner.MAX_REASON_CHARS
+    assert runner.parse_reasons('{"reasons": {"f1": "' + long_line + '"}}', {"f1": "k"}) == {}
+    # Its barred word straddling the limit can't survive a cut, nor can a
+    # reassuring head lose its qualifier: there is no cut.
+    straddle = "On schedule and within its estimate, " + "fine " * 31 + "provided they pay the supplier today"
+    assert runner.parse_reasons('{"reasons": {"f1": "' + straddle + '"}}', {"f1": "k"}) == {}
     assert runner.parse_reasons('{"reasons": {"f1": "' + "a" * 400 + '"}}', {"f1": "k"}) == {}
+    # At the limit it is kept whole.
+    exact = "x" * runner.MAX_REASON_CHARS
+    assert runner.parse_reasons('{"reasons": {"f1": "' + exact + '"}}', {"f1": "k"}) == {"k": exact}
 
 
 def test_the_instruction_asks_for_the_cost_position_english_and_the_teams_own_words() -> None:
