@@ -412,13 +412,24 @@ async def leave_drafts(
             if dedup_key(job.id, spec.key) in kept:
                 out.kept_from_reviewer.add(spec.key)
                 out.unproposed.append(spec)
-    else:
+    kept_now: set[str] = set()
+    if not job.once:
         left_today = {
             drafts._payload(c).get("dedup_key") for c in drafts.job_cards(job.id, open_only=False)
             if drafts._payload(c).get("run_day") == day
         }
+        # A finding ERPNext kept from this reviewer on an earlier run (its
+        # kept_key record, HOLD_DAYS at most): told to the principal, never
+        # this reviewer, and not checked as them again meanwhile.
+        kept_now = _kept_now(job, reviewer.id, specs, day)
+        for spec in specs:
+            if dedup_key(job.id, spec.key) in kept_now:
+                out.kept_from_reviewer.add(spec.key)
+                out.unproposed.append(spec)
     for n, spec in enumerate(specs):
         key = dedup_key(job.id, spec.key)
+        if key in kept_now:
+            continue
         if key in left_today or drafts.job_card_waiting(key):
             out.repeats += 1
             continue
@@ -597,6 +608,35 @@ def held_key(key: str, reviewer_id: int) -> str:
     return f"held:{reviewer_id}:{key}"
 
 
+def _kept_now(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec], day: str) -> set[str]:
+    """The dedupe keys of a job's ``specs`` ERPNext kept from reviewer
+    ``reviewer_id`` within ``HOLD_DAYS`` (their ``kept_key`` records, by the
+    reviewer's person id); older records are dropped, so the finding is
+    checked as the reviewer again. Unreadable: none, and every finding is
+    checked as the reviewer, whose check is the gate."""
+    from openexecutive.watch.runner import dedup_key
+    from openexecutive.watch.settings import forget_told, told_days
+
+    keys = [dedup_key(job.id, s.key) for s in specs]
+    if not keys:
+        return set()
+    try:
+        written = told_days(job.id, [kept_key(k, reviewer_id) for k in keys])
+    except Exception:
+        logger.warning("watch: job %s's kept records couldn't be read; checking each", job.id)
+        return set()
+    if day:
+        oldest = (date.fromisoformat(day) - timedelta(days=HOLD_DAYS)).isoformat()
+        old = [record for record, at in written.items() if at < oldest]
+        if old:
+            try:
+                forget_told(job.id, old)
+            except Exception:
+                logger.warning("watch: job %s's old kept records couldn't be dropped", job.id)
+            written = {record: at for record, at in written.items() if at >= oldest}
+    return {k for k in keys if kept_key(k, reviewer_id) in written}
+
+
 def kept_key(key: str, reviewer_id: int) -> str:
     """A once job's record that ERPNext kept a finding from reviewer
     ``reviewer_id``: held, and its notice offered to the principal until one
@@ -665,6 +705,10 @@ async def _leave_one(
             # Its own record kind: a kept one is still kept on later runs.
             record = kept_key if code in KEPT_CODES else held_key
             _mark_carded(job, day, key, lambda k: record(k, reviewer.id))
+        elif not job.once and code in KEPT_CODES:
+            # Exactly these codes: a timeout or a failed read keeps nothing,
+            # and the next run checks as the reviewer again (_kept_now).
+            _mark_carded(job, day, key, lambda k: kept_key(k, reviewer.id))
         out.unproposed.append(spec)
         return False
     if not isinstance(pinned, dict):

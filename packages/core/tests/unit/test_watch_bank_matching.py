@@ -1213,3 +1213,101 @@ def test_a_refused_read_keeps_no_name_in_the_run_record_audit_or_log(
     for kept in (detail, audit, caplog.text, "\n".join(logged), *(a.body for a in _alerts())):
         assert not any(part in kept for name in _NAMES for part in (name, name.split()[0])), kept
     assert any("template=arguments why=not_exact_name" in line for line in logged)
+
+
+# --------------------------------------------------------------------------- #
+# A finding ERPNext kept from the reviewer stays kept on later runs
+# --------------------------------------------------------------------------- #
+
+def _sod_bt1() -> str:
+    voucher = _voucher(PE, "PE-1", 1200.0, parties=[HARBOR], creator=REVIEWER)
+    return _checked(_summary(LINES[0], [voucher]))
+
+
+def _checked_names(erp: FakeErpnext, since: int) -> list[str]:
+    return [_plain(sent)["name"] for name, sent in erp.calls[since:] if name == "erpnext__draft_check"]
+
+
+def test_a_kept_finding_is_not_checked_again_nor_told_to_the_reviewer_later_that_day(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from openexecutive.watch import cards
+
+    _reads(erp)
+    erp.replies.extend([_sod_bt1(), _bt2()])
+    _run(job_on)
+    kept = watch_settings.told(job_on.id, [cards.kept_key(k, team.cara) for k in _bt1_keys(job_on)])
+    assert kept, "check_reviewer_sod leaves a kept record for the reviewer"
+    since = len(erp.calls)
+    _reads(erp)
+    _run_again(job_on, "12:00:00")
+    # BT-1 isn't checked as Cara again, and BT-2's card is waiting: no check at all.
+    assert _checked_names(erp, since) == []
+    for alert in _alerts():
+        if "BT-1" in alert.body:
+            assert alert.routed_to_person_id == team.principal
+    # Told to the principal once that day, whatever the runs.
+    assert len([a for a in _alerts() if "Likely match for bank line BT-1" in a.body]) == 1
+
+
+def _bt1_keys(job: WatchJob) -> list[str]:
+    key = f"match{bank_matching._SEP}BT-1{bank_matching._SEP}{PE}{bank_matching._SEP}PE-1"
+    return [runner.dedup_key(job.id, key)]
+
+
+def test_a_check_that_fails_keeps_nothing_and_is_checked_again(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.watch import cards
+
+    real = cards._check
+
+    async def failing(*args: Any, **kwargs: Any) -> Any:
+        return "check_failed", {}
+
+    monkeypatch.setattr(cards, "_check", failing)
+    _reads(erp)
+    _run(job_on)
+    assert not watch_settings.told(job_on.id, [cards.kept_key(k, team.cara) for k in _bt1_keys(job_on)])
+    monkeypatch.setattr(cards, "_check", real)
+    since = len(erp.calls)
+    _reads(erp)
+    erp.replies.extend([_bt1(), _bt2()])
+    _run_again(job_on, "12:00:00")
+    assert "BT-1" in _checked_names(erp, since)
+
+
+def test_the_kept_record_follows_the_reviewers_person_not_their_name(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _reads(erp)
+    erp.replies.extend([_sod_bt1(), _bt2()])
+    _run(job_on)
+    people_store.update_person(team.cara, full_name="Cara Credit-Renamed")
+    since = len(erp.calls)
+    _reads(erp)
+    _run_again(job_on, "12:00:00")
+    assert "BT-1" not in _checked_names(erp, since)
+    # Another reviewer is checked afresh: ERPNext decides for them.
+    _save(team.principal, reviewer=team.dan)
+    since = len(erp.calls)
+    _reads(erp)
+    erp.replies.extend([_bt1(), _bt2()])
+    _run_again(job_on, "13:00:00")
+    assert "BT-1" in _checked_names(erp, since)
+
+
+def test_a_kept_record_older_than_the_hold_is_checked_again(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from openexecutive.watch import cards
+
+    old = (TODAY - timedelta(days=cards.HOLD_DAYS + 1)).isoformat()
+    watch_settings.mark_told(job_on.id, [cards.kept_key(k, team.cara) for k in _bt1_keys(job_on)], old)
+    _reads(erp)
+    erp.replies.extend([_bt1(), _bt2()])
+    _run(job_on)
+    assert "BT-1" in _checked_names(erp, 0)
+    # The old record is gone.
+    assert not watch_settings.told(job_on.id, [cards.kept_key(k, team.cara) for k in _bt1_keys(job_on)])
+
