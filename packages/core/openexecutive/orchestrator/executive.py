@@ -1227,6 +1227,25 @@ EMPTY_ROUND_NOTE = (
 # What a turn says when the model declined to answer (stop reason
 # "refusal") and nothing was written: never an empty reply.
 REFUSED_REPLY = "I can't answer that one as it's asked. Try putting it another way."
+# A round's output cap, thinking and text together. Adaptive thinking on a
+# 5-generation model can spend all of 8,192 on thinking after a large tool
+# result and stop at max_tokens with no text (erpnext_094 at 45bd9197: 5 of
+# 10 replies empty). Streaming takes a larger cap; it limits, never spends.
+ROUND_MAX_TOKENS = 32000
+# Any other model keeps the old cap: a smaller completion limit or context
+# window (an OpenRouter or local model) could refuse the larger one.
+OTHER_ROUND_MAX_TOKENS = 8192
+# Claude models the larger cap goes to: the 4.5 and later families, whose
+# output caps all exceed it (an older Claude keeps the smaller cap).
+_CLAUDE_RE = re.compile(
+    r"(?:anthropic/)?claude-(?:opus|sonnet|haiku|fable|mythos)-(?:4[-.](?:[5-9]|\d{2})|[5-9])(?:[-.]\d{1,2})?(?:-\d{8})?"
+)
+# Claude models that take output_config.effort (the 5 generation): a retry
+# after a round that stopped at max_tokens with no text runs at low effort,
+# so it thinks less and writes.
+# Not Haiku: the loop sends no thinking, so a Haiku round already runs with
+# thinking off (feature_gate), and effort there gains nothing.
+_TAKES_EFFORT_RE = re.compile(r"(?:anthropic/)?claude-(?:opus|sonnet|fable|mythos)-5(?:[-.]\d{1,2})?")
 # The stop reasons an empty round is asked once more after: a natural end,
 # or the output limit reached with no text. Never a refusal.
 _EMPTY_RETRY_STOPS = frozenset({"end_turn", "max_tokens"})
@@ -2755,6 +2774,8 @@ class Executive:
         # The next round is offered no tool: a retry after a max_tokens stop
         # with no text must write, not repeat the call that filled it.
         no_tools_next = False
+        # And at low effort, where the model takes it (_TAKES_EFFORT_RE).
+        low_effort_next = False
         # The reply as it stood when the claim check asked for one more round:
         # that round's text is held and only a short line of what the reply
         # doesn't already say is kept (utils.repeats), so a rewritten answer
@@ -2831,7 +2852,12 @@ class Executive:
             flushed = False
             async with get_provider(stream_model).messages_stream(
                 model=stream_model,
-                max_tokens=8192,
+                max_tokens=ROUND_MAX_TOKENS if _CLAUDE_RE.fullmatch(stream_model.lower()) else OTHER_ROUND_MAX_TOKENS,
+                **(
+                    {"output_config": {"effort": "low"}}
+                    if low_effort_next and _TAKES_EFFORT_RE.fullmatch(stream_model.lower())
+                    else {}
+                ),
                 system=system_blocks,  # type: ignore[arg-type]
                 tools=tools_with_cache,  # type: ignore[arg-type,list-item]
                 messages=current_messages,  # type: ignore[arg-type]
@@ -2865,6 +2891,8 @@ class Executive:
                             held, flushed = "", True
 
                 final_msg = await stream.get_final_message()
+            # The retry's settings were for that one round only.
+            no_tools_next = low_effort_next = False
             if reply_before_nudge is not None:
                 # After the claim check's nudge, everything the model writes,
                 # before a tool call or after it, is gathered and trimmed once
@@ -2992,7 +3020,7 @@ class Executive:
                         final_msg.stop_reason, iteration, len(reply_so_far),
                     )
                     note = EMPTY_ROUND_CONTINUE_NOTE if reply_so_far.strip() else EMPTY_ROUND_NOTE
-                    no_tools_next = final_msg.stop_reason == "max_tokens"
+                    no_tools_next = low_effort_next = final_msg.stop_reason == "max_tokens"
                     # A hand-over the person asked for meanwhile is taken
                     # here: the extra round writes up, and runs no tool.
                     if inbox is not None and inbox.take_hand_over():
