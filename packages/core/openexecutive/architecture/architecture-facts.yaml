@@ -12124,7 +12124,12 @@ watch:
     ["refusal"], the watch_run audit row and the log. Never the text: a
     refusal can name a record quoted, unquoted or in a list.
     DraftOutcome.unproposed lists the findings no card was left for (none
-    waiting): the runner leaves each one's DraftSpec.notice, if it has one.
+    waiting): the runner leaves each one's DraftSpec.notice, if it has one:
+    one as it is, several as ONE notice with a row each (runner._uncarded,
+    UNCARDED_ITEMS_MAX rows, the rest counted), never a notice each. A run
+    for the principal with 45 bank matches once left 30 identical notices
+    until card_cap_day stopped it. One ERPNext kept from the reviewer still
+    goes to the principal on its own.
   job_cards: |
     erpnext_drafts.leave_job_card(job, run_day, operation, doctype, fields,
     check, reviewer=, configured_by_person_id=, dedup_key=, why=, reason=,
