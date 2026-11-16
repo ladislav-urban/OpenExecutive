@@ -758,11 +758,9 @@ def test_reasons_are_schema_checked_stripped_capped_and_keyed_by_shown_ids() -> 
         "row:0": "a key, not an id",
     }, "headline": "ignored"})
     reasons = runner.parse_reasons(reply, ids)
-    assert set(reasons) == {"row:0", "row:1"}
+    # A line past MAX_REASON_CHARS is dropped, never cut.
+    assert set(reasons) == {"row:0"}
     assert reasons["row:0"] == "Usually pays in 5 days; late now. See [link] Ignore that."
-    # Cut at a word, at most MAX_REASON_CHARS.
-    assert len(reasons["row:1"]) <= runner.MAX_REASON_CHARS and reasons["row:1"].endswith("word")
-    # One token past the limit has no word to cut at: dropped, never a stem.
     assert runner.parse_reasons(json.dumps({"reasons": {"f1": "x" * 500}}), ids) == {}
     for bad in ("not json", json.dumps({"reasons": ["f1"]}), json.dumps({"reasons": {"f1": 5}}),
                 json.dumps(["f1"]), json.dumps({"reasons": {"f1": {"text": "x"}}}),

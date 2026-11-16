@@ -1462,23 +1462,20 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
     for fid, reason in reasons.items():
         if fid not in ids or not isinstance(reason, str):
             continue
-        line = _at_word(clean(reason, MAX_REASON_CHARS + 1), MAX_REASON_CHARS)
+        # Cleaned at a wider bound, so the length check sees past the limit.
+        line = _at_word(clean(reason, MAX_REASON_CHARS * 2), MAX_REASON_CHARS)
         if line:
             out[ids[fid]] = line
     return out
 
 
 def _at_word(line: str, limit: int) -> str:
-    """``line`` at most ``limit`` characters, cut at the last whole word
-    (and its trailing comma or semicolon) rather than mid-word; "" when the
-    cut would fall inside a single token (no space before ``limit``), which
-    could leave a stem of a barred word the filter wouldn't know."""
-    if len(line) <= limit:
-        return line
-    cut = line[:limit]
-    if " " not in cut:
-        return ""
-    return cut.rsplit(" ", 1)[0].rstrip(" ,;:")
+    """``line`` when it is at most ``limit`` characters, else "": a line
+    past the limit is dropped, never cut. A cut could keep a line whose
+    barred word sat in its last token, or show only a reassuring head
+    without the qualifier after it; the instruction asks for less, so a
+    longer line is rare."""
+    return line if len(line) <= limit else ""
 
 
 def has_digit(line: str) -> bool:
