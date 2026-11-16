@@ -1046,3 +1046,52 @@ def test_one_match_left_without_a_card_is_still_its_own_notice(
     [notice] = _alerts()
     assert "Likely match for bank line BT-100" in notice.body
     assert runner.UNCARDED_LINE not in notice.body
+
+
+
+def _run_again(job: WatchJob, at: str) -> runner.RunOutcome:
+    """A second run the same day (a Run now)."""
+    runner.claim_now(job.id, DAY, f"now@{at}", datetime.now(UTC))
+    return asyncio.run(runner.run_job(job, DAY, slot=f"now@{at}"))
+
+
+def test_a_later_run_the_same_day_tells_only_what_is_new(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(3)
+    _reads(erp, lines=lines, cands=cands, invoices=None)
+    _run(job_on)
+    [first] = _alerts()
+    assert "3 found, not left as cards" in first.body
+    # The same three and two new: only the two new are told, on a notice of their own.
+    more, more_cands = _many_matches(5)
+    _reads(erp, lines=more, cands=more_cands, invoices=None)
+    _run_again(job_on, "12:00:00")
+    second = [a for a in _alerts() if a.id != first.id]
+    assert len(second) == 1
+    assert "2 found, not left as cards" in second[0].body
+    assert "BT-103" in second[0].body and "BT-104" in second[0].body
+    assert not any(f"BT-{100 + i}" in second[0].body for i in range(3))
+    # Nothing new: nothing told.
+    _reads(erp, lines=more, cands=more_cands, invoices=None)
+    _run_again(job_on, "13:00:00")
+    assert len(_alerts()) == 2
+
+
+def test_a_finding_whose_own_notice_is_open_is_never_a_row(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    # BT-100's own notice (say ERPNext kept it from the reviewer, told to the
+    # principal) is open: no later grouped notice names it, whoever it goes to.
+    _save(team.principal, reviewer=None)
+    lines, cands = _many_matches(3)
+    key = f"match{bank_matching._SEP}BT-100{bank_matching._SEP}{PE}{bank_matching._SEP}PE-100"
+    kept = registry.CardSpec(key=key, summary="Likely match for bank line BT-100", to_principal=True)
+    assert runner._leave_notice(job_on, DAY, kept, "", runner.dedup_key(job_on.id, key), found=1,
+                                to=team.principal) is not None
+    _reads(erp, lines=lines, cands=cands)
+    _run(job_on)
+    grouped = [a for a in _alerts() if "found, not left as cards" in a.body]
+    assert len(grouped) == 1 and "2 found, not left as cards" in grouped[0].body
+    assert "BT-100" not in grouped[0].body

@@ -126,6 +126,7 @@ NOTICE_SEVERITY = "medium"
 # told together on one notice when there are several (_uncarded): never a
 # notice each, which flooded the reviewer and used up the day's notices.
 UNCARDED_ITEMS_MAX = 60
+UNCARDED_PREFIX = "uncarded:"
 UNCARDED_LINE = "These weren't left as cards this run; the run's lines below say why. Each is found again on a later run while it's still open."
 
 # What a notice says stopped a run, by reason code: our words, never ERPNext's.
@@ -892,7 +893,7 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         dataclasses.replace(s.notice, to_principal=True)
         for s in made.unproposed
         if s.notice is not None and s.key in made.kept_from_reviewer
-    ] + _uncarded([
+    ] + _uncarded(job, [
         s.notice
         for s in made.unproposed
         if s.notice is not None and s.key not in made.kept_from_reviewer and s.key not in rows and not job.once
@@ -933,6 +934,8 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             outcome.cards += 1
             if job.once:
                 _mark_told(job, day, spec)
+            elif spec.key.startswith(UNCARDED_PREFIX):
+                _mark_uncarded_told(job, day, spec)
         elif spec is target:
             # Not left after all: the next one due takes the lines.
             target = _lines_target(due[due.index(spec) + 1:])
@@ -1082,26 +1085,64 @@ def _lines_target(due: Sequence[registry.CardSpec]) -> registry.CardSpec | None:
     return next((spec for spec in due if not spec.to_principal), due[0] if due else None)
 
 
-def _uncarded(found: list[registry.CardSpec], day: str) -> list[registry.CardSpec]:
+def _uncarded_told_key(job: registry.WatchJob, finding_key: str) -> str:
+    """A row told in a grouped notice, as ``watch_told`` keeps it: its own
+    dedupe digest under ``UNCARDED_PREFIX``, apart from a once job's keys."""
+    return f"{UNCARDED_PREFIX}{dedup_key(job.id, finding_key)}"
+
+
+def _uncarded(job: registry.WatchJob, found: list[registry.CardSpec], day: str) -> list[registry.CardSpec]:
     """The notices of findings a run left no card for: one as it is, several
     as one notice with a row each (``UNCARDED_ITEMS_MAX`` of them, the rest
-    counted). Each row keeps its own key, so its reason line and the run's
-    dedupe still see it."""
-    if len(found) <= 1:
-        return found
+    counted).
+
+    Each finding keeps its own dedupe, whichever notice tells it: one whose
+    own notice is still open or was left today (a finding ERPNext kept from
+    the reviewer, told to the principal) is never a row here, and a row told
+    in a grouped notice today (``watch_told``) isn't told again today. The
+    grouped notice's key is the day and its rows, so a later run's new
+    findings are told the same day."""
+    from openexecutive.watch.settings import told_days
+
+    fresh = [
+        s for s in found
+        if not (_still_open(dedup_key(job.id, s.key)) or _raised_today(dedup_key(job.id, s.key), day))
+    ]
+    try:
+        told_on = told_days(job.id, [_uncarded_told_key(job, s.key) for s in fresh])
+    except Exception:
+        # Unreadable: tell them, rather than drop a finding.
+        logger.warning("watch: job %s's told rows couldn't be read; telling them", job.id)
+        told_on = {}
+    fresh = [s for s in fresh if told_on.get(_uncarded_told_key(job, s.key)) != day]
+    if len(fresh) <= 1:
+        return fresh
+    found = fresh
     shown = found[:UNCARDED_ITEMS_MAX]
     notes: list[str] = [UNCARDED_LINE]
     for spec in found:
         notes.extend(n for n in spec.notes if n not in notes)
     if len(found) > len(shown):
         notes.append(f"{len(found) - len(shown)} more aren't listed here.")
+    rows = hashlib.sha256("\n".join(sorted(s.key for s in shown)).encode("utf-8")).hexdigest()[:16]
     return [registry.CardSpec(
-        key=f"uncarded:{day}",
+        key=f"{UNCARDED_PREFIX}{day}:{rows}",
         summary=f"{len(found)} found, not left as cards",
         items=tuple(shown),
         notes=tuple(notes),
         count=len(found),
     )]
+
+
+def _mark_uncarded_told(job: registry.WatchJob, day: str, spec: registry.CardSpec) -> None:
+    """Record a grouped notice's rows as told today; the counted rest past
+    ``UNCARDED_ITEMS_MAX`` aren't, so a later run names them."""
+    from openexecutive.watch.settings import mark_told
+
+    try:
+        mark_told(job.id, [_uncarded_told_key(job, item.key) for item in spec.items], day)
+    except Exception:
+        logger.warning("watch: job %s's told rows couldn't be recorded", job.id)
 
 
 def _without_rows(notices: list[registry.CardSpec], kept: set[str]) -> list[registry.CardSpec]:
