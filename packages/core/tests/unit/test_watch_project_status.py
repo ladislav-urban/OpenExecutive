@@ -578,12 +578,15 @@ def test_cleaning_outside_text_is_bounded_whatever_its_length(text: str) -> None
     assert time_.perf_counter() - started < 0.2
 
 
-def _hostile_build_seconds(n: int) -> float:
+def _hostile_build_seconds(n: int, scale: int = 1) -> float:
     """The best of three builds of ``n`` projects with hostile updates (a
-    long run of a wide character or of hyphens, and a huge tail)."""
+    long run of a wide character or of hyphens, and a huge tail), each run
+    and tail ``scale`` times its base length."""
     projects = [_project(f"PROJ-{i:04d}", f"Job {i}", end=-1) for i in range(n)]
-    updates = [_update(f"U{i}", f"PROJ-{i:04d}", ("㏘" * 4000 if i % 2 else "a-" * 2000) + "x" * 100_000)
-               for i in range(n)]
+    updates = [
+        _update(f"U{i}", f"PROJ-{i:04d}", ("㏘" * 4000 * scale if i % 2 else "a-" * 2000 * scale) + "x" * 100_000 * scale)
+        for i in range(n)
+    ]
     best = float("inf")
     for _ in range(3):
         started = time_.perf_counter()
@@ -602,6 +605,16 @@ def test_fifty_projects_of_hostile_updates_build_in_linear_time() -> None:
     fifty = _hostile_build_seconds(50)
     assert fifty < max(12 * ten, 0.05), (ten, fifty)
     assert fifty < 10.0
+
+
+def test_a_hostile_update_builds_in_linear_time_in_its_length() -> None:
+    # A slowdown in one update's length (a backtracking regex on a long
+    # run) costs the same per project whatever their number: compared on
+    # length too. Four times as long must take well under sixteen times as
+    # long (quadratic); linear is four.
+    short = _hostile_build_seconds(2)
+    long = _hostile_build_seconds(2, scale=4)
+    assert long < max(8 * short, 0.05), (short, long)
 
 
 def test_an_update_dated_after_today_is_never_this_weeks() -> None:
