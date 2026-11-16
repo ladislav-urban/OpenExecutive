@@ -26,9 +26,11 @@ export default function WatchJobsCard() {
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const alive = useRef(true);
 
-  const load = useCallback(async (signal?: AbortSignal) => {
+  // The first read decides whether the card shows; a later read that fails
+  // keeps what's shown rather than hiding the card mid-run.
+  const load = useCallback(async (signal?: AbortSignal, keep = false) => {
     const next = await getWatchJobs(signal).catch(() => null);
-    if (alive.current && !signal?.aborted) setJobs(next);
+    if (alive.current && !signal?.aborted && (next || !keep)) setJobs(next);
     return next;
   }, []);
 
@@ -49,7 +51,8 @@ export default function WatchJobsCard() {
     if (step >= REREAD_DELAYS_MS.length) return;
     const timer = setTimeout(async () => {
       if (!alive.current) return;
-      const next = await load();
+      const next = await load(undefined, true);
+      if (!alive.current) return;
       const now = next?.jobs.find((j) => j.id === job.id);
       if (now && runSettled(job.last_run, now.last_run)) return;
       reread(job, step + 1);
@@ -78,6 +81,9 @@ export default function WatchJobsCard() {
     }
   };
 
+  // Own keys only, so an id like "constructor" never reads Object's.
+  const noteFor = (id: string) => (Object.hasOwn(notes, id) ? notes[id] : "");
+
   return (
     <SettingsCard
       title="Watch jobs"
@@ -95,9 +101,9 @@ export default function WatchJobsCard() {
                 <span className="font-normal text-fg-muted">· {job.enabled ? `on, runs at ${job.runs_at}` : "off"}</span>
               </p>
               <p className="mt-0.5 text-sm text-fg-muted">{lastRunLine(job.last_run)}</p>
-              {notes[job.id] && (
+              {noteFor(job.id) && (
                 <p role="status" className="mt-1 text-sm text-fg">
-                  {notes[job.id]}
+                  {noteFor(job.id)}
                 </p>
               )}
             </div>
