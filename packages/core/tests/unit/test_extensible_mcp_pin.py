@@ -19,7 +19,10 @@ from openexecutive.orchestrator import mcp_gateway
 
 DOCKERFILE = Path(__file__).resolve().parents[4] / "docker" / "Dockerfile"
 PREWARM = re.compile(r"\buvx\s+((?:\S+\s+)*?extensible-mcp)\b")
-COMMIT_PIN = re.compile(r"^git\+https://github\.com/SenteLabsAI/extensible-mcp@[0-9a-f]{40}$")
+# Upstream, or the owner's fork while a fix waits upstream; nothing else.
+COMMIT_PIN = re.compile(
+    r"^git\+https://github\.com/(SenteLabsAI|ladislav-urban)/extensible-mcp@[0-9a-f]{40}"
+)
 
 
 def _dockerfile_prewarm_args() -> list[tuple[str, ...]]:
@@ -39,7 +42,7 @@ def _dockerfile_prewarm_args() -> list[tuple[str, ...]]:
 
 
 def test_gateway_pins_extensible_mcp_to_a_full_commit() -> None:
-    assert COMMIT_PIN.match(mcp_gateway._EXTENSIBLE_MCP_GIT), (
+    assert COMMIT_PIN.fullmatch(mcp_gateway._EXTENSIBLE_MCP_GIT), (
         f"{mcp_gateway._EXTENSIBLE_MCP_GIT!r} is not pinned to a 40-character commit; a branch, "
         "tag or short hash lets the gateway's code change without a new image"
     )
