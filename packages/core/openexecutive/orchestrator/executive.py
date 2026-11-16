@@ -1235,8 +1235,11 @@ ROUND_MAX_TOKENS = 32000
 # Any other model keeps the old cap: a smaller completion limit or context
 # window (an OpenRouter or local model) could refuse the larger one.
 OTHER_ROUND_MAX_TOKENS = 8192
-# Claude models the larger cap goes to: any Claude, by name.
-_CLAUDE_RE = re.compile(r"(?:anthropic/)?claude-[a-z0-9.-]+")
+# Claude models the larger cap goes to: the 4.5 and later families, whose
+# output caps all exceed it (an older Claude keeps the smaller cap).
+_CLAUDE_RE = re.compile(
+    r"(?:anthropic/)?claude-(?:opus|sonnet|haiku|fable|mythos)-(?:4[-.](?:[5-9]|\d{2})|[5-9])(?:[-.]\d{1,2})?(?:-\d{8})?"
+)
 # Claude models that take output_config.effort (the 5 generation): a retry
 # after a round that stopped at max_tokens with no text runs at low effort,
 # so it thinks less and writes.
