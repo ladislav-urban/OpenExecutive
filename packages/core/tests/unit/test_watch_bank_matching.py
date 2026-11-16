@@ -1213,6 +1213,7 @@ def test_a_refused_read_keeps_no_name_in_the_run_record_audit_or_log(
     for kept in (detail, audit, caplog.text, "\n".join(logged), *(a.body for a in _alerts())):
         assert not any(part in kept for name in _NAMES for part in (name, name.split()[0])), kept
     assert any("template=arguments why=not_exact_name" in line for line in logged)
+<<<<<<< HEAD
 
 
 # --------------------------------------------------------------------------- #
@@ -1311,3 +1312,26 @@ def test_a_kept_record_older_than_the_hold_is_checked_again(
     # The old record is gone.
     assert not watch_settings.told(job_on.id, [cards.kept_key(k, team.cara) for k in _bt1_keys(job_on)])
 
+||||||| dcd556cc
+=======
+
+
+def test_a_grouped_notices_merged_notes_are_capped_in_lines_and_characters(
+    job_on: WatchJob, team: SimpleNamespace,
+) -> None:
+    specs = [registry.CardSpec(key=f"n{i}", summary=f"row {i}", notes=(f"Note {i}.",)) for i in range(25)]
+    [grouped] = runner._uncarded(job_on, specs, DAY)
+    assert grouped.notes[0] == runner.UNCARDED_LINE
+    assert list(grouped.notes[1:1 + runner.UNCARDED_NOTES_MAX]) == [f"Note {i}." for i in range(10)]
+    assert grouped.notes[1 + runner.UNCARDED_NOTES_MAX] == "15 more notes aren't shown here."
+    # Long notes stop at the character budget, whatever the count.
+    long = [registry.CardSpec(key=f"l{i}", summary="", notes=("x" * 900 + str(i),)) for i in range(4)]
+    [grouped] = runner._uncarded(job_on, long, DAY)
+    assert len(grouped.notes) == 1 + 2 + 1 and grouped.notes[-1] == "2 more notes aren't shown here."
+    assert sum(len(n) for n in grouped.notes[1:-1]) <= runner.UNCARDED_NOTES_CHARS
+    # One more past the cap reads in the singular.
+    one = runner._capped_notes([f"N{i}" for i in range(runner.UNCARDED_NOTES_MAX + 1)])
+    assert one[-1] == "1 more note isn't shown here."
+    assert runner._capped_notes(["a", "b"]) == ["a", "b"]
+
+>>>>>>> private/main
