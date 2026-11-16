@@ -421,15 +421,22 @@ async def leave_drafts(
         # A finding ERPNext kept from this reviewer on an earlier run (its
         # kept_key record, HOLD_DAYS at most): told to the principal, never
         # this reviewer, and not checked as them again meanwhile.
-        kept_now = _kept_now(job, reviewer.id, specs, day)
+        kept_codes = _kept_now(job, reviewer.id, specs, day)
+        kept_now = set(kept_codes)
         for spec in specs:
-            if dedup_key(job.id, spec.key) in kept_now:
-                out.kept_from_reviewer.add(spec.key)
-                out.unproposed.append(spec)
+            code = kept_codes.get(dedup_key(job.id, spec.key))
+            if code is None:
+                continue
+            out.kept_from_reviewer.add(spec.key)
+            out.unproposed.append(spec)
+            # Counted as the refusal that kept it, as a check would count it
+            # again: the run's lines, and its going to the principal when
+            # every check was refused for permissions, stay as on the first.
+            out.checks += 1
+            _count_refusal(out, code)
+    specs = [s for s in specs if dedup_key(job.id, s.key) not in kept_now]
     for n, spec in enumerate(specs):
         key = dedup_key(job.id, spec.key)
-        if key in kept_now:
-            continue
         if key in left_today or drafts.job_card_waiting(key):
             out.repeats += 1
             continue
@@ -608,23 +615,44 @@ def held_key(key: str, reviewer_id: int) -> str:
     return f"held:{reviewer_id}:{key}"
 
 
-def _kept_now(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec], day: str) -> set[str]:
+def _count_refusal(out: DraftOutcome, code: str) -> None:
+    """A refused check's counts on the run: its line's code, or a refusal,
+    and a permission refusal. The check itself is counted by the caller."""
+    if code in CHECK_LINES:
+        # Our own reading of ERPNext's answer, not ERPNext's refusal.
+        out.codes[code] = out.codes.get(code, 0) + 1
+    else:
+        out.check_refused += 1
+    if code in ("check_permission", "check_not_theirs"):
+        out.permission_refused += 1
+
+
+def _kept_code_key(code: str, key: str, reviewer_id: int) -> str:
+    """A non-once job's kept record: ``kept_key`` with the code that kept it."""
+    return f"kept-{code}:{reviewer_id}:{key}"
+
+
+def _kept_now(
+    job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry.DraftSpec], day: str,
+) -> dict[str, str]:
     """The dedupe keys of a job's ``specs`` ERPNext kept from reviewer
-    ``reviewer_id`` within ``HOLD_DAYS`` (their ``kept_key`` records, by the
-    reviewer's person id); older records are dropped, so the finding is
-    checked as the reviewer again. Unreadable: none, and every finding is
-    checked as the reviewer, whose check is the gate."""
+    ``reviewer_id`` within ``HOLD_DAYS``, each with the code that kept it
+    (their ``_kept_code_key`` records, by the reviewer's person id); older
+    records are dropped, so the finding is checked as the reviewer again.
+    Unreadable: none, and every finding is checked as the reviewer, whose
+    check is the gate."""
     from openexecutive.watch.runner import dedup_key
     from openexecutive.watch.settings import forget_told, told_days
 
     keys = [dedup_key(job.id, s.key) for s in specs]
     if not keys:
-        return set()
+        return {}
+    records = {_kept_code_key(code, k, reviewer_id): (k, code) for k in keys for code in sorted(KEPT_CODES)}
     try:
-        written = told_days(job.id, [kept_key(k, reviewer_id) for k in keys])
+        written = told_days(job.id, list(records))
     except Exception:
         logger.warning("watch: job %s's kept records couldn't be read; checking each", job.id)
-        return set()
+        return {}
     if day:
         oldest = (date.fromisoformat(day) - timedelta(days=HOLD_DAYS)).isoformat()
         old = [record for record, at in written.items() if at < oldest]
@@ -634,7 +662,7 @@ def _kept_now(job: registry.WatchJob, reviewer_id: int, specs: Sequence[registry
             except Exception:
                 logger.warning("watch: job %s's old kept records couldn't be dropped", job.id)
             written = {record: at for record, at in written.items() if at >= oldest}
-    return {k for k in keys if kept_key(k, reviewer_id) in written}
+    return {records[record][0]: records[record][1] for record in written if record in records}
 
 
 def kept_key(key: str, reviewer_id: int) -> str:
@@ -687,13 +715,7 @@ async def _leave_one(
             code = "check_fields"
     _audit_check(job, day, spec.operation, reviewer.id, code)
     if code != "ok":
-        if code in CHECK_LINES:
-            # Our own reading of ERPNext's answer, not ERPNext's refusal.
-            out.codes[code] = out.codes.get(code, 0) + 1
-        else:
-            out.check_refused += 1
-        if code in ("check_permission", "check_not_theirs"):
-            out.permission_refused += 1
+        _count_refusal(out, code)
         if code in KEPT_CODES:
             out.kept_from_reviewer.add(spec.key)
         if job.once and code in HELD_CHECK_CODES:
@@ -707,8 +729,9 @@ async def _leave_one(
             _mark_carded(job, day, key, lambda k: record(k, reviewer.id))
         elif not job.once and code in KEPT_CODES:
             # Exactly these codes: a timeout or a failed read keeps nothing,
-            # and the next run checks as the reviewer again (_kept_now).
-            _mark_carded(job, day, key, lambda k: kept_key(k, reviewer.id))
+            # and the next run checks as the reviewer again (_kept_now). The
+            # code is kept with it, so a later run counts it the same way.
+            _mark_carded(job, day, key, lambda k: _kept_code_key(code, k, reviewer.id))
         out.unproposed.append(spec)
         return False
     if not isinstance(pinned, dict):
