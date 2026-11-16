@@ -29,5 +29,6 @@ forbidden_reply_words:
 quality_criteria:
   moves_metros_open_invoices_by_its_usual_payment_delay_with_dates: true
   shows_the_weeks_that_change_with_their_figures: true
+  says_whether_the_lowest_week_moves_and_what_it_ends_at: true
   says_the_outlook_is_an_estimate_from_the_books_today: true
   keeps_the_answer_short_enough_for_a_side_panel: true
