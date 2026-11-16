@@ -50,7 +50,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from openexecutive.briefing.home_rules import register_waiting_cards
 
@@ -90,7 +90,11 @@ class DraftFieldOut(BaseModel):
 
 class DraftLineOut(BaseModel):
     # One line of a card's table, whichever kind of card it is. Every key is
-    # optional, so a card of one kind never fails the whole list.
+    # optional, so a card of one kind never fails the whole list; a key none
+    # of these names fails the card (left out by _listed), never shown blank
+    # with Approve offered.
+    model_config = ConfigDict(extra="forbid")
+
     # A Material Request's, Quotation's or Purchase Order's line.
     item_code: str = ""
     qty: str = ""

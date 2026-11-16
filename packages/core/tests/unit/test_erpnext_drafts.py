@@ -1309,7 +1309,22 @@ def test_a_card_that_doesnt_fit_never_empties_the_list(
 
     good = _job_card(22, "Bank Transaction", "match", erpnext_match.card_view(_MATCH_SUMMARY))
     bad = _job_card(23, "Bank Transaction", "match", {"fields": [{"label": 1}], "lines": [], "notes": []})
-    monkeypatch.setattr("openexecutive.integrations.erpnext_drafts.cards", lambda person: [bad, good])
+    # A line key no kind uses fails its card too, never shown blank.
+    odd = _job_card(24, "Bank Transaction", "match",
+                    {"fields": [], "lines": [{"unknown_key": "x"}], "notes": []})
+    monkeypatch.setattr("openexecutive.integrations.erpnext_drafts.cards", lambda person: [bad, odd, good])
     resp = client.get("/erpnext/drafts", headers={"x-caller-email": OWNER})
     assert resp.status_code == 200
     assert [c["decision_id"] for c in resp.json()["cards"]] == [22]
+
+def test_every_card_views_line_keys_are_ones_the_list_names() -> None:
+    """DraftLineOut forbids keys it doesn't name, so a key a card_view adds
+    later must fail here, not drop every card of that kind from the list."""
+    from openexecutive.api.routes.erpnext_drafts import DraftLineOut
+    from openexecutive.integrations import erpnext_fill, erpnext_match
+
+    named = set(DraftLineOut.model_fields)
+    for view in (erpnext_match.card_view(_MATCH_SUMMARY), erpnext_fill.card_view(_FILL_SUMMARY)):
+        assert view["lines"], "the summary must give the view at least one line"
+        for line in view["lines"]:
+            assert set(line) <= named, set(line) - named

@@ -15,8 +15,11 @@ const labels = (t) => t.columns.map((c) => c.label);
 
 test("a bank-match card shows its vouchers", () => {
   const t = lineTable(MATCH);
-  assert.deepEqual(labels(t), ["Voucher", "Dated", "Party", "Allocated", "Clears on"]);
-  assert.deepEqual(t.rows, [["Payment Entry ACC-PAY-2026-00042", "2026-11-13", "Metro Transit Works", "1,200.00 USD", "2026-11-14"]]);
+  assert.deepEqual(labels(t), ["Voucher", "Dated", "Party", "Allocated", "Clears on", "Matched elsewhere", "Created by"]);
+  assert.deepEqual(t.rows, [[
+    "Payment Entry ACC-PAY-2026-00042", "2026-11-13", "Metro Transit Works", "1,200.00 USD", "2026-11-14", "0",
+    "accounts@example.com",
+  ]]);
 });
 
 test("an invoice-fill card shows its rows", () => {
