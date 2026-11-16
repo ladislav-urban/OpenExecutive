@@ -19,7 +19,10 @@ from openexecutive.orchestrator import mcp_gateway
 
 DOCKERFILE = Path(__file__).resolve().parents[4] / "docker" / "Dockerfile"
 PREWARM = re.compile(r"\buvx\s+((?:\S+\s+)*?extensible-mcp)\b")
-COMMIT_PIN = re.compile(r"^git\+https://github\.com/SenteLabsAI/extensible-mcp@[0-9a-f]{40}$")
+# Upstream, or the owner's fork while a fix waits upstream; nothing else.
+COMMIT_PIN = re.compile(
+    r"^git\+https://github\.com/(SenteLabsAI|ladislav-urban)/extensible-mcp@[0-9a-f]{40}$"
+)
 
 
 def _dockerfile_prewarm_args() -> list[tuple[str, ...]]:
