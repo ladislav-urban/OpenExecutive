@@ -271,14 +271,21 @@ def test_a_refusal_with_nothing_written_says_so_and_is_never_retried() -> None:
     assert reply == REFUSED_REPLY and len(calls) == 2
 
 
-def test_an_empty_turn_logs_why_without_text(caplog: pytest.LogCaptureFixture) -> None:
-    import logging
+def test_an_empty_turn_logs_why_without_text(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator import executive
 
-    with caplog.at_level(logging.WARNING, logger="openexecutive.orchestrator.executive"):
-        _reply_and_calls([
-            FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
-            FinalMsg([], "end_turn"),
-            FinalMsg([], "end_turn"),
-        ])
-    assert "turn ended with no reply: stop_reason=end_turn iter=3/15 empty_retried=True" in caplog.text
+    # The executive's own warnings, captured at the call: caplog depends on
+    # logging set-up another test in the same worker may have changed.
+    logged: list[str] = []
+    monkeypatch.setattr(
+        executive.logger, "warning", lambda msg, *args, **_kw: logged.append(msg % args if args else msg),
+    )
+    _reply_and_calls([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "end_turn"),
+        FinalMsg([], "end_turn"),
+    ])
+    assert any(
+        "turn ended with no reply: stop_reason=end_turn iter=3/15 empty_retried=True" in line for line in logged
+    ), logged
 
