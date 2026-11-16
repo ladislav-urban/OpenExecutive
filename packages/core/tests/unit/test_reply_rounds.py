@@ -247,6 +247,46 @@ def test_an_empty_round_at_the_output_limit_is_asked_once_more() -> None:
     assert reply == "ITEM-1 has 12." and len(calls) == 3
     # That retry is offered no tool: it must write, not fill the limit again.
     assert calls[2].get("tool_choice") == {"type": "none"}
+    # Every round has room past its thinking; only the retry runs at low
+    # effort, and only on a model that takes effort (claude-test doesn't).
+    assert all(c["max_tokens"] == 32000 for c in calls)
+    assert "output_config" not in calls[2]
+
+
+def test_a_thinking_only_max_tokens_round_is_retried_at_low_effort_on_claude_5(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator.executive import _TAKES_EFFORT_RE
+
+    for model in ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5", "anthropic/claude-sonnet-5-5"):
+        assert _TAKES_EFFORT_RE.match(model), model
+    for model in ("claude-sonnet-4-6", "claude-haiku-4-5", "gpt-5", "llama3.3", "claude-test"):
+        assert not _TAKES_EFFORT_RE.match(model), model
+    provider = StreamingProvider([
+        FinalMsg([ToolUseBlock("tu1", "no_such_tool", {})], "tool_use"),
+        FinalMsg([], "max_tokens"),
+        FinalMsg([TextBlock("ITEM-1 has 12.")], "end_turn"),
+    ])
+
+    async def go() -> list[str]:
+        out: list[str] = []
+        with (
+            patch("openexecutive.orchestrator.executive.get_provider", return_value=provider),
+            patch("openexecutive.orchestrator.executive.audit_log", lambda *_a, **_k: None),
+            set_session(Session()),
+        ):
+            async for item in Executive()._stream_agent_loop(
+                system_blocks=[], messages=[{"role": "user", "content": "x"}],
+                model="claude-sonnet-5-5", workspace_mode="team", principal_role_tag="", turn_id="t-1",
+            ):
+                if isinstance(item, str) and item != Executive._THINKING:
+                    out.append(item)
+        return out
+
+    assert "".join(asyncio.run(go())) == "ITEM-1 has 12."
+    calls = provider.calls
+    assert "output_config" not in calls[0] and "output_config" not in calls[1]
+    assert calls[2]["output_config"] == {"effort": "low"} and calls[2]["tool_choice"] == {"type": "none"}
 
 
 def test_a_refusal_after_some_text_ends_the_turn_unretried(monkeypatch: pytest.MonkeyPatch) -> None:
