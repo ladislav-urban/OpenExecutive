@@ -606,6 +606,57 @@ providers:
     answer. A scheduled action a cap stopped waits for the reset
     (scheduler.runner._failed_or_retry, reschedule_action) without spending
     an attempt; unreadable counters are retried as a fault.
+    The turn cap (S7 round 2, Nov 17, 2026): COST_CAP_TURN_USD (0, off)
+    holds one turn, everything one message causes (or one unattended run: a
+    watch job's run, a scheduled action), the principal's too. Counted in
+    memory only: a TurnSpend bound by cost_caps.bind_turn (the SSE route for
+    the whole stream, Executive.chat, every channel handler through the
+    @cost_caps.as_turn decorator (Slack, Telegram, Discord, Google Chat,
+    email, the ERPNext panel, A2A, MCP), cost_caps.run_as_turn for each
+    scheduled action, watch._cost_budget for each run; ensure_turn in
+    stream_chat when nothing is bound). The check and the add are one step
+    under a threading.Lock (reservations run in asyncio.to_thread); a
+    refusal by another cap gives the turn's share back; settle and release
+    put it right. The turn closes when it ends: a call charged to a closed
+    turn counts against none, and cost_caps.unbind_turn / the alert's bare
+    context bind none. Every cache_event row's attribution carries turn_id
+    (null outside a turn). The reply checks (claim_check, briefing.grounding,
+    answer_check) are kept off the turn cap only, through the private
+    cost_caps._check_exempt (a test greps the package so nothing else uses
+    it); the person, job and month caps still hold for them.
+    At any cap a turn stops with a plain sentence, never a silent cut: a
+    CostCapReached from the round's own call, a specialist (route_parallel
+    re-raises it once every call ended, never a partial result), a tool or
+    a script call ends the round before _tool_error_result, through
+    executive._cap_stop -> _flush_held(sentence, streamed_tail), the
+    REFUSED_REPLY exit: what was written stays, the sentence is its own last
+    paragraph, or the whole reply when nothing was written. The turn is
+    marked stopped_by_cap: the SSE route sends no error event after it,
+    Executive.chat keeps the reply if a later step fails, so every adapter
+    sends exactly one reply. Sentences: turn "I stopped here: this answer
+    reached its spend limit. Ask me to continue and I'll pick up from this
+    point." (people on People only); person/job/month as before; anyone off
+    People only refusal.reply_text(). A turn cap makes no card. A check a cap
+    refused holds the reply, never passes it: the claim check's held last
+    text is withheld for the sentence; answer_check raises, and a collected
+    reply (a chat app, email) becomes the sentence alone while a streamed one
+    keeps what was shown and adds it; grounding's repair raises, so a brief
+    is held (the scheduled action waits for the reset). Text already
+    streamed can't be recalled. watch.runner.reason_lines re-raises
+    CostCapReached and run_job ends the run with status "capped", error
+    cost_cap_<scope>, and a failure notice naming the cap (REASONS).
+    Each refusal writes one audit event cost_cap_reached (source cost_cap,
+    principal_only) with scope (turn/person/job/total/unreadable), key (a
+    People id, outside:<channel>, a job id or the turn id; never an email or
+    a name), cap_usd, spent_usd, worst_case_usd, resets_at and session_id;
+    GET /audit/usage gains capped_calls (day, scope, calls). The principal's
+    channel message is a fixed template naming no one (cost_caps.channel_text),
+    sent with deliver_to_person through the send tools' outbound guard.
+    Owner decisions (Nov 17, 2026): recommended values when switched on are
+    COST_CAP_TURN_USD=1, COST_CAP_PERSON_DAILY_USD=5,
+    COST_CAP_JOB_DAILY_USD=2, COST_CAP_MONTHLY_USD=100 (commented in
+    .env.example; the code defaults stay 0); the principal is exempt from
+    the person cap only; "continue" is offered to people on People only.
   feature_gate: |
     openexecutive.providers.feature_gate.apply_feature_gates(spec, kwargs)
     runs inside the OpenRouter provider before translation. Spec-driven
@@ -12081,8 +12132,10 @@ watch:
     per job and calendar day. One asyncio task per run (unscoped audit
     rows), not a scheduled_actions row. run_job(job, day, slot=) runs under
     set_turn(turn_id=watch:<id>:<day>[:<slot>]) and
-    _cost_budget(id) (HOOK: imports audit.cost_caps.bind_job by name, a
-    no-op until S7's cost caps land). Reads: arguments from the job's code,
+    _cost_budget(id) (audit.cost_caps.bind_job("watch:<id>") and a fresh
+    bind_turn: the run is one turn for the turn cap). A cost cap that
+    refuses a call (reason_lines re-raises it) ends the run with status
+    "capped", error cost_cap_<scope>, and one failure notice naming the cap. Reads: arguments from the job's code,
     shape-checked, then gateway.call_tool inside watch_run, 60 s each; an
     error result, non-JSON text, a timeout or a WatchRefused ends the run
     with one failure notice a job and calendar day (take_failure_notice; a
