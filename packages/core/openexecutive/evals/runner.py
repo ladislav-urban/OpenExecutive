@@ -442,7 +442,7 @@ async def run_watch_reason_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     on the scenario's findings, built by the job's own code;
     ``{"outcome", "scores", "passed"}``. Nothing is stored and no notice is
     left."""
-    from openexecutive.watch.runner import drop_rule, reason_lines
+    from openexecutive.watch.runner import MAX_REASON_CHARS, clean, drop_rule, reason_lines
 
     case = scenario_watch_reason(scenario)
     if case is None:
@@ -455,7 +455,9 @@ async def run_watch_reason_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
                 "finding": f.label,
                 "facts": dict(f.spec.facts),
                 "line": kept.get(f.spec.key),
-                "dropped": dropped.get(f.spec.key),
+                # Never shown on a notice; kept cleaned and capped (twice the
+                # line limit, so a too-long one still shows it was long).
+                "dropped": clean(dropped[f.spec.key], 2 * MAX_REASON_CHARS) if f.spec.key in dropped else None,
                 # Which filter rule dropped it (watch.runner.DROP_RULES).
                 "dropped_rule": drop_rule(dropped[f.spec.key]) if f.spec.key in dropped else None,
             }

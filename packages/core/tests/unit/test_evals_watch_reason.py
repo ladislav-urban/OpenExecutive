@@ -237,5 +237,8 @@ def test_a_line_dropped_for_its_length_is_recorded_as_too_long(
     result = asyncio.run(run_watch_reason_scenario(_scenario(LATE)))
     finding = result["outcome"]["findings"][0]
     assert finding["line"] is None
-    assert (finding["dropped"], finding["dropped_rule"]) == (long, "too_long")
+    assert finding["dropped_rule"] == "too_long"
+    # Kept cleaned and capped in the record: never the model's raw text.
+    assert finding["dropped"] == watch_runner.clean(long, 2 * watch_runner.MAX_REASON_CHARS)
+    assert len(finding["dropped"]) <= 2 * watch_runner.MAX_REASON_CHARS
 

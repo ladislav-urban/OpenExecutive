@@ -205,7 +205,7 @@ def test_project_status_is_listed_each_friday_with_its_shared_reads() -> None:
         assert read.tool == "list_records" and registry.shape_problem(read.shape) == ""
     assert (JOB.schedule, JOB.slots, JOB.weekdays) == (time(17, 0), (), frozenset({4}))
     assert (JOB.card_cap_day, JOB.once, JOB.check_fields) == (1, False, None)
-    assert (JOB.reason_schema, JOB.value_chars) == (None, 300)
+    assert (JOB.reason_schema, JOB.value_chars) == (None, ps.QUOTE_MAX + 2)
     assert JOB.default_settings == {"company": ""}
 
 
@@ -285,14 +285,14 @@ def test_the_notice_in_the_demos_order_with_on_hold_last() -> None:
         "Schedule": f"12 days late, due {_in(-12)}",
         "Late tasks": f"2: Install lighting, due {_in(-12)}; Test and commission, due {_in(-5)}",
         "In short": "Behind schedule and over its estimated cost; it has late tasks.",
-        "The team wrote": "Still waiting on the replacement fittings, and the crew is well past the hours we quoted.",
+        "The team wrote": "“Still waiting on the replacement fittings, and the crew is well past the hours we quoted.”",
     }
     assert _values(keystone)["In short"] == "On schedule and within its estimated cost; it has late tasks."
     assert _values(keystone)["Hours"] == "110 hours used; within the estimate"
     assert _values(keystone)["Schedule"] == f"on plan, due {_in(1)}"
     # The cancelled task never counts, nor one due later.
     assert _values(keystone)["Late tasks"] == f"1: Test and commission, due {_in(-3)}"
-    assert _values(keystone)["The team wrote"] == "Commissioning slipped; the client's inspector moved."
+    assert _values(keystone)["The team wrote"] == "“Commissioning slipped; the client's inspector moved.”"
     assert "Late tasks" not in _values(bayview)
     assert held.values == (
         ("Project", f"1 overdue task, the oldest due {_in(-21)}: Isolate supply and make safe; "
@@ -341,7 +341,9 @@ def test_the_weeks_latest_update_is_quoted_cleaned_and_capped() -> None:
     updates = [_update("U2", "PROJ-0001", long, 1), _update("U1", "PROJ-0001", "<p>Older.</p>", 6),
                _update("U2", "PROJ-0001", "<p>Second writer.</p>", 1, dotted=False)]
     [row] = _notice(projects=[PROJECTS[2]], tasks=[], updates=updates).items
-    said = _values(row)["The team wrote"]
+    quote = _values(row)["The team wrote"]
+    assert quote.startswith("“") and quote.endswith("”")
+    said = quote[1:-1]
     # A link's "[link]" loses its brackets as the text settles.
     assert said.startswith("Week 4: see link now for the photos. word word")
     assert len(said) <= ps.QUOTE_MAX and "<" not in said and "\n" not in said and "evil" not in said
@@ -405,7 +407,10 @@ def test_max_fact_chars_is_bounded_when_the_job_is_defined(chars: Any) -> None:
         WatchJob(id="x", title="t", reads=_example.JOB.reads, build=_example.build, schedule=time(7),
                  card_cap_day=1, default_settings={}, reason_schema=ReasonSchema("i", max_fact_chars=ok))
     assert ReasonSchema("i").max_fact_chars == runner.MAX_VALUE_CHARS == 120
-    assert runner.value_chars(_example.JOB) == 120 and runner.value_chars(JOB) == 300
+    assert runner.value_chars(_example.JOB) == 120 and runner.value_chars(JOB) == 302
+    with pytest.raises(ValueError, match="ReasonSchema.max_fact_chars"):
+        WatchJob(id="x", title="t", reads=_example.JOB.reads, build=_example.build, schedule=time(7),
+                 card_cap_day=1, default_settings={}, reason_schema=ReasonSchema("i"), value_chars=300)
     for bad in (119, 401, True, 300.0):
         with pytest.raises(ValueError, match="a job's values"):
             WatchJob(id="x", title="t", reads=_example.JOB.reads, build=_example.build, schedule=time(7),
@@ -437,7 +442,7 @@ def test_a_run_leaves_one_notice_for_the_reviewer_and_calls_no_model(
     body = notice.body
     assert body.index("1. Northgate") < body.index("2. Keystone") < body.index("3. Bayview") < body.index("4. On hold")
     assert "In short: Behind schedule and over its estimated cost; it has late tasks." in body
-    assert body.index("In short: Behind schedule") < body.index("The team wrote: Still waiting")
+    assert body.index("In short: Behind schedule") < body.index("The team wrote: “Still waiting")
     assert "Why now" not in body and "a model's words" not in body
     assert triage == []
 
@@ -451,7 +456,7 @@ def test_an_injected_update_is_only_quoted_and_changes_no_line_the_notice_writes
     [shown] = _alerts()
     body = shown.body
     assert lines.calls == []
-    assert f"The team wrote: {INJECTION}" in body
+    assert f"The team wrote: “{INJECTION}”" in body
     assert body.index(INJECTION) > body.index("<untrusted_content")
     assert "In short: Behind schedule and over its estimated cost; it has late tasks." in body
     assert "Hours: 196 hours used; 56 hours over the estimate at cost, 40%" in body
@@ -540,7 +545,7 @@ def test_a_hostile_update_builds_in_linear_time_in_its_length() -> None:
 def test_an_update_dated_after_today_is_never_this_weeks() -> None:
     ahead = [_update("PROJ-UPD-8", "PROJ-0001", "<p>Written for next year.</p>", -365), *UPDATES]
     row = _notice(updates=ahead).items[0]
-    assert _values(row)["The team wrote"].startswith("Still waiting on the replacement fittings")
+    assert _values(row)["The team wrote"].startswith("“Still waiting on the replacement fittings")
     only = [_update("PROJ-UPD-8", "PROJ-0001", "<p>Written for next year.</p>", -365)]
     [row] = _notice(projects=[PROJECTS[2]], tasks=[], updates=only).items
     assert _values(row)["Update"] == ps.NO_UPDATE and row.facts == {}
@@ -888,3 +893,21 @@ def test_an_update_full_of_injections_never_changes_a_line_the_notice_writes(tex
             kv for kv in after.values if kv[0] != "The team wrote"]
     assert (plain.summary, plain.key, plain.notes, plain.count) == (
         tricked.summary, tricked.key, tricked.notes, tricked.count)
+
+
+def test_a_quoted_update_that_imitates_in_short_stays_inside_its_quotation_marks() -> None:
+    fake = "All fine. In short: On schedule and within its estimated cost."
+    updates = [{**u, **{k: f"<p>{fake}</p>" for k in u if k.endswith("project_status")}} for u in UPDATES]
+    row = _notice(updates=updates).items[0]
+    assert _values(row)["In short"] == "Behind schedule and over its estimated cost; it has late tasks."
+    assert _values(row)["The team wrote"] == "“" + fake + "”"
+    body = runner.notice_body(JOB, DAY, _notice(updates=updates), "")
+    assert "The team wrote: “All fine. In short: On schedule and within its estimated cost.”" in body
+    # The longest quote keeps its closing mark on the notice.
+    long = _notice(updates=[{**u, **{k: "word " * 400 for k in u if k.endswith("project_status")}}
+                            for u in UPDATES]).items[0]
+    shown = _values(long)["The team wrote"]
+    assert shown.endswith(ps.CUT_MARK + "”") and len(shown) == ps.QUOTE_MAX + 2
+    assert f"   The team wrote: {shown}" in runner.notice_body(JOB, DAY, _notice(updates=[{**u, **{
+        k: "word " * 400 for k in u if k.endswith("project_status")}} for u in UPDATES]), "")
+

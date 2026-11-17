@@ -156,6 +156,7 @@ STANDING = {
     ("no_end", "none"): "No end date or cost estimate set",
 }
 LATE_TASKS_CLAUSE = "; it has late tasks"
+OPEN_QUOTE, CLOSE_QUOTE = "\u201c", "\u201d"
 NO_UPDATE = "No status update this week"
 UNSHOWN_UPDATE = "An update was posted; its text couldn't be shown"
 MORE_LINE = "{n} more open projects; the first {shown} are shown."
@@ -530,7 +531,9 @@ def _row(status: Status, today: date) -> CardSpec:
         values.append(("Late tasks", _tasks_line(status.late)))
     values.append(("In short", standing(project, len(status.late), today)))
     if status.words:
-        values.append(("The team wrote", status.words))
+        # In quotation marks: text inside them that imitates code's own
+        # labels ("In short: on schedule") reads as the team's.
+        values.append(("The team wrote", f"{OPEN_QUOTE}{status.words}{CLOSE_QUOTE}"))
     else:
         values.append(("Update", UNSHOWN_UPDATE if status.posted else NO_UPDATE))
     return CardSpec(
@@ -606,7 +609,7 @@ JOB: WatchJob = WatchJob(
     weekdays=frozenset({4}),
     card_cap_day=1,
     default_settings={"company": ""},
-    # The team's words are quoted up to QUOTE_MAX.
-    value_chars=QUOTE_MAX,
+    # The team's words are quoted up to QUOTE_MAX, in quotation marks.
+    value_chars=QUOTE_MAX + 2,
     card_noun="cards",
 )
