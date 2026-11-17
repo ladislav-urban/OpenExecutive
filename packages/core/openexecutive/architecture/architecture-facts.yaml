@@ -5720,8 +5720,11 @@ chat:
     figure_check._in_a_name, only where the reply writes the whole value
     as whole tokens on one line (any case and spacing, its punctuation as
     is), from the Item, Item Group and Project masters only (_item_names: a
-    result's titles for those DocTypes, or rows of those DocTypes), which
-    staff set up; never a transaction line's own item_name (typed or
+    result's titles for Item and Project, which Item Group has none of, or
+    the record of an erpnext__get_record whose payload's own str doctype is
+    one of the three; never list_records, whose fields may be aggregate
+    aliases, run_report, or the call's arguments), which an Item Manager or
+    a Projects User / Manager sets up; never a transaction line's own item_name (typed or
     imported, never refreshed from the master) or a party-set name
     (customer, supplier, lead, company, contact, sender, file), so a line
     or a customer named "paid 12,500" never clears a figure; a currency

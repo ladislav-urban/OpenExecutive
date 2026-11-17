@@ -1159,17 +1159,27 @@ def sources_for(
 
 
 # Whose names a number may be part of (_in_a_name): an item's, an item
-# group's and a project's, as their own master records hold them, set up by
-# the company's staff in the desk (Stock, Projects). Only from the master: a
-# result's ``titles`` for those DocTypes (each linked record's title, which
-# oe_connector reads from the record itself) and rows or a record OF those
-# DocTypes. Never a transaction line's own item_name (a Sales Order or
-# Purchase Invoice line), which a desk user or an import types and nothing
-# overwrites from the master; and never a party-set name (customer_name,
-# supplier_name, lead_name, company_name, a contact's or sender's name,
-# file_name) or anything a portal, an email or a web form can write. A line
-# or a customer named "paid 12,500" must never let that figure through.
+# group's and a project's, as their own master records hold them. Item and
+# Item Group names are set by an Item Manager, Project names by a Projects
+# User or Manager. Only from the master:
+# - a result's ``titles`` for Item and Project (each linked record's title,
+#   which oe_connector reads from the record itself; Item Group has no title
+#   field, so the connector never gives titles for it);
+# - an ``erpnext__get_record`` of one of these DocTypes, by the payload's own
+#   ``doctype`` (never the call's arguments, which the model writes and the
+#   gateway passes through): its own name fields, never its child rows.
+# list_records and run_report never count: a list's field can be an
+# aggregate's alias ("MAX(customer) as project_name") and a report's
+# item_name column is an invoice line's own text. Never a transaction line's
+# own item_name (a Sales Order or Purchase Invoice line), which a desk user
+# or an import types and nothing overwrites from the master; and never a
+# party-set name (customer_name, supplier_name, lead_name, company_name, a
+# contact's or sender's name, file_name) or anything a portal, an email or a
+# web form can write. A line or a customer named "paid 12,500" must never let
+# that figure through.
 _MASTER_DOCTYPES = frozenset({"Item", "Item Group", "Project"})
+_MASTER_TITLE_DOCTYPES = frozenset({"Item", "Project"})
+_MASTER_RECORD_TOOL = "erpnext__get_record"
 # A master record's own name fields.
 _MASTER_NAME_FIELDS = frozenset({"item_name", "item_code", "item_group_name", "project_name"})
 # A name worth keeping: a digit and a letter in it.
@@ -1180,10 +1190,9 @@ MAX_NAME_CHARS = 140
 
 def _item_names(results: Iterable[ErpnextResult]) -> list[str]:
     """The names of the turn's Item, Item Group and Project masters that hold
-    a number, whitespace-normalised: each result's ``titles`` for those
-    DocTypes, and the name fields of a result's own rows or record when the
-    result IS one of those DocTypes (never its child rows, never a line of
-    another document)."""
+    a number, whitespace-normalised: each result's ``titles`` for Item and
+    Project, and the name fields of a ``get_record`` of one of the three
+    (never its child rows, never a line of another document)."""
     found: set[str] = set()
 
     def keep(value: object) -> None:
@@ -1198,18 +1207,17 @@ def _item_names(results: Iterable[ErpnextResult]) -> list[str]:
             continue
         titles = payload.get("titles")
         if isinstance(titles, dict):
-            for doctype in _MASTER_DOCTYPES:
+            for doctype in _MASTER_TITLE_DOCTYPES:
                 by_id = titles.get(doctype)
                 for title in by_id.values() if isinstance(by_id, dict) else ():
                     keep(title)
-        if (payload.get("doctype") or result.arguments.get("doctype")) not in _MASTER_DOCTYPES:
+        doctype = payload.get("doctype")
+        if result.tool != _MASTER_RECORD_TOOL or not isinstance(doctype, str) or doctype not in _MASTER_DOCTYPES:
             continue
         record = payload.get("record")
-        rows = payload.get("rows")
-        for row in [record, *(rows if isinstance(rows, list) else [])]:
-            if isinstance(row, dict):
-                for key in _MASTER_NAME_FIELDS:
-                    keep(row.get(key))
+        if isinstance(record, dict):
+            for key in _MASTER_NAME_FIELDS:
+                keep(record.get(key))
     return sorted(found)
 
 

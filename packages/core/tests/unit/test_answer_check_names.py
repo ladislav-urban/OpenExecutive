@@ -79,18 +79,18 @@ PARTY = ErpnextResult(
         },
     },
 )
-EDGES = ErpnextResult(
-    "erpnext__list_records",
-    {"doctype": "Item"},
-    {
-        "doctype": "Item",
-        "rows": [
-            {"item_code": "ROLL-1", "item_name": "25000 Meter cable roll", "item_group": "MW-1"},
-            {"item_code": "PP-1", "item_name": "Prepaid 12,500 balance", "qty": 1.0},
-        ],
-        "truncated": False,
-        "titles": {"Item Group": {"MW-1": "Main Warehouse 25000"}},
-    },
+def _master(doctype: str, name: str, **fields: object) -> ErpnextResult:
+    # A master read as oe_connector's get_record gives it.
+    return ErpnextResult(
+        "erpnext__get_record", {"doctype": doctype, "name": name},
+        {"doctype": doctype, "name": name, "record": {"name": name, **fields}},
+    )
+
+
+EDGES = (
+    _master("Item", "ROLL-1", item_code="ROLL-1", item_name="25000 Meter cable roll", item_group="MW-1"),
+    _master("Item Group", "MW-1", item_group_name="Main Warehouse 25000"),
+    _master("Item", "PP-1", item_code="PP-1", item_name="Prepaid 12,500 balance"),
 )
 # A sales order whose line someone typed an item_name into, and no titles.
 PLANTED = ErpnextResult(
@@ -155,7 +155,7 @@ def test_a_figure_beside_a_name_is_still_checked(text: str, flagged: list[str]) 
     ],
 )
 def test_the_security_reviews_probes_are_figures(text: str, flagged: list[str]) -> None:
-    assert _figures(text, PARTY, EDGES, DELIVERY) == flagged
+    assert _figures(text, PARTY, *EDGES, DELIVERY) == flagged
 
 
 def test_a_transaction_lines_own_item_name_is_never_a_name() -> None:
@@ -170,19 +170,75 @@ def test_a_name_never_runs_across_a_line_break() -> None:
 
 
 def test_a_minus_sign_keeps_it_a_figure() -> None:
-    assert _figures("Copper cable -1.5 mm2 (per metre)", ErpnextResult(
-        "erpnext__list_records", {"doctype": "Item"},
-        {"doctype": "Item", "rows": [{"item_name": "Copper cable -1.5 mm2 (per metre)"}]},
-    )) == ["1.5"]
+    minus = _master("Item", "CB-M", item_name="Copper cable -1.5 mm2 (per metre)")
+    assert _figures("Copper cable -1.5 mm2 (per metre)", minus) == ["1.5"]
 
 
 def test_a_whole_item_name_from_a_row_or_its_group_is_the_names() -> None:
-    assert _figures("The 25000 Meter cable roll arrived; it sits in Main Warehouse 25000.", EDGES) == []
-    assert _figures("| Prepaid 12,500 balance | 1 |", EDGES) == []
+    assert _figures("The 25000 Meter cable roll arrived; it sits in Main Warehouse 25000.", *EDGES) == []
+    assert _figures("We stock the Prepaid 12,500 balance item.", *EDGES) == []
+
+
+def test_only_a_get_record_of_a_master_by_its_own_doctype_gives_names() -> None:
+    # A report's item_name column is an invoice line's text, whatever DocType
+    # the model's arguments claim (the gateway passes extra keys through).
+    report = ErpnextResult(
+        "erpnext__run_report", {"report_name": "Sales Register", "doctype": "Item"},
+        {"report_name": "Sales Register", "columns": [{"fieldname": "item_name", "fieldtype": "Data"}],
+         "rows": [{"item_name": "Zed paid 12,500 roll"}], "truncated": False},
+    )
+    assert _figures("Zed paid 12,500 roll", report) == ["12,500"]
+    # A list of a master: a field may be an aggregate's alias.
+    aliased = ErpnextResult(
+        "erpnext__list_records", {"doctype": "Project", "fields": ["MAX(customer) as project_name"]},
+        {"doctype": "Project", "rows": [{"project_name": "Zed paid 12,500 roll"}], "truncated": False},
+    )
+    assert _figures("Zed paid 12,500 roll", aliased) == ["12,500"]
+    # A get_record whose payload doesn't say it's a master, though its
+    # arguments do.
+    claimed = ErpnextResult(
+        "erpnext__get_record", {"doctype": "Item", "name": "X"},
+        {"name": "X", "record": {"item_name": "Zed paid 12,500 roll"}},
+    )
+    assert _figures("Zed paid 12,500 roll", claimed) == ["12,500"]
+    # Item Group has no title field: its titles never come from the connector.
+    group_titles = ErpnextResult(
+        "erpnext__get_record", {"doctype": "Item", "name": "X"},
+        {"doctype": "Item", "name": "X", "record": {}, "titles": {"Item Group": {"G": "Zed paid 12,500 roll"}}},
+    )
+    assert _figures("Zed paid 12,500 roll", group_titles) == ["12,500"]
+    assert _figures("Zed paid 12,500 roll", _master("Project", "P-1", project_name="Zed paid 12,500 roll")) == []
+
+
+@pytest.mark.parametrize("doctype", [["Item"], {"Item": 1}])
+def test_a_malformed_doctype_leaves_the_check_running(monkeypatch: pytest.MonkeyPatch, doctype: object) -> None:
+    from openexecutive.orchestrator.name_check import name_sources_for
+
+    odd = ErpnextResult("erpnext__get_record", {"doctype": doctype, "name": "X"},
+                        {"doctype": doctype, "name": "X", "record": {"item_name": "Zed paid 12,500 roll"}})
+    name_sources_for([odd, DELIVERY])  # no TypeError
+    assert _figures("Zed paid 12,500 roll", odd, DELIVERY) == ["12,500"]
+    # The whole check: the unknown figure is still taken out.
+    monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **k: None)
+
+    async def cannot_tell(**kw: Any) -> list[Any]:
+        return [CANNOT_TELL] * len(kw["flagged"])
+
+    async def no_rewrite(*_a: Any, **_k: Any) -> None:
+        return None
+
+    monkeypatch.setattr(answer_review, "review", cannot_tell)
+    monkeypatch.setattr(answer_check, "_rewrite", no_rewrite)
+    turn = answer_check.AnswerCheckTurn()
+    turn.results.extend([odd, DELIVERY])
+    turn._context = {"number_format": "#,###.##"}
+    reply = "The wall switches are all in.\n\n- Wall switch: 99,999 installed\n- Distribution board: 1 installed"
+    checked = asyncio.run(answer_check.check_reply(reply, turn, question="Installed?", model="m"))
+    assert "99,999" not in checked
 
 
 def test_a_lone_number_in_a_cell_is_never_a_name() -> None:
-    assert _figures("| Item | Qty |\n|---|---|\n| Warehouse | 25000 |", EDGES) == ["25000"]
+    assert _figures("| Item | Qty |\n|---|---|\n| Warehouse | 25000 |", *EDGES) == ["25000"]
 
 
 def test_the_check_keeps_the_row_that_names_the_item(monkeypatch: pytest.MonkeyPatch) -> None:
