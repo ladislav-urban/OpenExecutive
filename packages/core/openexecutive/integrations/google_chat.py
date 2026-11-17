@@ -8,6 +8,7 @@ from typing import Any
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
+from openexecutive.audit import cost_caps
 from openexecutive.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -234,6 +235,7 @@ async def _read_attachments(
     return "\n\n".join(parts), blocks
 
 
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _process_and_reply(
     message_text: str,
     sender_name: str,

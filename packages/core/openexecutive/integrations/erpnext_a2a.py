@@ -64,6 +64,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from openexecutive.api.caller import CallerKeysError, JtiLedger, parse_public_keys
+from openexecutive.audit import cost_caps
 from openexecutive.integrations.erpnext_panel import _b64url, _RateLimiter, _signs
 from openexecutive.orchestrator import erpnext_caller
 
@@ -326,6 +327,7 @@ async def _tools_ready() -> bool:
     return gateway is not None and await gateway.verified_erpnext_tools(sorted(ERPNEXT_SUPPLIER_TOOLS))
 
 
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _answer(partner: Partner, message: str) -> Any:
     """The narrow agent's answer, its ERPNext calls signed as this supplier."""
     from openexecutive.integrations.erpnext_a2a_agent import answer

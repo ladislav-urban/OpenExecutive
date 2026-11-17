@@ -77,6 +77,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from openexecutive.api.caller import CallerKeysError, JtiLedger, parse_public_keys
+from openexecutive.audit import cost_caps
 
 logger = logging.getLogger(__name__)
 
@@ -726,6 +727,7 @@ def _person_for(email: str) -> Any:
     return person
 
 
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _answer(person: Any, email: str, conversation_id: str, message: str, page: Any) -> str:
     from openexecutive.audit import log_event as audit_log
     from openexecutive.config import get_settings

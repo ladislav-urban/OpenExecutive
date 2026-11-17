@@ -26,6 +26,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from openexecutive.audit import cost_caps
 from openexecutive.orchestrator.people_tools import audit_rows_on_senders_turn
 from openexecutive.utils.product_name import product_name
 
@@ -800,6 +801,7 @@ async def _reply_context(message: Any, bot_user: Any) -> str:
     sender_ref=lambda args: str(args["discord_user_id"] or ""),
     find_sender=_find_discord_sender,
 )
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _handle_message(
     text: str,
     discord_user_id: str,

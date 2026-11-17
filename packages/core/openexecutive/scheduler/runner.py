@@ -447,9 +447,10 @@ async def run_scheduler(
             for row in due:
                 # A scheduled action is unattended, never part of a turn: its
                 # task starts with no audit scope (create_task copies the
-                # context as it is here).
+                # context as it is here). For the cost caps it counts
+                # against its job, and is one turn of its own (the turn cap).
                 with unscoped_audit_rows(), cost_caps.bind_job(_job_id(row)):
-                    task = asyncio.create_task(_execute_action(row, gateway))
+                    task = asyncio.create_task(cost_caps.run_as_turn(_execute_action(row, gateway)))
                 _inflight.add(task)
                 task.add_done_callback(_inflight.discard)
             _beat("ran")

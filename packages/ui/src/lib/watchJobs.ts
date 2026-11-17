@@ -103,6 +103,10 @@ export function lastRunLine(run: WatchRun | null): string {
     const why = Object.hasOwn(RUN_ERRORS, run.error) ? RUN_ERRORS[run.error] : "it failed";
     return `Last run ${when}: didn't finish, ${why}.`;
   }
+  if (run.status === "capped") {
+    // A spend limit stopped it (the server's cost caps); it runs again once the limit resets.
+    return `Last run ${when}: stopped at a spend limit.`;
+  }
   if (run.status === "done") {
     return `Last run ${when}: done, ${leftLine(run)}.`;
   }

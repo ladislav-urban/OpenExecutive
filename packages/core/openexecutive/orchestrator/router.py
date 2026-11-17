@@ -563,6 +563,12 @@ async def route_parallel(
                 standing_facts=standing_facts,
             )
         except Exception as exc:
+            from openexecutive.audit import cost_caps
+
+            if cost_caps.capped(exc) is not None:
+                # A cost cap stops the turn: never a partial result for the
+                # Executive to build a synthesis from.
+                raise
             logger.warning(
                 "specialist %s failed; answering without it", specialist, exc_info=True
             )
@@ -578,7 +584,13 @@ async def route_parallel(
             })
         return result
 
-    results = list(await asyncio.gather(*(call_one(i, c) for i, c in enumerate(calls))))
+    gathered = await asyncio.gather(*(call_one(i, c) for i, c in enumerate(calls)), return_exceptions=True)
+    for got in gathered:
+        if isinstance(got, BaseException):
+            # A cost cap's refusal (call_one raises nothing else): once every
+            # call has ended, the turn stops on it.
+            raise got
+    results = [str(got) for got in gathered]
     if failed_calls_out is not None:
         failed_calls_out.extend(sorted(failed))
     if record_source is not None:

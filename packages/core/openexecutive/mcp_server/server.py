@@ -76,6 +76,7 @@ from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import ToolAnnotations
 
 from openexecutive.api import caller as api_caller
+from openexecutive.audit import cost_caps
 from openexecutive.utils.product_name import product_name
 
 logger = logging.getLogger(__name__)
@@ -516,6 +517,7 @@ async def ask_executive(message: str) -> str:
         return refused
 
 
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _ask_executive(message: str) -> str:
     from openexecutive.orchestrator.artifact_records import NOBODY
     from openexecutive.orchestrator.executive import Executive
