@@ -667,16 +667,134 @@ def test_only_plain_ascii_digits_are_a_people_id(
     assert cost_caps._people_id(str(db.principal)) == db.principal
 
 
-def test_a_scope_that_cant_be_told_refuses_the_call_closed(
+def test_a_person_key_that_cant_be_read_refuses_the_call_closed_and_records_it(
     db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def broken(*_a: Any) -> Any:
-        raise RuntimeError("no")
+    from openexecutive.providers.refusal import reply_text
 
-    monkeypatch.setattr(cost_caps, "_scopes", broken)
+    def broken(*_a: Any) -> Any:
+        raise RuntimeError("the roster is gone")
+
+    rows: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr("openexecutive.audit.log_event", lambda event, summary, **kw: rows.append((event, kw)))
+    monkeypatch.setattr(cost_caps, "_person_key", broken)
     _caps(monkeypatch, monthly=100.0)
     with pytest.raises(cost_caps.CostCapReached) as refused:
         _check()
-    assert refused.value.scope == "unreadable"
+    assert refused.value.scope == "unreadable" and cost_caps.capped(refused.value) is refused.value
+    # Whoever asked can't be told: the general sentence, never the budget's.
+    assert refused.value.reply() == reply_text()
+    assert [(event, kw["details"]["scope"]) for event, kw in rows] == [("cost_cap_reached", "unreadable")]
+    assert db.told and db.told[-1].scope == "unreadable"
     _caps(monkeypatch)
     _check()  # every cap off: never refused
+
+
+def test_a_failed_runs_stream_never_carries_the_exceptions_text(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from pydantic import create_model
+
+    from openexecutive.api.routes import workflows as workflows_route
+    from openexecutive.workflows import persistence
+    from openexecutive.workflows.base import WorkflowStepDef
+
+    class _Failing:
+        name = "failing"
+        title = "Failing"
+
+        def input_model(self) -> Any:
+            return create_model("_In2", topic=(str, ""))
+
+        def steps(self) -> list[Any]:
+            return [WorkflowStepDef(id="s", title="Step", description="Fails.")]
+
+        async def run(self, inputs: Any, store: Any) -> Any:
+            raise RuntimeError("Sara Teammate's secret path /etc/x")
+            yield  # pragma: no cover
+
+    persistence.initialize_runs_db(db.path)
+    monkeypatch.setattr(persistence, "DB_PATH", db.path)
+    monkeypatch.setattr(workflows_route, "get_workflow", lambda name: _Failing())
+    monkeypatch.setattr(workflows_route, "_caller_person_id", lambda request: db.teammate)
+    monkeypatch.setattr(workflows_route, "refuse_principal_only_run", lambda *a, **k: None)
+    monkeypatch.setattr(workflows_route, "create_run", lambda **kw: persistence.create_run(db_path=db.path, **kw))
+    monkeypatch.setattr(workflows_route, "fail_run", lambda **kw: None)
+    app = FastAPI()
+    app.include_router(workflows_route.router)
+    app.state.store = object()
+    with TestClient(app) as client:
+        body = client.post("/workflows/failing/runs", json={"topic": "x"}).text
+    assert "secret" not in body and "Sara" not in body
+    assert "The run failed. Try again later." in body
+
+
+def test_a_teammates_run_again_is_spent_for_them_not_the_creator(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.knowledge import store as knowledge_store
+    from openexecutive.memory import episodic
+    from openexecutive.orchestrator.schedule_tools import current_session
+    from openexecutive.scheduler import runner
+    from openexecutive.workflows import dynamic_cadence, dynamic_store, failure_alerts, persistence
+    from openexecutive.workflows.base import WorkflowEvent
+    from openexecutive.workflows.chat_tools import in_workflow
+
+    episodic.initialize_db(db.path)
+    persistence.initialize_runs_db(db.path)
+    monkeypatch.setattr(persistence, "DB_PATH", db.path)
+    # The teammate has spent 5.0 today; the person cap is 1.0.
+    token = current_session.set(None)
+    try:
+        with cost_caps.bind_spender(db.teammate):
+            cost_caps.add(MODEL, {"cost_usd": 5.0}, now=NOW)
+    finally:
+        current_session.reset(token)
+    _caps(monkeypatch, person=1.0)
+    seen: dict[str, Any] = {}
+
+    class _Custom:
+        name = "principals_custom"
+        title = "Principal's custom"
+
+        def input_model(self) -> Any:
+            from pydantic import create_model
+
+            return create_model("_In3")
+
+        async def run(self, inputs: Any, store: Any) -> Any:
+            with in_workflow(self.name, db.principal):
+                seen["key"] = cost_caps._person_key(current_session.get())
+                try:
+                    cost_caps.check(MODEL, {"model": MODEL, "max_tokens": 10, "messages": []}, now=NOW)
+                    seen["refused"] = None
+                except cost_caps.CostCapReached as refused:
+                    seen["refused"] = refused
+            yield WorkflowEvent(type="artifact", content="done")
+
+    defn = SimpleNamespace(is_active=True, title="Principal's custom", description="", cadence="daily@09:00")
+    monkeypatch.setattr(dynamic_store, "get_definition", lambda name: defn)
+    monkeypatch.setattr("openexecutive.workflows.get_workflow", lambda name: _Custom())
+    monkeypatch.setattr("openexecutive.delegation.workflow_reads.owns_runs", lambda name: None)
+    monkeypatch.setattr(knowledge_store, "ChromaDBStore", lambda **_k: object())
+    monkeypatch.setattr(dynamic_cadence, "schedule_dynamic_workflow_cadence", lambda *a, **k: None)
+    monkeypatch.setattr(runner, "mark_action_done", lambda *a, **k: None)
+    # The teammate taps Run again on the failed run's card.
+    persistence.create_run("r-f", "principals_custom", "t", {}, db_path=db.path)
+    monkeypatch.setattr(failure_alerts, "rerun_target", lambda run: ("dynamic_workflow", "principals_custom", None))
+    monkeypatch.setattr(failure_alerts, "_close_cards", lambda key: None)
+    action_id = failure_alerts.queue_rerun({"run_id": "r-f", "workflow_name": "principals_custom"},
+                                           started_by=db.teammate)
+    (action,) = [a for a in episodic.claim_due_actions(datetime.now(UTC)) if a.id == action_id]
+    assert action.created_by_person_id == db.teammate
+    assert runner._job_id(action) == f"scheduled:dynamic_workflow:{db.teammate}"
+    token = current_session.set(None)
+    try:
+        asyncio.run(runner._run_dynamic_workflow(action, datetime.now(UTC)))
+    finally:
+        current_session.reset(token)
+    # Counted under and refused by the teammate's own person cap.
+    assert seen["key"] == str(db.teammate)
+    assert seen["refused"] is not None and seen["refused"].key == str(db.teammate)

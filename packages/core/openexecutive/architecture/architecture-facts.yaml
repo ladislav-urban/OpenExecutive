@@ -697,6 +697,13 @@ providers:
     scheduled run with no starter keeps its creator. A People id is read from
     a key only as plain ASCII digits (cost_caps._people_id), and a scope that
     can't be told refuses the call as unreadable (fail closed).
+    Sixth review (Nov 17, 2026): an asker that can't be read counts as
+    outside (CostCapReached never raises building itself; unreadable keeps
+    its row and card); the run route's SSE error frame carries a fixed
+    sentence or cap.reply(), never the exception's text. Run again records
+    who tapped it as the action's created_by_person_id: the scheduler binds
+    them as spender for the dynamic workflow's run and their id is in its
+    job key; a cadence's own runs keep the creator.
     Owner decisions (Nov 17, 2026): recommended values when switched on are
     COST_CAP_TURN_USD=1, COST_CAP_PERSON_DAILY_USD=5,
     COST_CAP_JOB_DAILY_USD=2, COST_CAP_MONTHLY_USD=100 (commented in

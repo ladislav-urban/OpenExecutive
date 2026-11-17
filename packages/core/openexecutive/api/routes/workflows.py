@@ -169,7 +169,8 @@ def rerun_workflow_run(run_id: str, request: Request) -> dict[str, Any]:
             status_code=403, detail="Only the principal, or the person it goes to, can run it again."
         )
     try:
-        action_id = queue_rerun(run)
+        # Spent for whoever asked for it again (the scheduler binds them).
+        action_id = queue_rerun(run, started_by=caller)
     except RerunRefused as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
     from openexecutive.audit import log_event as audit_log
@@ -779,7 +780,12 @@ async def start_workflow_run(name: str, request: Request) -> StreamingResponse:
             # The run is safely parked; only the stream broke.
             if not paused:
                 fail_run(run_id=run_id, error=str(exc))
-            yield _sse({"type": "error", "run_id": run_id, "message": str(exc)})
+            # Never the exception's own text: a cap's sentence, else a fixed one.
+            from openexecutive.audit import cost_caps
+
+            cap = cost_caps.capped(exc)
+            message = cap.reply() if cap is not None else "The run failed. Try again later."
+            yield _sse({"type": "error", "run_id": run_id, "message": message})
         finally:
             logger.info(
                 "workflow.run_complete run_id=%s workflow=%s duration_s=%.2f",

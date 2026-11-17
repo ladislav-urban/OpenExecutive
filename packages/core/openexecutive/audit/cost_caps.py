@@ -468,7 +468,13 @@ def _person_key(session: Any) -> str | None:
 
 
 def _asker_is_outside() -> bool:
-    key = _person_key(_session())
+    """Whether the asker is off People. One that can't be told counts as
+    outside, so its sentence stays the generic one (and a refusal built for
+    it never raises)."""
+    try:
+        key = _person_key(_session())
+    except Exception:  # noqa: BLE001
+        return True
     return key is not None and key.startswith(OUTSIDE_PREFIX)
 
 

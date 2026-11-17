@@ -2653,7 +2653,10 @@ async def _run_dynamic_workflow(action: ScheduledAction, now: datetime) -> None:
             artifact = ""
             paused = False
             as_owner = pinned_viewer(viewer_for_person(owner)) if owner is not None else contextlib.nullcontext()
-            with as_owner:
+            # A rerun someone asked for is spent for them (their person cap);
+            # the cadence's own runs, with no one, keep the creator
+            # (chat_tools.in_workflow). Its job key names them too (_job_id).
+            with as_owner, cost_caps.bind_spender(action.created_by_person_id):
                 async for event in workflow.run(inputs=wf_inputs, store=store):
                     # The one pause a scheduled run CAN take: an action step held
                     # writes to new targets. Nothing waits in-process — the run is
