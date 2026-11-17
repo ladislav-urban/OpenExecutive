@@ -405,10 +405,11 @@ OUTSIDE_PREFIX = "outside:"
 def _person_id(session: Any) -> int | None:
     """The People id the current call is spent for: a teammate's queued run,
     else the signed-in or verified sender. An email's sender counts only when
-    Gmail authenticated it: a From line alone proves nothing. None for a turn
+    Gmail authenticated it: a From line alone proves nothing. With no session
+    bound, the bound spender (a People id) when there is one. None for a turn
     with no one on People behind it."""
     if session is None:
-        return None
+        return _bound_person()
     email = str(getattr(session, "origin_channel", "") or "") == "email"
     authenticated = (
         getattr(session, "email_authenticated", False) is True
@@ -421,6 +422,11 @@ def _person_id(session: Any) -> int | None:
         if email and attr != "run_for_person_id" and not authenticated:
             return None
         return value
+    return _bound_person()
+
+
+def _bound_person() -> int | None:
+    """The People id bound with :func:`bind_spender`, if a People id is."""
     bound = _spender.get()
     if bound is not None and bound.isdigit():
         return int(bound)
@@ -461,6 +467,13 @@ def _is_principal(person_id: int) -> bool:
 
     person = get_person(person_id)
     return person is not None and person.is_principal
+
+
+def _exempt_from_person_cap(person_key: str | None) -> bool:
+    """Whether the person scope's key is the principal's: the one test of
+    the exemption, read from the same key the person cap counts under, so
+    the two can never disagree."""
+    return person_key is not None and person_key.isdigit() and _is_principal(int(person_key))
 
 
 # --------------------------------------------------------------------------- #
@@ -773,10 +786,9 @@ def reserve(
         turn_amount = estimate
     if not limits.stored_on:
         return Reservation(scopes, day, 0.0, turn, turn_amount)
-    person = _person_id(session)
     person_key = _person_key(session)
     try:
-        exempt = person is not None and _is_principal(person)
+        exempt = _exempt_from_person_cap(person_key)
         with contextlib.closing(_connect()) as conn:
             conn.isolation_level = None
             conn.execute("BEGIN IMMEDIATE")

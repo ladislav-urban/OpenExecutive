@@ -496,3 +496,41 @@ def test_a_refusal_in_the_worker_tells_the_principal_on_the_loop(
     with pytest.raises(cost_caps.CostCapReached):
         asyncio.run(CappedProvider(_Backend()).messages_create(**KW))  # type: ignore[arg-type]
     assert where == [True]
+
+
+def test_with_only_a_spender_bound_the_principal_is_still_exempt_from_the_person_cap(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Home's Reply, the scheduled and the manual inbox scans bind a spender
+    # and no session: the exemption reads the same key the person cap counts
+    # under, so the principal is never held to it there either.
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    def spend_as(person_id: int, usd: float) -> None:
+        token = current_session.set(None)
+        try:
+            with cost_caps.bind_spender(person_id):
+                cost_caps.add(MODEL, {"cost_usd": usd}, now=NOW)
+        finally:
+            current_session.reset(token)
+
+    def check_as(person_id: int) -> None:
+        token = current_session.set(None)
+        try:
+            with cost_caps.bind_spender(person_id):
+                cost_caps.check(MODEL, {"model": MODEL, "max_tokens": 10, "messages": []}, now=NOW)
+        finally:
+            current_session.reset(token)
+
+    spend_as(db.principal, 5.0)
+    spend_as(db.teammate, 5.0)
+    _caps(monkeypatch, person=1.0)
+    check_as(db.principal)  # over the person cap, and exempt from it
+    with pytest.raises(cost_caps.CostCapReached) as teammate:
+        check_as(db.teammate)
+    assert teammate.value.scope == "person" and teammate.value.key == str(db.teammate)
+    # The month's cap still holds the principal.
+    _caps(monkeypatch, person=1.0, monthly=8.0)
+    with pytest.raises(cost_caps.CostCapReached) as month:
+        check_as(db.principal)
+    assert month.value.scope == "total"
