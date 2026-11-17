@@ -135,7 +135,9 @@ async def should_respond(
 
     Always returns a ``GateDecision`` — never raises. On any exception or
     timeout, returns ``allow=True, reason="fail_open"`` so the caller still
-    proceeds to ``executive.chat`` rather than silently dropping the message.
+    proceeds to ``executive.chat`` rather than silently dropping the message;
+    except a cost cap's refusal (``allow=False, reason="cost_cap"``): the
+    reply would spend past the same cap, so the bot stays silent.
     """
     try:
         from openexecutive.agents.utility_fast import get_fast_model
@@ -193,7 +195,14 @@ async def should_respond(
             if getattr(b, "type", "") == "text"
         )
         return _parse_gate_output(raw)
-    except Exception:
+    except Exception as exc:
+        from openexecutive.audit import cost_caps
+
+        if cost_caps.capped(exc) is not None:
+            # A cost cap refused the gate's call: answering would spend past
+            # the same cap, so stay silent rather than fail open.
+            logger.warning("%s: response gate refused by a cost cap, staying silent", channel)
+            return GateDecision(allow=False, reason="cost_cap", raw="")
         logger.exception(
             "%s: response gate failed, defaulting to respond", channel
         )

@@ -1068,8 +1068,11 @@ async def check_delegation_inbox(request: Request) -> InboxOut:
         raise _refuse(409, "inbox_off", "Turn on Draft replies to my inbox first.")
     if inbox.scanning(person_id):
         raise _refuse(409, "in_progress", "It's checking your inbox already.")
+    from openexecutive.audit import cost_caps
+
     with unscoped_audit_rows():
-        task = asyncio.create_task(inbox.scan_person(person))
+        # The check runs as one turn of its own (the turn cap).
+        task = asyncio.create_task(cost_caps.run_as_turn(inbox.scan_person(person)))
     _CHECKS.add(task)
     task.add_done_callback(_CHECKS.discard)
     # The scan marks itself as running on its first step; say so either way.

@@ -9,7 +9,9 @@ one process against the same database.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING
@@ -421,23 +423,23 @@ async def run_scheduler(
                 _beat("rotating")
                 await asyncio.sleep(poll_interval_seconds)
                 continue
-            with cost_caps.bind_job("refresh-narrative"):
+            with _sweep("refresh-narrative"):
                 _maybe_refresh_narrative(now)
-            with cost_caps.bind_job("scan-inbox"):
+            with _sweep("scan-inbox"):
                 _maybe_scan_inbox(now)
-            with cost_caps.bind_job("keep-contacts"):
+            with _sweep("keep-contacts"):
                 _maybe_keep_contacts(now)
-            with cost_caps.bind_job("remind-notes"):
+            with _sweep("remind-notes"):
                 _maybe_remind_notes(now)
-            with cost_caps.bind_job("send-reminders"):
+            with _sweep("send-reminders"):
                 _maybe_send_reminders(now)
-            with cost_caps.bind_job("check-mail-watches"):
+            with _sweep("check-mail-watches"):
                 _maybe_check_mail_watches(now)
-            with cost_caps.bind_job("release-held"):
+            with _sweep("release-held"):
                 _maybe_release_held(now)
-            with cost_caps.bind_job("push-cards"):
+            with _sweep("push-cards"):
                 _maybe_push_cards(now)
-            with cost_caps.bind_job("send-monthly-value"):
+            with _sweep("send-monthly-value"):
                 _maybe_send_monthly_value(now)
             # Each watch job binds its own budget (watch/runner.py).
             _maybe_run_watch_jobs(now)
@@ -469,10 +471,25 @@ async def run_scheduler(
 def _job_id(action: ScheduledAction) -> str:
     """The job a scheduled action's model calls count against for the cost
     caps: its kind, and its department when it has one, so a recurring
-    brief or check-in keeps one budget across its daily rows."""
+    brief or check-in keeps one budget across its daily rows; and the
+    person who queued it, when someone did, so one teammate's actions can't
+    use up (and defer) everyone else's."""
+    job = f"scheduled:{action.kind}"
     if action.department:
-        return f"scheduled:{action.kind}:{action.department}"
-    return f"scheduled:{action.kind}"
+        job += f":{action.department}"
+    creator = getattr(action, "created_by_person_id", None)
+    if isinstance(creator, int) and not isinstance(creator, bool):
+        job += f":{creator}"
+    return job
+
+
+@contextlib.contextmanager
+def _sweep(name: str) -> Iterator[None]:
+    """One periodic sweep's run for the cost caps: its job's daily budget,
+    and one turn of its own for the work it starts this tick (the tasks it
+    spawns share it; nothing after the tick does)."""
+    with cost_caps.bind_job(name), cost_caps.bind_turn(fresh=True, close=False):
+        yield
 
 
 def _failed_or_retry(action_id: int, exc: BaseException) -> str:

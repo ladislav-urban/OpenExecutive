@@ -21,17 +21,24 @@ from openexecutive.audit import cost_caps
 from openexecutive.providers.provider import LLMProvider
 
 
-def _snapshot(stream: Any) -> Any:
-    # What the stream had used when it ended: Anthropic's MessageStream keeps
-    # the message assembled so far, usage included; a translated backend may
-    # not, and one closed before message_start has none.
+def _snapshot(stream: Any, *, finished_only: bool = False) -> Any:
+    """What the stream had used when it ended: Anthropic's MessageStream
+    keeps the message assembled so far, usage included; a translated backend
+    may not, and one closed before message_start has none.
+
+    ``finished_only``: the snapshot only once the message finished (its
+    ``stop_reason`` set). Before that its ``output_tokens`` is the count at
+    message_start (it is filled in at message_delta), so a stream stopped
+    mid-answer would settle on next to no output: it keeps its worst case."""
     try:
-        return stream.current_message_snapshot
+        snap = stream.current_message_snapshot
     except Exception:  # noqa: BLE001
-        pass
-    # The OpenAI-compatible stream (OpenRouter) keeps its finished message
-    # here instead.
-    return getattr(stream, "_finalized", None)
+        # The OpenAI-compatible stream (OpenRouter) keeps its message here
+        # instead, set only once the stream ended: finished whenever there.
+        return getattr(stream, "_finalized", None)
+    if finished_only and getattr(snap, "stop_reason", None) is None:
+        return None
+    return snap
 
 
 def _not_billed(exc: BaseException) -> bool:
@@ -98,9 +105,11 @@ class CappedProvider:
             raise
         finally:
             if reservation is not None:
-                await asyncio.to_thread(
-                    cost_caps.settle, reservation, model, _snapshot(stream) if stream is not None else None,
-                )
+                # A reserved call stopped mid-answer keeps its worst case; with
+                # nothing reserved (every cap off), what it had is counted.
+                reserved = bool(reservation.amount or reservation.turn_amount)
+                snap = _snapshot(stream, finished_only=reserved) if stream is not None else None
+                await asyncio.to_thread(cost_caps.settle, reservation, model, snap)
 
     def messages_stream(self, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
         return self._stream(kwargs)

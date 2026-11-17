@@ -205,7 +205,8 @@ async def evaluate_and_dispatch(
     from openexecutive.audit import cost_caps
 
     agent = TriageAgent()
-    with cost_caps.bind_job("alert-triage"):
+    # One event's triage is one turn for the turn cap.
+    with cost_caps.bind_job("alert-triage"), cost_caps.bind_turn(fresh=True):
         decision = await agent.triage(
             event,
             recent_alerts=recent,

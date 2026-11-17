@@ -19,6 +19,7 @@ call through ``add_usage_listener``.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
 import struct
@@ -204,10 +205,13 @@ async def transcribe(
     from openexecutive.audit import cost_caps
 
     # Billed per minute, so no worst case: refused only once a cap is spent.
+    # Read off the event loop, as every other check is.
     try:
-        cost_caps.check(where.model, {})
+        await asyncio.to_thread(cost_caps.check, where.model, {})
     except cost_caps.CostCapReached as capped:
-        raise TranscriptionError("today's usage limit is reached") from capped
+        # The cap's own sentence: anyone off People hears only that it can't
+        # answer.
+        raise TranscriptionError(capped.reply()) from capped
     if not _reserve(len(data)):
         raise TranscriptionError("today's limit on voice notes is used up")
     try:

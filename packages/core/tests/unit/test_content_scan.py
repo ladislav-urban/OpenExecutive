@@ -559,3 +559,18 @@ def test_a_failed_second_call_is_unchecked(monkeypatch: pytest.MonkeyPatch) -> N
     monkeypatch.setattr(content_scan, "_call_model", fake)
     content_scan.reset()
     assert _scan("An ordinary note about lunch on Thursday.") == content_scan.UNCHECKED
+
+
+def test_a_check_a_cost_cap_refused_holds_the_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A cap must never switch the check off: held like content too big to
+    # check, never let through as merely unchecked.
+    from datetime import UTC, datetime
+
+    from openexecutive.audit import cost_caps
+
+    class Provider:
+        async def messages_create(self, **kwargs: Any) -> Any:
+            raise cost_caps.CostCapReached("turn", "t", 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr("openexecutive.providers.get_provider", lambda model: Provider())
+    assert _scan("hello") == content_scan.TOO_BIG

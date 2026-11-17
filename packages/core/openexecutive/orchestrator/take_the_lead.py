@@ -1701,6 +1701,8 @@ async def carry_out(payload: dict[str, Any], *, by_principal: bool) -> str:
 
         with (
             cost_caps.bind_job("take-the-lead"),
+            # One approved card's run is one turn for the turn cap.
+            cost_caps.bind_turn(fresh=True),
             grant_contact_egress() if by_principal else nullcontext(),
             # The tap approves this one call: a skill that runs others
             # (a workflow, research) keeps every check for them.

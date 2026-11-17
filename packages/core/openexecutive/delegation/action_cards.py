@@ -988,6 +988,8 @@ async def _carry_out(
         with (
             rows_for_person(person.id),
             cost_caps.bind_job("action-card"),
+            # One card's actions are one turn for the turn cap.
+            cost_caps.bind_turn(fresh=True),
             grant_contact_egress() if person.is_principal else nullcontext(),
         ):
             for i, action in enumerate(actions):

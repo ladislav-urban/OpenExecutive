@@ -552,6 +552,18 @@ def test_the_other_entry_paths_bind_a_turn() -> None:
     assert executive.count("cost_caps.ensure_turn()") == 2
     scheduler = (PACKAGE / "scheduler/runner.py").read_text(encoding="utf-8")
     assert "cost_caps.run_as_turn(_execute_action(row, gateway))" in scheduler
+    # Every periodic sweep runs under _sweep (its job and one turn).
+    assert scheduler.count('with _sweep("') == 9
+    # The other unattended and asked-for runs: one turn each.
+    for module, binding in [
+        ("api/routes/delegation.py", "cost_caps.run_as_turn(inbox.scan_person(person))"),
+        ("orchestrator/take_the_lead.py", "cost_caps.bind_turn(fresh=True)"),
+        ("delegation/action_cards.py", "cost_caps.bind_turn(fresh=True)"),
+        ("alerts/pipeline.py", "cost_caps.bind_turn(fresh=True)"),
+    ]:
+        assert binding in (PACKAGE / module).read_text(encoding="utf-8"), module
+    # The CLI closes a turn per message.
+    assert (PACKAGE / "cli.py").read_text(encoding="utf-8").count("with cost_caps.bind_turn(fresh=True):") == 2
 
     async def seen() -> Any:
         return cost_caps.current_turn()
@@ -641,3 +653,165 @@ def test_the_usage_summary_counts_capped_calls_by_day_and_scope(tmp_path: Path) 
     ]
     # The rows are the principal's alone.
     assert audit.usage_summary(include_private=False)["capped_calls"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Security review (Nov 17): the fixes
+# --------------------------------------------------------------------------- #
+
+
+class _Snap:
+    """A stream whose message snapshot is as the SDK keeps it."""
+
+    def __init__(self, stop_reason: str | None) -> None:
+        self.current_message_snapshot = SimpleNamespace(
+            stop_reason=stop_reason,
+            usage=SimpleNamespace(input_tokens=10, output_tokens=1, cache_read_input_tokens=0,
+                                  cache_creation_input_tokens=0),
+        )
+
+    async def __aenter__(self) -> _Snap:
+        return self
+
+    async def __aexit__(self, *_a: Any) -> None:
+        return None
+
+
+@pytest.mark.parametrize(("stop_reason", "settled_on_snapshot"), [(None, False), ("end_turn", True)])
+def test_a_stream_closed_before_it_finished_keeps_its_worst_case(
+    caps: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, stop_reason: str | None, settled_on_snapshot: bool,
+) -> None:
+    # message_start and some deltas, then Stop: output_tokens is still the
+    # message_start count, so the snapshot would count next to nothing.
+    settled: list[Any] = []
+    real_settle = cost_caps.settle
+    monkeypatch.setattr(cost_caps, "settle", lambda res, model, message: (
+        settled.append(message), real_settle(res, model, message),
+    ))
+    monkeypatch.setattr(cost_caps, "charge", lambda model, counts: 0.01)
+
+    class _Inner:
+        def messages_stream(self, **_kw: Any) -> _Snap:
+            return _Snap(stop_reason)
+
+    provider = CappedProvider(_Inner())  # type: ignore[arg-type]
+    caps.turn = 10.0
+
+    async def go() -> float:
+        with cost_caps.bind_turn(fresh=True) as turn:
+            async with provider.messages_stream(model="claude-test", max_tokens=10, messages=[]):
+                pass
+            return turn.spent
+
+    spent = asyncio.run(go())
+    assert (settled[0] is not None) is settled_on_snapshot
+    assert spent == (pytest.approx(0.01) if settled_on_snapshot else 1.0)
+
+
+def test_a_committee_draft_a_cap_stopped_still_passes_the_answer_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator import executive as executive_mod
+
+    async def corrected(text: str, turn: Any, **_k: Any) -> str:
+        return text.replace("12,900", "12,500")
+
+    monkeypatch.setattr(executive_mod.answer_check, "check_reply", corrected)
+
+    async def go() -> str:
+        with cost_caps.bind_turn(fresh=True):
+            cost_caps.mark_stopped(STOP)
+            return await Executive._checked_stopped_draft(
+                f"North owes $12,900.\n\n{STOP}", object(), question="q", model="m",
+            )
+
+    assert asyncio.run(go()) == f"North owes $12,500.\n\n{STOP}"
+
+
+def test_a_committee_draft_whose_check_a_cap_refused_is_held_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator import executive as executive_mod
+
+    async def capped(text: str, turn: Any, **_k: Any) -> str:
+        raise cost_caps.CostCapReached("total", "all", 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(executive_mod.answer_check, "check_reply", capped)
+
+    async def go() -> str:
+        with cost_caps.bind_turn(fresh=True):
+            cost_caps.mark_stopped(STOP)
+            return await Executive._checked_stopped_draft(
+                f"North owes $12,900.\n\n{STOP}", object(), question="q", model="m",
+            )
+
+    assert asyncio.run(go()) == STOP
+
+
+@pytest.mark.asyncio
+async def test_a_response_gate_a_cap_refused_stays_silent() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from openexecutive.integrations.response_gate import should_respond
+
+    provider = MagicMock()
+    provider.messages_create = AsyncMock(
+        side_effect=cost_caps.CostCapReached("person", "outside:slack", 1.0, 1.0, datetime.now(UTC)),
+    )
+    settings = MagicMock(utility_fast_timeout_s=10.0)
+    with (
+        patch("openexecutive.providers.get_provider", return_value=provider),
+        patch("openexecutive.config.get_settings", return_value=settings),
+    ):
+        d = await should_respond(
+            user_text="anything", author_display_name="Alice", history=[{"role": "user", "content": "x"}],
+            bot_display_name="Exec", channel="slack",
+        )
+    assert d.allow is False and d.reason == "cost_cap"
+
+
+def test_a_scheduled_actions_job_is_its_creators_own() -> None:
+    from openexecutive.scheduler.runner import _job_id
+
+    row = SimpleNamespace(kind="followup", department=None, created_by_person_id=7)
+    assert _job_id(row) == "scheduled:followup:7"  # type: ignore[arg-type]
+    row = SimpleNamespace(kind="dept_cadence", department="sales", created_by_person_id=None)
+    assert _job_id(row) == "scheduled:dept_cadence:sales"  # type: ignore[arg-type]
+
+
+def test_a_refusals_text_names_only_its_scope() -> None:
+    exc = cost_caps.CostCapReached("person", "7", 1.0, 1.23, datetime.now(UTC), name="Sara Teammate")
+    assert str(exc) == "cost cap reached: person"
+    assert exc.key == "7" and exc.spent == 1.23
+
+
+def test_a_sweep_is_one_turn_for_the_work_it_starts() -> None:
+    from openexecutive.scheduler.runner import _sweep
+
+    async def go() -> tuple[Any, Any]:
+        seen: list[Any] = []
+
+        async def work() -> None:
+            seen.append(cost_caps.current_turn())
+
+        with _sweep("scan-inbox"):
+            assert cost_caps.current_job() == "scan-inbox"
+            task = asyncio.create_task(work())
+        await task
+        return seen[0], cost_caps.current_turn()
+
+    inside, after = asyncio.run(go())
+    assert inside is not None and not inside.closed and after is None
+
+
+def test_a_voice_note_at_a_cap_tells_an_outsider_only_the_general_sentence(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.providers import transcription
+    from openexecutive.providers.refusal import reply_text
+
+    def capped(model: str, kwargs: dict[str, Any]) -> None:
+        raise cost_caps.CostCapReached("total", "all", 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(cost_caps, "check", capped)
+    where = SimpleNamespace(model="whisper", api_key="", via_openrouter=False, base_url="http://x")
+    monkeypatch.setattr(transcription, "target", lambda: where)
+    stranger = Session(origin_channel="telegram")
+    stranger.sender_off_team = True  # type: ignore[attr-defined]
+    with set_session(stranger), pytest.raises(transcription.TranscriptionError) as failed:
+        asyncio.run(transcription.transcribe(b"OggS", "note.ogg"))
+    assert str(failed.value) == reply_text()

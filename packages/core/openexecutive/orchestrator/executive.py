@@ -1874,7 +1874,13 @@ class Executive:
         # session_id=NULL and be invisible in the per-session audit view.
         # private_rows: the passes scheduled here copy the context, so a turn
         # that touched the speaker's mailbox keeps their rows private too.
-        with set_turn(session_id=session.session_id, turn_id=turn_id), private_rows(touched_mail):
+        # unbind_turn: the passes scheduled here outlive the turn and are
+        # no part of it, so the turn cap never refuses them.
+        with (
+            set_turn(session_id=session.session_id, turn_id=turn_id),
+            private_rows(touched_mail),
+            cost_caps.unbind_turn(),
+        ):
             # Inside the wrapper: schedule_extraction snapshots the vars at
             # call time, so scheduling it out here would snapshot (None,
             # None) and the memory_extractor's model call would record
@@ -2239,15 +2245,19 @@ class Executive:
 
         # A draft a cost cap stopped is the reply as it stands: no review and
         # no revision (each would spend past the cap), and the stop sentence
-        # stays its last paragraph.
+        # stays its last paragraph. It still passes the answer check first;
+        # nothing of it was shown, so a check a cap refused holds all of it.
         if cost_caps.turn_stopped() and draft.strip():
             for phase in ("reviewing", "finalizing"):
                 yield {"type": "phase", "phase": phase, "session_id": session.session_id}
-            yield draft
+            final_draft = await self._checked_stopped_draft(
+                draft, check_turn, question=memory_text or user_message, model=effective_model,
+            )
+            yield final_draft
             session.add_user_message(user_message)
             for added_text in inbox.taken_texts() if inbox is not None else []:
                 session.add_user_message(added_text)
-            session.add_assistant_message(draft)
+            session.add_assistant_message(final_draft)
             clear_turn()
             return
 
@@ -2514,7 +2524,7 @@ class Executive:
         # A replay (memory.replay) is kept nowhere — see stream_chat.
         kept = not touched_mail and not host_words and not chat_replay.is_replay(session)
         mail_words = _mail_turn_words(session, own_text, touched_mail=touched_mail, host_words=host_words)
-        with private_rows(touched_mail):
+        with private_rows(touched_mail), cost_caps.unbind_turn():
             if should_extract(speaker_text, session=session):
                 schedule_extraction(
                     speaker_text, final_response, session_id=session.session_id
@@ -4375,6 +4385,28 @@ class Executive:
 
         logger.warning("max_iterations=%d reached — returning partial result", max_iterations)
         yield last_full_text or "I was unable to complete the analysis. Please try again."
+
+    @staticmethod
+    async def _checked_stopped_draft(
+        draft: str, check_turn: Any, *, question: str, model: str,
+    ) -> str:
+        """A committee draft a cost cap stopped, as the reply: held to the
+        answer check like any reply, its stop sentence kept last. Nothing of
+        it was shown yet, so a check a cap refuses holds all of it: the
+        sentence alone is the reply."""
+        stop = cost_caps.stop_sentence()
+        body = _without_stop(draft, stop)
+        try:
+            checked = (
+                await answer_check.check_reply(body, check_turn, question=question, model=model)
+                if body.strip()
+                else body
+            )
+        except cost_caps.CostCapReached as check_cap:
+            sentence = stop or check_cap.reply()
+            cost_caps.mark_stopped(sentence)
+            return sentence
+        return _with_stop(checked, stop) if stop else checked
 
     @staticmethod
     def _capped_check(

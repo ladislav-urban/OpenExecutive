@@ -134,13 +134,17 @@ def current_turn() -> TurnSpend | None:
 
 
 @contextlib.contextmanager
-def bind_turn(*, fresh: bool = False) -> Iterator[TurnSpend]:
+def bind_turn(*, fresh: bool = False, close: bool = True) -> Iterator[TurnSpend]:
     """Count every model call inside the block against one turn, closed at
     the end. Bind it where the turn's session is bound: the SSE turn, each
     channel's handler, each unattended run. Inside an open turn it yields
     that one (one message is one turn, however many layers bind it) unless
     ``fresh``. Saves and restores rather than ``Token.reset``, so it holds
-    across the task hops of a stepped stream (as ``set_session`` does)."""
+    across the task hops of a stepped stream (as ``set_session`` does).
+
+    ``close=False`` leaves the turn open for the tasks started inside the
+    block (an unattended sweep's work, which is that run's own); nothing
+    started after the block sees it."""
     outer = _turn.get()
     if not fresh and outer is not None and not outer.closed:
         yield outer
@@ -150,7 +154,8 @@ def bind_turn(*, fresh: bool = False) -> Iterator[TurnSpend]:
     try:
         yield turn
     finally:
-        turn.close()
+        if close:
+            turn.close()
         _turn.set(outer)
 
 
@@ -325,7 +330,10 @@ class CostCapReached(Exception):
         self, scope: RefusedScope, key: str, cap: float, spent: float,
         resets_at: datetime, name: str = "", worst_case: float = 0.0,
     ) -> None:
-        super().__init__(f"cost cap reached: {scope} {key} at {spent:.2f} of {cap:.2f} USD")
+        # Only the scope: this text reaches logs and other audit rows (a
+        # failed action's error). The key and the figures are kept on the
+        # object and in the principal's own cost_cap_reached row.
+        super().__init__(f"cost cap reached: {scope}")
         self.scope = scope
         self.key = key
         self.cap = cap
