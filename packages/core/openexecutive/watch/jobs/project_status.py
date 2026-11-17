@@ -64,6 +64,7 @@ from __future__ import annotations
 import html
 import math
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, time, timedelta
@@ -554,6 +555,15 @@ _QUOTE_MARKS = str.maketrans({mark: "'" for mark in (
     "`\u2018\u2019\u201a\u201b\u2032\u2035\u2039\u203a\u275b\u275c\u275d\u275e\u02ba\u02bb\u02bc\u02ee\uff07"
 )})
 _APOSTROPHES = re.compile(r"'{2,}")
+# A double mark that is a unit, after a number, said in words before marks
+# become apostrophes, so a quantity never changes ('2" conduit' would show as
+# "2' conduit", a foot): seconds after degrees and minutes, inches otherwise.
+# The words are already cleaned (NFKC), so a double prime arrives as two.
+_DOUBLE_MARK = "(?:[\"\u201c\u201d\u02ba\u02ee\uff02]|[\u2032'\u2019]{2})"
+_ARC_SECONDS = re.compile(
+    rf"(\d\s?\u00b0\s?\d+(?:\.\d+)?\s?[\u2032'\u2019]\s?\d+(?:\.\d+)?)\s?{_DOUBLE_MARK}"
+)
+_INCHES = re.compile(rf"(\d)\s?{_DOUBLE_MARK}")
 
 
 def _quote(words: str) -> str:
@@ -562,7 +572,18 @@ def _quote(words: str) -> str:
     ("In short: on schedule") stays the team's, and the whole a fixed point
     of the notice's cleaning, so the closing mark is never lost (a text
     ending "www." would join it into a link). "" when no form holds."""
-    inner = _APOSTROPHES.sub("'", words.translate(_QUOTE_MARKS))
+    units = _INCHES.sub(r"\1 in", _ARC_SECONDS.sub(r"\1 sec", words))
+    # A combining mark on an apostrophe would keep two of them apart ("'\u0301'").
+    kept: list[str] = []
+    for ch in units.translate(_QUOTE_MARKS):
+        if kept and kept[-1] == "'" and unicodedata.category(ch).startswith("M"):
+            continue
+        kept.append(ch)
+    inner = _APOSTROPHES.sub("'", "".join(kept))
+    # Settled again: a mark that hid a link from the first cleaning
+    # ("\u02bchttp://x") exposes it now, and it reads "link" rather than the
+    # whole quote failing.
+    inner = _APOSTROPHES.sub("'", settled(inner, QUOTE_MAX) or inner)
     # The closing mark spaced off when the text's end would take it in.
     for wrapped in (f"{OPEN_QUOTE}{inner}{CLOSE_QUOTE}", f"{OPEN_QUOTE}{inner} {CLOSE_QUOTE}"):
         if (

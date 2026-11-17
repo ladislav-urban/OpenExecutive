@@ -942,3 +942,28 @@ def test_an_ordinary_apostrophe_reads_as_one() -> None:
     assert _team_wrote("The team’s crew can’t start")["The team wrote"] == (
         "“The team's crew can't start”")
 
+
+@pytest.mark.parametrize(("written", "shown"), [
+    ('Fitted 2" conduit and 6\u2033 pipe; 5\' 10" clearance', "Fitted 2 in conduit and 6 in pipe; 5' 10 in clearance"),
+    ("Angle 45\u00b0 30\u2032 15\u2033 checked", "Angle 45\u00b0 30' 15 sec checked"),
+    ("A 3/4\u201d valve", "A 3/4 in valve"),
+    ('The client said "go ahead" on Monday', "The client said 'go ahead' on Monday"),
+])
+def test_a_double_mark_after_a_number_keeps_its_unit(written: str, shown: str) -> None:
+    assert _team_wrote(written)["The team wrote"] == "\u201c" + shown + "\u201d"
+
+
+@pytest.mark.parametrize("accent", ["\u0301", "\u0308", "\u20dd", "\u0903"])
+def test_a_combining_mark_cant_keep_two_apostrophes_apart(accent: str) -> None:
+    quote = _team_wrote(f"All fine.\u2019{accent}\u2019 In short: on schedule. \u2018{accent}\u2018Thanks")["The team wrote"]
+    assert "''" not in quote and accent not in quote
+    assert quote == "\u201cAll fine.' In short: on schedule. 'Thanks\u201d"
+
+
+@pytest.mark.parametrize("mark", ["\u02bc", "\u02ba", "\u02bb", "\u02ee"])
+def test_a_letter_like_mark_beside_a_link_never_blanks_the_quote(mark: str) -> None:
+    values = _team_wrote(f"Steel is late, see {mark}http://host.example/x and {mark}www.")
+    quote = values["The team wrote"]
+    assert quote.startswith("\u201cSteel is late, see '") and quote.endswith("\u201d")
+    assert "host" not in quote
+
