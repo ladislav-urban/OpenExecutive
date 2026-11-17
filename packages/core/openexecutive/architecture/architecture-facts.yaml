@@ -652,6 +652,27 @@ providers:
     GET /audit/usage gains capped_calls (day, scope, calls). The principal's
     channel message is a fixed template naming no one (cost_caps.channel_text),
     sent with deliver_to_person through the send tools' outbound guard.
+    Security review fixes (Nov 17, 2026): a stream closed before its message
+    finished (no stop_reason yet; output_tokens is filled at message_delta)
+    keeps its worst case rather than settling on the snapshot, whenever it
+    reserved anything. A committee draft a cap stopped still passes
+    answer_check (a capped check holds all of it: it was never shown). A
+    content_scan call a cap refused holds the content (TOO_BIG), never
+    UNCHECKED; a response_gate call a cap refused stays silent
+    (allow=False, reason cost_cap), never fails open. Turns are bound on
+    every entry: also POST /delegation/inbox/check (run_as_turn),
+    take_the_lead's approved card, an action card's actions, an alert's
+    triage, each scheduler sweep (scheduler.runner._sweep: its job and one
+    turn for the tasks it starts that tick, bind_turn(close=False)), and
+    each CLI message; the post-turn passes Executive schedules run under
+    cost_caps.unbind_turn. A scheduled action's job key adds the person who
+    queued it: scheduled:<kind>[:<department>][:<created_by_person_id>].
+    str(CostCapReached) names only the scope ("cost cap reached: <scope>"):
+    keys and figures stay on the object and in the principal's
+    cost_cap_reached row. A voice note's cap check runs off the event loop
+    and answers with CostCapReached.reply(). A call is held to its worst
+    case (whole prompt plus max_tokens), so a large attachment (a PDF of
+    about 250 KB) can trip a 1 USD turn cap on its own.
     Owner decisions (Nov 17, 2026): recommended values when switched on are
     COST_CAP_TURN_USD=1, COST_CAP_PERSON_DAILY_USD=5,
     COST_CAP_JOB_DAILY_USD=2, COST_CAP_MONTHLY_USD=100 (commented in
