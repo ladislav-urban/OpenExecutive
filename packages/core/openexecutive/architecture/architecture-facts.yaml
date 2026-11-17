@@ -12653,8 +12653,9 @@ watch:
     after the team's Project Updates; card_cap_day 1 (one notice a run);
     once False (the notice key projects:<company>:<day>); check_fields
     None (notices only: no card, check, hold or kept-from-reviewer path);
-    settings company only. reason_schema ReasonSchema(REASON_INSTRUCTION, a
-    constant; max_findings 10, max_fact_chars 300). Three reads, exactly
+    settings company only. reason_schema None (no model line: "In short"
+    is code's, below); value_chars 302 (the quote and its quotation
+    marks). Three reads, exactly
     oe_connector's (ladislav-urban/oe_connector#574: watch_shape_vectors
     cases marked to sync, copied verbatim into tests/unit/
     watch_shape_vectors.json; watch_job_vectors.json project_status_job;
@@ -12714,8 +12715,13 @@ watch:
     from the 50-project cut (PROJECTS_CUT_LINE says that). No model call:
     reason_schema None, so no model ever reads a team's update and nothing
     an update says can reach a line the notice writes (the text is only
-    quoted inside the untrusted block); value_chars 300 (WatchJob's own
-    notice width, 120-400) keeps the quote whole. Why: with a model line,
+    quoted inside the untrusted block, in quotation marks that hold
+    (project_status._quote: the team's own double quotation marks made
+    apostrophes, the quote a fixed point of runner.clean, its closing mark
+    spaced off when the text ends like a link, UNSHOWN_UPDATE if no form
+    holds), so text in it that imitates "In short" reads as the team's); value_chars 302
+    (WatchJob's own notice width, 120-400, refused on a job with a
+    reason_schema, whose max_fact_chars sets it) keeps the quote whole. Why: with a model line,
     the real-model evals (watch_project_status_001-009, now retired) showed
     an injected update leaking into it in paraphrase ("the team's account
     stands as written"), which no word filter catches; the owner chose to
