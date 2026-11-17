@@ -137,6 +137,32 @@ PROPOSE_RULE_TOOL = "erpnext__propose_rule"
 ERPNEXT_PROPOSAL_TOOLS = frozenset({PROPOSE_RULE_TOOL})
 
 
+# oe_connector's refusal of a record, a DocType or a report the caller can't
+# see ("Permission denied: this ERPNext user cannot read Project 'PROJ-0217'",
+# "… (this ERPNext user cannot read it)", "… cannot run 'Stock Ledger'").
+_THIS_USER_CANNOT = re.compile(r"\bthis ERPNext user (?:cannot|can't|can not) (read|run)\b")
+
+
+def in_askers_words(text: str, caller: ErpnextCaller | None) -> str:
+    """An ERPNext result's refusals in words about the person asking, when
+    the call ran as them (a ``user`` caller): "this ERPNext user cannot read
+    Project 'X'" becomes "the asker's own access doesn't include Project
+    'X'". The model repeated oe_connector's words to the person ("this
+    ERPNext user has no permission", where-is-my-order step 4, Nov 17,
+    2026): they name the system, which a branded desk never does, and the
+    user is the person themselves. Any other caller (the service user, a
+    watch job, a supplier) keeps the text as it is: there the refused user
+    is the install's, not theirs."""
+    if caller is None or caller.kind != "user" or "this ERPNext user" not in text:
+        return text
+    return _THIS_USER_CANNOT.sub(
+        lambda m: "the asker's own access doesn't include"
+        if m.group(1) == "read"
+        else "the asker's own access doesn't let them run",
+        text,
+    )
+
+
 def is_erpnext_write(normalized: str) -> bool:
     """Whether a normalized gateway name is one of oe_connector's writes:
     every ``erpnext__draft*`` tool (by prefix, so one added later is a write

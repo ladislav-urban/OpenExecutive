@@ -31,6 +31,14 @@ reply shows: "$1.2M" matches 1,184,330 and "43%" matches 42.71 or 0.4271
 be rounded, keeping two significant digits: "1,200" matches 1,184. Signs are
 ignored: "owes $500" quotes an outstanding of -500.
 
+A number inside a record's name is part of the name, never a figure: "2.5" in
+"Panel wiring 2.5 mm2 (per metre)", when the reply writes it among the name's
+own words (``_in_a_name``). Only names from the turn's name fields count
+(``answer_check`` passes them from ``name_check``), never a description or a
+remark. Without it the check left out the one table row that named that item
+(where-is-my-order step 4, Nov 17, 2026: "covers every line" over three of
+four lines).
+
 Each figure ends ``confirmed``, ``given``, ``from_text``, ``from_truncated`` (a
 sum, count or average over a result ERPNext cut off) or ``unconfirmed``. The
 last two are what check 2 and the correction look at
@@ -977,6 +985,9 @@ class Sources:
     marks: dict[str, str] = field(default_factory=dict)
     # Values seen only in money columns (an amount, a price, a total).
     money: set[float] = field(default_factory=set)
+    # The turn's record names that hold a number, plain (_plain_name): a
+    # number written among a name's own words is the name's (_in_a_name).
+    names: list[str] = field(default_factory=list)
     _complete_keys: list[float] = field(default_factory=list)
     _truncated_keys: list[float] = field(default_factory=list)
 
@@ -1066,9 +1077,12 @@ def sources_for(
     extra: Iterable[float] = (),
     fmt: NumberFormat = PLAIN,
     currencies: Any = None,
+    names: Iterable[str] = (),
 ) -> Sources:
     """Everything the turn's figures may come from. ``extra`` adds values that
-    count as ERPNext's own (a correction's right values, found there by code)."""
+    count as ERPNext's own (a correction's right values, found there by code).
+    ``names`` are the turn's record names (``name_check``'s sources): the ones
+    holding a number are kept, so a number inside one isn't read as a figure."""
     reader = _Reader(types or ResultTypes())
     for result in results:
         reader.result(result)
@@ -1139,7 +1153,48 @@ def sources_for(
     src.differences, src.ratios, src.changes = sorted(diffs), sorted(ratios), sorted(changes)
     src.given = sorted({v for text in _capped(given) for v in numbers_in(text, fmt)})
     src.text = sorted({v for text in _capped(texts) for v in numbers_in(text, fmt)})
+    src.names = sorted({
+        plain for name in names
+        if isinstance(name, str) and _DIGIT_AND_LETTER.search(name) and (plain := _plain_name(name))
+    })[:MAX_NAMES_WITH_NUMBERS]
     return src
+
+
+# A name worth keeping for _in_a_name: a digit and a letter in it.
+_DIGIT_AND_LETTER = re.compile(r"(?=.*\d)(?=.*[A-Za-z])")
+MAX_NAMES_WITH_NUMBERS = 2_000
+# A word of a name, as the reply writes it beside a number: no Markdown, table
+# or sentence punctuation, so "| 300 |" or "sensor: 18" never reads as a name.
+_NAME_WORD_BEFORE = re.compile(r"([^\s|*_:;,()\[\]]+)[ \t]+$")
+_NAME_WORD_AFTER = re.compile(r"^[ \t]+([^\s|*_:;,()\[\]]+)")
+
+
+def _plain_name(name: str) -> str:
+    return " ".join(name.split()).casefold()
+
+
+def _in_a_name(text: str, fig: Figure, names: list[str]) -> bool:
+    """Whether ``fig`` is a number inside one of the turn's record names, as
+    the reply writes it: the word before it, the number and the word after
+    it, as written, are part of one name ("wiring 2.5 mm2" in "Panel wiring
+    2.5 mm2 (per metre)"); with a word on one side only, a name ends or
+    starts so. A figure with a currency mark, a scale or a percent sign is
+    never a name's."""
+    if not names or fig.pre or fig.post or fig.scale_text or fig.percent:
+        return False
+    line_start = text.rfind("\n", 0, fig.start) + 1
+    line_end = text.find("\n", fig.end)
+    before = _NAME_WORD_BEFORE.search(text[max(line_start, fig.start - 80):fig.start])
+    after = _NAME_WORD_AFTER.match(text[fig.end:line_end if line_end != -1 else len(text)])
+    num = fig.num.casefold()
+    if before and after:
+        phrase = f"{before.group(1).casefold()} {num} {after.group(1).casefold()}"
+        return any(phrase in name for name in names)
+    if before:
+        return any(name.endswith(f"{before.group(1).casefold()} {num}") for name in names)
+    if after:
+        return any(name.startswith(f"{num} {after.group(1).casefold()}") for name in names)
+    return False
 
 
 def _symbols(currencies: Any) -> dict[str, frozenset[str]]:
@@ -1252,8 +1307,9 @@ def _run_sum(before: list[Figure], fig: Figure) -> float | None:
 
 
 def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> list[Figure]:
-    """Every figure of ``text`` with its status (module docstring)."""
-    figures = find_figures(text, fmt)[:MAX_FIGURES]
+    """Every figure of ``text`` with its status (module docstring). A number
+    inside one of the turn's record names is no figure (``_in_a_name``)."""
+    figures = [f for f in find_figures(text, fmt) if not _in_a_name(text, f, sources.names)][:MAX_FIGURES]
     for fig in figures:
         _classify(fig, sources)
         _check_currency(fig, sources)
