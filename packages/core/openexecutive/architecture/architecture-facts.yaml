@@ -12715,8 +12715,11 @@ watch:
     from the 50-project cut (PROJECTS_CUT_LINE says that). No model call:
     reason_schema None, so no model ever reads a team's update and nothing
     an update says can reach a line the notice writes (the text is only
-    quoted inside the untrusted block, in quotation marks, so text in it
-    that imitates "In short" reads as the team's); value_chars 302
+    quoted inside the untrusted block, in quotation marks that hold
+    (project_status._quote: the team's own double quotation marks made
+    apostrophes, the quote a fixed point of runner.clean, its closing mark
+    spaced off when the text ends like a link, UNSHOWN_UPDATE if no form
+    holds), so text in it that imitates "In short" reads as the team's); value_chars 302
     (WatchJob's own notice width, 120-400, refused on a job with a
     reason_schema, whose max_fact_chars sets it) keeps the quote whole. Why: with a model line,
     the real-model evals (watch_project_status_001-009, now retired) showed

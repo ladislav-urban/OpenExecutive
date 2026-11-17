@@ -1306,6 +1306,9 @@ def test_every_fact_the_reason_step_sees_is_a_number_or_a_ranking_constant() -> 
     for ar, records in ((_ar(), _records()), (_ar([*AR_ROWS, *hostile_rows]), _records([*RECORDS, *hostile_records]))):
         notice, _drafts = _specs(ar=ar, records=records)
         assert notice.items
+        if "SINV-H1" in ar:
+            # The hostile customers are among what the step is shown.
+            assert any(HOSTILE in item.summary for item in notice.items)
         for item in notice.items:
             assert set(item.facts) <= {
                 "overdue_amount", "days_overdue", "overdue_invoices", "reminders_sent", "ranked_as",

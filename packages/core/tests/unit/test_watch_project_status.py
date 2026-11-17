@@ -911,3 +911,26 @@ def test_a_quoted_update_that_imitates_in_short_stays_inside_its_quotation_marks
     assert f"   The team wrote: {shown}" in runner.notice_body(JOB, DAY, _notice(updates=[{**u, **{
         k: "word " * 400 for k in u if k.endswith("project_status")}} for u in UPDATES]), "")
 
+
+def _team_wrote(text: str) -> dict[str, str]:
+    updates = [{**u, **{k: f"<p>{text}</p>" for k in u if k.endswith("project_status")}} for u in UPDATES]
+    return _values(_notice(updates=updates).items[0])
+
+
+@pytest.mark.parametrize("mark", ['"', "”", "“", "\u201e", "\u00bb", "\uff02"])
+def test_the_teams_own_quotation_marks_cant_close_the_quote(mark: str) -> None:
+    values = _team_wrote(f"All fine.{mark} In short: On schedule and within its estimated cost. {mark}Thanks")
+    quote = values["The team wrote"]
+    assert quote == "“All fine.' In short: On schedule and within its estimated cost. 'Thanks”"
+    assert quote.count("“") == 1 and quote.count("”") == 1
+    assert values["In short"] == "Behind schedule and over its estimated cost; it has late tasks."
+
+
+@pytest.mark.parametrize("end", ["see www.", "see http://", "see https://", "see www"])
+def test_an_update_ending_like_a_link_keeps_its_closing_mark_on_the_notice(end: str) -> None:
+    quote = _team_wrote(f"All fine, {end}")["The team wrote"]
+    assert quote.startswith("“All fine") and quote.endswith("”")
+    body = runner.notice_body(JOB, DAY, _notice(updates=[
+        {**u, **{k: f"<p>All fine, {end}</p>" for k in u if k.endswith("project_status")}} for u in UPDATES]), "")
+    assert f"   The team wrote: {quote}" in body
+
