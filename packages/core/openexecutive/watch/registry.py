@@ -354,6 +354,10 @@ class WatchJob:
     card_cap_day: int
     default_settings: Mapping[str, Any]
     reason_schema: ReasonSchema | None = None
+    # How long a notice's value may be, cleaned (DEFAULT_FACT_CHARS to
+    # MAX_FACT_CHARS), for a job with no reason step that quotes longer text;
+    # 0: its ReasonSchema's max_fact_chars, else DEFAULT_FACT_CHARS.
+    value_chars: int = 0
     # Its draft cards' builder (``CheckFields``); None: a job of notices only.
     check_fields: CheckFields | None = None
     # A whole-number setting's bounds other than 1 to MAX_INT (e.g. an
@@ -434,6 +438,11 @@ class WatchJob:
             or not DEFAULT_FACT_CHARS <= schema.max_fact_chars <= MAX_FACT_CHARS
         ):
             raise ValueError(f"a reason's text facts are {DEFAULT_FACT_CHARS} to {MAX_FACT_CHARS} characters")
+        if (
+            not isinstance(self.value_chars, int) or isinstance(self.value_chars, bool)
+            or not (self.value_chars == 0 or DEFAULT_FACT_CHARS <= self.value_chars <= MAX_FACT_CHARS)
+        ):
+            raise ValueError(f"a job's values are {DEFAULT_FACT_CHARS} to {MAX_FACT_CHARS} characters")
         if schema is not None and not isinstance(schema.no_digits, bool):
             raise ValueError("a reason's no_digits is true or false")
         if schema is not None and not isinstance(schema.per_finding, bool):

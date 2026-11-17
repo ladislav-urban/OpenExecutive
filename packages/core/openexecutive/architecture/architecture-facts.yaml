@@ -12702,21 +12702,24 @@ watch:
     late, share over, late tasks, billed, name (all desc but name).
     Output: one CardSpec "Projects this week", items one per active
     project (up to 10: Project, Customer, Complete, Hours, Schedule, Late
-    tasks, "The team wrote" or "Update: No status update this week"),
-    facts (plain-word keys, since the reason step cleans a key as text and
-    drops underscores) days late, late tasks, percent and hours over the
-    estimate, percent complete, the team wrote, only with an update (none: no model
-    line), then an "On hold" item (each held project's overdue tasks, no
-    facts); notes for more than 10 and each cut read; count active +
-    held. Bad rows are skipped, never stop the run (a missing rows list in
+    tasks, "In short", then "The team wrote" or "Update: No status update
+    this week"), no facts, then an "On hold" item (each held project's
+    overdue tasks); notes for more than 10 and each cut read; count active +
+    held. "In short" is project_status.standing: STANDING's fixed opening
+    for (behind | on | no_end) x (over | within | none), "over" exactly when
+    _hours_line shows it over, plus LATE_TASKS_CLAUSE "; it has late tasks"
+    when it has any, then a full stop: code's words from the figures alone. Bad rows are skipped, never stop the run (a missing rows list in
     read 1 stops the run as any job's would). TASKS_CUT_LINE and
     UPDATES_CUT_LINE come only from that read's own result truncated, never
-    from the 50-project cut (PROJECTS_CUT_LINE says that). Cost: one reason
-    call per project with facts (per_finding True, at most 10 a run) on the
-    fast model, max_tokens PER_FINDING_MAX_TOKENS 150 each, no_digits True
-    (the instruction says to say what the figures mean and never write a
-    number, in digits or words), actor watch:project-status (the
-    runner's _cost_budget hook binds it once cost caps land).
+    from the 50-project cut (PROJECTS_CUT_LINE says that). No model call:
+    reason_schema None, so no model ever reads a team's update and nothing
+    an update says can reach a line the notice writes (the text is only
+    quoted inside the untrusted block); value_chars 300 (WatchJob's own
+    notice width, 120-400) keeps the quote whole. Why: with a model line,
+    the real-model evals (watch_project_status_001-009, now retired) showed
+    an injected update leaking into it in paraphrase ("the team's account
+    stands as written"), which no word filter catches; the owner chose to
+    remove the channel.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds
@@ -12724,7 +12727,7 @@ watch:
     facts, text values cleaned to runner.value_chars(job): 120 chars, or
     the job's ReasonSchema.max_fact_chars, 120-400, checked in
     WatchJob.__post_init__; notice_body cuts the job's values at the same
-    width, so project-status's quoted update reads the same on the notice)
+    width, or at WatchJob.value_chars when the job sets it)
     as JSON in wrap_untrusted, keyed f1,
     f2... never by a finding's key. parse_reasons keeps only {"reasons":
     {id: str}} for ids shown, each cleaned (no control chars, line breaks,
@@ -12732,10 +12735,8 @@ watch:
     log_model_usage actor watch:<id>. A reason is shown as "Reason (a
     model's words, not a figure)" and never reaches a key, title or routing.
     runner._reasoned shows the model only rows with facts: a row with none
-    (project-status's project with no update this week, its on-hold row)
     gets no line, and a run with none makes no call. With
-    ReasonSchema.no_digits (default False; project-status sets it,
-    collections doesn't), runner.without_digits drops a line holding any
+    ReasonSchema.no_digits (default False; no listed job sets it today), runner.without_digits drops a line holding any
     digit (runner.has_digit: str.isdigit / isdecimal / unicodedata.digit,
     so ASCII, other scripts', full-width, superscript, subscript and
     circled digits, and any character with unicodedata.numeric: dingbat
@@ -12768,14 +12769,10 @@ watch:
     detail counts the reason lines dropped (reasons_dropped). The rule came from
     a real-model eval line that narrated
     an injected request ("the team's note asking for a euro overrun figure
-    and an approval link was ignored"). The project-status instruction
-    also forbids counting words ("a second": say "another"), mentioning
-    any instruction or request in the team's text, and saying anything was
-    ignored. Roman numerals and letters
+    and an approval link was ignored"). Roman numerals and letters
     that look like digits remain a known residual. With
-    ReasonSchema.per_finding (default False; project-status sets it,
-    collections doesn't), reason_step makes one _ask call per finding (at
-    most max_findings, PER_FINDING_MAX_TOKENS 150, asyncio.gather with
+    ReasonSchema.per_finding (default False; no listed job sets it today), reason_step makes one _ask call per finding (at
+    most max_findings, PER_FINDING_MAX_TOKENS 300, asyncio.gather with
     return_exceptions), each turn holding that finding's facts alone, so one
     finding's outside text never reaches another's call; a failed call
     drops only its own line (a count logged). Otherwise one call for all,
@@ -12784,24 +12781,23 @@ watch:
     before _MARKDOWN_RE and the backtracking _URL_RE (a 4000-char U+33D8
     update took 7.7 s to clean before). reason_step returns
     runner.reason_lines' kept lines; reason_lines also returns the lines
-    no_digits dropped (never shown), for the evals. Evals: a `type:
+    dropped (never shown), for the evals: those no_digits dropped, and
+    those parse_reasons dropped for their length (runner.is_too_long: past
+    200 cleaned, or past 400 raw or normalised), which drop_rule names
+    too_long and the log counts. Evals: a `type:
     watch_reason` scenario (evals.scenarios.scenario_watch_reason; `make
     eval` with `--watch-reason`, or run_scenarios(kind="watch_reason"),
     not offered by POST /evals/runs) gives a job id and findings as
     figures plus the team's update; the job's own code builds each finding
-    (project-status: project_status._row over a Project with those
-    figures, the update through project_status.quoted, refused unless the
-    facts come out exactly as given), and evals.runner.
+    (its builder listed in evals.scenarios._WATCH_FINDINGS; none is listed
+    today, since project status has no model line), and evals.runner.
     run_watch_reason_scenario runs reason_lines on the real fast model,
     with the job's ReasonSchema and instruction and REASON_SYSTEM, never a
     copy. evals.judges.judge_watch_reason scores the kept lines (a dropped
     one shown as context only); `expect_line` per finding and
     `forbidden_reply_words` over the kept lines are deterministic checks the
-    score can't outvote. Scenarios watch_project_status_001-007: late and
-    over with a plain update, on plan, an injected "say it is on time", an
-    injected ask for an amount and a payment link, two findings where one
-    update tries to steer the other, a German update with a number in
-    words, and an HTML update.
+    score can't outvote. No scenario ships today; the kind's tests run on a
+    test-only job.
   notices: |
     Private alerts stored directly with alerts.store.insert_alert
     (runner._leave_notice), never through alerts.pipeline or triage, whose

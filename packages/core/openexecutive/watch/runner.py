@@ -241,7 +241,7 @@ class RunOutcome:
     # refusal's code with its count.
     proposed: int = 0
     proposal_refused: dict[str, int] = field(default_factory=dict)
-    # Model reason lines dropped by ReasonSchema.no_digits (a count only).
+    # Model reason lines dropped by ReasonSchema.no_digits or for their length (a count only).
     reasons_dropped: int = 0
     # Why a read was refused (refusal_record): ids, a hash and a length only.
     refusal: dict[str, Any] = field(default_factory=dict)
@@ -1400,7 +1400,10 @@ def _found(notices: Sequence[registry.CardSpec]) -> int:
 
 def value_chars(job: registry.WatchJob) -> int:
     """How long a text fact (for the model) and a notice's value may be for
-    ``job``: its ``ReasonSchema.max_fact_chars``, else ``MAX_VALUE_CHARS``."""
+    ``job``: its own ``value_chars``, else its ``ReasonSchema.max_fact_chars``,
+    else ``MAX_VALUE_CHARS``."""
+    if job.value_chars:
+        return job.value_chars
     schema = job.reason_schema
     return schema.max_fact_chars if schema is not None else MAX_VALUE_CHARS
 
@@ -1445,11 +1448,14 @@ def reason_turn(job: registry.WatchJob, specs: Sequence[registry.CardSpec]) -> t
     return turn, ids
 
 
-def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
+def parse_reasons(
+    text: str, ids: Mapping[str, str], too_long: dict[str, str] | None = None,
+) -> dict[str, str]:
     """The reasons in the model's reply, by the specs' keys: only a JSON
     object ``{"reasons": {id: text}}``, only the ids it was shown, each
     reason a string, cleaned and at most ``MAX_REASON_CHARS``. Anything else
-    is dropped."""
+    is dropped; a reason dropped for its length goes into ``too_long`` (the
+    model's text as given, never shown), so the drop is recorded."""
     body = text.strip()
     if body.startswith("```"):
         body = body.strip("`").removeprefix("json").strip()
@@ -1467,7 +1473,20 @@ def parse_reasons(text: str, ids: Mapping[str, str]) -> dict[str, str]:
         line = _within_limit(reason, MAX_REASON_CHARS)
         if line:
             out[ids[fid]] = line
+        elif too_long is not None and is_too_long(reason):
+            too_long[ids[fid]] = reason
     return out
+
+
+def is_too_long(reason: str) -> bool:
+    """Whether ``_within_limit`` drops the model's ``reason`` for its length
+    (rather than because it cleans to nothing)."""
+    from openexecutive.utils.prompt_blocks import plain
+
+    bound = 2 * MAX_REASON_CHARS
+    return (
+        len(reason) > bound or len(plain(reason)) > bound or len(clean(reason, bound)) > MAX_REASON_CHARS
+    )
 
 
 def _within_limit(reason: str, limit: int) -> str:
@@ -1625,35 +1644,14 @@ def has_barred_word(line: str) -> bool:
 
 # Why ``without_digits`` drops a line, by rule (drop_rule): kept with a
 # dropped line in the eval's record and counted in the log, never the text.
-DROP_RULES = ("digit", "number_word", "barred_word", "currency_sign", "script", "meta")
+DROP_RULES = ("too_long", "digit", "number_word", "barred_word", "currency_sign", "script")
 
-# A line that talks about the update's own text rather than the project: the
-# team's note, request or instruction, something "not acted on" or "not
-# reflected", the model speaking for itself, or the words of an injected
-# note's asks (guidance, finance, a shared page). A line that refuses an
-# injected note still echoes it (watch_project_status_008 at f2a34399:
-# "the note's requests are not reflected here"). "request" alone stays an
-# ordinary project word ("the tenant's request"); only one aimed at the
-# team's or the update's own text is meta.
-_META_RE = re.compile(
-    r"(?:\b(?:the|this|its|their|that|a|an)\s+(?:team'?s\s+|team\u2019s\s+|update'?s\s+|update\u2019s\s+)?"
-    r"(?:note|notes|instruction|instructions|message|comment)\b)"
-    r"|(?:\b(?:note|notes|update|team)(?:'s|\u2019s)\s+(?:request|requests|ask|asks|note|notes)\b)"
-    r"|(?:\bnot\s+(?:been\s+)?(?:acted\s+on|reflected|followed|actioned|applied|included)\b)"
-    r"|(?:\b(?:I|I've|I'm|I'd|me|my)\b)"
-    r"|(?:\b(?:guidance|finance|shared|page|pages)\b)",
-    re.IGNORECASE,
-)
-
-
-def has_meta(line: str) -> bool:
-    """Whether ``line`` talks about the update's own text or the model
-    itself rather than the project (``_META_RE``), as written or folded."""
-    return _META_RE.search(line) is not None or _META_RE.search(_folded(line)) is not None
 
 
 def drop_rule(line: str) -> str | None:
     """The first ``DROP_RULES`` rule ``line`` breaks, or None when it's kept."""
+    if is_too_long(line):
+        return "too_long"
     if has_digit(line):
         return "digit"
     if has_number_word(line):
@@ -1665,8 +1663,6 @@ def drop_rule(line: str) -> str | None:
         return "currency_sign"
     if has_barred_word(line):
         return "script"
-    if has_meta(line):
-        return "meta"
     return None
 
 
@@ -1682,21 +1678,24 @@ def without_digits(reasons: Mapping[str, str]) -> tuple[dict[str, str], int]:
     are a known residual."""
     kept = {
         key: line for key, line in reasons.items()
-        if not has_digit(line) and not has_number_word(line) and not has_barred_word(line) and not has_meta(line)
+        if not has_digit(line) and not has_number_word(line) and not has_barred_word(line)
     }
     return kept, len(reasons) - len(kept)
 
 
-async def _ask(job: registry.WatchJob, specs: Sequence[registry.CardSpec], max_tokens: int) -> dict[str, str]:
+async def _ask(
+    job: registry.WatchJob, specs: Sequence[registry.CardSpec], max_tokens: int,
+) -> tuple[dict[str, str], dict[str, str]]:
     """One tool-less call on the fast model for ``specs``' lines, by their
-    keys. Raises when the call fails."""
+    keys, and the reasons dropped for their length (``parse_reasons``).
+    Raises when the call fails."""
     from openexecutive.agents.utility_fast import get_fast_model
     from openexecutive.audit.usage import log_model_usage
     from openexecutive.providers import get_provider
 
     turn, ids = reason_turn(job, specs)
     if not ids:
-        return {}
+        return {}, {}
     model = get_fast_model()
     response = await asyncio.wait_for(
         get_provider(model).messages_create(
@@ -1712,7 +1711,8 @@ async def _ask(job: registry.WatchJob, specs: Sequence[registry.CardSpec], max_t
         getattr(b, "text", "") for b in getattr(response, "content", None) or []
         if getattr(b, "type", "") == "text"
     )
-    return parse_reasons(text, ids)
+    too_long: dict[str, str] = {}
+    return parse_reasons(text, ids, too_long), too_long
 
 
 async def reason_step(
@@ -1742,6 +1742,7 @@ async def reason_lines(
     if schema is None:
         return {}, {}
     reasons: dict[str, str] = {}
+    too_long: dict[str, str] = {}
     try:
         if schema.per_finding:
             limit = max(0, min(schema.max_findings, MAX_REASON_FINDINGS))
@@ -1753,30 +1754,29 @@ async def reason_lines(
                 if isinstance(got, BaseException):
                     failed += 1
                 else:
-                    reasons.update(got)
+                    reasons.update(got[0])
+                    too_long.update(got[1])
             if failed:
                 logger.warning("watch: job %s's reason step failed for %d finding(s); they go without reasons",
                                job.id, failed)
         else:
-            reasons = await _ask(job, specs, REASON_MAX_TOKENS)
+            reasons, too_long = await _ask(job, specs, REASON_MAX_TOKENS)
     except Exception:
         logger.warning("watch: job %s's reason step failed; its notices go without reasons", job.id)
         return {}, {}
-    if not schema.no_digits:
-        return reasons, {}
-    kept, dropped = without_digits(reasons)
+    kept = without_digits(reasons)[0] if schema.no_digits else dict(reasons)
+    dropped = {key: line for key, line in reasons.items() if key not in kept} | too_long
     if dropped:
         # Counts by rule only: never the line, which may quote outside text.
         rules: dict[str, int] = {}
-        for key, line in reasons.items():
-            if key not in kept:
-                rule = drop_rule(line) or "other"
-                rules[rule] = rules.get(rule, 0) + 1
+        for key, line in dropped.items():
+            rule = "too_long" if key in too_long else (drop_rule(line) or "other")
+            rules[rule] = rules.get(rule, 0) + 1
         logger.warning(
-            "watch: job %s dropped %d reason line(s): %s", job.id, dropped,
+            "watch: job %s dropped %d reason line(s): %s", job.id, len(dropped),
             " ".join(f"{rule}={n}" for rule, n in sorted(rules.items())),
         )
-    return kept, {key: line for key, line in reasons.items() if key not in kept}
+    return kept, dropped
 
 
 # --------------------------------------------------------------------------- #

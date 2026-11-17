@@ -1,9 +1,13 @@
 """A ``type: watch_reason`` scenario runs a watch job's model "reason" line
 through the job's own reason step (watch/runner.py ``reason_lines``) on
-findings the job's own code builds, with the model and the judge stubbed."""
+findings the job's own code builds, with the model and the judge stubbed.
+
+No shipped job has one today (project status writes its sentence in code),
+so these tests list a test job with a reason step and its finding builder."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 from types import SimpleNamespace
 from typing import Any
@@ -11,29 +15,47 @@ from typing import Any
 import pytest
 
 from openexecutive.evals import runner as runner_module
+from openexecutive.evals import scenarios as scenarios_module
 from openexecutive.evals.runner import run_watch_reason_scenario
 from openexecutive.evals.scenarios import (
     WATCH_REASON,
     load_scenarios,
-    scenario_kind,
     scenario_watch_reason,
     validate_scenario_yaml,
 )
+from openexecutive.watch import registry
 from openexecutive.watch import runner as watch_runner
-from openexecutive.watch.jobs import project_status as ps
+from openexecutive.watch.jobs import _example
 
-LATE = {
-    "project": "Riverside fit-out", "days_late": 12, "late_tasks": 3, "percent_over": 40, "hours_over": 48,
-    "percent_complete": 55, "update": "The flooring came late; another crew is on site.",
-}
-ON_PLAN = {
-    "project": "Harbour office refresh", "days_late": 0, "late_tasks": 0, "percent_over": 0, "hours_over": 0,
-    "update": "Moving as planned.",
-}
+JOB_ID = "reason-test"
+INSTRUCTION = "Say in one sentence how this item stands, in words only."
+JOB = dataclasses.replace(
+    _example.JOB, id=JOB_ID,
+    reason_schema=registry.ReasonSchema(INSTRUCTION, max_findings=10, no_digits=True, per_finding=True),
+)
+
+LATE = {"project": "Riverside fit-out", "update": "The flooring came late; another crew is on site."}
+ON_PLAN = {"project": "Harbour office refresh", "update": "Moving as planned."}
+
+
+def _finding(raw: dict[str, Any], _today: Any) -> registry.CardSpec:
+    """The test job's finding: its name and the words it was given."""
+    name, update = raw.get("project"), raw.get("update")
+    if not isinstance(name, str) or not isinstance(update, str) or not update:
+        raise ValueError("`project` and `update`: text")
+    return registry.CardSpec(key=f"item:{name}", summary=name, values=(("Item", name),),
+                             facts={"the item's words": update})
+
+
+@pytest.fixture(autouse=True)
+def listed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The test job, listed with a reason step and its finding builder."""
+    monkeypatch.setitem(registry._JOBS, JOB_ID, JOB)
+    monkeypatch.setitem(scenarios_module._WATCH_FINDINGS, JOB_ID, _finding)
 
 
 def _scenario(*findings: dict[str, Any], **extra: Any) -> dict[str, Any]:
-    return {"id": "w", "type": WATCH_REASON, WATCH_REASON: {"job": "project-status", "findings": list(findings)},
+    return {"id": "w", "type": WATCH_REASON, WATCH_REASON: {"job": JOB_ID, "findings": list(findings)},
             **extra}
 
 
@@ -74,35 +96,12 @@ def judged(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- #
 
 
-def test_a_finding_has_the_facts_the_job_builds() -> None:
+def test_a_finding_is_built_by_the_jobs_own_builder() -> None:
     case = scenario_watch_reason(_scenario(LATE))
-    assert case is not None and case.job is ps.JOB
+    assert case is not None and case.job is JOB
     [finding] = case.findings
     assert finding.label == "Riverside fit-out" and finding.expect_line is None
-    assert dict(finding.spec.facts) == {
-        "days late": 12, "late tasks": 3, "percent over the estimate": 40, "hours over the estimate": 48.0,
-        "percent complete": 55, "the team wrote": "The flooring came late; another crew is on site.",
-    }
-    assert finding.spec.key.startswith("project:Riverside fit-out:")
-
-
-def test_an_on_plan_finding_and_one_with_no_estimate() -> None:
-    case = scenario_watch_reason(_scenario(ON_PLAN, {**LATE, "project": "B", "percent_over": None,
-                                                     "hours_over": None, "percent_complete": None}))
-    assert case is not None
-    on_plan, no_estimate = (dict(f.spec.facts) for f in case.findings)
-    assert on_plan == {"days late": 0, "late tasks": 0, "percent over the estimate": 0,
-                       "hours over the estimate": 0.0, "the team wrote": "Moving as planned."}
-    assert set(no_estimate) == {"days late", "late tasks", "the team wrote"}
-
-
-def test_the_update_is_quoted_as_the_job_quotes_it() -> None:
-    markup = '<p><b>Steel</b> is <i>late</i>.</p><a href="https://example.com/x">plan</a>'
-    case = scenario_watch_reason(_scenario({**LATE, "update": markup}))
-    assert case is not None
-    words = case.findings[0].spec.facts["the team wrote"]
-    assert words == ps.quoted(markup)
-    assert isinstance(words, str) and "Steel is late" in words and "<" not in words and "href" not in words
+    assert dict(finding.spec.facts) == {"the item's words": LATE["update"]}
 
 
 @pytest.mark.parametrize(
@@ -110,24 +109,14 @@ def test_the_update_is_quoted_as_the_job_quotes_it() -> None:
     [
         ("watch_reason: x", "mapping"),
         ("watch_reason: {job: collections, findings: []}", "job must be one of"),
-        ("watch_reason: {job: project-status, findings: []}", "1 to 10"),
-        ("watch_reason: {job: project-status, findings: [x]}", "mapping"),
-        ("watch_reason: {job: project-status, findings: [{project: A, late_tasks: 0, update: u}]}", "days_late"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: -1, late_tasks: 0, update: u}]}",
-         "days_late"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: 1, late_tasks: 0}]}", "update"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: 1, late_tasks: 0, update: '<b></b>'}]}",
-         "update"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: 1, late_tasks: 0, update: u, "
-         "hours_over: 5}]}", "percent_over"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: 1, late_tasks: 0, update: u, "
-         "percent_complete: 120}]}", "percent_complete"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: 1, late_tasks: 0, update: u, "
-         "expect_line: yes please}]}", "expect_line"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: 1, late_tasks: 0, update: u, "
-         "customer: X}]}", "unknown key"),
-        ("watch_reason: {job: project-status, findings: [{project: A, days_late: 1, late_tasks: 0, update: u}, "
-         "{project: A, days_late: 2, late_tasks: 0, update: v}]}", "its own project"),
+        ("watch_reason: {job: project-status, findings: [{project: A, update: u}]}", "job must be one of"),
+        ("watch_reason: {job: reason-test, findings: []}", "1 to 10"),
+        ("watch_reason: {job: reason-test, findings: [x]}", "mapping"),
+        ("watch_reason: {job: reason-test, findings: [{project: A}]}", "update"),
+        ("watch_reason: {job: reason-test, findings: [{project: A, update: u, expect_line: yes please}]}",
+         "expect_line"),
+        ("watch_reason: {job: reason-test, findings: [{project: A, update: u}, {project: A, update: v}]}",
+         "its own project"),
     ],
 )
 def test_a_malformed_block_fails_validation(block: str, match: str) -> None:
@@ -140,18 +129,13 @@ def test_a_watch_reason_scenario_needs_its_block() -> None:
         validate_scenario_yaml("id: w\ntype: watch_reason\n")
 
 
-def test_the_shipped_scenarios_are_their_own_kind_and_build() -> None:
-    shipped = load_scenarios(kind=WATCH_REASON)
-    ids = {s["id"] for s in shipped}
-    assert {f"watch_project_status_00{n}" for n in range(1, 9)} <= ids
-    assert not ids & {s["id"] for s in load_scenarios(kind="chat")}
-    for scenario in shipped:
-        assert scenario_kind(scenario) == WATCH_REASON
-        assert scenario_watch_reason(scenario) is not None
-    # The two-finding scenario: one call per finding.
-    two = next(s for s in shipped if s["id"] == "watch_project_status_005")
-    case = scenario_watch_reason(two)
-    assert case is not None and len(case.findings) == 2
+def test_no_shipped_job_has_a_model_line_to_evaluate(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Project status writes its sentence in code, so its scenarios are retired.
+    assert load_scenarios(kind=WATCH_REASON) == []
+    monkeypatch.delitem(scenarios_module._WATCH_FINDINGS, JOB_ID)
+    assert scenarios_module._WATCH_FINDINGS == {}
+    project_status = registry.get("project-status")
+    assert project_status is not None and project_status.reason_schema is None
 
 
 # --------------------------------------------------------------------------- #
@@ -172,17 +156,17 @@ def test_a_scenario_runs_the_jobs_reason_step_one_call_per_finding(
     for call in model.calls:
         assert call["system"] == watch_runner.REASON_SYSTEM
         assert call["max_tokens"] == watch_runner.PER_FINDING_MAX_TOKENS
-        assert ps.REASON_INSTRUCTION in call["messages"][0]["content"]
+        assert INSTRUCTION in call["messages"][0]["content"]
     turns = [c["messages"][0]["content"] for c in model.calls]
     assert sum("flooring" in t for t in turns) == 1 and sum("Moving as planned" in t for t in turns) == 1
     assert not any("flooring" in t and "Moving as planned" in t for t in turns)
     [outcome] = judged
-    assert outcome["job"] == "project-status"
+    assert outcome["job"] == JOB_ID
     assert [(f["finding"], f["line"], f["dropped"]) for f in outcome["findings"]] == [
         ("Riverside fit-out", "Behind and over its estimate after the late flooring.", None),
         ("Harbour office refresh", "Running to plan with nothing outstanding.", None),
     ]
-    assert outcome["findings"][0]["facts"]["days late"] == 12
+    assert outcome["findings"][0]["facts"] == {"the item's words": LATE["update"]}
 
 
 def test_a_line_with_a_number_is_dropped_and_shown_only_as_dropped(
@@ -236,8 +220,22 @@ def test_reason_step_still_returns_the_kept_lines(model: SimpleNamespace) -> Non
     assert case is not None
     model.say = {"flooring": "Behind after the late flooring.", "Moving as planned": "Two weeks ahead."}
     specs = [f.spec for f in case.findings]
-    kept = asyncio.run(watch_runner.reason_step(ps.JOB, specs))
+    kept = asyncio.run(watch_runner.reason_step(JOB, specs))
     assert kept == {specs[0].key: "Behind after the late flooring."}
-    assert asyncio.run(watch_runner.reason_lines(ps.JOB, specs)) == (
+    assert asyncio.run(watch_runner.reason_lines(JOB, specs)) == (
         {specs[0].key: "Behind after the late flooring."}, {specs[1].key: "Two weeks ahead."},
     )
+
+
+def test_a_line_dropped_for_its_length_is_recorded_as_too_long(
+    model: SimpleNamespace, judged: list[dict[str, Any]],
+) -> None:
+    # watch_project_status_001 at a735e38c: a line past the limit was lost
+    # with no record of why (dropped None, rule None).
+    long = "Behind schedule and over its estimate, " + "with the snag list still being worked through " * 6
+    model.say = {"flooring": long}
+    result = asyncio.run(run_watch_reason_scenario(_scenario(LATE)))
+    finding = result["outcome"]["findings"][0]
+    assert finding["line"] is None
+    assert (finding["dropped"], finding["dropped_rule"]) == (long, "too_long")
+
