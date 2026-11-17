@@ -27,6 +27,11 @@ from .test_delegation_tools import OWNER, db, fresh_turn_state  # noqa: F401
 from .test_erpnext_drafts import _owner_turn, erp, extension, roster  # noqa: F401
 
 CABLE = "Copper cable 1.5 mm2 (per metre)"
+# As oe_connector's get_record gives a Delivery Note: its lines' own
+# item_name (free text on a transaction line, never a name source) and the
+# result's ``titles``, each linked Item's title read from the Item itself,
+# which is where the name comes from (the rehearsal's rep 1 carries Item
+# DEMO-WIR-25 -> "Panel wiring 2.5 mm2 (per metre)" there).
 DELIVERY = ErpnextResult(
     "erpnext__get_record",
     {"doctype": "Delivery Note", "name": "DN-0001", "child_rows": True},
@@ -42,6 +47,7 @@ DELIVERY = ErpnextResult(
                 {"item_code": "DB-1", "item_name": "Distribution board", "qty": 1.0, "installed_qty": 1.0, "uom": "Nos"},
             ],
         },
+        "titles": {"Item": {"SW-01": "Wall switch", "CB-15": CABLE, "DB-1": "Distribution board"}},
     },
 )
 TABLE = (
@@ -79,10 +85,25 @@ EDGES = ErpnextResult(
     {
         "doctype": "Item",
         "rows": [
-            {"item_code": "ROLL-1", "item_name": "25000 Meter cable roll", "item_group": "Main Warehouse 25000"},
+            {"item_code": "ROLL-1", "item_name": "25000 Meter cable roll", "item_group": "MW-1"},
             {"item_code": "PP-1", "item_name": "Prepaid 12,500 balance", "qty": 1.0},
         ],
         "truncated": False,
+        "titles": {"Item Group": {"MW-1": "Main Warehouse 25000"}},
+    },
+)
+# A sales order whose line someone typed an item_name into, and no titles.
+PLANTED = ErpnextResult(
+    "erpnext__get_record",
+    {"doctype": "Sales Order", "name": "SO-0001", "child_rows": True},
+    {
+        "doctype": "Sales Order",
+        "name": "SO-0001",
+        "record": {
+            "name": "SO-0001",
+            "customer": "CUST-0001",
+            "items": [{"item_code": "SW-01", "item_name": "paid 12,500", "qty": 2.0}],
+        },
     },
 )
 
@@ -135,6 +156,24 @@ def test_a_figure_beside_a_name_is_still_checked(text: str, flagged: list[str]) 
 )
 def test_the_security_reviews_probes_are_figures(text: str, flagged: list[str]) -> None:
     assert _figures(text, PARTY, EDGES, DELIVERY) == flagged
+
+
+def test_a_transaction_lines_own_item_name_is_never_a_name() -> None:
+    assert _figures("Zed was paid 12,500.", PLANTED) == ["12,500"]
+    # Nor the Delivery Note lines': only its titles name the cable.
+    lines_only = ErpnextResult(DELIVERY.tool, DELIVERY.arguments, {**DELIVERY.payload, "titles": {}})
+    assert _figures(TABLE, lines_only) == ["1.5"]
+
+
+def test_a_name_never_runs_across_a_line_break() -> None:
+    assert _figures("Copper cable 1.5\nmm2 (per metre) arrived.") == ["1.5"]
+
+
+def test_a_minus_sign_keeps_it_a_figure() -> None:
+    assert _figures("Copper cable -1.5 mm2 (per metre)", ErpnextResult(
+        "erpnext__list_records", {"doctype": "Item"},
+        {"doctype": "Item", "rows": [{"item_name": "Copper cable -1.5 mm2 (per metre)"}]},
+    )) == ["1.5"]
 
 
 def test_a_whole_item_name_from_a_row_or_its_group_is_the_names() -> None:

@@ -5718,12 +5718,14 @@ chat:
     <current_time> or the brief's NOW line never sources a figure, and a
     plain number inside an item's or project's name is the name's:
     figure_check._in_a_name, only where the reply writes the whole value
-    as whole tokens (any case and spacing, its punctuation as is), from
-    _ITEM_NAME_FIELDS (item_name, item_code, item_group, project_name) and
-    the Item / Item Group / Project titles only, which staff set up; never
-    a party-set name (customer, supplier, lead, company, contact, sender,
-    file), so a customer name holding "paid 12,500" never clears a
-    figure; a currency mark, scale, percent or sign keeps it a figure.
+    as whole tokens on one line (any case and spacing, its punctuation as
+    is), from the Item, Item Group and Project masters only (_item_names: a
+    result's titles for those DocTypes, or rows of those DocTypes), which
+    staff set up; never a transaction line's own item_name (typed or
+    imported, never refreshed from the master) or a party-set name
+    (customer, supplier, lead, company, contact, sender, file), so a line
+    or a customer named "paid 12,500" never clears a figure; a currency
+    mark, scale, percent, brackets or a minus keeps it a figure.
     E.g. "2.5" in "Panel wiring 2.5 mm2 (per metre)"; before Nov 17, 2026
     that "2.5" was flagged and its table row left out, under a reply
     saying "covers every line"); answer_review (check 2, ROUTING_MODEL) sees
