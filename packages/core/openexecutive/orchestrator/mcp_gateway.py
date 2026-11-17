@@ -4975,6 +4975,9 @@ class MCPGateway:
                 },
             )
         if erpnext_call:
+            # A refusal of what the person asking can't see, in words about
+            # them, not about "this ERPNext user" (erpnext_caller.in_askers_words).
+            result_text = erpnext_caller.in_askers_words(result_text, erp_caller)
             # On a panel turn, what the answer showed (integrations.erpnext_panel).
             from openexecutive.integrations.erpnext_panel import note_erpnext_call
             from openexecutive.orchestrator.answer_check import note_erpnext_result

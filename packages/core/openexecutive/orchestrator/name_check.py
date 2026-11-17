@@ -274,7 +274,11 @@ def name_sources_for(
         if not isinstance(payload, dict):
             continue
         doctype = payload.get("doctype") or result.arguments.get("doctype")
-        if isinstance(doctype, str):
+        if not isinstance(doctype, str):
+            # A malformed one (a list, a mapping) is skipped: never a
+            # TypeError that leaves the whole reply unchecked.
+            doctype = None
+        if doctype is not None:
             src.labels.add(doctype.lower())
         fields = _name_fields(doctypes, doctype)
         suffixed = _SUFFIXED_FIELDS | ({"name"} if doctype in _SUFFIXED_DOCTYPES else set())

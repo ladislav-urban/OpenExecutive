@@ -31,6 +31,16 @@ reply shows: "$1.2M" matches 1,184,330 and "43%" matches 42.71 or 0.4271
 be rounded, keeping two significant digits: "1,200" matches 1,184. Signs are
 ignored: "owes $500" quotes an outstanding of -500.
 
+A number inside an item's or project's name is part of the name, never a
+figure: "2.5" in "Panel wiring 2.5 mm2 (per metre)", only where the reply
+writes that whole name, as whole words (``_in_a_name``). Only the item and
+project masters count (``_item_names``: their titles and their own
+records), which the company's own staff set up, never a transaction line's
+item_name; never a party's, a contact's or a file's name, a description or a
+remark, which customers, suppliers and forms can write. Without it the check
+left out the one table row that named that item (where-is-my-order step 4,
+Nov 17, 2026: "covers every line" over three of four lines).
+
 Each figure ends ``confirmed``, ``given``, ``from_text``, ``from_truncated`` (a
 sum, count or average over a result ERPNext cut off) or ``unconfirmed``. The
 last two are what check 2 and the correction look at
@@ -977,6 +987,10 @@ class Sources:
     marks: dict[str, str] = field(default_factory=dict)
     # Values seen only in money columns (an amount, a price, a total).
     money: set[float] = field(default_factory=set)
+    # The turn's item and project names that hold a number (_item_names): a
+    # number inside one, where the reply writes the whole name, is the name's
+    # (_in_a_name).
+    names: list[str] = field(default_factory=list)
     _complete_keys: list[float] = field(default_factory=list)
     _truncated_keys: list[float] = field(default_factory=list)
 
@@ -1069,6 +1083,7 @@ def sources_for(
 ) -> Sources:
     """Everything the turn's figures may come from. ``extra`` adds values that
     count as ERPNext's own (a correction's right values, found there by code)."""
+    results = list(results)
     reader = _Reader(types or ResultTypes())
     for result in results:
         reader.result(result)
@@ -1139,7 +1154,97 @@ def sources_for(
     src.differences, src.ratios, src.changes = sorted(diffs), sorted(ratios), sorted(changes)
     src.given = sorted({v for text in _capped(given) for v in numbers_in(text, fmt)})
     src.text = sorted({v for text in _capped(texts) for v in numbers_in(text, fmt)})
+    src.names = _item_names(results)
     return src
+
+
+# Whose names a number may be part of (_in_a_name): an item's, an item
+# group's and a project's, as their own master records hold them. Item and
+# Item Group names are set by an Item Manager, Project names by a Projects
+# User or Manager. Only from the master:
+# - a result's ``titles`` for Item and Project (each linked record's title,
+#   which oe_connector reads from the record itself; Item Group has no title
+#   field, so the connector never gives titles for it);
+# - an ``erpnext__get_record`` of one of these DocTypes, by the payload's own
+#   ``doctype`` (never the call's arguments, which the model writes and the
+#   gateway passes through): its own name fields, never its child rows.
+# list_records and run_report never count: a list's field can be an
+# aggregate's alias ("MAX(customer) as project_name") and a report's
+# item_name column is an invoice line's own text. Never a transaction line's
+# own item_name (a Sales Order or Purchase Invoice line), which a desk user
+# or an import types and nothing overwrites from the master; and never a
+# party-set name (customer_name, supplier_name, lead_name, company_name, a
+# contact's or sender's name, file_name) or anything a portal, an email or a
+# web form can write. A line or a customer named "paid 12,500" must never let
+# that figure through.
+_MASTER_DOCTYPES = frozenset({"Item", "Item Group", "Project"})
+_MASTER_TITLE_DOCTYPES = frozenset({"Item", "Project"})
+_MASTER_RECORD_TOOL = "erpnext__get_record"
+# A master record's own name fields.
+_MASTER_NAME_FIELDS = frozenset({"item_name", "item_code", "item_group_name", "project_name"})
+# A name worth keeping: a digit and a letter in it.
+_DIGIT_AND_LETTER = re.compile(r"(?=.*\d)(?=.*[A-Za-z])")
+MAX_NAMES_WITH_NUMBERS = 2_000
+MAX_NAME_CHARS = 140
+
+
+def _item_names(results: Iterable[ErpnextResult]) -> list[str]:
+    """The names of the turn's Item, Item Group and Project masters that hold
+    a number, whitespace-normalised: each result's ``titles`` for Item and
+    Project, and the name fields of a ``get_record`` of one of the three
+    (never its child rows, never a line of another document)."""
+    found: set[str] = set()
+
+    def keep(value: object) -> None:
+        if isinstance(value, str) and len(value) <= MAX_NAME_CHARS and _DIGIT_AND_LETTER.search(value):
+            name = " ".join(value.split())
+            if name and len(found) < MAX_NAMES_WITH_NUMBERS:
+                found.add(name)
+
+    for result in results:
+        payload = result.payload
+        if not isinstance(payload, dict):
+            continue
+        titles = payload.get("titles")
+        if isinstance(titles, dict):
+            for doctype in _MASTER_TITLE_DOCTYPES:
+                by_id = titles.get(doctype)
+                for title in by_id.values() if isinstance(by_id, dict) else ():
+                    keep(title)
+        own = payload.get("doctype")
+        if result.tool != _MASTER_RECORD_TOOL or not isinstance(own, str) or own not in _MASTER_DOCTYPES:
+            continue
+        record = payload.get("record")
+        if isinstance(record, dict):
+            for key in _MASTER_NAME_FIELDS:
+                keep(record.get(key))
+    return sorted(found)
+
+
+def _name_spans(text: str, names: list[str]) -> list[tuple[int, int]]:
+    """Where ``text`` writes one of ``names`` whole: as whole tokens (no
+    letter or digit just before or after it), on one line, any case and
+    spacing, its own punctuation as it is."""
+    lowered = text.casefold()
+    spans: list[tuple[int, int]] = []
+    for name in names:
+        words = name.split()
+        if words[0].casefold() not in lowered:
+            continue
+        # Spaces between its words only, never across a line break.
+        pattern = r"(?<![^\W_])" + r"[ \t]+".join(re.escape(w) for w in words) + r"(?![^\W_])"
+        spans.extend(m.span() for m in re.finditer(pattern, text, re.IGNORECASE))
+    return spans
+
+
+def _in_a_name(text: str, fig: Figure, spans: list[tuple[int, int]]) -> bool:
+    """Whether ``fig`` is a plain number inside a whole item or project name
+    the reply writes (``_name_spans``). A currency mark, a scale, a percent,
+    brackets or a minus sign right before it keep it a figure; a lone number
+    (a table cell) is in no name, which always holds a letter."""
+    if fig.text != fig.num or (fig.start > 0 and text[fig.start - 1] in "-−–"):
+        return False
+    return any(start <= fig.start and fig.end <= end for start, end in spans)
 
 
 def _symbols(currencies: Any) -> dict[str, frozenset[str]]:
@@ -1252,8 +1357,11 @@ def _run_sum(before: list[Figure], fig: Figure) -> float | None:
 
 
 def check_figures(text: str, sources: Sources, fmt: NumberFormat = PLAIN) -> list[Figure]:
-    """Every figure of ``text`` with its status (module docstring)."""
-    figures = find_figures(text, fmt)[:MAX_FIGURES]
+    """Every figure of ``text`` with its status (module docstring). A number
+    inside a whole item or project name the reply writes is no figure
+    (``_in_a_name``)."""
+    spans = _name_spans(text, sources.names) if sources.names else []
+    figures = [f for f in find_figures(text, fmt) if not _in_a_name(text, f, spans)][:MAX_FIGURES]
     for fig in figures:
         _classify(fig, sources)
         _check_currency(fig, sources)

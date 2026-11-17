@@ -5715,7 +5715,23 @@ chat:
     number format and numeric fields; figure_check (check 1, no model)
     finds each figure's source (a date or time is neither: _DATE_RES masks
     numeric dates and dates with a month's name, so the turn's own
-    <current_time> or the brief's NOW line never sources a figure); answer_review (check 2, ROUTING_MODEL) sees
+    <current_time> or the brief's NOW line never sources a figure, and a
+    plain number inside an item's or project's name is the name's:
+    figure_check._in_a_name, only where the reply writes the whole value
+    as whole tokens on one line (any case and spacing, its punctuation as
+    is), from the Item, Item Group and Project masters only (_item_names: a
+    result's titles for Item and Project, which Item Group has none of, or
+    the record of an erpnext__get_record whose payload's own str doctype is
+    one of the three; never list_records, whose fields may be aggregate
+    aliases, run_report, or the call's arguments), which an Item Manager or
+    a Projects User / Manager sets up; never a transaction line's own item_name (typed or
+    imported, never refreshed from the master) or a party-set name
+    (customer, supplier, lead, company, contact, sender, file), so a line
+    or a customer named "paid 12,500" never clears a figure; a currency
+    mark, scale, percent, brackets or a minus keeps it a figure.
+    E.g. "2.5" in "Panel wiring 2.5 mm2 (per metre)"; before Nov 17, 2026
+    that "2.5" was flagged and its table row left out, under a reply
+    saying "covers every line"); answer_review (check 2, ROUTING_MODEL) sees
     only flagged ones and code works out every operation it names from
     ERPNext's own numbers; answer_correct writes known values in by code,
     calls the turn's model once (tools=[], constant prompt, draft as
@@ -8714,7 +8730,9 @@ auth:
     OE_PRODUCT_NAME, utils.product_name; with it set, every /chat reply,
     host or own page, streams and saves through connected_systems.
     ProductReplyStream: ERPNext as "the ERP", Open Executive as the
-    product, the panel's through in_product_reply), never noted as the person's own
+    product, the panel's through in_product_reply; after a word that
+    already says which one, "this ERP user", never "this the ERP user"),
+    never noted as the person's own
     words (history_chat.verified_speaker), and _stop_owner_key adds
     "|host" so it stops/adds to its own turns only. Each user line saves
     chat_messages.sender_surface ("host" or NULL); a conversation with any
@@ -10643,6 +10661,15 @@ integrations:
     integration is involved. Skipped silently when no attendee has a reachable
     DM channel. Failure to schedule never blocks the booking.
   erpnext: |
+    Refusals in the asker's words (erpnext_caller.in_askers_words, applied
+    by the gateway to every erpnext__* result): on a call that ran as the
+    person asking (a `user` caller), oe_connector's "this ERPNext user
+    cannot read X" / "cannot run X" become "the asker's own access doesn't
+    include X" / "doesn't let them run X", so the reply says their own
+    access doesn't include it instead of repeating "this ERPNext user has no
+    permission" (Nov 17, 2026, a demo viewer's panel turn on a Project they
+    can't read). The service user's, a watch job's and a supplier's calls
+    keep the text: there the refused user is the install's.
     ERPNext is an optional URL MCP server served by the oe_connector Frappe
     app inside the ERPNext site (not part of this repository):
     "erpnext": {"url": "https://<site>/api/method/oe_connector.mcp.endpoint.handle"}
@@ -13045,6 +13072,25 @@ evals:
     here: an eval Session is no verified surface, so run_workflow refuses
     those workflows inside the turn. The check covers who may trigger the
     run; stored eval results are read under the existing /evals/runs rules.
+  reply_checks: |
+    Deterministic checks a reply fails whatever the judge's score
+    (evals.scenarios.reply_check_failures), recorded in the run's scores
+    under their own keys: forbidden_reply_words (whole words, any case;
+    forbid_principal_name adds the install's principal), forbid_repeated_text
+    (a sentence said twice) and reply_must_name (a list of strings, each
+    present anywhere in the reply in any case and spacing, with |-separated
+    alternatives such as "Panel wiring|DEMO-WIR-25"; a missing one is
+    reply_must_name_missing). Chat and mcp turns are also held to their
+    routing and the panel's views (runner.chat_checks); supplier replies to
+    all three; a watch_reason run's kept lines to the words and the names.
+    Both runners run a chat or mcp scenario through runner.run_chat_turn
+    (product name, advice policy, surface and every other per-turn override)
+    and chat_checks, so the repo's evals/run_evals.py, which ERPNext's
+    rehearsals run with --mcp, fails the same replies as the package runner;
+    before Nov 17, 2026 its chat path only judged (a reply naming ERPNext,
+    and one tabling three of four delivered lines, passed at 4). A panel
+    scenario's quality_criteria reach both judges (judges._panel_section,
+    judges.chat_judge_context); other chat judge prompts are unchanged.
 
 company_onboarding:
   module: openexecutive.onboarding (interview.py, commit.py, wizard.py) + api.routes.onboarding

@@ -33,6 +33,13 @@ def _named(monkeypatch: pytest.MonkeyPatch, name: str | None) -> None:
         ("Item ERPNEXT-01 is short.", "Item ERPNEXT-01 is short."),
         ("Customer 'ERPNext Services Ltd' owes 400.", "Customer 'ERPNext Services Ltd' owes 400."),
         ("Customer `ERPNext Hosting` paid.", "Customer `ERPNext Hosting` paid."),
+        # A word that already says which one takes no "the" (Nov 17, 2026:
+        # "this ERPNext user has no permission" became "this the ERP user").
+        ("I couldn't read it: this ERPNext user has no permission.",
+         "I couldn't read it: this ERP user has no permission."),
+        ("Your ERPNext user lacks permission.", "Your ERP user lacks permission."),
+        ("It needs an ERPNext login.", "It needs an ERP login."),
+        ("So that ERPNext shows it, submit it.", "So that the ERP shows it, submit it."),
     ],
 )
 def test_the_reply_names_the_product(monkeypatch: pytest.MonkeyPatch, reply: str, shown: str) -> None:
