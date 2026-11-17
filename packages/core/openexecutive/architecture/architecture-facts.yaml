@@ -683,6 +683,12 @@ providers:
     scheduled scan binds each due person as spender and a fresh turn, and a
     message a cap refused (classifier, composer) waits with reason cost_cap
     without spending one of its MAX_ATTEMPTS (scan status spend_limit).
+    Third review (Nov 17, 2026): inbox._consider restores a claimed message
+    a cap stopped to RETRY (cost_cap, uncounted) whatever called it (scan,
+    oe__answer_email_as_me's answer_thread, which then answers spend_limit),
+    so no row stays PROCESSING; a follow-up a cap stopped does the same and
+    ends the look; POST /delegation/mail/reply binds the asker as spender
+    and a turn, and answers a cap with 409 spend_limit and cap.reply().
     Owner decisions (Nov 17, 2026): recommended values when switched on are
     COST_CAP_TURN_USD=1, COST_CAP_PERSON_DAILY_USD=5,
     COST_CAP_JOB_DAILY_USD=2, COST_CAP_MONTHLY_USD=100 (commented in

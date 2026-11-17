@@ -1218,13 +1218,22 @@ async def reply_to_delegation_mail(request: Request, body: MailReplyIn) -> MailR
     if not is_enabled(person_id):
         raise _refuse(409, "act_as_me_off", "Turn Act as me on first.")
     client = await _connected_mailbox(person)
+    from openexecutive.audit import cost_caps
+
     try:
-        got = await draft_on_request(person, body.thread_id, body.message_id, gmail=client)
+        # Spent for the person who asked (the person cap), as one turn of
+        # its own (the turn cap).
+        with cost_caps.bind_spender(person_id), cost_caps.bind_turn(fresh=True):
+            got = await draft_on_request(person, body.thread_id, body.message_id, gmail=client)
     except GmailAuthError as exc:
         raise _refuse(409, "gmail_needs_reconnect", STATUS_MESSAGES["needs_reconnect"]) from exc
     except GmailError as exc:
         logger.warning("delegation: writing a reply on request failed", exc_info=True)
         raise _refuse(502, "gmail_error", STATUS_MESSAGES["error"]) from exc
+    except cost_caps.CostCapReached as cap:
+        # Not now, as any limit: the email waits (draft_on_request left it
+        # for a later scan), and the cap's own sentence says why.
+        raise _refuse(409, "spend_limit", cap.reply()) from cap
     if isinstance(got, str):
         raise _refuse(409, got, ASK_REFUSALS.get(got, ASK_REFUSALS["not_now"]))
     return MailReplyOut(decision_id=got)

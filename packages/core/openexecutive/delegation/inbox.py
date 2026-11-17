@@ -1219,8 +1219,9 @@ async def answer_thread(person: Any, client: Any, thread_id: str, *, now: dateti
     for me's rules allow, otherwise a card for the person. For a workflow
     step (``delegation.workflow_reply``). Returns what happened: ``sent``,
     ``card``, ``not_needed``, ``skipped``, ``theirs_last`` (nothing to
-    answer), ``backlog_full``, ``busy`` or ``not_now`` (too new, already
-    looked at, or a limit). Raises a Gmail error as a scan does."""
+    answer), ``backlog_full``, ``busy``, ``spend_limit`` (a cost cap: the
+    email waits for a later scan) or ``not_now`` (too new, already looked
+    at, or a limit). Raises a Gmail error as a scan does."""
     from openexecutive.audit import rows_for_person
     from openexecutive.config import get_settings
 
@@ -1260,6 +1261,8 @@ async def _answer(person: Any, client: Any, thread_id: str, *, now: datetime, ex
         return "not_needed"
     if result.skipped:
         return "skipped"
+    if result.status == "spend_limit":
+        return "spend_limit"
     return "not_now"
 
 
@@ -1271,12 +1274,6 @@ async def _consider(
     Once claimed, a message is finished or left for a later scan
     (``_retry_later``); a Gmail failure is raised for the scan to back off."""
     from openexecutive.delegation import invites
-    from openexecutive.delegation.inbox_classifier import (
-        addressing,
-        classify,
-        their_last_words,
-        wants_draft,
-    )
 
     thread = await client.get_thread(thread_id)
     message = next((m for m in thread.messages if m.id == message_id), None)
@@ -1311,6 +1308,38 @@ async def _consider(
         return False
     if not _claim(person.id, message, relation=relation, outcome=PROCESSING, now=now):
         return False
+    # Claimed: whatever stops it now must leave it for a later scan, never
+    # PROCESSING for good (every path that reads it then thinks it settled).
+    try:
+        return await _consider_claimed(
+            person, client, message, thread, relation=relation, known_as=known_as, own=own,
+            exec_address=exec_address, now=now, result=result,
+        )
+    except Exception as exc:
+        from openexecutive.audit import cost_caps
+
+        if cost_caps.capped(exc) is None:
+            raise
+        # A spend limit: back to the watcher without spending an attempt (a
+        # cap is never the message's fault), and the scan stops here.
+        _retry_later(person.id, message.id, "cost_cap", count=False, thread_id=thread.id)
+        result.deferred += 1
+        result.status = "spend_limit"
+        return True
+
+
+async def _consider_claimed(
+    person: Any, client: Any, message: Any, thread: Any, *, relation: str, known_as: str, own: set[str],
+    exec_address: str, now: datetime, result: ScanResult,
+) -> bool:
+    """``_consider``'s work once the message is claimed (``PROCESSING``)."""
+    from openexecutive.delegation.inbox_classifier import (
+        addressing,
+        classify,
+        their_last_words,
+        wants_draft,
+    )
+
     _note_mail(person.id, message, relation=relation)
     asked = addressing(message, name=person.full_name or "", own=own, exec_address=exec_address)
     verdict = await classify(

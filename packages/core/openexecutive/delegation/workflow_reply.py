@@ -67,6 +67,9 @@ _OUTCOMES: dict[str, tuple[str, str]] = {
         "answered, too old, or not addressed to them.",
     ),
     "theirs_last": ("nothing_to_answer", "The last message in this thread is theirs."),
+    "spend_limit": (
+        "not_now", "A spend limit is reached, so no reply was written. The email waits until it resets; say so.",
+    ),
     "backlog_full": (
         "not_now", "Too many replies are already waiting on them. Say they should clear some first.",
     ),
