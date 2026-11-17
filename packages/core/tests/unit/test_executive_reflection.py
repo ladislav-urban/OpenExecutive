@@ -399,7 +399,9 @@ async def test_workflow_handles_provider_failure_gracefully(
     types = [e.type for e in events]
     assert "error" in types
     error = next(e for e in events if e.type == "error")
-    assert error.message and "provider failure" in error.message.lower()
+    # Fixed text: the provider's own message stays in the server log.
+    assert error.message == "The reflection couldn't be written. Try again later."
+    assert "provider failure" not in error.message.lower()
 
 
 # ---------------------------------------------------------------------------
