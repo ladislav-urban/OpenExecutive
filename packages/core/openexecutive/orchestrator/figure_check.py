@@ -1211,8 +1211,8 @@ def _item_names(results: Iterable[ErpnextResult]) -> list[str]:
                 by_id = titles.get(doctype)
                 for title in by_id.values() if isinstance(by_id, dict) else ():
                     keep(title)
-        doctype = payload.get("doctype")
-        if result.tool != _MASTER_RECORD_TOOL or not isinstance(doctype, str) or doctype not in _MASTER_DOCTYPES:
+        own = payload.get("doctype")
+        if result.tool != _MASTER_RECORD_TOOL or not isinstance(own, str) or own not in _MASTER_DOCTYPES:
             continue
         record = payload.get("record")
         if isinstance(record, dict):
