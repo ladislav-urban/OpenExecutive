@@ -8,6 +8,7 @@ from rich.console import Console
 from rich.markup import escape
 from rich.prompt import Prompt
 
+from openexecutive.audit import cost_caps
 from openexecutive.utils.product_name import product_name
 
 console = Console()
@@ -49,15 +50,17 @@ async def _ask(question: str) -> None:
 
     console.print("\n[bold blue]Executive[/bold blue]\n")
     response = ""
-    async for chunk in executive.stream_chat(
-        user_message=question,
-        session=session,
-        retrieved_context=retrieved,
-        episodic_context=episodic,
-    ):
-        if isinstance(chunk, str) and chunk != Executive._THINKING:
-            response += chunk
-            console.print(chunk, end="", highlight=False)
+    # One message, one turn for the cost cap (audit.cost_caps).
+    with cost_caps.bind_turn(fresh=True):
+        async for chunk in executive.stream_chat(
+            user_message=question,
+            session=session,
+            retrieved_context=retrieved,
+            episodic_context=episodic,
+        ):
+            if isinstance(chunk, str) and chunk != Executive._THINKING:
+                response += chunk
+                console.print(chunk, end="", highlight=False)
 
     console.print("\n")
 
@@ -108,14 +111,16 @@ async def _chat() -> None:
         episodic = format_for_prompt()
 
         console.print("\n[bold blue]Executive[/bold blue]\n")
-        async for chunk in executive.stream_chat(
-            user_message=user_input,
-            session=session,
-            retrieved_context=retrieved,
-            episodic_context=episodic,
-        ):
-            if isinstance(chunk, str) and chunk != Executive._THINKING:
-                console.print(chunk, end="", highlight=False)
+        # Each message is a turn of its own for the cost cap, closed after it.
+        with cost_caps.bind_turn(fresh=True):
+            async for chunk in executive.stream_chat(
+                user_message=user_input,
+                session=session,
+                retrieved_context=retrieved,
+                episodic_context=episodic,
+            ):
+                if isinstance(chunk, str) and chunk != Executive._THINKING:
+                    console.print(chunk, end="", highlight=False)
 
         console.print("\n")
 

@@ -494,7 +494,12 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
     if models:
         try:
             rewrite = await _rewrite(question, text, corrections, model)
-        except Exception:
+        except Exception as exc:
+            from openexecutive.audit import cost_caps
+
+            cap = cost_caps.capped(exc)
+            if cap is not None:
+                raise cap from None
             logger.warning("answer_check: the correction call failed; removing instead", exc_info=True)
             rewrite = None
         if (
@@ -704,7 +709,12 @@ async def check_reply(
 ) -> str:
     """``text`` with its figures held to the turn's ERPNext results: the same
     string when nothing changed. Checks a turn's reply once (a second call
-    with the same text returns the first answer). Never raises."""
+    with the same text returns the first answer).
+
+    Its calls are kept off the turn's cost cap (never the others): a cap
+    must never switch the check off. When a cap refuses one, it raises
+    ``CostCapReached``: the reply is held, never passed unchecked (the
+    caller withholds what it hasn't shown yet). Nothing else raises."""
     if turn is None or not turn.results or not text.strip() or not enabled():
         return text
     if turn._done is not None and turn._done[0] == text:
@@ -714,19 +724,26 @@ async def check_reply(
 
         model = get_settings().default_model
     counts = _Counts()
+    from openexecutive.audit import cost_caps
+
     try:
-        try:
-            fixed = await asyncio.wait_for(
-                _check(text, turn, question=question, model=model, models=True, counts=counts), budget_s,
-            )
-        except TimeoutError:
-            logger.warning("answer_check: out of time; checking with code alone")
-            counts = _Counts(code_only=True)
-            fixed = await asyncio.wait_for(
-                _check(text, turn, question=question, model=model, models=False, counts=counts),
-                CODE_ONLY_BUDGET_S,
-            )
-    except Exception:
+        with cost_caps._check_exempt():
+            try:
+                fixed = await asyncio.wait_for(
+                    _check(text, turn, question=question, model=model, models=True, counts=counts), budget_s,
+                )
+            except TimeoutError:
+                logger.warning("answer_check: out of time; checking with code alone")
+                counts = _Counts(code_only=True)
+                fixed = await asyncio.wait_for(
+                    _check(text, turn, question=question, model=model, models=False, counts=counts),
+                    CODE_ONLY_BUDGET_S,
+                )
+    except Exception as exc:
+        cap = cost_caps.capped(exc)
+        if cap is not None:
+            logger.warning("answer_check: a cost cap refused the check's call; the reply is held")
+            raise cap from None
         logger.exception("answer_check: the check failed; the reply is left as it was")
         return text
     if fixed != answer_correct.WHOLE_REPLY:

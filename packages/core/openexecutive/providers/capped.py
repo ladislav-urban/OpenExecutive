@@ -1,0 +1,130 @@
+"""``LLMProvider`` decorator that holds every hosted model call to the cost
+caps (``audit.cost_caps``).
+
+``get_provider()`` wraps every hosted backend in it, so no model call the
+package makes can skip it. Before a call is sent, ``cost_caps.reserve``
+refuses it (``CostCapReached``) when its worst case could pass a cap that
+is on, and otherwise puts that worst case on its scopes at once. Once the
+call answers, ``cost_caps.settle`` replaces it with what the call cost. A
+stream stopped early settles on what it had used by then; one that ended
+without any usage keeps its worst case, so closing a tab never spends for
+free.
+"""
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncIterator
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from typing import Any
+
+from openexecutive.audit import cost_caps
+from openexecutive.providers.provider import LLMProvider
+
+
+def _usage_reported(stream: Any) -> bool:
+    """Whether an OpenAI-compatible stream got a usage chunk: its
+    accumulator (providers.translator) keeps what the chunks said, and an
+    empty one means none came. A stream without one is taken at its word."""
+    accumulator = getattr(stream, "_accumulator", None)
+    if accumulator is None:
+        return True
+    return bool(getattr(accumulator, "_usage", None))
+
+
+def _snapshot(stream: Any, *, finished_only: bool = False) -> Any:
+    """What the stream had used when it ended: Anthropic's MessageStream
+    keeps the message assembled so far, usage included; a translated backend
+    may not, and one closed before message_start has none.
+
+    ``finished_only``: the snapshot only once the message finished (its
+    ``stop_reason`` set). Before that its ``output_tokens`` is the count at
+    message_start (it is filled in at message_delta), so a stream stopped
+    mid-answer would settle on next to no output: it keeps its worst case."""
+    try:
+        snap = stream.current_message_snapshot
+    except Exception:  # noqa: BLE001
+        # The OpenAI-compatible stream (OpenRouter) keeps its message here
+        # instead, set only once the stream ended: finished whenever there.
+        # Its usage defaults to 0 when the usage chunk never came, so a
+        # reserved call whose stream reported none keeps its worst case.
+        finalized = getattr(stream, "_finalized", None)
+        if finished_only and finalized is not None and not _usage_reported(stream):
+            return None
+        return finalized
+    if finished_only and getattr(snap, "stop_reason", None) is None:
+        return None
+    return snap
+
+
+def _not_billed(exc: BaseException) -> bool:
+    """Whether a call that raised ``exc`` cost nothing: the provider answered
+    with an error, or the connection failed before a request went out. A
+    timeout or a cancel may have come after the provider began work, so its
+    worst case stays counted."""
+    import anthropic
+    import httpx
+
+    from openexecutive.providers.refusal import ProviderRefused
+
+    # Never sent: held back after a billing refusal, refused by a nested cap,
+    # or no connection made (a connect timeout included).
+    if isinstance(exc, ProviderRefused | cost_caps.CostCapReached | httpx.ConnectError | httpx.ConnectTimeout):
+        return True
+    if isinstance(exc, anthropic.APITimeoutError | httpx.TimeoutException):
+        return False
+    if isinstance(exc, anthropic.APIConnectionError):
+        # Only a connection never made; a read error may come after the
+        # provider took (and billed) the request.
+        return isinstance(exc.__cause__, httpx.ConnectError | httpx.ConnectTimeout)
+    return isinstance(exc, anthropic.APIStatusError | httpx.HTTPStatusError)
+
+
+async def _reserve(model: str, kwargs: dict[str, Any]) -> cost_caps.Reservation:
+    """Reserve off the event loop; a refusal tells the principal from it."""
+    try:
+        return await asyncio.to_thread(cost_caps.reserve, model, kwargs, tell=False)
+    except cost_caps.CostCapReached as refused:
+        cost_caps.tell_principal(refused)
+        raise
+
+
+class CappedProvider:
+    def __init__(self, inner: LLMProvider) -> None:
+        self._inner = inner
+
+    async def messages_create(self, **kwargs: Any) -> Any:
+        model = str(kwargs.get("model") or "")
+        # SQLite work off the event loop: a busy DB never stalls other turns.
+        reservation = await _reserve(model, kwargs)
+        try:
+            message = await self._inner.messages_create(**kwargs)
+        except BaseException as exc:
+            if _not_billed(exc):
+                await asyncio.to_thread(cost_caps.release, reservation)
+            raise
+        await asyncio.to_thread(cost_caps.settle, reservation, model, message)
+        return message
+
+    @asynccontextmanager
+    async def _stream(self, kwargs: dict[str, Any]) -> AsyncIterator[Any]:
+        model = str(kwargs.get("model") or "")
+        reservation = await _reserve(model, kwargs)
+        stream: Any = None
+        try:
+            async with self._inner.messages_stream(**kwargs) as stream:
+                yield stream
+        except BaseException as exc:
+            if stream is None and _not_billed(exc):
+                await asyncio.to_thread(cost_caps.release, reservation)
+                reservation = None  # type: ignore[assignment]
+            raise
+        finally:
+            if reservation is not None:
+                # A reserved call stopped mid-answer keeps its worst case; with
+                # nothing reserved (every cap off), what it had is counted.
+                reserved = bool(reservation.amount or reservation.turn_amount)
+                snap = _snapshot(stream, finished_only=reserved) if stream is not None else None
+                await asyncio.to_thread(cost_caps.settle, reservation, model, snap)
+
+    def messages_stream(self, **kwargs: Any) -> AbstractAsyncContextManager[Any]:
+        return self._stream(kwargs)

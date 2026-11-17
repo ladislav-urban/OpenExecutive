@@ -1377,3 +1377,76 @@ def test_reply_from_home_that_fails_is_not_left_busy(
     assert _ledger(db)["m1"][0] == "retry"
     broken["on"] = False
     assert isinstance(_ask(owner, mailbox, "t1", "m1"), int)
+
+
+def test_a_spend_limit_leaves_the_message_for_a_later_scan_without_spending_an_attempt(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.audit import cost_caps
+
+    working = ic._call_model
+
+    async def capped(model: str, turn: str) -> dict[str, Any]:
+        raise cost_caps.CostCapReached("person", str(owner.id), 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(ic, "_call_model", capped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"), _msg("m2", "t2", sender="ben@northpeak.example"))
+    # Far more scans than MAX_ATTEMPTS: a cap never gives a message up.
+    for i in range(inbox.MAX_ATTEMPTS + 2):
+        result = _scan(owner, mailbox, now=NOW + timedelta(minutes=i))
+        assert result.status == "spend_limit" and result.failed == 0
+    ledger = _ledger(db)
+    assert ledger["m1"] == ("retry", "cost_cap")
+    assert "m2" not in ledger or ledger["m2"][0] == "retry"  # the scan stopped at the first
+    # Once the limit resets, the next scan drafts them.
+    monkeypatch.setattr(ic, "_call_model", working)
+    assert _scan(owner, mailbox, now=NOW + timedelta(minutes=30)).drafted == 2
+
+
+def test_a_workflow_answer_under_a_spend_limit_leaves_the_email_for_a_later_scan(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # oe__answer_email_as_me's step (answer_thread) claims the message, then
+    # a cap refuses the classifier: the row goes back to RETRY, never stays
+    # PROCESSING, and costs none of its attempts.
+    from openexecutive.audit import cost_caps
+    from openexecutive.delegation import workflow_reply
+
+    working = ic._call_model
+
+    async def capped(model: str, turn: str) -> dict[str, Any]:
+        raise cost_caps.CostCapReached("person", str(owner.id), 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(ic, "_call_model", capped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    for i in range(inbox.MAX_ATTEMPTS + 1):
+        outcome = asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW + timedelta(minutes=i)))
+        assert outcome == "spend_limit"
+        assert _ledger(db)["m1"] == ("retry", "cost_cap")
+    assert workflow_reply._OUTCOMES["spend_limit"][0] == "not_now"
+    # Once the limit resets, the next scan drafts it.
+    monkeypatch.setattr(ic, "_call_model", working)
+    assert _scan(owner, mailbox, now=NOW + timedelta(minutes=30)).drafted == 1
+    assert _ledger(db)["m1"][0] == "drafted"
+
+
+def test_a_composer_a_cap_refused_leaves_the_email_for_a_later_scan(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.audit import cost_caps
+
+    working = gw._call_model
+
+    async def capped(model: str, system: str, turn: str) -> dict[str, Any]:
+        raise cost_caps.CostCapReached("total", "all", 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(gw, "_call_model", capped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    result = _scan(owner, mailbox)
+    assert result.status == "spend_limit" and result.failed == 0
+    assert _ledger(db)["m1"] == ("retry", "cost_cap")
+    monkeypatch.setattr(gw, "_call_model", working)
+    assert _scan(owner, mailbox, now=NOW + timedelta(minutes=30)).drafted == 1

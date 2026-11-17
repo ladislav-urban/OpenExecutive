@@ -181,17 +181,27 @@ async def _call_model(model: str, turn: str) -> dict[str, Any]:
 
 async def unbacked_claim(message: str, reply: str, calls: list[tuple[str, str]]) -> str | None:
     """The reply's claim of a change no call in ``calls`` made, or None.
-    Never raises."""
+
+    Its call is kept off the turn's cost cap (never the others): a cap must
+    never switch the check off. A call a cap refused raises
+    ``CostCapReached``, so the reply is held rather than passed unchecked;
+    nothing else raises."""
     if not enabled() or not may_claim(reply):
         return None
+    from openexecutive.audit import cost_caps
+
     try:
         from openexecutive.config import get_settings
 
         model = get_settings().routing_model
-        payload = await asyncio.wait_for(
-            _call_model(model, _render_turn(message, reply, calls)), timeout=_TIMEOUT_S
-        )
-    except Exception:
+        with cost_caps._check_exempt():
+            payload = await asyncio.wait_for(
+                _call_model(model, _render_turn(message, reply, calls)), timeout=_TIMEOUT_S
+            )
+    except Exception as exc:
+        cap = cost_caps.capped(exc)
+        if cap is not None:
+            raise cap from None
         logger.warning("claim_check: check failed, reply goes out as is", exc_info=True)
         return None
     return accept_claim(payload, reply)

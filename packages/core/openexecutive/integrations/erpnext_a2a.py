@@ -64,6 +64,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
 from openexecutive.api.caller import CallerKeysError, JtiLedger, parse_public_keys
+from openexecutive.audit import cost_caps
 from openexecutive.integrations.erpnext_panel import _b64url, _RateLimiter, _signs
 from openexecutive.orchestrator import erpnext_caller
 
@@ -326,6 +327,7 @@ async def _tools_ready() -> bool:
     return gateway is not None and await gateway.verified_erpnext_tools(sorted(ERPNEXT_SUPPLIER_TOOLS))
 
 
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _answer(partner: Partner, message: str) -> Any:
     """The narrow agent's answer, its ERPNext calls signed as this supplier."""
     from openexecutive.integrations.erpnext_a2a_agent import answer
@@ -338,7 +340,11 @@ async def _answer(partner: Partner, message: str) -> Any:
     async def call(name: str, arguments: dict[str, Any]) -> str:
         return await gateway.call_tool({"name": name, "arguments": arguments})
 
-    with erpnext_caller.supplier_run(partner.supplier):
+    from openexecutive.audit import cost_caps
+
+    # A supplier's agent is off People: its calls share the A2A bucket, held to
+    # the person cap, and a refusal tells it only that it can't answer.
+    with erpnext_caller.supplier_run(partner.supplier), cost_caps.bind_spender(f"{cost_caps.OUTSIDE_PREFIX}a2a"):
         return await asyncio.wait_for(answer(partner.supplier, message, call), timeout=TURN_TIMEOUT_S)
 
 

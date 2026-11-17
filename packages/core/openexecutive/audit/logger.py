@@ -137,6 +137,7 @@ EVENT_TYPES: tuple[str, ...] = (
     "directory_person_restored",   # back in the group: restored with everything they had
     "content_flagged",  # the content check flagged something a chat turn read (orchestrator/outside_content.py), with which item it was
     "grounding",  # unattended prose held back / refused / rewritten for naming people or figures not in its inputs
+    "cost_cap_reached",  # a model call a cost cap refused (audit.cost_caps): scope, key (a People id, outside bucket, job or turn id; never a name), figures; the principal's alone
     # ERPNext drafts (integrations/erpnext_drafts.py) — written private to the card's person.
     "erpnext_draft_proposed",   # propose_erpnext_draft left a card; details name the DocType and card, never its fields
     "erpnext_draft_created",    # the person approved a card and ERPNext made the unsubmitted draft (details.name)
@@ -818,6 +819,18 @@ class AuditLogger:
             ).fetchone()
         return {k: int(row[k] or 0) for k in _zero_scripts()}
 
+    def _capped_calls(self, where: str, params: list[Any]) -> list[dict[str, Any]]:
+        """The calls a cost cap refused (``cost_cap_reached`` rows), counted
+        by day (UTC, as ``by_day``) and scope."""
+        with _get_conn(self._db_path) as conn:
+            rows = conn.execute(
+                "SELECT substr(ts,1,10) AS day, "
+                "COALESCE(json_extract(details_json,'$.scope'),'unknown') AS scope, COUNT(*) AS calls "
+                f"FROM audit_log {where} GROUP BY day, scope ORDER BY day ASC, scope ASC",
+                params,
+            ).fetchall()
+        return [{"day": row["day"], "scope": str(row["scope"]), "calls": int(row["calls"])} for row in rows]
+
     def _python_job_summary(self, where: str, params: list[Any]) -> dict[str, float | int]:
         """Totals over the ``python_job`` rows a window holds, plus the model
         usage of the turns that ran one (the whole turn: writing the job's
@@ -879,7 +892,7 @@ class AuditLogger:
         private to the principal, as there.
         """
         empty: dict[str, Any] = {
-            "totals": _zero_usage(), "by_day": [], "by_model": [], "by_source": [],
+            "totals": _zero_usage(), "by_day": [], "by_model": [], "by_source": [], "capped_calls": [],
             "scripts": _zero_scripts(), "python_jobs": _zero_python_jobs(),
         }
         if not self._db_path.exists():
@@ -920,6 +933,9 @@ class AuditLogger:
             ).fetchall()
 
         return {
+            "capped_calls": self._capped_calls(where.replace(
+                "event_type = 'cache_event'", "event_type = 'cost_cap_reached'"
+            ), params),
             "scripts": self._script_summary(where.replace(
                 "event_type = 'cache_event'", _SCRIPT_ROWS
             ), params),

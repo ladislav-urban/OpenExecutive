@@ -15,6 +15,7 @@ the hardcoded ``OPENROUTER_MODELS`` snapshot when nothing has been loaded.
 from __future__ import annotations
 
 import re
+import weakref
 from dataclasses import replace
 from typing import Any, Literal, TypedDict
 
@@ -470,10 +471,12 @@ def get_provider(model: str) -> LLMProvider:
     # to a hosted vendor.
     if model in _local_models(settings):
         return wrap_provider(_local(), "local")
+    # Hosted backends are billed: every call checks the cost caps first
+    # (audit.cost_caps). A local model costs nothing and isn't capped.
     if _is_claude(model):
         if settings.openrouter_enabled:
-            return wrap_provider(_openrouter(), "openrouter")
-        return wrap_provider(_anthropic(), "anthropic")
+            return _capped(wrap_provider(_openrouter(), "openrouter"))
+        return _capped(wrap_provider(_anthropic(), "anthropic"))
     # Other non-Claude slugs require OpenRouter to be enabled.
     if not settings.openrouter_enabled:
         raise HTTPException(
@@ -485,7 +488,32 @@ def get_provider(model: str) -> LLMProvider:
                 f"from a local OpenAI-compatible backend."
             ),
         )
-    return wrap_provider(_openrouter(), "openrouter")
+    return _capped(wrap_provider(_openrouter(), "openrouter"))
+
+
+# One cost-cap wrapper per backend object, so a singleton backend stays one
+# object to its callers. Weak keys: a backend wrapped per call (tracing on)
+# isn't kept alive by it.
+_CAPPED: weakref.WeakKeyDictionary[Any, LLMProvider] = weakref.WeakKeyDictionary()
+
+
+def _capped(provider: LLMProvider) -> LLMProvider:
+    from openexecutive.providers.capped import CappedProvider
+
+    try:
+        wrapped = _CAPPED.get(provider)
+        if wrapped is None:
+            wrapped = _CAPPED[provider] = CappedProvider(provider)
+    except TypeError:  # a backend that can't be weakly referenced: wrap it each time
+        wrapped = CappedProvider(provider)
+    return wrapped
+
+
+def backend_of(provider: Any) -> Any:
+    """The backend under the cost-cap and tracing wrappers."""
+    while hasattr(provider, "_inner"):
+        provider = provider._inner
+    return provider
 
 
 def pdf_input_supported(model: str) -> bool:

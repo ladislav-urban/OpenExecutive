@@ -9,11 +9,14 @@ one process against the same database.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from typing import TYPE_CHECKING
 
+from openexecutive.audit import cost_caps
 from openexecutive.audit.context import unscoped_audit_rows
 from openexecutive.memory.chat_review import CHAT_REVIEW_KIND as _CHAT_REVIEW_KIND
 from openexecutive.memory.episodic import (
@@ -420,15 +423,25 @@ async def run_scheduler(
                 _beat("rotating")
                 await asyncio.sleep(poll_interval_seconds)
                 continue
-            _maybe_refresh_narrative(now)
-            _maybe_scan_inbox(now)
-            _maybe_keep_contacts(now)
-            _maybe_remind_notes(now)
-            _maybe_send_reminders(now)
-            _maybe_check_mail_watches(now)
-            _maybe_release_held(now)
-            _maybe_push_cards(now)
-            _maybe_send_monthly_value(now)
+            with _sweep("refresh-narrative"):
+                _maybe_refresh_narrative(now)
+            with _sweep("scan-inbox"):
+                _maybe_scan_inbox(now)
+            with _sweep("keep-contacts"):
+                _maybe_keep_contacts(now)
+            with _sweep("remind-notes"):
+                _maybe_remind_notes(now)
+            with _sweep("send-reminders"):
+                _maybe_send_reminders(now)
+            with _sweep("check-mail-watches"):
+                _maybe_check_mail_watches(now)
+            with _sweep("release-held"):
+                _maybe_release_held(now)
+            with _sweep("push-cards"):
+                _maybe_push_cards(now)
+            with _sweep("send-monthly-value"):
+                _maybe_send_monthly_value(now)
+            # Each watch job binds its own budget (watch/runner.py).
             _maybe_run_watch_jobs(now)
             due = claim_due_actions(now)
             if due:
@@ -436,9 +449,10 @@ async def run_scheduler(
             for row in due:
                 # A scheduled action is unattended, never part of a turn: its
                 # task starts with no audit scope (create_task copies the
-                # context as it is here).
-                with unscoped_audit_rows():
-                    task = asyncio.create_task(_execute_action(row, gateway))
+                # context as it is here). For the cost caps it counts
+                # against its job, and is one turn of its own (the turn cap).
+                with unscoped_audit_rows(), cost_caps.bind_job(_job_id(row)):
+                    task = asyncio.create_task(cost_caps.run_as_turn(_execute_action(row, gateway)))
                 _inflight.add(task)
                 task.add_done_callback(_inflight.discard)
             _beat("ran")
@@ -452,6 +466,41 @@ async def run_scheduler(
         except asyncio.CancelledError:
             logger.info("scheduler cancelled — exiting")
             raise
+
+
+def _job_id(action: ScheduledAction) -> str:
+    """The job a scheduled action's model calls count against for the cost
+    caps: its kind, and its department when it has one, so a recurring
+    brief or check-in keeps one budget across its daily rows; and the
+    person who queued it, when someone did, so one teammate's actions can't
+    use up (and defer) everyone else's."""
+    job = f"scheduled:{action.kind}"
+    if action.department:
+        job += f":{action.department}"
+    creator = getattr(action, "created_by_person_id", None)
+    if isinstance(creator, int) and not isinstance(creator, bool):
+        job += f":{creator}"
+    return job
+
+
+@contextlib.contextmanager
+def _sweep(name: str) -> Iterator[None]:
+    """One periodic sweep's run for the cost caps: its job's daily budget,
+    and one turn of its own for the work it starts this tick (the tasks it
+    spawns share it; nothing after the tick does)."""
+    with cost_caps.bind_job(name), cost_caps.bind_turn(fresh=True, close=False):
+        yield
+
+
+def _failed_or_retry(action_id: int, exc: BaseException) -> str:
+    """``mark_action_failed_or_retry``, except for a run a cost cap stopped:
+    that one waits, without spending an attempt, until the cap resets."""
+    cap = cost_caps.capped(exc)
+    # Counters that couldn't be read are a fault, not a spent cap: retried as usual.
+    if cap is not None and cap.scope != "unreadable" and reschedule_action(action_id, cap.resets_at):
+        logger.info("scheduler: action %d capped — runs again at %s", action_id, cap.resets_at.isoformat())
+        return "deferred"
+    return mark_action_failed_or_retry(action_id, str(exc))
 
 
 def _record_held_action(card_id: int | None, action_id: int) -> None:
@@ -737,7 +786,7 @@ async def _execute_action(
             logger.exception(
                 "scheduler: dept_cadence %r (action %d) failed", slug, action.id
             )
-            new_status = mark_action_failed_or_retry(action.id, str(exc))
+            new_status = _failed_or_retry(action.id, exc)
             logger.info("scheduler: action %d → %s", action.id, new_status)
             if new_status == "failed" and not chained:
                 # Retries are spent. Chain anyway so one broken department
@@ -1369,7 +1418,7 @@ async def _execute_action(
 
     except Exception as exc:
         logger.exception("scheduler: action %d failed", action.id)
-        new_status = mark_action_failed_or_retry(action.id, str(exc))
+        new_status = _failed_or_retry(action.id, exc)
         logger.info("scheduler: action %d → %s", action.id, new_status)
         from openexecutive.audit import log_event as audit_log
         audit_log(
@@ -1642,7 +1691,7 @@ async def _run_teammate_followup(
             raise RuntimeError(delivery.detail)
     except Exception as exc:
         logger.exception("scheduler: action %d failed", action.id)
-        new_status = mark_action_failed_or_retry(action.id, str(exc))
+        new_status = _failed_or_retry(action.id, exc)
         _audit("failed", f"({action.channel}) FAILED → {new_status}: {exc}",
                new_status=new_status, error=str(exc)[:300])
         return True
@@ -2604,7 +2653,10 @@ async def _run_dynamic_workflow(action: ScheduledAction, now: datetime) -> None:
             artifact = ""
             paused = False
             as_owner = pinned_viewer(viewer_for_person(owner)) if owner is not None else contextlib.nullcontext()
-            with as_owner:
+            # A rerun someone asked for is spent for them (their person cap);
+            # the cadence's own runs, with no one, keep the creator
+            # (chat_tools.in_workflow). Its job key names them too (_job_id).
+            with as_owner, cost_caps.bind_spender(getattr(action, "created_by_person_id", None)):
                 async for event in workflow.run(inputs=wf_inputs, store=store):
                     # The one pause a scheduled run CAN take: an action step held
                     # writes to new targets. Nothing waits in-process — the run is

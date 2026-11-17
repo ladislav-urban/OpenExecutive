@@ -24,6 +24,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
+from openexecutive.audit import cost_caps
 from openexecutive.config import get_settings
 from openexecutive.integrations.email_attachments import (
     EmailAttachmentRef,
@@ -1093,6 +1094,7 @@ def _principal_email_text(raw_email: str, from_addr: str) -> str:
     )
 
 
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _run_executive(
     gateway: MCPGateway | None,
     raw_email: str,

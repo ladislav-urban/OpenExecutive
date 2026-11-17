@@ -215,13 +215,20 @@ async def review(
     results: list[ErpnextResult],
     sources: Sources,
 ) -> list[Review]:
-    """Check 2's verdict on each flagged figure, in order. Never raises: a
-    failed or late call leaves every figure ``cannot_tell``."""
+    """Check 2's verdict on each flagged figure, in order. A failed or late
+    call leaves every figure ``cannot_tell``; only a cost cap's refusal
+    raises (``CostCapReached``): the reply is then held, never passed
+    unchecked (answer_check.check_reply)."""
     if not flagged:
         return []
     try:
         return await asyncio.wait_for(_review(question, draft, flagged, results, sources), REVIEW_TIMEOUT_S)
-    except Exception:
+    except Exception as exc:
+        from openexecutive.audit import cost_caps
+
+        cap = cost_caps.capped(exc)
+        if cap is not None:
+            raise cap from None
         logger.warning("answer_review: the review failed; every flagged figure stays unconfirmed", exc_info=True)
         return [CANNOT_TELL] * len(flagged)
 

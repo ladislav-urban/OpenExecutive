@@ -1724,9 +1724,14 @@ async def _chat_turn(
         # Executive's upstream stream aclose). Wrapping it in a plain
         # `async for` would leave `_sse_body` suspended at its yield until a
         # later GC hop — or never, if the loop closes first.
+        from openexecutive.audit import cost_caps
+
         with (
             set_turn(session_id=session.session_id, turn_id=turn_id),
             set_session(session),
+            # The turn the cost cap counts (audit.cost_caps), for the whole
+            # stream, every step of it, and closed when the turn ends.
+            cost_caps.bind_turn(fresh=True),
             principal_turn_rows(principal_turn),
             rows_for_person(caller_person_id) if own_rows else contextlib.nullcontext(),
             bind_turn_files(turn_files),
@@ -2099,9 +2104,25 @@ async def _chat_turn(
             # corrected here first (decided Nov 4, 2026). A disconnected one is
             # saved as streamed: nobody is there to show the correction to.
             if (stopped or timed_out) and full_response.strip():
-                checked = await answer_check.check_reply(
-                    full_response, check_turn, question=message, budget_s=answer_check.STOPPED_BUDGET_S,
-                )
+                from openexecutive.audit import cost_caps
+
+                try:
+                    checked = await answer_check.check_reply(
+                        full_response, check_turn, question=message, budget_s=answer_check.STOPPED_BUDGET_S,
+                    )
+                except cost_caps.CostCapReached as cap:
+                    # Held, never passed: everything here was already shown,
+                    # so the cap's sentence follows it (unless a stop added it).
+                    checked = full_response
+                    if not cost_caps.turn_stopped():
+                        sentence = cap.reply()
+                        cost_caps.mark_stopped(sentence)
+                        cap_evt = {"type": "chunk", "content": f"\n\n{sentence}", "session_id": session.session_id}
+                        full_response += cap_evt["content"]
+                        if not client_disconnected:
+                            if live_turn:
+                                chat_live.turn_event(session.session_id, live_key, cap_evt)
+                            yield f"data: {json.dumps(cap_evt)}\n\n"
                 if checked != full_response:
                     full_response = in_product_reply(checked) if words is not None else checked
                     replaced_evt = {
@@ -2281,8 +2302,15 @@ async def _chat_turn(
         except Exception as exc:
             # Don't leak exception text (may contain API keys, paths, etc.) to clients.
             logger.exception("chat.turn_failed turn_id=%s", turn_id)
+            from openexecutive.audit import cost_caps
             from openexecutive.providers.refusal import refusal_reply
 
+            if cost_caps.turn_stopped():
+                # A cost cap stopped the turn and its reply already says so:
+                # what failed after it never replaces or repeats it.
+                done = json.dumps({"type": "done", "session_id": session.session_id})
+                yield f"data: {done}\n\n"
+                return
             error = json.dumps({
                 "type": "error",
                 # Out of credit or over a spend limit: trying again won't help.

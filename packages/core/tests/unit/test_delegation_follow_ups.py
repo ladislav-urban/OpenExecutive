@@ -211,3 +211,35 @@ def test_the_send_path_rechecks_the_setting(owner: Any, models: dict[str, Any]) 
         asyncio.run(send_on_its_own(type("C", (), {**card.__dict__, "gate_mode": "auto_execute"})(),
                                     gmail=mailbox, now=NOW))
     assert refused.value.code == "handle_it_off" and mailbox.sent == []
+
+
+def test_a_follow_up_a_cap_refused_waits_for_a_later_look(
+    owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from datetime import UTC, datetime
+
+    from openexecutive.audit import cost_caps
+    from openexecutive.delegation import ghostwriter as gw
+
+    from .test_delegation_inbox import _ledger
+
+    _on(owner, "careful")
+    working = gw._call_model
+
+    async def capped(model: str, system: str, turn: str) -> dict[str, Any]:
+        raise cost_caps.CostCapReached("person", str(owner.id), 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(gw, "_call_model", capped)
+    mailbox = FakeInbox()
+    mailbox.add(_asked(), _asked("s2", "t8", to=LEE))
+    path = _inbox_tests.episodic.DB_PATH
+    result = _scan(owner, mailbox)
+    assert result.failed == 0 and result.status == "spend_limit"
+    ledger_rows = _ledger(path)
+    # Never FAILED/follow_up_failed: back to RETRY, and the look stopped there.
+    looked = {mid: row for mid, row in ledger_rows.items() if mid in ("s1", "s2")}
+    assert list(looked.values()) == [("retry", "cost_cap")]
+    # Once the limit resets, the next look writes it.
+    monkeypatch.setattr(gw, "_call_model", working)
+    follow_ups._LAST_LOOK.clear()
+    assert _scan(owner, mailbox, now=NOW + timedelta(days=1)).drafted >= 1

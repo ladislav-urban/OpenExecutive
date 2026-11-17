@@ -12,6 +12,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -168,7 +169,8 @@ def rerun_workflow_run(run_id: str, request: Request) -> dict[str, Any]:
             status_code=403, detail="Only the principal, or the person it goes to, can run it again."
         )
     try:
-        action_id = queue_rerun(run)
+        # Spent for whoever asked for it again (the scheduler binds them).
+        action_id = queue_rerun(run, started_by=caller)
     except RerunRefused as exc:
         raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
     from openexecutive.audit import log_event as audit_log
@@ -681,6 +683,18 @@ async def start_workflow_run(name: str, request: Request) -> StreamingResponse:
         raise HTTPException(status_code=503, detail="Knowledge store not initialized")
 
     async def event_stream():
+        # Spent for whoever started the run (the person cap), as one turn of
+        # its own (the turn cap), bound here, in the generator Starlette
+        # drives, so every step of the run sees it; a custom workflow's steps
+        # then never fall back to its creator's budget (chat_tools.in_workflow).
+        from openexecutive.audit import cost_caps
+
+        with cost_caps.bind_spender(owner_person_id), cost_caps.bind_turn(fresh=True):
+            async with contextlib.aclosing(_run_events()) as events:
+                async for frame in events:
+                    yield frame
+
+    async def _run_events():
         t_start = time.monotonic()
         artifact: str = ""
         private_to_principal = False
@@ -766,7 +780,12 @@ async def start_workflow_run(name: str, request: Request) -> StreamingResponse:
             # The run is safely parked; only the stream broke.
             if not paused:
                 fail_run(run_id=run_id, error=str(exc))
-            yield _sse({"type": "error", "run_id": run_id, "message": str(exc)})
+            # Never the exception's own text: a cap's sentence, else a fixed one.
+            from openexecutive.audit import cost_caps
+
+            cap = cost_caps.capped(exc)
+            message = cap.reply() if cap is not None else "The run failed. Try again later."
+            yield _sse({"type": "error", "run_id": run_id, "message": message})
         finally:
             logger.info(
                 "workflow.run_complete run_id=%s workflow=%s duration_s=%.2f",

@@ -118,6 +118,14 @@ async def look(person: Any, client: Any, *, own: set[str], exec_address: str, no
         except GmailError:
             raise  # the mailbox itself is failing: the scan backs off
         except Exception as exc:
+            from openexecutive.audit import cost_caps
+
+            if cost_caps.capped(exc) is not None:
+                # A spend limit is never the email's fault: it waits for a
+                # later look without spending an attempt, and so does the rest.
+                inbox._retry_later(person.id, sent.id, "cost_cap", count=False)
+                result.status = "spend_limit"
+                return
             logger.warning("delegation.follow_ups: a follow-up failed (%s)", type(exc).__name__)
             inbox._set_outcome(person.id, sent.id, inbox.FAILED, reason="follow_up_failed")
 

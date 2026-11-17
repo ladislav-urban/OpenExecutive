@@ -151,6 +151,14 @@ class UsageByModel(UsageTotals):
     model: str
 
 
+class CappedCalls(BaseModel):
+    """How many model calls a cost cap refused on one day (UTC), for one
+    scope: turn, person, job, total or unreadable (audit.cost_caps)."""
+    day: str
+    scope: str
+    calls: int
+
+
 class UsageBySource(UsageTotals):
     """One row per call source (the audit `actor`): `executive` chat turns,
     `specialist` chat-turn consults, `specialist_workflow` steps,
@@ -233,6 +241,8 @@ class UsageSummary(BaseModel):
     by_day: list[UsageByDay]
     by_model: list[UsageByModel]
     by_source: list[UsageBySource] = []
+    # The calls a cost cap refused, by day and scope (`cost_cap_reached` rows).
+    capped_calls: list[CappedCalls] = []
     scripts: ScriptUsage = ScriptUsage()
     python_jobs: PythonJobUsage = PythonJobUsage()
     erpnext: ErpnextUsage | None = None
@@ -884,6 +894,7 @@ def get_audit_usage(
         by_day=[UsageByDay(**d) for d in data["by_day"]],
         by_model=[UsageByModel(**m) for m in data["by_model"]],
         by_source=[UsageBySource(**s) for s in data.get("by_source", [])],
+        capped_calls=[CappedCalls(**c) for c in data.get("capped_calls", [])],
         scripts=ScriptUsage(**data.get("scripts", {})),
         python_jobs=PythonJobUsage(**data.get("python_jobs", {})),
         erpnext=(
