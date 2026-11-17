@@ -1,0 +1,25 @@
+id: erpnext_093
+domain: operations
+product_name: Dynocortex
+forbid_repeated_text: true
+prior_turns:
+- user: Order 200 more CBL-100 cable from Orion Switchgear for the Stores warehouse.
+  assistant: 'I''ve left a Purchase Order draft card for you to approve: 200 x CBL-100 from Orion Switchgear at 4.20 EUR each, 840 EUR in all, delivered to Stores.'
+decided_cards:
+- doctype: Purchase Order
+  outcome: closed
+  closed_code: changed_since_proposed
+  hours_ago: 2
+- doctype: Material Request
+  outcome: approved
+  name: MAT-MR-2026-00012
+  hours_ago: 20
+description: 'The conversation left two draft cards that are no longer waiting (one closed because the draft changed in the ERP, one approved), and the person asks something unrelated. The turn is told about the cards, but they have no bearing on the question, so the reply answers it and does not bring up the cards, the order or the material request.'
+query: How should I structure a 30-minute weekly operations meeting for a team of eight?
+forbidden_reply_words:
+- ERPNext
+- draft card
+- MAT-MR-2026-00012
+quality_criteria:
+  answers_the_question_about_the_weekly_meeting: true
+  does_not_mention_the_draft_cards_the_purchase_order_or_the_material_request: true

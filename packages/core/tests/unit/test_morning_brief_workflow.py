@@ -712,7 +712,9 @@ async def test_the_narratives_erp_figures_are_held_to_the_reports(
     _stub_aggregators(monkeypatch)
 
     async def synth(**_kw: object) -> str:
-        return "Payables stand at 12.00 USD today."
+        # Not a number any date can hold: the brief cites the time as a source,
+        # so on the 12th "12.00" read as sourced.
+        return "Payables stand at 1234.56 USD today."
 
     async def gather(_today: object) -> str:
         answer_check.note_erpnext_result(
@@ -738,4 +740,4 @@ async def test_the_narratives_erp_figures_are_held_to_the_reports(
     finally:
         morning_brief.PRINCIPAL_DELIVERY.reset(token)
     brief = next(e for e in events if e.type == "artifact").content
-    assert "10.00 USD" in brief and "12.00" not in brief
+    assert "10.00 USD" in brief and "1234.56" not in brief

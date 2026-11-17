@@ -579,7 +579,7 @@ def patch_agent(agent_id: str, patch: AgentPatch) -> AgentDetail:
     if "pushback_model" in raw:
         if agent_id != EXECUTIVE_ID:
             raise HTTPException(
-                status_code=400, detail="Only the Executive has a pushback model"
+                status_code=400, detail="Only the executive agent has a pushback model"
             )
         if patch.pushback_model not in (None, PUSHBACK_OFF) and (
             patch.pushback_model not in _allowed(agent_id)

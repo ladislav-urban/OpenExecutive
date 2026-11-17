@@ -432,5 +432,26 @@ def test_the_route_returns_the_gate_with_the_range_before_and_keeps_the_csv(
         assert client.get("/erpnext/drafts/oversight", params=bad, headers=owner).status_code == 422, bad
     # The CSV stays one row per record with the same columns: no summary.
     as_csv = client.get("/erpnext/drafts/oversight?format=csv", headers=owner).text
-    assert next(csv.reader(io.StringIO(as_csv))) == list(oversight.CSV_COLUMNS) and len(oversight.CSV_COLUMNS) == 23
+    assert next(csv.reader(io.StringIO(as_csv))) == list(oversight.CSV_COLUMNS) and len(oversight.CSV_COLUMNS) == 28
+    # Every row has every column (the last, sender_checked, written too).
+    assert {len(row) for row in csv.reader(io.StringIO(as_csv))} == {len(oversight.CSV_COLUMNS)}
     assert "approval_rate" not in as_csv
+
+
+def test_the_csv_line_keeps_every_kind_of_card_line() -> None:
+    from openexecutive.integrations.erpnext_oversight import _card_text
+
+    view = {
+        "fields": [{"label": "Amount", "value": "1,200.00 EUR"}],
+        "lines": [
+            {"voucher": "Payment Entry PE-1", "dated": "2026-11-13", "party": "Harbor Ltd", "allocated": "1,200.00 EUR",
+             "clears_on": "2026-11-14", "matched_elsewhere": "0", "created_by": "accounts@example.com"},
+            {"row": "1", "item": "SENSOR-01", "qty": "10", "rate": "", "amount": "125.00 EUR"},
+            {"item_code": "SENSOR-01", "qty": "150", "warehouse": "Stores"},
+        ],
+        "notes": ["Check it."],
+    }
+    text = _card_text(view)
+    assert "Payment Entry PE-1" in text and "accounts@example.com" in text and "Harbor Ltd" in text
+    assert "row=1 item=SENSOR-01 qty=10 amount=125.00 EUR" in text and "created_by=accounts@example.com" in text
+    assert "item_code=SENSOR-01 qty=150 warehouse=Stores" in text and text.endswith("Check it.")

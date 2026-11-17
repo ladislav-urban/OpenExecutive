@@ -285,7 +285,7 @@ def _check_contact(action: dict[str, Any], speaker: Any) -> dict[str, Any] | str
 
 def _check_drive_files(action: dict[str, Any], speaker: Any) -> dict[str, Any] | str:
     if not speaker.is_principal:
-        return "drive_files: the Executive's Drive is the owner's; only they can change it."
+        return "drive_files: this app's own Drive is the owner's; only they can change it."
     raw = action.get("files")
     if not isinstance(raw, list) or not raw:
         return "drive_files: pass `files`, each with a `file_id` and the new `name` if it is renamed."
@@ -328,7 +328,7 @@ def _check_drive_files(action: dict[str, Any], speaker: Any) -> dict[str, Any] |
 
 def _check_save_files(action: dict[str, Any], speaker: Any) -> dict[str, Any] | str:
     if not speaker.is_principal:
-        return "save_files: the Executive's Drive is the owner's; only they can save into it."
+        return "save_files: this app's own Drive is the owner's; only they can save into it."
     folder = str(action.get("folder") or "").strip()
     if not _DRIVE_ID_RE.match(folder):
         return "save_files: `folder` must be a Drive folder id."

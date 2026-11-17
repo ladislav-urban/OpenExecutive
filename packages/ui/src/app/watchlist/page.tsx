@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -171,7 +172,12 @@ function WatchCard({
           {item.last_fired_at
             ? `Last fired ${formatRelTime(item.last_fired_at)} ago`
             : "Hasn't fired yet"}
-          {isResearch && " · added by the Executive"}
+          {isResearch && (
+            <>
+              {" · added by "}
+              <ProductName />
+            </>
+          )}
         </div>
       </Link>
       <div className="relative flex flex-shrink-0 items-center gap-1 pt-1">
@@ -824,10 +830,10 @@ export default function WatchlistPage() {
           <div className="mb-6">
             <div className="max-w-2xl">
               <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">
-                What the Executive watches
+                What <ProductName /> watches
               </h1>
               <p className="text-[15px] text-fg-muted mt-2">
-                External conditions the Executive is monitoring. Signals that survive
+                External conditions <ProductName /> is monitoring. Signals that survive
                 severity + triage become proposals in your briefing.
               </p>
             </div>
@@ -845,7 +851,7 @@ export default function WatchlistPage() {
             <div className="rounded-2xl border border-dashed border-line p-8 text-center">
               <p className="text-fg-muted text-[15px] mb-3">Nothing being watched yet.</p>
               <p className="text-sm text-fg-subtle">
-                Say what to watch in the box above, or ask the Executive in chat:{" "}
+                Say what to watch in the box above, or ask <ProductName /> in chat:{" "}
                 <span className="italic">
                   Watch Initech&apos;s stock, alert me on 5% moves.
                 </span>
@@ -856,7 +862,7 @@ export default function WatchlistPage() {
           {suggestions.length > 0 && (
             <div className="mb-10">
               <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 mb-1">
-                <h2 className="text-xl font-bold tracking-tight text-fg">Suggested by the Executive</h2>
+                <h2 className="text-xl font-bold tracking-tight text-fg">Suggested by <ProductName /></h2>
                 <span className="text-[15px] text-fg-muted">
                   {suggestions.length} waiting for you
                 </span>

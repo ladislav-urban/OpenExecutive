@@ -15,11 +15,17 @@ import { openMessage } from "@/lib/embed";
 import {
   askedInNote,
   type CardOutcome,
-  draftKind,
+  cardKind,
+  changeMadeLine,
+  CREDIT_CHANGED_NOTE,
+  creditMadeLine,
   draftMadeLine,
   draftsTip,
+  jobCardKind,
   openDraftLabel,
+  whyNowLine,
 } from "@/lib/erpnextDraftWords";
+import { lineTable } from "@/lib/draftLines";
 import { erpnextLink } from "@/lib/erpnextLinks";
 import { formatRelativeTime } from "@/lib/relativeTime";
 
@@ -210,10 +216,8 @@ export function ErpnextDraftCardItem({
     event.preventDefault();
     window.parent.postMessage(message, hostOrigin);
   };
-  // A Quotation's or Purchase Order's lines carry ERPNext's rates; a
-  // Quotation's may name no warehouse.
-  const priced = card.lines.some((line) => Boolean(line.rate || line.amount));
-  const anyWarehouse = card.lines.some((line) => Boolean(line.warehouse));
+  // Items, an invoice fill's rows or a bank match's vouchers (lib/draftLines).
+  const table = lineTable(card.lines);
   return (
     <article
       className={`rounded-2xl border bg-surface-elevated p-4 sm:p-5 ${
@@ -224,7 +228,9 @@ export function ErpnextDraftCardItem({
         <span className="inline-flex items-center rounded-lg bg-surface-overlay px-2 py-0.5 text-[13px] font-medium text-fg-muted">
           To approve
         </span>
-        <span className="text-[12px] font-medium text-fg-muted">{draftKind(card.doctype, named)}</span>
+        <span className="text-[12px] font-medium text-fg-muted">
+          {card.job_title ? jobCardKind(card.doctype, card.operation, card.job_title) : cardKind(card.doctype, card.operation, named)}
+        </span>
         {when && <span className="text-sm text-fg-subtle tabular-nums">{when}</span>}
       </div>
       {(card.asked_in === "erpnext_panel" || card.asked_in === "erpnext_desk") && (
@@ -237,6 +243,16 @@ export function ErpnextDraftCardItem({
       )}
       {card.why && (
         <div className="text-base sm:text-[17px] font-semibold leading-snug text-fg break-words">{card.why}</div>
+      )}
+      {card.job_title && card.why_now && (
+        // A watch job's reason line: a model's words, never a figure, shown
+        // as plain text under the code-built headline.
+        <div className="mt-1 text-sm text-fg-muted break-words">{whyNowLine(card.why_now)}</div>
+      )}
+      {card.changed && !done && (
+        <div className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-sm text-amber-800 dark:text-amber-200">
+          {CREDIT_CHANGED_NOTE}
+        </div>
       )}
 
       <div className="mt-3 rounded-xl border border-line bg-surface px-3 py-2">
@@ -252,29 +268,34 @@ export function ErpnextDraftCardItem({
             </div>
           ))}
         </dl>
-        {card.lines.length > 0 && (
-          <table className="mt-2 w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-fg-muted">
-                <th className="font-medium">Item</th>
-                <th className="font-medium text-right">Qty</th>
-                {priced && <th className="font-medium text-right pl-3">Rate</th>}
-                {priced && <th className="font-medium text-right pl-3">Amount</th>}
-                {anyWarehouse && <th className="font-medium pl-3">Warehouse</th>}
-              </tr>
-            </thead>
-            <tbody>
-              {card.lines.map((line, i) => (
-                <tr key={i} className="align-top">
-                  <td className="break-words text-fg">{line.item_code}</td>
-                  <td className="text-right tabular-nums text-fg">{line.qty}</td>
-                  {priced && <td className="pl-3 text-right tabular-nums text-fg">{line.rate || "—"}</td>}
-                  {priced && <td className="pl-3 text-right tabular-nums text-fg">{line.amount || "—"}</td>}
-                  {anyWarehouse && <td className="pl-3 break-words text-fg">{line.warehouse}</td>}
+        {table && (
+          <div className="mt-2 overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-fg-muted">
+                  {table.columns.map((c, j) => (
+                    <th key={c.key} className={`font-medium ${c.numeric ? "text-right" : ""} ${j > 0 ? "pl-3" : ""}`}>
+                      {c.label}
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {table.rows.map((cells, i) => (
+                  <tr key={i} className="align-top">
+                    {cells.map((cell, j) => (
+                      <td
+                        key={table.columns[j].key}
+                        className={`text-fg ${table.columns[j].numeric ? "text-right tabular-nums" : "break-words"} ${j > 0 ? "pl-3" : ""}`}
+                      >
+                        {cell}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
         {card.notes.map((note, i) => (
           <p key={i} className="mt-2 text-sm text-fg-muted break-words">{note}</p>
@@ -284,7 +305,17 @@ export function ErpnextDraftCardItem({
       {done ? (
         <div className="mt-4 space-y-2">
           <p className="text-sm text-emerald-700 dark:text-emerald-300">
-            {draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
+            {card.operation === "credit"
+              ? creditMadeLine(
+                  created?.name ?? "",
+                  created?.credit?.company ?? "",
+                  created?.credit?.limit ?? "",
+                  created?.already_created ?? false,
+                )
+              : card.operation === "update" || card.operation === "comment" || card.operation === "block"
+                  || card.operation === "match" || card.operation === "fill"
+                ? changeMadeLine(card.operation, card.doctype, created?.name ?? "", created?.already_created ?? false)
+                : draftMadeLine(card.doctype, created?.name ?? null, created?.already_created ?? false, named)}
           </p>
           <div className="flex flex-wrap items-center gap-2">
             {link && (

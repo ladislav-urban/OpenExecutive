@@ -174,7 +174,7 @@ def enabled() -> bool:
 def _keep_whole() -> bool:
     """``ERPNEXT_ANSWER_CHECK=correct_keep``: figures are put right in place,
     and a reply the check would replace whole is kept with its known values
-    written in, never replaced (the owner's decision 90.a, Nov 5, 2026)."""
+    written in, never replaced (decided Nov 5, 2026)."""
     from openexecutive.config import get_settings
 
     return get_settings().erpnext_answer_check == "correct_keep"

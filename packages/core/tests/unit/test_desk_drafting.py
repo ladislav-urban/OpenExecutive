@@ -1,5 +1,5 @@
 # ruff: noqa: F811 — pytest fixtures imported from test_erpnext_drafts share their names with the test parameters.
-"""Draft cards proposed from ERPNext's desk (the owner's decision 114.a, Nov 6,
+"""Draft cards proposed from ERPNext's desk (decided Nov 6,
 2026): a host origin's turn (``Session.from_host``: the desk's Conversations
 screen, the docked panel's chat) may propose an ERPNext draft card, as the
 person signed in to this app, on a conversation private to them. It still

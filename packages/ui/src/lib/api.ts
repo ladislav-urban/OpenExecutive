@@ -4,6 +4,7 @@ import type { DirectoryListing, DirectoryOption } from "@/lib/chatDirectory";
 import type { HistoryNote, HistoryState } from "@/lib/history";
 import type { NotificationSettings, NotificationSettingsUpdate } from "@/lib/notifications";
 import type { SetupStatus } from "@/lib/setupStatus";
+import type { WatchJobs } from "@/lib/watchJobs";
 
 const API_BASE = "/api/backend";
 
@@ -374,7 +375,7 @@ export async function transcribeRecording(recording: Blob, filename: string): Pr
   try {
     res = await fetch(`${API_BASE}/chat/transcribe`, { method: "POST", body: form });
   } catch {
-    throw new Error("Couldn't reach Open Executive to hear it. Try again.");
+    throw new Error("Couldn't reach the server to hear it. Try again.");
   }
   if (!res.ok) {
     let detail = "Couldn't hear it. Try again.";
@@ -1984,15 +1985,15 @@ export async function pauseExecutive(reason?: string): Promise<ExecutiveStatus> 
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason: reason?.trim() || null }),
   });
-  if (!res.ok) throw new Error("Failed to pause the Executive");
+  if (!res.ok) throw new Error("Failed to pause");
   delegationChanged();
   return res.json();
 }
 
 export async function resumeExecutive(): Promise<ExecutiveStatus> {
   const res = await fetch(`${API_BASE}/executive/resume`, { method: "POST" });
-  if (res.status === 403) throw new Error("Only the principal can resume the Executive.");
-  if (!res.ok) throw new Error("Failed to resume the Executive");
+  if (res.status === 403) throw new Error("Only the principal can resume it.");
+  if (!res.ok) throw new Error("Failed to resume");
   delegationChanged();
   return res.json();
 }
@@ -3048,14 +3049,26 @@ export interface ErpnextDraftField {
 }
 
 export interface ErpnextDraftLine {
-  item_code: string;
-  qty: string;
+  item_code?: string;
+  qty?: string;
   // "" when the line names none (a Quotation's may not).
-  warehouse: string;
+  warehouse?: string;
   // A Quotation's or Purchase Order's ERPNext rate and amount, formatted;
   // "" or absent on the others and where ERPNext gave none.
   rate?: string;
   amount?: string;
+  // An invoice-fill card's row: its number and item.
+  row?: string;
+  item?: string;
+  // A bank-match card's voucher: what it is, its date and party, what is
+  // allocated and the date it clears (lib/draftLines.ts picks the columns).
+  voucher?: string;
+  dated?: string;
+  party?: string;
+  allocated?: string;
+  clears_on?: string;
+  matched_elsewhere?: string;
+  created_by?: string;
 }
 
 export interface ErpnextDraftCard {
@@ -3063,8 +3076,15 @@ export interface ErpnextDraftCard {
   created_at: string;
   expires_at: string;
   why: string;
-  // "ToDo", "Material Request", "Quotation" or "Purchase Order".
+  // "ToDo", "Material Request", "Quotation", "Purchase Order", "Dunning", or
+  // for a change or a comment the document's DocType.
   doctype: string;
+  // "create" for a new draft; "update" or "comment" on an existing document;
+  // "credit" for a credit-limit raise; "block" for a hold on a submitted
+  // supplier invoice; "match" for a bank line matched with its vouchers;
+  // "fill" for a supplier's mailed draft invoice filled from its order or
+  // receipt (each a watch job's card only).
+  operation?: string;
   fields: ErpnextDraftField[];
   lines: ErpnextDraftLine[];
   notes: string[];
@@ -3074,6 +3094,12 @@ export interface ErpnextDraftCard {
   // named you; "erpnext_desk" when from ERPNext's desk, whose page sent the
   // words; "" or absent otherwise.
   asked_in?: string;
+  // A credit-limit raise the ERP now reads differently: approving is refused.
+  changed?: boolean;
+  // A watch job's card: the job's title (e.g. "Collections"), and the job's
+  // reason line for it, a model's words shown as "Why now".
+  job_title?: string;
+  why_now?: string;
 }
 
 // What an approval made in ERPNext.
@@ -3081,12 +3107,19 @@ export interface ErpnextDraftCreated {
   doctype: string;
   name: string;
   // ERPNext's desk link for it, or "" when it gave none.
-  url: string;
+  url?: string;
   already_created: boolean;
+  // "update" or "comment" when the card changed or commented on a document;
+  // "credit" for a raised credit limit; "block" for a held invoice; "match"
+  // for a matched bank line; "fill" for a filled mailed invoice.
+  operation?: string;
+  // A raised credit limit: the company and the new limit, formatted.
+  credit?: { company: string; limit: string };
 }
 
-// An open ERPNext alert that suggests a draft (a restock, a follow-up), for
-// its "Prepare" button. The principal's alone; [] for anyone else.
+// An open ERPNext alert that suggests a draft (a restock, a follow-up, a
+// credit-limit raise), for its "Prepare" button. The principal's, and a
+// credit hold's raise for the people it names; [] for anyone else.
 export interface ErpnextAlertDraft {
   alert_id: number;
   label: string;
@@ -3102,13 +3135,20 @@ export async function getErpnextAlertDrafts(signal?: AbortSignal): Promise<Erpne
 }
 
 // The tap: ERPNext checks the suggested draft as you and leaves its card in
-// Needs you. Nothing is in ERPNext until you approve that card.
-export async function prepareErpnextAlertDraft(
-  alertId: number,
-): Promise<{ decision_id: number; already_waiting: boolean }> {
+// Needs you. Nothing is in ERPNext until you approve that card. A credit
+// hold's raise may wait for someone else's approval, or leave no card when
+// only someone with credit authority can prepare it (decision_id null);
+// `message` then says so.
+export interface ErpnextAlertDraftPrepared {
+  decision_id: number | null;
+  already_waiting: boolean;
+  message?: string;
+}
+
+export async function prepareErpnextAlertDraft(alertId: number): Promise<ErpnextAlertDraftPrepared> {
   const res = await fetch(`${API_BASE}/erpnext/alert-drafts/${alertId}`, { method: "POST" });
   if (!res.ok) throw await delegationError(res, "Couldn't prepare that draft.");
-  return (await res.json()) as { decision_id: number; already_waiting: boolean };
+  return (await res.json()) as ErpnextAlertDraftPrepared;
 }
 
 // [] for a viewer with none, or a backend without them (404).
@@ -3118,6 +3158,31 @@ export async function getErpnextDraftCards(signal?: AbortSignal): Promise<Erpnex
   if (!res.ok) throw await delegationError(res, "Couldn't load the drafts waiting for you.");
   const body = (await res.json()) as { cards: ErpnextDraftCard[] };
   return body.cards;
+}
+
+// A bank rule the bank-rules job proposed, waiting for a System Manager
+// (GET /erpnext/proposed-rules). `word` is bank-line text: shown as text only.
+export interface ProposedRule {
+  name: string;
+  kind: string;
+  company: string;
+  account: string;
+  transaction_type: string;
+  word: string;
+  lines: number;
+  misses: number;
+  url: string;
+  proposed: string;
+}
+
+// [] for anyone but the principal, a principal who isn't a System Manager,
+// or a backend without them (404).
+export async function getProposedRules(signal?: AbortSignal): Promise<ProposedRule[]> {
+  const res = await fetch(`${API_BASE}/erpnext/proposed-rules`, { signal });
+  if (res.status === 403 || res.status === 404) return [];
+  if (!res.ok) throw await delegationError(res, "Couldn't load the proposed rules.");
+  const body = (await res.json()) as { rules: ProposedRule[] };
+  return body.rules;
 }
 
 export async function approveErpnextDraft(id: number): Promise<ErpnextDraftCreated | null> {
@@ -7426,4 +7491,26 @@ export async function undoMemoryChange(change: MemoryChange): Promise<void> {
     case "note":
       return forgetHistoryNote(change.id);
   }
+}
+
+// ---- Watch jobs (Settings → <product>, the account owner only) ----
+
+/** The watch jobs, or null when this caller may not see them (403/409) or
+ * they couldn't be read: the card then shows nothing. */
+export async function getWatchJobs(signal?: AbortSignal): Promise<WatchJobs | null> {
+  const res = await fetch(`${API_BASE}/watch/jobs`, { signal, cache: "no-store" });
+  if (!res.ok) return null;
+  const body = (await res.json().catch(() => null)) as WatchJobs | null;
+  return body && Array.isArray(body.jobs) ? body : null;
+}
+
+/** Run a watch job once now. `id` is a job id GET /watch/jobs returned.
+ * Resolves to null once started, else the refusal's code ("" when the answer
+ * carried none). */
+export async function runWatchJobNow(id: string): Promise<string | null> {
+  const res = await fetch(`${API_BASE}/watch/jobs/${encodeURIComponent(id)}/run`, { method: "POST" });
+  if (res.status === 202) return null;
+  const body = (await res.json().catch(() => ({}))) as { detail?: unknown };
+  const detail = (body.detail && typeof body.detail === "object" ? body.detail : {}) as Record<string, unknown>;
+  return typeof detail.code === "string" ? detail.code : "";
 }

@@ -1,0 +1,26 @@
+id: erpnext_096
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Sales Invoice
+prior_turns:
+- page:
+    doctype: Sales Invoice
+  user: How much is overdue across all our customers?
+  assistant: $48,300 is overdue across 9 customers.
+description: 'Negative control for the persona''s rule that a figure or date now differing from an earlier answer is said (erpnext_084, erpnext_095). The earlier turn gives a total for every customer; the question narrows it to one. Metro Transit Works'' overdue amount in oe_connector''s demo data is a figure for another thing, never a difference from the $48,300 total, so the reply gives Metro''s amount from the records and claims no difference between it and the earlier total. Asked for after an adversarial read of the rule, which fired on any figure that differed, whatever it measured. The demo data''s own all-customer total isn''t $48,300, so a reply that also restates that total is giving a figure for the same thing: the rule then holds, and it says so with both figures rather than switching quietly.'
+query: And Metro alone?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  gives_metro_transit_works_overdue_amount_from_the_records: true
+  does_not_present_metros_amount_as_a_difference_from_or_a_correction_of_the_48300_total: true
+  if_it_restates_an_all_customer_overdue_total_that_differs_from_48300_it_says_so_with_both_figures: true

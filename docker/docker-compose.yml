@@ -80,6 +80,10 @@ services:
       - AUTH_URL=${AUTH_URL:-}
       - ALLOWED_EMAILS=${ALLOWED_EMAILS:-}
       - BACKEND_SHARED_SECRET=${BACKEND_SHARED_SECRET:-}
+      # The API's directory sync setting, so an SSO sign-in the roster
+      # refuses asks the API whether the directory has just approved them
+      # (docs/auth.md, "Following your identity provider's directory").
+      - DIRECTORY_SYNC_ENABLED=${DIRECTORY_SYNC_ENABLED:-}
       # Signed callers (docs/auth.md): the UI's signing key. The API reads
       # CALLER_ASSERTION_PUBLIC_KEYS from the env_file above, with this key
       # shadowed empty there.

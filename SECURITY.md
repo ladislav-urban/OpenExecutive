@@ -8,6 +8,13 @@ the latest `main`.
 
 ## Reporting a Vulnerability
 
+**This repository is Dynocortex Limited's fork of SenteLabsAI/OpenExecutive.**
+Report a vulnerability in this fork's changes (the ERP integration and the
+files listed in [CHANGES-DYNOCORTEX.md](CHANGES-DYNOCORTEX.md)) through this
+repository's private reporting below, or to security@dynocortex.com. Report
+one in upstream's own code to SenteLabs, through
+[SenteLabsAI/OpenExecutive](https://github.com/SenteLabsAI/OpenExecutive).
+
 **Please do not report security vulnerabilities through public GitHub issues,
 discussions, or pull requests.**
 

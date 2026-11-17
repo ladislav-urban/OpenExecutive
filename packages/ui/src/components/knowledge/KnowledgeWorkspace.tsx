@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import {
@@ -251,7 +252,7 @@ export default function KnowledgeWorkspace() {
         <div className="mb-6">
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">Knowledge</h1>
           <p className="mt-1.5 text-[15px] text-fg-muted max-w-2xl">
-            Everything here is read by the Executive when it answers questions about your
+            Everything here is read by <ProductName /> when it answers questions about your
             company.
           </p>
         </div>

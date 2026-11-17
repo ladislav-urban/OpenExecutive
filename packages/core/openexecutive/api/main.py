@@ -59,6 +59,7 @@ from openexecutive.api.routes import (
     take_the_lead,
     today,
     version,
+    watch_jobs,
     watchlist,
     worked_out,
     workflow_designer,
@@ -1079,6 +1080,7 @@ def create_app() -> FastAPI:
     app.include_router(erpnext_demo_people_router, tags=["erpnext"])
     app.include_router(erpnext_a2a_router, tags=["erpnext"])
     app.include_router(erpnext_drafts.router, tags=["erpnext"])
+    app.include_router(watch_jobs.router, tags=["erpnext"])
     app.include_router(architecture.router, tags=["architecture"])
     app.include_router(guide.router, tags=["guide"])
     app.include_router(health.router, tags=["health"])

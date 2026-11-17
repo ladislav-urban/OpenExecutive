@@ -39,6 +39,7 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
         profile.financials.runway_months = ctx["runway_months"]
 
     from openexecutive.evals.scenarios import (
+        scenario_decided_cards,
         scenario_principal_role,
         scenario_query,
         scenario_turn_surface,
@@ -58,15 +59,22 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     )
     # A follow-up: the turns it follows, in the session's history.
     seed_prior_turns(session, scenario)
+    # The draft cards its conversation left, as the turn's note is told them
+    # (never written to the ledger, and forgotten after the turn).
+    from openexecutive.integrations.erpnext_drafts import decided_cards_override
 
-    response = await executive.chat(
-        user_message=scenario_query(scenario),
-        session=session,
-        channel_context_block=channel_block,
-        # chat() sets the turn's speaker from this, as the chat route passes
-        # the signed-in person: a `speaker` scenario's caller, else None.
-        person_id=surface.get("caller_person_id"),
-    )
+    cards_token = decided_cards_override.set(scenario_decided_cards(scenario))
+    try:
+        response = await executive.chat(
+            user_message=scenario_query(scenario),
+            session=session,
+            channel_context_block=channel_block,
+            # chat() sets the turn's speaker from this, as the chat route
+            # passes the signed-in person: a `speaker` scenario's caller, else None.
+            person_id=surface.get("caller_person_id"),
+        )
+    finally:
+        decided_cards_override.reset(cards_token)
 
     return {
         "id": scenario["id"],
@@ -276,6 +284,11 @@ async def main() -> None:
         help="Run the A2A supplier agent's scenarios (type: supplier) over their own documents.",
     )
     parser.add_argument(
+        "--watch-reason",
+        action="store_true",
+        help="Run a watch job's model reason line (type: watch_reason) through the job's own reason step.",
+    )
+    parser.add_argument(
         "--mcp",
         action="store_true",
         help=(
@@ -284,9 +297,9 @@ async def main() -> None:
         ),
     )
     args = parser.parse_args()
-    mode_flags = [args.triage, args.workflow, args.mcp, args.inbox, args.supplier]
+    mode_flags = [args.triage, args.workflow, args.mcp, args.inbox, args.supplier, args.watch_reason]
     if sum(mode_flags) > 1:
-        parser.error("--triage, --workflow, --mcp, --inbox and --supplier are mutually exclusive")
+        parser.error("--triage, --workflow, --mcp, --inbox, --supplier and --watch-reason are mutually exclusive")
 
     os.environ.setdefault("COMPANY_PROFILE_PATH", "./company/profile.yaml")
     os.environ.setdefault("VECTOR_STORE_PATH", "./chroma_db")
@@ -313,18 +326,7 @@ async def main() -> None:
     output_dir = Path(args.output)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    def _scenario_kind(s: dict) -> str:
-        if s.get("domain") == "triage":
-            return "triage"
-        if s.get("type") == "workflow":
-            return "workflow"
-        if s.get("type") == "inbox":
-            return "inbox"
-        if s.get("type") == "supplier":
-            return "supplier"
-        if s.get("requires_mcp"):
-            return "mcp"
-        return "chat"
+    from openexecutive.evals.scenarios import scenario_kind as _scenario_kind
 
     if args.triage:
         target_kind = "triage"
@@ -336,6 +338,8 @@ async def main() -> None:
         target_kind = "inbox"
     elif args.supplier:
         target_kind = "supplier"
+    elif args.watch_reason:
+        target_kind = "watch_reason"
     else:
         target_kind = "chat"
 
@@ -369,12 +373,20 @@ async def main() -> None:
             except Exception as e:
                 print(f"    → ERROR: {e}")
                 results.append({"id": scenario["id"], "error": str(e), "passed": False})
-    elif target_kind in ("inbox", "supplier"):
-        # The inbox watcher's two model calls, or the A2A supplier agent,
-        # judged in the package runner.
-        from openexecutive.evals.runner import run_inbox_scenario, run_supplier_scenario
+    elif target_kind in ("inbox", "supplier", "watch_reason"):
+        # The inbox watcher's two model calls, the A2A supplier agent, or a
+        # watch job's reason line, judged in the package runner.
+        from openexecutive.evals.runner import (
+            run_inbox_scenario,
+            run_supplier_scenario,
+            run_watch_reason_scenario,
+        )
 
-        run_one = run_inbox_scenario if target_kind == "inbox" else run_supplier_scenario
+        run_one = {
+            "inbox": run_inbox_scenario,
+            "supplier": run_supplier_scenario,
+            "watch_reason": run_watch_reason_scenario,
+        }[target_kind]
         for scenario in scenarios:
             print(f"  [{scenario['id']}] {scenario['description']}")
             try:

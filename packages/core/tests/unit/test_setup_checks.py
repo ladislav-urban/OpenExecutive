@@ -251,7 +251,7 @@ def test_exec_email() -> None:
     sample = check_exec_email(make_snap(make_settings(EXEC_EMAIL_ADDRESS="exec@example.com")))
     assert sample.state == "warn" and "sample address" in sample.summary
     real = check_exec_email(make_snap())
-    assert (real.state, real.summary) == ("ok", "The Executive sends email as exec@acme.io.")
+    assert (real.state, real.summary) == ("ok", "Open Executive sends email as exec@acme.io.")
 
 
 def test_is_example_email() -> None:
@@ -843,7 +843,7 @@ async def test_run_checks_keeps_order_and_contains_a_crash(
     company = checks[list(LABELS).index("company")]
     assert (company.state, company.summary) == ("error", "This check couldn't run.")
     assert check_logs == ["setup status: the company check crashed (RuntimeError)"]
-    assert all(c.label == LABELS[c.id] for c in checks)
+    assert all(c.label == setup_checks._label(c.id) for c in checks)
 
 
 @pytest.fixture

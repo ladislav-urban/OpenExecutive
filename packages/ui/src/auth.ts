@@ -9,6 +9,7 @@ import {
   describeDenial,
   parseAllowedEmails,
   resolveAllowed,
+  resolveSessionAllowed,
   type AllowDecision,
 } from "@/lib/allowlist";
 import {
@@ -18,6 +19,13 @@ import {
   localLoginSessionAllowed,
 } from "@/lib/localLogin";
 import { directoryRefusal, directorySubjects } from "@/lib/directory";
+import {
+  WAITING_REDIRECT,
+  admitAfterDenial,
+  admitEligible,
+  directorySyncOn,
+  requestAdmit,
+} from "@/lib/directoryAdmit";
 import { OIDC_PROVIDER_ID, emailVerified, oidcConfig } from "@/lib/oidc";
 import { endedSessions } from "@/lib/endedSessionsServer";
 import type { ProviderSession } from "@/lib/endedSessions";
@@ -30,6 +38,14 @@ const ENV_ALLOWED = parseAllowedEmails(process.env.ALLOWED_EMAILS);
 
 const BACKEND_BASE = process.env.BACKEND_BASE_URL ?? "http://localhost:8000";
 const BACKEND_SHARED_SECRET = process.env.BACKEND_SHARED_SECRET ?? "";
+
+// The API's DIRECTORY_SYNC_ENABLED, mirrored here: while it is on, an SSO
+// sign-in the roster refuses asks the API to admit someone the directory has
+// just approved (lib/directoryAdmit.ts). The API checks its own setting too.
+const DIRECTORY_SYNC_ON = directorySyncOn(process.env.DIRECTORY_SYNC_ENABLED);
+
+// How long sign-in waits for that answer; the API keeps its reads under it.
+const ADMIT_TIMEOUT_MS = 4000;
 
 // SSO sign-in through any OpenID Connect provider (see lib/oidc.ts), when
 // AUTH_OIDC_ISSUER / _ID / _SECRET are all set and the issuer is https.
@@ -187,7 +203,14 @@ async function judgeSession(session: Session | null, host: string | null): Promi
   if (session?.providerSession && (await providerSessionOver(session.providerSession))) {
     return { kind: "ended", email };
   }
-  const decision = await checkEmailAllowed(email);
+  // A session newer than this bundle's roster is judged on a fresh read, so
+  // someone admitted at sign-in isn't revoked by an older roster here.
+  const decision = await resolveSessionAllowed(
+    email,
+    ENV_ALLOWED,
+    loadRoster,
+    session?.providerSession?.signedInAt ?? null,
+  );
   // Exhaustive on purpose: a `!== "revoke"` test would admit any future
   // SessionAction, i.e. fail open. This way adding one is a build error.
   switch (decideSessionAction(decision)) {
@@ -312,6 +335,44 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return false;
       }
       const { allowed, source, rosterUnknown } = await checkEmailAllowed(email);
+      const sub = profile?.sub;
+      if (
+        typeof sub === "string" &&
+        admitEligible({ provider, ssoProviderId: OIDC_PROVIDER_ID, syncOn: DIRECTORY_SYNC_ON, allowed, source, sub })
+      ) {
+        // Refused by the roster: the directory may have approved them since
+        // the last sync run. One fresh read of the roster after an admit
+        // feeds both the allow-list and the directory's identities, and the
+        // same two checks as below decide.
+        const outcome = await admitAfterDenial(
+          { subject: sub, email },
+          {
+            admit: (subject, mail) =>
+              requestAdmit(subject, mail, {
+                baseUrl: BACKEND_BASE,
+                sharedSecret: BACKEND_SHARED_SECRET,
+                timeoutMs: ADMIT_TIMEOUT_MS,
+                fetchImpl: (input, init) => fetch(input, init),
+              }),
+            refresh: () => loadRoster.refresh(),
+            recheck: async (fresh) => {
+              const again = await resolveAllowed(email, ENV_ALLOWED, async () => fresh.emails);
+              if (!again.allowed) return "not_in_allowlist";
+              return directoryRefusal({ provider, email, sub }, directorySubjects(fresh.rows), OIDC_PROVIDER_ID);
+            },
+          },
+        );
+        if (outcome.allow) return true;
+        auditAuth("auth_login", `Login denied: ${email} (${outcome.reason.replaceAll("_", " ")})`, email, {
+          denied: true,
+          reason: outcome.reason,
+          source,
+          roster_unavailable: rosterUnknown,
+          provider,
+          admit: outcome.code,
+        });
+        return outcome.waiting ? WAITING_REDIRECT : false;
+      }
       if (!allowed) {
         auditAuth(
           "auth_login",

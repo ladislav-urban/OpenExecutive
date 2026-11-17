@@ -29,6 +29,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -358,12 +359,15 @@ def close_externally(
     instance_id: int,
     *,
     reason: str,
+    proposed_only: bool = False,
     db_path: Path | None = None,
 ) -> bool:
     """proposed | executing → closed_externally, compare-and-set: something
     outside the app settled it. ``reason`` is a short code, kept in
-    ``reversal_reason``."""
+    ``reversal_reason``. ``proposed_only``: never a card being carried out
+    (an approval in flight), so False when it turned ``executing``."""
     now = datetime.now(UTC).isoformat()
+    statuses = (STATUS_PROPOSED, STATUS_PROPOSED) if proposed_only else tuple(OPEN_STATUSES)
     with _get_conn(db_path or _db_path()) as conn:
         result = conn.execute(
             """
@@ -371,7 +375,7 @@ def close_externally(
             SET status = ?, resolved_at = ?, reversal_reason = ?
             WHERE id = ? AND status IN (?, ?)
             """,
-            (STATUS_CLOSED_EXTERNALLY, now, reason[:200], instance_id, *OPEN_STATUSES),
+            (STATUS_CLOSED_EXTERNALLY, now, reason[:200], instance_id, *statuses),
         )
         return result.rowcount == 1
 
@@ -469,6 +473,35 @@ def list_instances(
     params.append(limit)
     with _get_conn(db_path or _db_path()) as conn:
         rows = conn.execute(sql, params).fetchall()
+    return [DecisionInstance(**dict(r)) for r in rows]
+
+
+def list_session_instances(
+    decision_class: str,
+    session_id: str,
+    *,
+    approver_person_id: int | None = None,
+    limit: int = 100,
+    db_path: Path | None = None,
+) -> list[DecisionInstance]:
+    """``decision_class`` rows a conversation (``originating_session_id``)
+    left, newest first; with ``approver_person_id``, only that person's. A
+    database where no decision was ever recorded (no table yet) has none;
+    any other failure raises."""
+    sql = "SELECT * FROM decision_instances WHERE decision_class = ? AND originating_session_id = ?"
+    params: list[Any] = [decision_class, session_id]
+    if approver_person_id is not None:
+        sql += " AND approver_person_id = ?"
+        params.append(approver_person_id)
+    sql += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with _get_conn(db_path or _db_path()) as conn:
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError as exc:
+            if "no such table" in str(exc):
+                return []
+            raise
     return [DecisionInstance(**dict(r)) for r in rows]
 
 

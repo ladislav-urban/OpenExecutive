@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -55,7 +56,7 @@ export default function HowItsDone({
     <section className="rounded-2xl border border-line bg-surface-elevated p-5 shadow-sm sm:p-7">
       <h2 className="text-lg font-semibold text-fg">How it&rsquo;s done</h2>
       <p className="mt-1 text-sm text-fg-muted">
-        Your Executive follows this for {workflowTitle}, here and in chat.
+        <ProductName /> follows this for {workflowTitle}, here and in chat.
       </p>
       <div className="mt-4 space-y-6">
         {skills.map((s) => (

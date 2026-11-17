@@ -1,5 +1,6 @@
 "use client";
 
+import { useNamed } from "@/components/embed/EmbedProvider";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSessions } from "@/components/sessions/SessionsContext";
@@ -108,6 +109,7 @@ export function GettingStartedCard({
   hide,
   onAsk,
 }: GettingStartedState & { onAsk?: () => void }) {
+  const named = useNamed();
   const progress = checklistProgress(items);
   return (
     <section
@@ -142,7 +144,7 @@ export function GettingStartedCard({
             </span>
             <div className="min-w-0 flex-1">
               <p className="text-[15px] font-semibold text-fg">
-                {item.title}
+                {named(item.title)}
                 <span className="sr-only">{item.done ? " (done)" : ""}</span>
               </p>
               <p className="text-[13px] text-fg-muted leading-snug">{item.detail}</p>

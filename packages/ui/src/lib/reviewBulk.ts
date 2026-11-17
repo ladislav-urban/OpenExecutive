@@ -62,7 +62,7 @@ export function domainBulkActions(
       domain,
       count: defaults,
       label: `Curate ${domain} (${defaults})`,
-      detail: `Send ${defaults} shipped item(s) in ${domain} for review — they will be withheld from the Executive until approved.`,
+      detail: `Send ${defaults} shipped item(s) in ${domain} for review — they won't be used until approved.`,
     });
   }
   return actions;

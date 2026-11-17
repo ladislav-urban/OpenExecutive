@@ -22,6 +22,11 @@ if TYPE_CHECKING:
     from openexecutive.memory.workspace_settings import PrincipalRole
 
 
+# A watch job's model "reason" line (``type: watch_reason``): the scenario's
+# findings go through the job's own reason step.
+WATCH_REASON = "watch_reason"
+
+
 def _scenarios_dir() -> Path:
     env_path = os.environ.get("EVAL_SCENARIOS_PATH")
     if env_path:
@@ -39,6 +44,8 @@ def scenario_kind(s: dict[str, Any]) -> str:
         return "inbox"
     if s.get("type") == "supplier":
         return "supplier"
+    if s.get("type") == WATCH_REASON:
+        return WATCH_REASON
     if s.get("requires_mcp"):
         return "mcp"
     return "chat"
@@ -330,6 +337,73 @@ def prior_turns_section(scenario: dict[str, Any]) -> str:
     )
 
 
+_DECIDED_OUTCOMES = frozenset({"approved", "dismissed", "closed", "expired"})
+_DECIDED_KEYS = frozenset({"doctype", "outcome", "closed_code", "replaced", "name", "hours_ago", "tried"})
+
+
+def scenario_decided_cards(scenario: dict[str, Any]) -> tuple[Any, ...] | None:
+    """The ERPNext draft cards this conversation left that are no longer
+    waiting (``decided_cards``), as the turn's ``<decided_cards>`` note is
+    told them, or None when the scenario has none. Each is
+    ``{doctype, outcome, hours_ago, closed_code?, replaced?, name?, tried?}``; the
+    runners hand them to ``erpnext_drafts.decided_cards_override``, so no
+    card is ever written to the install's ledger. Raises ValueError on a
+    malformed block."""
+    from datetime import UTC, datetime, timedelta
+
+    from openexecutive.integrations.erpnext_drafts import DECIDED_WINDOW, DecidedCard
+
+    raw = scenario.get("decided_cards")
+    if raw is None:
+        return None
+    if not isinstance(raw, list) or not raw:
+        raise ValueError("`decided_cards`: a list of {doctype, outcome, hours_ago, closed_code?, replaced?, name?}")
+    now = datetime.now(UTC)
+    found: list[DecidedCard] = []
+    for card in raw:
+        if not isinstance(card, dict) or set(card) - _DECIDED_KEYS:
+            raise ValueError("`decided_cards`: each card is {doctype, outcome, hours_ago, closed_code?, replaced?, name?}")
+        doctype, outcome, hours = card.get("doctype"), card.get("outcome"), card.get("hours_ago")
+        if not isinstance(doctype, str) or not doctype.strip():
+            raise ValueError("`decided_cards`: each card needs a doctype")
+        if outcome not in _DECIDED_OUTCOMES:
+            raise ValueError(f"`decided_cards`: outcome is one of {sorted(_DECIDED_OUTCOMES)}")
+        if (
+            not isinstance(hours, (int, float)) or isinstance(hours, bool)
+            or not 0 <= hours <= DECIDED_WINDOW.total_seconds() / 3600
+        ):
+            raise ValueError("`decided_cards`: hours_ago is a number of hours within the note's window")
+        code, replaced, name = card.get("closed_code", ""), card.get("replaced", False), card.get("name", "")
+        tried = card.get("tried", False)
+        if (
+            not isinstance(code, str) or not isinstance(replaced, bool) or not isinstance(name, str)
+            or not isinstance(tried, bool)
+        ):
+            raise ValueError("`decided_cards`: closed_code and name are text, replaced and tried are true or false")
+        found.append(DecidedCard(
+            doctype=doctype.strip(), outcome=str(outcome), decided_at=now - timedelta(hours=float(hours)),
+            closed_code=code, replaced=replaced, name=name, tried=tried,
+        ))
+    return tuple(sorted(found, key=lambda c: c.decided_at))
+
+
+def decided_cards_section(scenario: dict[str, Any]) -> str:
+    """For a judge: what the assistant was told became of the conversation's
+    draft cards, or "" when the scenario has none (every other judge prompt
+    stays byte-identical)."""
+    from openexecutive.integrations.erpnext_drafts import decided_says
+
+    found = scenario_decided_cards(scenario)
+    if not found:
+        return ""
+    lines = "\n".join(f"- {c.doctype} draft card: {decided_says(c)}." for c in found)
+    return (
+        "\nDRAFT CARDS THE ASSISTANT WAS TOLD ABOUT (left earlier in this conversation; "
+        "this is all the record says about them, so any other reason it gives is invented):\n"
+        f"{lines}\n"
+    )
+
+
 def scenario_voice_persona(scenario: dict[str, Any]) -> str | None:
     """The scenario's ``voice_persona`` slug, or None to use the install's
     voice. An unknown slug raises ValueError, so a typo fails the scenario
@@ -546,6 +620,84 @@ def scenario_supplier(scenario: dict[str, Any]) -> SupplierCase | None:
     return SupplierCase(str(raw["name"]), message.strip(), docs["orders"], docs["invoices"])
 
 
+@dataclass
+class WatchReasonFinding:
+    # The scenario's name for the finding (for the judge and the result;
+    # the model never sees it).
+    label: str
+    # The finding as the job's own code builds it (a ``CardSpec``).
+    spec: Any
+    # True: a line must reach the notice; False: none may; None: either.
+    expect_line: bool | None
+
+
+@dataclass
+class WatchReasonCase:
+    job: Any  # the registered ``WatchJob``
+    findings: list[WatchReasonFinding]
+
+
+# How a scenario gives one finding of each job it can run: (block, today) ->
+# the job's own CardSpec. Only a job listed here has watch_reason scenarios.
+# None is listed today: project status, the first, writes its sentence in
+# code from the figures (watch.jobs.project_status.standing), so it has no
+# model line to evaluate. A job with a reason step adds its builder here.
+_WATCH_FINDINGS: dict[str, Any] = {}
+
+
+def scenario_watch_reason(scenario: dict[str, Any]) -> WatchReasonCase | None:
+    """The scenario's ``watch_reason`` block (a watch job's model line,
+    ``type: watch_reason``) as a ``WatchReasonCase``, or None when it has
+    none.
+
+    Shape::
+
+        watch_reason:
+          job: <a job listed in _WATCH_FINDINGS>
+          findings:                 # one or more, each its own call
+            - ...                   # the job's builder's own keys
+              expect_line: true     # optional: a line must (true) or
+                                    # must not (false) reach the notice
+
+    Each finding is built by the job's own code, so the model is shown its
+    facts exactly as a run shows them. Raises ValueError on a malformed
+    block."""
+    from datetime import date
+
+    from openexecutive.watch import registry
+    from openexecutive.watch.runner import MAX_REASON_FINDINGS
+
+    raw = scenario.get(WATCH_REASON)
+    if raw is None:
+        return None
+    if not isinstance(raw, dict) or set(raw) - {"job", "findings"}:
+        raise ValueError("watch_reason must be a mapping of job and findings")
+    job = registry.get(raw.get("job"))
+    build = _WATCH_FINDINGS.get(str(raw.get("job")))
+    if job is None or job.reason_schema is None or build is None:
+        raise ValueError(f"watch_reason.job must be one of {sorted(_WATCH_FINDINGS)}")
+    found = raw.get("findings")
+    limit = min(job.reason_schema.max_findings, MAX_REASON_FINDINGS)
+    if not isinstance(found, list) or not 1 <= len(found) <= limit:
+        raise ValueError(f"watch_reason.findings: a list of 1 to {limit} findings")
+    today = date.today()
+    findings: list[WatchReasonFinding] = []
+    for n, item in enumerate(found, 1):
+        if not isinstance(item, dict):
+            raise ValueError(f"watch_reason.findings[{n}] must be a mapping")
+        expect = item.get("expect_line")
+        if expect is not None and not isinstance(expect, bool):
+            raise ValueError(f"watch_reason.findings[{n}]: `expect_line` must be true or false")
+        try:
+            spec = build(item, today)
+        except ValueError as e:
+            raise ValueError(f"watch_reason.findings[{n}]: {e}") from e
+        findings.append(WatchReasonFinding(str(item["project"]), spec, expect))
+    if len({f.spec.key for f in findings}) != len(findings):
+        raise ValueError("watch_reason.findings: each finding needs its own project")
+    return WatchReasonCase(job, findings)
+
+
 def builtin_scenario_ids() -> set[str]:
     return {s["id"] for s in _load_builtin_scenarios()}
 
@@ -600,6 +752,8 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             raise ValueError(f"`surface`: {e}") from e
     if s.get("prior_turns") is not None:
         scenario_prior_turns(s)
+    if s.get("decided_cards") is not None:
+        scenario_decided_cards(s)
     for key in ("expected_view_kinds", "forbidden_view_kinds"):
         if s.get(key) is None:
             continue
@@ -608,6 +762,19 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             raise ValueError(f"`{key}`: a list of non-empty strings")
         if scenario_surface(s) != SURFACE_ERPNEXT_PANEL:
             raise ValueError(f"`{key}`: only a scenario with surface: erpnext_panel opens views")
+    if s.get("expected_report_filters") is not None:
+        wanted = s["expected_report_filters"]
+        if (
+            not isinstance(wanted, dict)
+            or not wanted
+            or not all(isinstance(name, str) and name.strip() and _report_filters_ok(needed) for name, needed in wanted.items())
+        ):
+            raise ValueError(
+                "`expected_report_filters`: a mapping of report name to a list of filter names, "
+                "or to a mapping of filter name to its value (a string, or a list of strings it must hold)"
+            )
+        if scenario_surface(s) != SURFACE_ERPNEXT_PANEL:
+            raise ValueError("`expected_report_filters`: only a scenario with surface: erpnext_panel opens views")
     for flag in ("demo_viewer", "forbid_principal_name", "forbid_repeated_text"):
         if s.get(flag) is not None and not isinstance(s[flag], bool):
             raise ValueError(f"`{flag}` must be true or false")
@@ -635,6 +802,11 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
             scenario_supplier(s)
         except ValueError as e:
             raise ValueError(f"`supplier`: {e}") from e
+    if s.get(WATCH_REASON) is not None:
+        try:
+            scenario_watch_reason(s)
+        except ValueError as e:
+            raise ValueError(f"`watch_reason`: {e}") from e
 
     scenario_routing(s)
 
@@ -647,27 +819,86 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         raise ValueError("inbox scenarios require an `inbox` block")
     if k == "supplier" and s.get("supplier") is None:
         raise ValueError("supplier scenarios require a `supplier` block")
+    if k == WATCH_REASON and s.get(WATCH_REASON) is None:
+        raise ValueError("watch_reason scenarios require a `watch_reason` block")
     if k == "triage" and not s.get("event"):
         raise ValueError("triage scenarios require an `event` field")
 
     return s
 
 
+def _report_filters_ok(needed: Any) -> bool:
+    """A report's expected filters: a list of names, or names with values."""
+    if isinstance(needed, list):
+        return bool(needed) and all(isinstance(f, str) and f.strip() for f in needed)
+    if isinstance(needed, dict):
+        return bool(needed) and all(
+            isinstance(f, str)
+            and f.strip()
+            and (
+                (isinstance(v, str) and v.strip())
+                or (isinstance(v, list) and v and all(isinstance(x, str) and x.strip() for x in v))
+            )
+            for f, v in needed.items()
+        )
+    return False
+
+
+def _report_filters_met(needed: list[str] | dict[str, Any], filters: dict[str, Any]) -> bool:
+    """Whether a view's filters hold every expected name, and each expected
+    value: a string equal to the filter's, or a list whose every item is in
+    the filter's list."""
+    if isinstance(needed, list):
+        return all(f in filters for f in needed)
+    for name, value in needed.items():
+        got = filters.get(name)
+        if isinstance(value, list):
+            if not isinstance(got, list) or not all(v in got for v in value):
+                return False
+        elif got != value:
+            return False
+    return True
+
+
 def view_kinds_check(scenario: dict[str, Any], views: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Whether a panel turn opened the kinds of view the scenario expects
     beside the panel, from what ``erpnext_panel.note_erpnext_call`` kept (the
     show calls ERPNext accepted): deterministic, since the judge reads only the
-    reply. ``None`` when the scenario sets neither ``expected_view_kinds`` nor
-    ``forbidden_view_kinds``; otherwise ``{"kinds", "missing", "forbidden",
-    "ok"}``."""
+    reply. ``None`` when the scenario sets none of ``expected_view_kinds``,
+    ``forbidden_view_kinds`` and ``expected_report_filters``; otherwise
+    ``{"kinds", "missing", "forbidden", "ok"}``, with ``"reports_unmet"`` (the
+    reports never opened with their expected filters) when the scenario
+    sets ``expected_report_filters``."""
     expected = [k.strip() for k in scenario.get("expected_view_kinds") or []]
     banned = [k.strip() for k in scenario.get("forbidden_view_kinds") or []]
-    if not expected and not banned:
+    wanted = scenario.get("expected_report_filters") or {}
+    if not expected and not banned and not wanted:
         return None
     kinds = sorted({str(v.get("kind")) for v in views if isinstance(v, dict) and v.get("kind")})
     missing = [k for k in expected if k not in kinds]
     forbidden = [k for k in banned if k in kinds]
-    return {"kinds": kinds, "missing": missing, "forbidden": forbidden, "ok": not missing and not forbidden}
+    out: dict[str, Any] = {"kinds": kinds, "missing": missing, "forbidden": forbidden}
+    ok = not missing and not forbidden
+    if wanted:
+        # A report the turn must open with these filters among its own, and
+        # their values where given (oe_connector refuses a name the report
+        # doesn't declare, so a refused show never counts).
+        unmet = [
+            name
+            for name, needed in wanted.items()
+            if not any(
+                isinstance(v, dict)
+                and v.get("kind") == "report"
+                and v.get("report_name") == name
+                and isinstance(v.get("filters"), dict)
+                and _report_filters_met(needed, v["filters"])
+                for v in views
+            )
+        ]
+        out["reports_unmet"] = unmet
+        ok = ok and not unmet
+    out["ok"] = ok
+    return out
 
 
 def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:

@@ -92,13 +92,14 @@ class SetupCheck(BaseModel):
     last_activity: str | None = None
 
 
-# Every check, in display order: what the Executive needs to work at all, then
+# Every check, in display order: what the system needs to work at all, then
 # the channels people reach it through, then what runs in the background.
 LABELS: dict[str, str] = {
     "ai_model": "AI model",
     "company": "Company setup",
     "owner": "Owner",
-    "exec_email": "The Executive's email address",
+    # "{product}": the product's name (utils.product_name), written in by _label.
+    "exec_email": "{product}'s email address",
     "api_secret": "API protection",
     "gmail": "Email (Gmail)",
     "your_gmail": "Your own mailbox (Act as me)",
@@ -113,6 +114,17 @@ LABELS: dict[str, str] = {
 }
 
 
+def _product() -> str:
+    from openexecutive.utils.product_name import product_name
+
+    return product_name()
+
+
+def _label(check_id: str) -> str:
+    """A check's label, under the product's name (OE_PRODUCT_NAME)."""
+    return LABELS[check_id].replace("{product}", _product())
+
+
 def _result(
     check_id: str,
     state: State,
@@ -124,7 +136,7 @@ def _result(
 ) -> SetupCheck:
     return SetupCheck(
         id=check_id,
-        label=LABELS[check_id],
+        label=_label(check_id),
         state=state,
         summary=summary,
         fix=fix,
@@ -207,7 +219,7 @@ async def check_ai_model(snap: Snapshot) -> SetupCheck:
         return _result(
             "ai_model",
             "error",
-            f"{refused.provider} refused the Executive's requests at {when}: {why}. "
+            f"{refused.provider} refused {_product()}'s requests at {when}: {why}. "
             "Nobody gets an answer until that changes.",
             f"{fix}. The next question then answers as usual, with no restart.",
         )
@@ -231,7 +243,7 @@ async def check_ai_model(snap: Snapshot) -> SetupCheck:
         return _result(
             "ai_model",
             "error",
-            "ANTHROPIC_API_KEY still has the sample value from .env.example, so the Executive can't answer.",
+            f"ANTHROPIC_API_KEY still has the sample value from .env.example, so {_product()} can't answer.",
             f"Paste your key from console.anthropic.com over it in the .env file, {_RESTART}",
         )
 
@@ -294,8 +306,8 @@ def check_company(snap: Snapshot) -> SetupCheck:
         return _result(
             "company",
             "warn",
-            "Not done yet: the Executive doesn't know your company.",
-            "Run the setup interview: describe your business, then check what the Executive drafts.",
+            f"Not done yet: {_product()} doesn't know your company.",
+            f"Run the setup interview: describe your business, then check what {_product()} drafts.",
             link="/onboard",
         )
     return _result("company", "ok", f"Set up for {_clip(profile.name)}.")
@@ -328,7 +340,7 @@ def check_owner(snap: Snapshot) -> SetupCheck:
 
 def check_exec_email(snap: Snapshot) -> SetupCheck:
     address = snap.settings.exec_email_address.strip()
-    fix = f"Set EXEC_EMAIL_ADDRESS in .env to the Gmail address the Executive sends from, {_RESTART}"
+    fix = f"Set EXEC_EMAIL_ADDRESS in .env to the Gmail address {_product()} sends from, {_RESTART}"
     if "@" not in address:
         return _result("exec_email", "error", "EXEC_EMAIL_ADDRESS isn't an email address.", fix)
     if is_example_email(address):
@@ -339,7 +351,7 @@ def check_exec_email(snap: Snapshot) -> SetupCheck:
             "one; email doesn't.",
             fix,
         )
-    return _result("exec_email", "ok", f"The Executive sends email as {address}.")
+    return _result("exec_email", "ok", f"{_product()} sends email as {address}.")
 
 
 def check_api_protection(snap: Snapshot) -> SetupCheck:
@@ -852,7 +864,7 @@ def check_gmail(snap: Snapshot) -> SetupCheck:
         return _result(
             "gmail",
             "off",
-            "Not set up: the Executive can't read or send email.",
+            f"Not set up: {_product()} can't read or send email.",
             "To connect Gmail, follow the Google Workspace steps in .env.example.",
         )
     if snap.mcp_gateway is None:
@@ -868,7 +880,7 @@ def check_gmail(snap: Snapshot) -> SetupCheck:
         return _result(
             "gmail",
             "error",
-            f"Google turned the Executive's sign-in as {settings.exec_email_address} away: "
+            f"Google turned {_product()}'s sign-in as {settings.exec_email_address} away: "
             "it expired or was revoked, so email, calendar and files are off.",
             f"Sign Google in again as that address (scripts/mint-google-token.py), {_RESTART}",
         )
@@ -877,11 +889,11 @@ def check_gmail(snap: Snapshot) -> SetupCheck:
         return _result(
             "gmail",
             "error",
-            f"Google can't sign the Executive in: {missing} isn't set.",
+            f"Google can't sign {_product()} in: {missing} isn't set.",
             f"Set it in .env (the Google Workspace steps there explain how), {_RESTART}",
         )
     summary = (
-        f"Connected. The Executive checks {settings.exec_email_address}'s inbox every "
+        f"Connected. {_product()} checks {settings.exec_email_address}'s inbox every "
         f"{settings.email_poll_interval_seconds} seconds."
     )
     if snap.last_inbound.get("email") is None:
@@ -961,9 +973,9 @@ async def check_your_gmail(snap: Snapshot) -> SetupCheck:
         )
     if status == "connected":
         summary = f"Connected to {owner.email}. " + (
-            "Act as me is on: the Executive can draft replies as you, in your own mailbox."
+            f"Act as me is on: {_product()} can draft replies as you, in your own mailbox."
             if on
-            else "Turn Act as me on in Settings to let the Executive draft replies as you."
+            else f"Turn Act as me on in Settings to let {_product()} draft replies as you."
         )
         watch = await asyncio.to_thread(get_watch, owner.id) if on and owner.id is not None else None
         if watch is not None and watch.enabled:
@@ -981,7 +993,7 @@ async def check_your_gmail(snap: Snapshot) -> SetupCheck:
         return _result(
             "your_gmail",
             "warn" if on else "off",
-            "Not set up (optional): the Executive can't draft emails as you in your own mailbox.",
+            f"Not set up (optional): {_product()} can't draft emails as you in your own mailbox.",
             "Signed in as yourself, run scripts/connect-own-gmail.py for Gmail or "
             "scripts/connect-own-outlook.py for Outlook (see .env.example → Act as me), then "
             "put the file it writes in DELEGATION_GOOGLE_CREDENTIALS_DIR.",
@@ -1219,7 +1231,7 @@ def check_brief(snap: Snapshot) -> SetupCheck:
             "warn",
             f"Your last {brief_name(last.kind)} went {channel_phrase(last.channel)}, "
             f"because {first} didn't work.",
-            f'See the "{LABELS[_DELIVERY_CHANNEL_CHECKS[plan[0]]]}" light on this page.',
+            f'See the "{_label(_DELIVERY_CHANNEL_CHECKS[plan[0]])}" light on this page.',
         )
     zone = ZoneInfo(snap.brief_zone or "UTC")
     times = [

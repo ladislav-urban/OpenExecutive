@@ -15,7 +15,8 @@ so block 0's 1h cache stays warm.
 from __future__ import annotations
 
 import re
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -105,7 +106,7 @@ GOOGLE_TOOLS_ABOVE_CORE: frozenset[str] = frozenset({
 
 ERPNEXT_SERVER = "erpnext"
 
-# The oe_connector app's read tools (github.com/ladislav-urban/oe_connector),
+# The oe_connector app's read tools (the app runs inside the ERP),
 # as the gateway names them. All six only read: oe_connector rolls back every
 # request and serves them under a read-only "OE Reader" service user. Like the
 # Google names, pinning one never widens access; it only spares the model a
@@ -146,10 +147,13 @@ ERPNEXT_DISCOVERY_QUERIES: dict[str, str] = {
 # but the approval-card path's own (integrations.erpnext_drafts).
 ERPNEXT_DRAFT_TOOLS: frozenset[str] = frozenset({
     "erpnext__draft_check",
+    "erpnext__draft_comment",
+    "erpnext__draft_dunning",
     "erpnext__draft_material_request",
     "erpnext__draft_purchase_order",
     "erpnext__draft_quotation",
     "erpnext__draft_todo",
+    "erpnext__draft_update",
 })
 
 # oe_connector's oversight tool: what became of the drafts made here. Never
@@ -166,6 +170,52 @@ ERPNEXT_ANSWER_CHECK_TOOL = "erpnext__answer_check_context"
 # Its check 3: a headline figure's standard report, run as the turn's caller.
 ERPNEXT_CONFIRM_TOOL = "erpnext__confirm_figure"
 ERPNEXT_CODE_ONLY_TOOLS: frozenset[str] = frozenset({ERPNEXT_ANSWER_CHECK_TOOL, ERPNEXT_CONFIRM_TOOL})
+
+# Tools oe_connector serves and this install pins (erpnext_tool_pin), but
+# no turn may call: reading an attachment (S4) and the mailed invoices to
+# fill belong to the invoice-capture job (phase 2), a supplier's bank-change fact (S5) belongs to the
+# payment-checks job, customers' payment records (phase 1) to the
+# collections job, which reads many customers' payment behaviour at once,
+# and bank lines and their candidate vouchers (phase 2) to the bank-matching
+# job, and the bank rules reconciled lines support, with the one write that
+# proposes one (phase 3), to the bank-rules job. The gateway refuses
+# them on every path but one: a watch job's own read of a tool
+# JOB_WITHHELD_EXCEPTIONS gives that job, under its watch_run marker with
+# exactly that tool bound, or, for propose_rule, its proposal marker
+# (erpnext_caller.proposal_for_job). The proposed rules waiting for a System
+# Manager (proposed_rules) belong to Home's "Needs you", read by code as the
+# principal's own caller, never by a turn. Tool search never shows them, and
+# the model is never offered one.
+ERPNEXT_WITHHELD_TOOLS: frozenset[str] = frozenset({
+    "erpnext__bank_line_candidates",
+    "erpnext__bank_lines_to_match",
+    "erpnext__bank_rule_evidence",
+    "erpnext__customer_payment_record",
+    "erpnext__mail_invoices_to_fill",
+    "erpnext__propose_rule",
+    "erpnext__proposed_rules",
+    "erpnext__read_attachment",
+    "erpnext__supplier_bank_changed",
+})
+
+# The one job each withheld tool opens to (watch.registry refuses a job that
+# lists a withheld tool it doesn't own, so the two stay in step).
+JOB_WITHHELD_EXCEPTIONS: Mapping[str, frozenset[str]] = MappingProxyType({
+    "collections": frozenset({"erpnext__customer_payment_record"}),
+    # Whether a supplier's bank details changed since its last payment: the
+    # payment-checks job's alone. Chat never reads it, whoever asks.
+    "payment-checks": frozenset({"erpnext__supplier_bank_changed"}),
+    # A listed account's unreconciled bank lines and ERPNext's candidate
+    # vouchers for one: the bank-matching job's alone.
+    "bank-matching": frozenset({"erpnext__bank_line_candidates", "erpnext__bank_lines_to_match"}),
+    # The drafts a supplier's mail made, and each one's PDF: the
+    # invoice-capture job's alone (oe_connector refuses both to anyone else).
+    "invoice-capture": frozenset({"erpnext__mail_invoices_to_fill", "erpnext__read_attachment"}),
+    # The bank rules a company's reconciled lines support (counts only), and
+    # the one write a watch job makes, an inert proposal of one: the
+    # bank-rules job's alone (propose_rule only under its proposal marker).
+    "bank-rules": frozenset({"erpnext__bank_rule_evidence", "erpnext__propose_rule"}),
+})
 
 # The tool ERPNext's panel uses to open what an answer talks about beside it
 # (oe_connector's views.py). Named only in the panel's own channel block
@@ -229,7 +279,9 @@ _ERPNEXT_GUIDE = (
     "(rent, payroll and the other monthly overheads, from their journal "
     "entries) with them. Fill every cell of a table you write. Never compare a "
     "figure with one you gave before (\"is now 120\", \"three, not one\"): "
-    "give the current figure alone.\n"
+    "give the current figure alone, unless the records give another figure "
+    "for the same thing you told the same person earlier in this "
+    "conversation, which you say once with both.\n"
     "  Before you write that nothing went wrong or nothing is planned, read "
     "where it would show: every batch's job cards (their time logs, remarks "
     "and comments, where a wait for a machine or a fault is noted: list the "
@@ -288,16 +340,26 @@ _ERPNEXT_GUIDE = (
     "the month before its date (a review dated Nov 2 is October's): count the "
     "reviews themselves, passed and failed, never months you infer. Say what "
     "a figure is before you judge it: the quantity and amount of a purchase "
-    "before saying it is within someone's limit.\n"
+    "before saying it is within someone's limit. Stock against what an order "
+    "or quote asks for is said as the shortfall itself, what is asked for less "
+    "what is on hand, with both figures, never as \"short of\" the amount "
+    "asked for.\n"
     "  Over several turns, a forecast keeps the figures it gave: work each "
     "week again from the same reads, every week's end being the week before "
     "plus what comes in less what goes out, with the recurring overheads "
     "(rent, payroll, utilities, the company card) in every week they fall "
-    "in. Never comment on an earlier answer's rounding or figures; give the "
-    "exact ones. A count over a narrower period than one the conversation "
-    "gave says it is part of it (\"34 of those 37 invoices fall in the last "
-    "three months, Aug 7 to Nov 7\"), never a second count with no link to "
-    "the first. Say a chart is open only when the view you opened is a "
+    "in. A what-if on a forecast (a customer paying as late as it usually "
+    "does, a bill moved) works those weeks again with the change and says "
+    "whether the lowest week moves and what it ends at, never handing the "
+    "re-run back. Never comment on an earlier answer's rounding; give the "
+    "exact figures, and when the records give another figure for the same "
+    "thing an earlier answer to the same person in this conversation gave, "
+    "say so once with both. A count or amount for "
+    "part of what the conversation gave (a narrower period, one customer of "
+    "all) says it is part of it (\"34 of those 37 invoices fall in the last "
+    "three months, Aug 7 to Nov 7\"), never a second figure with no link to "
+    "the first. Compare a delay with a payer's record exactly: one inside "
+    "its range is not beyond its slowest payment. Say a chart is open only when the view you opened is a "
     "chart. When asked for the next step, name it and who takes it (a call, "
     "by its owner), and say a deadline as what must be done by it, in plain "
     "words (\"ask Vanta before the invoice falls due on Nov 20\").\n"
@@ -325,7 +387,7 @@ _ERPNEXT_GUIDE = (
 # it searched; on the pilot it guessed shapes and names, Oct 29, 2026).
 # Written for the pin below: a test fails when the pin moves, so a changed
 # definition gets these lines checked too. Process-constant.
-ERPNEXT_ARGS_WRITTEN_FOR = "602ef2e67dc44b23a5f0b7abb13a4b1d6f026a9263470c72ff652d487d287a2a"
+ERPNEXT_ARGS_WRITTEN_FOR = "1e3c00b2728eb1cdbd99c7ac084179ab1207a6a54b4a7563cc9384e79b0631ef"
 _ERPNEXT_ARGS = (
     "  Their arguments, exactly these names, with objects and lists passed as JSON "
     "values, never as quoted strings: "
@@ -364,6 +426,7 @@ _ERPNEXT_AS_CALLER = (
 # for the DocTypes this install drafts (erpnext_draft_doctypes).
 # Process-constant, like the lines above.
 _ERPNEXT_DRAFT_KINDS = {
+    "Dunning": "a Dunning (a payment reminder letter for one overdue Sales Invoice; nothing reaches the customer until someone prints or emails it)",
     "Material Request": "a Material Request (a restock)",
     "Purchase Order": "a Purchase Order (an order to a supplier, from lines or from a submitted Material Request or Supplier Quotation)",
     "Quotation": "a Quotation (a quote for a customer)",

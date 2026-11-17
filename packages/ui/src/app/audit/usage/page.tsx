@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -196,7 +197,7 @@ export default function TokenUsagePage() {
             <section className="mt-8">
               <h2 className="text-sm font-medium text-fg mb-2">Done in one go</h2>
               <p className="text-xs text-fg-muted mb-3">
-                When work repeats over many items, the Executive builds a tool for the job and runs it
+                When work repeats over many items, <ProductName /> builds a tool for the job and runs it
                 once, instead of spending a model turn on each item.
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
@@ -224,7 +225,7 @@ export default function TokenUsagePage() {
             <section className="mt-8">
               <h2 className="text-sm font-medium text-fg mb-2">Work on files</h2>
               <p className="text-xs text-fg-muted mb-3">
-                Jobs the Executive ran with Python on files: splitting PDFs, building spreadsheets,
+                Jobs <ProductName /> ran with Python on files: splitting PDFs, building spreadsheets,
                 documents and charts. Tokens and charges are for the whole turns that ran one.
               </p>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">

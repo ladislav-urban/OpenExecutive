@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import Icon from "@/components/Icon";
 import { formatPausedAt, useExecutiveStatus } from "@/components/executive/ExecutiveStatusContext";
 import Button from "@/components/ui/Button";
@@ -24,6 +25,7 @@ function heldLabel(n: number): string {
  */
 export default function ExecutiveRunSwitch() {
   const { status, unknown, busy, error, pause, resume } = useExecutiveStatus();
+  const product = useProductName();
   const [expanded, setExpanded] = useState(false);
   const [reason, setReason] = useState("");
 
@@ -37,7 +39,7 @@ export default function ExecutiveRunSwitch() {
         title="Couldn't reach the backend — retrying"
       >
         <span className="inline-block w-2.5 h-2.5 rounded-full flex-shrink-0 bg-fg-subtle" aria-hidden="true" />
-        <span>Executive status unknown</span>
+        <span>{product}: status unknown</span>
       </div>
     );
   }
@@ -99,7 +101,7 @@ export default function ExecutiveRunSwitch() {
           </p>
           <p className="text-sm text-amber-500">{heldLabel(status.held_actions)}</p>
           {!status.can_resume && (
-            <p className="text-sm text-fg-muted">Only the principal can resume the Executive.</p>
+            <p className="text-sm text-fg-muted">Only the principal can resume {product}.</p>
           )}
         </div>
       ) : expanded ? (
@@ -120,7 +122,7 @@ export default function ExecutiveRunSwitch() {
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="primary" onClick={() => void onPause()} disabled={busy}>
               <Icon name="pause" size="w-4 h-4" />
-              {busy ? "Pausing…" : "Pause Executive"}
+              {busy ? "Pausing…" : `Pause ${product}`}
             </Button>
             <Button variant="ghost" onClick={() => setExpanded(false)} disabled={busy}>
               Cancel

@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useState } from "react";
 
 // /signin in any frame (a host origin's, lib/hostOrigins.ts): most sign-in
@@ -40,7 +41,7 @@ export default function FrameSignIn({ destination, children }: { destination: st
         rel="noopener"
         className="block w-full rounded-md bg-white px-4 py-2 text-center text-sm font-medium text-zinc-900 hover:bg-zinc-100 transition"
       >
-        Sign in to Open Executive
+        Sign in to <ProductName />
       </a>
       <p className="mt-3 text-xs text-fg-subtle">
         Sign-in opens in a new tab. Come back here when you&rsquo;re done.

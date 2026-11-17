@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useState } from "react";
 
 import Switch from "@/components/Switch";
@@ -244,7 +245,7 @@ export default function SavedToolsSettingsPage() {
   return (
     <SettingsSubpage
       title="Custom tools"
-      description="When the Executive needs a tool it doesn't have, it builds one, and keeps the ones it will need again: ones that combine its other tools, and ones that work on files. A custom tool can only do what the conversation or workflow using it is already allowed to do. Turn one off to stop it running, or switch it back to an earlier version."
+      description="When it needs a tool it doesn't have, it builds one, and keeps the ones it will need again: ones that combine its other tools, and ones that work on files. A custom tool can only do what the conversation or workflow using it is already allowed to do. Turn one off to stop it running, or switch it back to an earlier version."
     >
       {state.kind === "loading" && <p className="text-sm text-fg-muted">Loading…</p>}
       {state.kind === "forbidden" && (
@@ -270,7 +271,7 @@ export default function SavedToolsSettingsPage() {
           {state.tools.length === 0 ? (
             <SettingsCard>
               <p className="text-sm text-fg-muted">
-                No custom tools yet. They appear here when the Executive builds a tool for a job it
+                No custom tools yet. They appear here when <ProductName /> builds a tool for a job it
                 is likely to do again.
               </p>
             </SettingsCard>

@@ -164,7 +164,7 @@ export default function CompanyPanel({ onCountChange }: CompanyPanelProps) {
   }
 
   async function handleDelete(row: DocRow) {
-    if (!confirm(`Delete "${row.name}"? The Executive will stop using it.`)) return;
+    if (!confirm(`Delete "${row.name}"? It won't be used any more.`)) return;
     setError(null);
     try {
       await deleteDocument(row.ref);

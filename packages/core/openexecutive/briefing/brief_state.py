@@ -163,7 +163,7 @@ DELIVERY_PROBLEMS: dict[str, tuple[str, str]] = {
         "Connect Gmail, or add your Slack, Telegram or Discord to your People profile.",
     ),
     "gateway_down": (
-        "the Executive's mail connection wasn't running",
+        "the mail connection wasn't running",
         "It keeps retrying on its own; if the Gmail light on the Setup status page stays red, "
         "the API log says why.",
     ),
@@ -258,7 +258,7 @@ def describe_problem(reason: DeliveryReason, detail: str | None = None) -> tuple
         problem = f"{problem} ({detail})"
         if reason == "send_failed" and _RECONNECT_HINT_RE.search(detail):
             fix = (
-                "The Executive's sign-in to its mailbox expired or was revoked: connect it again, "
+                "This app's sign-in to its mailbox expired or was revoked: connect it again, "
                 "then the next brief goes out."
             )
     return problem, fix

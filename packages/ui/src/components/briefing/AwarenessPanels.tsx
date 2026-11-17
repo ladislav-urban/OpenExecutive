@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 
 import Button from "@/components/ui/Button";
@@ -39,7 +40,7 @@ export function InFlightPanelBody({ inFlight }: { inFlight: InFlightItem[] }) {
   return (
     <>
       <PanelIntro>
-        What the Executive is about to do (scheduled follow-ups &amp; nudges). Nothing here needs your approval —
+        What <ProductName /> is about to do (scheduled follow-ups &amp; nudges). Nothing here needs your approval —
         it&apos;s a heads-up.
       </PanelIntro>
       <div className="divide-y divide-line">
@@ -163,7 +164,7 @@ export function MonitoringPanelBody({
   return (
     <>
       <PanelIntro>
-        Passive signals (watchlist tickers, vendor status, external news) the Executive is tracking. Nothing here
+        Passive signals (watchlist tickers, vendor status, external news) <ProductName /> is tracking. Nothing here
         needs a decision — tap one to talk it through.
       </PanelIntro>
       {proposals.length === 0 ? (

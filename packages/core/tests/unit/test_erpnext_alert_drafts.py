@@ -197,7 +197,7 @@ def test_a_follow_up_is_worded_here_and_assigned_to_the_principal(
     }
     card = get_decision_instance(decision_id)
     assert card is not None and card.approver_person_id == roster.principal
-    assert json.loads(card.proposed_payload_json)["why"] == "Follow up overdue invoice ACC-SINV-2026-00012 (ERPNext alert)"
+    assert json.loads(card.proposed_payload_json)["why"] == "Follow up overdue invoice ACC-SINV-2026-00012 (ERP alert)"
     # A second tap is the card already waiting, checked again but not stored twice.
     erp.replies.append(json.dumps(CHECKED))
     assert _prepare(alert) == (decision_id, False)

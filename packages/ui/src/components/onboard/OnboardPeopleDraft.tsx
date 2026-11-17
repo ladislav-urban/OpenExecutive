@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { type OnboardPersonDraft } from "@/lib/api";
 
 interface Props {
@@ -34,7 +35,7 @@ export default function OnboardPeopleDraft({ people, onChange }: Props) {
         </button>
       </div>
       <p className="text-xs text-fg-muted mb-4">
-        Mark yourself with &ldquo;This is me&rdquo; — that&rsquo;s who the Executive
+        Mark yourself with &ldquo;This is me&rdquo; — that&rsquo;s who <ProductName />
         reports to and escalates to. Other contact details are added later on the
         People page.
       </p>

@@ -565,6 +565,13 @@ def group_handled(items: Sequence[Any]) -> list[tuple[Any, list[Any], int]]:
 # Summary, tiles and the quiet day
 # --------------------------------------------------------------------------- #
 
+def _product() -> str:
+    """What the install calls itself on screen (OE_PRODUCT_NAME)."""
+    from openexecutive.utils.product_name import product_name
+
+    return product_name()
+
+
 def _plural(n: int, one: str, many: str) -> str:
     return one if n == 1 else many
 
@@ -590,7 +597,7 @@ def summary(
             parts.append(SummaryPart(text=text, count=count, target=target))
 
     add(needs_you, f"{needs_you} {_plural(needs_you, 'waits', 'wait')} for your decision", SummaryTarget(kind="needs_you"))
-    add(handled, f"The Executive handled {handled} on its own", SummaryTarget(kind="panel", panel="handled"))
+    add(handled, f"{_product()} handled {handled} on its own", SummaryTarget(kind="panel", panel="handled"))
     add(people_overdue, f"{people_overdue} overdue", SummaryTarget(kind="panel", panel="people"))
     add(people_need_reply, f"{people_need_reply} awaiting reply", SummaryTarget(kind="panel", panel="people"))
     add(
@@ -705,7 +712,7 @@ def tiles(
             tone="amber" if any(f.overdue for f in in_flight) else None,
         ))
     if handled:
-        out.append(Tile(key="handled", value=str(handled), label="Handled", sub="by the Executive", tone="emerald"))
+        out.append(Tile(key="handled", value=str(handled), label="Handled", sub=f"by {_product()}", tone="emerald"))
     if monitoring:
         out.append(Tile(
             key="monitoring", value=str(monitoring), label="Monitoring",

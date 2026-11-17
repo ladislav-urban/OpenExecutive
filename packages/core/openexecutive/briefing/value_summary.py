@@ -398,7 +398,9 @@ _HEADLINE_KEYS = (
 def render_message(summary: ValueSummary, *, link: str = "") -> str:
     """The short monthly message: the counted lines that aren't zero and
     where to see the rest. Deterministic text."""
-    lines = [f"**What your Executive did in {summary.label}**", ""]
+    from openexecutive.utils.product_name import product_name
+
+    lines = [f"**What {product_name()} did in {summary.label}**", ""]
     shown = [summary.line(k) for k in _HEADLINE_KEYS]
     for line in shown:
         if line is not None and line.count:

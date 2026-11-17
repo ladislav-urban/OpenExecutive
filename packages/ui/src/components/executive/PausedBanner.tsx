@@ -1,5 +1,6 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import Icon from "@/components/Icon";
 import { formatPausedAt, useExecutiveStatus } from "@/components/executive/ExecutiveStatusContext";
 
@@ -8,6 +9,7 @@ import { formatPausedAt, useExecutiveStatus } from "@/components/executive/Execu
 // where the sidebar switch sits behind the drawer.
 export default function PausedBanner() {
   const { status, unknown, busy, error, resume } = useExecutiveStatus();
+  const product = useProductName();
   // A failed status read renders nothing here: the sidebar switch says
   // "status unknown" instead of a possibly stale "paused".
   if (!status?.paused || unknown) return null;
@@ -20,7 +22,7 @@ export default function PausedBanner() {
     >
       <Icon name="pause" size="w-4 h-4" />
       <p className="flex-1 min-w-0 text-xs leading-snug">
-        <span className="font-medium">Executive paused{since && ` since ${since}`}</span>
+        <span className="font-medium">{product} paused{since && ` since ${since}`}</span>
         <span className="hidden sm:inline">
           {" "}
           — briefs, nudges, monitoring, inbox and workflow timers are on hold. Chat still works.

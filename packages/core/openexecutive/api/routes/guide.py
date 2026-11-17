@@ -53,7 +53,8 @@ async def get_section_content(section_id: str) -> dict[str, Any]:
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e)) from e
 
-    content = prebuilt.get_prebuilt(spec.id)
+    # Under the install's own name (OE_PRODUCT_NAME), as the guide is read.
+    content = prebuilt.get_named(spec.id)
     if content is None:
         logger.warning("guide.prebuilt.missing section=%s", spec.id)
         raise HTTPException(

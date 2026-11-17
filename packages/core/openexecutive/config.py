@@ -982,11 +982,60 @@ class Settings(BaseSettings):
     erpnext_draft_doctypes: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: ["ToDo", "Material Request"], alias="ERPNEXT_DRAFT_DOCTYPES"
     )
+    # Phase 0 (S3, integrations/erpnext_changes.py): cards that change an
+    # existing unsubmitted document, and cards that add a comment, for the
+    # DocTypes listed (comma-separated), as oe_connector's
+    # oe_connector_update_doctypes / oe_connector_comment_doctypes list them.
+    # Each is intersected with this app's own allowlist; both empty (off).
+    erpnext_draft_update_doctypes: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="ERPNEXT_DRAFT_UPDATE_DOCTYPES"
+    )
+    erpnext_draft_comment_doctypes: Annotated[list[str], NoDecode] = Field(
+        default_factory=list, alias="ERPNEXT_DRAFT_COMMENT_DOCTYPES"
+    )
     # Phase 4b: a verified teammate may have drafts prepared too, for
     # themselves, in a conversation nobody else reads, as their own ERPNext
     # user (who may read ERPNext as themselves; erpnext_caller.caller_for).
     # Off by default, so an install's drafts stay the principal's until set.
     erpnext_drafts_teammates: bool = Field(False, alias="ERPNEXT_DRAFTS_TEAMMATES")
+    # The credit-hold alert's "Prepare the raise" (integrations/erpnext_credit.py):
+    # a card that raises one company's credit limit for a customer whose
+    # draft Sales Order is held, approved by someone with customer credit
+    # authority. The first card whose approval changes a live master, so off
+    # by default; needs drafts on and oe_connector's Customer update listed.
+    erpnext_credit_raise: bool = Field(False, alias="ERPNEXT_CREDIT_RAISE")
+    # Separation of duties for those cards, set as oe_connector's
+    # oe_connector_draft_sod is on the site: "agent" means whoever prepared a
+    # raise never approves it (the card goes to the principal, or none is
+    # left when the principal prepared it). Set both the same; either
+    # mismatch fails closed: the site on and this off refuses the approval
+    # there, and this on with the site off only sends more cards to the
+    # principal.
+    erpnext_draft_sod: Literal["off", "agent"] = Field("off", alias="ERPNEXT_DRAFT_SOD")
+    # Watch jobs (watch/): the operator's master switch for the unattended
+    # ERPNext jobs defined in code. Off, no job runs whatever its row in
+    # `watch_jobs` says. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
+    erpnext_watch_jobs_enabled: bool = Field(False, alias="ERPNEXT_WATCH_JOBS_ENABLED")
+    # The payment-checks job's block card (integrations/erpnext_block.py):
+    # ERPNext's own Block Invoice on a submitted supplier invoice that likely
+    # repeats another, approved by the job's reviewer. The one card that
+    # changes a submitted document, so off by default; it also needs the
+    # job's block_submitted setting and oe_connector's draft_block_invoice
+    # pinned, and oe_connector_block_invoices on the site.
+    erpnext_block_invoice: bool = Field(False, alias="ERPNEXT_BLOCK_INVOICE")
+    # The bank-matching job's match card (integrations/erpnext_match.py):
+    # ERPNext's own reconciliation of a bank line with the submitted
+    # vouchers the card shows, approved by the job's reviewer. It changes
+    # financial state, so off by default; it also needs oe_connector's
+    # draft_match_bank_line pinned, and the accounts listed in
+    # oe_connector_bank_matching on the site.
+    erpnext_bank_match: bool = Field(False, alias="ERPNEXT_BANK_MATCH")
+    # The invoice-capture job's fill card (integrations/erpnext_fill.py):
+    # ERPNext's own mapper fills a supplier's mailed draft Purchase Invoice
+    # from the order or receipt it bills, approved by the draft's assignee.
+    # Off by default; it also needs oe_connector's draft_fill_purchase_invoice
+    # pinned, and the job listed in oe_connector_watch_jobs on the site.
+    erpnext_invoice_fill: bool = Field(False, alias="ERPNEXT_INVOICE_FILL")
 
     # ---- Calendar booking (first-climb autonomy, Build 1) ------------------
     # When true, the `create_calendar_event` / `cancel_calendar_event` tools
@@ -1069,7 +1118,8 @@ class Settings(BaseSettings):
 
     @field_validator(
         "web_search_allowed_domains", "web_search_blocked_domains",
-        "research_specialists", "workflow_file_dirs", "erpnext_draft_doctypes", mode="before",
+        "research_specialists", "workflow_file_dirs", "erpnext_draft_doctypes",
+        "erpnext_draft_update_doctypes", "erpnext_draft_comment_doctypes", mode="before",
     )
     @classmethod
     def _parse_domain_list(cls, v: Any) -> list[str]:
@@ -1594,7 +1644,9 @@ class Settings(BaseSettings):
     # The demo company `openexecutive demo-reset --bundle <dir>` may load
     # (cli/demo_reset.py): its bundle must name exactly this company.
     # Empty (the default) refuses every bundle, so a real company is never
-    # replaced by one.
+    # replaced by one. It also lets the invoice-capture job accept the demo's
+    # simulated supplier mail ("demo-simulated") for exactly this company
+    # (integrations/erpnext_fill.demo_simulated); empty, never.
     demo_reset_company: str = Field("", max_length=200, alias="DEMO_RESET_COMPANY")
     # The web app's SSO issuer, read here only so the sync can refuse a
     # directory other than the one people sign in through.

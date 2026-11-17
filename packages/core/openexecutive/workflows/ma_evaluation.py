@@ -16,6 +16,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -468,7 +469,7 @@ def _assemble_doc(ctx: _MACtx) -> str:
         _ensure_heading(ctx.recommendation, "## Recommendation"),
         "",
         "---",
-        "*Drafted by Open Executive. Engage outside M&A counsel and a "
+        f"*Drafted by {product_name()}. Engage outside M&A counsel and a "
         "deal advisor before issuing an LOI. Every diligence finding "
         "below must be confirmed against primary documents.*",
     ]

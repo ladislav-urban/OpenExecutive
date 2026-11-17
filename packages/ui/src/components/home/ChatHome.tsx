@@ -16,6 +16,7 @@ import { useWorkspace } from "@/components/workspace/WorkspaceContext";
 import { useExecutiveStatus } from "@/components/executive/ExecutiveStatusContext";
 import { GettingStartedCard, useGettingStarted } from "@/components/onboard/GettingStarted";
 import { useFirstRunRedirect } from "@/components/onboard/useFirstRunRedirect";
+import { useProductName } from "@/components/embed/EmbedProvider";
 import PausedBanner from "@/components/executive/PausedBanner";
 import OverflowMenu from "@/components/ui/OverflowMenu";
 import { ChatMessage, DebugEvent, getSessionMessages, updateSession } from "@/lib/api";
@@ -48,6 +49,7 @@ export type ChatHomeStart =
 // the matching view back.
 export default function ChatHome({ start }: { start: ChatHomeStart }) {
   const { data: session } = useSession();
+  const product = useProductName();
   const firstName = session?.user?.name?.trim().split(/\s+/)[0];
   // What the profile is called here (a team's company; in solo, an owner's
   // business or anyone else's work), for the no-profile banner.
@@ -405,7 +407,7 @@ export default function ChatHome({ start }: { start: ChatHomeStart }) {
               <Icon name="menu" size="w-5 h-5" />
             </button>
             <span className="text-sm text-fg-muted font-medium truncate">
-              {isOnboarded && companyName ? `${companyName} · Executive` : "Executive"}
+              {isOnboarded && companyName ? `${companyName} · ${product}` : product}
             </span>
           </div>
           {/* Agent activity (the live trace of the Executive's turn) lives in

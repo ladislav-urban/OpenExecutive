@@ -1193,3 +1193,17 @@ def test_a_stronger_insert_makes_a_weaker_same_site_proposal_already_watched(db:
     out = wp.apply_proposals([weaker, strong], [_finding()], _ctx(), db_path=db)
     assert [(o["slug"], o["outcome"]) for o in out] == [("rss-acme-news", "rejected"), ("rss-acme-blog", "added")]
     assert "already watched" in out[0]["result_preview"]
+
+
+def test_a_watch_added_in_a_research_run_records_the_run(db: Path) -> None:
+    """A demo reset keeps only the carried run's watch rows (research/carry.py)."""
+    from openexecutive.audit.usage import bind_research_run
+
+    with bind_research_run("R1"):
+        wp.apply_proposals(
+            [_proposal(slug="rss-initech", target="https://initech.com/feed.xml",
+                       grounding_entity="Initech Industries", certainty="unsure")],
+            [_initech_finding(confidence="high")], _ctx(), db_path=db,
+        )
+    row = ms.get_watchlist_item_by_slug("rss-initech", db_path=db)
+    assert row is not None and wp.policy_stamp_of(row)["run_id"] == "R1"

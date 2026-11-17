@@ -81,7 +81,7 @@ export const KIND_META: Record<string, KindMeta> = {
     blurb: "Whole-company state, sent to you each morning.",
   },
   executive_reflection: {
-    label: "Executive reflection",
+    label: "Daily reflection",
     group: "daily",
     blurb: "Decides what to act on, just before the morning brief.",
   },

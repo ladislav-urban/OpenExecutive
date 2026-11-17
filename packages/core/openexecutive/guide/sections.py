@@ -30,7 +30,7 @@ GUIDE_SECTIONS: list[GuideSection] = [
     GuideSection(
         id="chat",
         title="Chat & Briefing",
-        sub="The main surface — talk to the Executive, and land on a briefing of what's happened.",
+        sub="The main surface — ask in plain language, and land on a briefing of what's happened.",
     ),
     GuideSection(
         id="ask_oe",
@@ -45,12 +45,12 @@ GUIDE_SECTIONS: list[GuideSection] = [
     GuideSection(
         id="pulse",
         title="Memory",
-        sub="What the Executive knows about you and the company, what you taught it, what it worked out, and what it does on its own.",
+        sub="What it knows about you and the company, what you taught it, what it worked out, and what it does on its own.",
     ),
     GuideSection(
         id="review",
         title="Review Queue",
-        sub="On Knowledge, under Advanced: approve, reject, or correct knowledge before the Executive relies on it.",
+        sub="On Knowledge, under Advanced: approve, reject, or correct knowledge before answers rely on it.",
     ),
     GuideSection(
         id="jobs",
@@ -75,7 +75,7 @@ GUIDE_SECTIONS: list[GuideSection] = [
     GuideSection(
         id="people",
         title="People",
-        sub="Your roster — who the Executive coordinates with, their SLAs, channels, and approval scopes.",
+        sub="Your roster — the people it coordinates with, their SLAs, channels, and approval scopes.",
     ),
     GuideSection(
         id="company_profile",
@@ -85,22 +85,22 @@ GUIDE_SECTIONS: list[GuideSection] = [
     GuideSection(
         id="knowledge",
         title="Knowledge Base",
-        sub="Upload company documents so the Executive can ground its answers in your context.",
+        sub="Upload company documents so answers are grounded in your context.",
     ),
     GuideSection(
         id="skills",
         title="How it's done",
-        sub="The method behind each workflow, which the Executive also follows in chat. Edit it on the workflow's page.",
+        sub="The method behind each workflow, also followed in chat. Edit it on the workflow's page.",
     ),
     GuideSection(
         id="custom_tools",
         title="Custom Tools",
-        sub="When the Executive lacks a tool, it builds one — and keeps the ones it will need again.",
+        sub="When no tool fits, one is built — and kept when it will be needed again.",
     ),
     GuideSection(
         id="council",
         title="Agent Council",
-        sub="Configure the specialists — models, prompts, reasoning depth, and the Executive's voice.",
+        sub="Configure the specialists — models, prompts, reasoning depth, and the voice of its replies.",
     ),
     GuideSection(
         id="audit",
@@ -115,7 +115,7 @@ GUIDE_SECTIONS: list[GuideSection] = [
     GuideSection(
         id="simulator",
         title="Company Simulator",
-        sub="Load a realistic test company to try the Executive before trusting it with real data.",
+        sub="Load a realistic test company to try everything before trusting it with real data.",
     ),
     GuideSection(
         id="clients",
@@ -125,17 +125,17 @@ GUIDE_SECTIONS: list[GuideSection] = [
     GuideSection(
         id="integrations",
         title="Integrations",
-        sub="Reach the Executive where you already work — Slack, Discord, Telegram, email, Google Chat, MCP.",
+        sub="Use it where you already work — Slack, Discord, Telegram, email, Google Chat, MCP.",
     ),
     GuideSection(
         id="delegate",
         title="Delegate",
-        sub="What the Executive may do without asking you, writing email as you, and handling things on its own.",
+        sub="What it may do without asking you, writing email as you, and handling things on its own.",
     ),
     GuideSection(
         id="settings",
         title="Settings & Advanced",
-        sub="Your Executive, workspace, notifications, and the Advanced tools outside the day-to-day nav — including this guide.",
+        sub="Pausing, workspace, notifications, and the Advanced tools outside the day-to-day nav — including this guide.",
     ),
 ]
 

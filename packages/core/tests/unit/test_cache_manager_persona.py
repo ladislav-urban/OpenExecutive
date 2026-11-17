@@ -226,6 +226,16 @@ def test_persona_reads_before_ruling_out_and_corrects_once() -> None:
         assert "## Getting the Figures Right Once" in persona
         assert "**Read before you rule something out.**" in persona
         assert "**Correct yourself plainly, once.**" in persona
+        # Whatever the cause (a misread, or the records changed since), a
+        # figure or date that now differs from an earlier answer is said, with
+        # both, never switched quietly (erpnext_084, erpnext_095).
+        assert "a different figure or date for the same thing an earlier answer in this conversation gave" in persona
+        assert "Never just switch to it." in persona
+        # Not for another thing, a rounding that agrees, or someone else's
+        # earlier answer (erpnext_096 is the control).
+        assert "A figure for something else (another customer, period or company) is no difference" in persona
+        assert "When that earlier answer was to someone else, answer from what you read without comparing" in persona
+        assert "When you can't tell whose mistake it was, never guess." in persona
     blocks = build_system_blocks()
     assert "**Correct yourself plainly, once.**" in blocks[0]["text"]
 

@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useSession } from "next-auth/react";
 import { ProfileSections, type SectionId } from "@/components/company-profile/ProfileSections";
@@ -204,7 +205,7 @@ export default function OnboardDraftReview({
           {profile.name.trim() ? <>Here&rsquo;s {profile.name.trim()}</> : <>Here&rsquo;s what I understood</>}
         </h1>
         <p className="text-sm text-fg-muted mt-0.5">
-          This is what your Executive will know. Nothing is saved yet: edit anything that&rsquo;s
+          This is what <ProductName /> will know. Nothing is saved yet: edit anything that&rsquo;s
           off, then save.
         </p>
       </div>
@@ -274,7 +275,7 @@ export default function OnboardDraftReview({
         <div className="bg-surface-elevated border border-line rounded-xl p-5">
           <h2 className="text-sm font-semibold text-fg">You</h2>
           <p className="text-xs text-fg-muted mt-1 mb-3">
-            The Executive reports to you. Add clients, partners and anyone else you work
+            <ProductName /> reports to you. Add clients, partners and anyone else you work
             with later, on the People page.
           </p>
           <div className="flex flex-col sm:flex-row gap-2">

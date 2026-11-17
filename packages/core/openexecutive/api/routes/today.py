@@ -431,9 +431,12 @@ def _board_alerts(now: datetime, *, include_private: bool, viewer: Any, fold_twi
         # a meeting with one) appear only on the principal's own /today —
         # never for a teammate, and never in the morning brief, the
         # end-of-day digest or the reflection, which all read this default.
-        from openexecutive.alerts.models import is_private_alert
+        from openexecutive.alerts.models import is_private_alert, named_for
 
-        raw_alerts = [a for a in raw_alerts if not is_private_alert(a)]
+        # A private alert that names the viewer (models.named_people, an
+        # ERPNext credit hold) is on their own Home too, never anyone else's.
+        person_id = getattr(viewer, "person_id", None)
+        raw_alerts = [a for a in raw_alerts if not is_private_alert(a) or named_for(a, person_id)]
     elif fold_twins:
         raw_alerts = _fold_private_twins(raw_alerts)
     return raw_alerts
@@ -2917,6 +2920,7 @@ def _attach_home_rules(
 ) -> None:
     """Fill Home's rules for ``caller`` (briefing.home_rules) on ``response``;
     ``tz`` is the zone their client shows times in, when it says."""
+    from openexecutive.alerts.models import is_private_alert
     from openexecutive.briefing import home_rules
 
     _hide_other_demo_people(response, caller=caller, principal=principal)
@@ -2931,7 +2935,12 @@ def _attach_home_rules(
         p.card_kind = home_rules.card_kind(p)
         p.actions = home_rules.card_actions(
             p, lane_=p.lane, caller_is_principal=principal, people_by_id=people_by_id,
-            snoozes=response.snooze_choices, caller_is_demo=demo, caller_id=caller,
+            snoozes=response.snooze_choices,
+            # A private card someone else sees is one that names them (an
+            # ERPNext credit hold): they look only, as a demo person does;
+            # acting on it stays the principal's (the alert routes refuse it).
+            caller_is_demo=demo or (not principal and is_private_alert(p)),
+            caller_id=caller,
         )
     mine = [p for p in response.proposals if p.lane == "needs_you"]
     team = [p for p in response.proposals if p.lane == "team"]

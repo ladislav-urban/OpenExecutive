@@ -55,6 +55,13 @@ export function agentDisplayName(role: string): string {
   return splitRole(role).name;
 }
 
+/** A card's name: the leading agent under its default role is the product
+ *  itself ("Dynocortex"); any role someone gave it, and every other agent,
+ *  as agentDisplayName. */
+export function agentCardName(agent: { name: string; role: string }, product: string): string {
+  return agent.name === "executive" && agent.role.trim() === "Executive" ? product : agentDisplayName(agent.role);
+}
+
 /** What the agent covers, in a few plain words. */
 export function agentArea(agent: { name: string; role: string; domains: string[] }): string {
   const known = AREAS[agent.name];

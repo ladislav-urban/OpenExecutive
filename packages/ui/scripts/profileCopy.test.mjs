@@ -12,7 +12,7 @@ test("team keeps the company wording it always had", () => {
     basicsTitle: "Company Basics",
     missionPlaceholder: "Why does this company exist?",
     dependenciesNote:
-      "Named here, a vendor or ticker counts as company data: the Executive will start watching its status page or filings on its own instead of asking you first.",
+      "Named here, a vendor or ticker counts as company data: it will start watching its status page or filings on its own instead of asking you first.",
     departmentsLabel: "Departments",
   });
 });

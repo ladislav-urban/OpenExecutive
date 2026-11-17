@@ -50,8 +50,18 @@ def test_point_key_follows_the_bold_subject_across_rewording() -> None:
     assert right_now.point_key("**東京支社** — 新しい") == "東京支社"
 
 
+def _noon() -> datetime:
+    """Noon today in the workspace's zone, as UTC: a test's "now", taken once.
+    A point recorded half an hour earlier stays on the same local day, so a
+    run that crosses midnight never splits a test across two days."""
+    from openexecutive.memory.workspace_settings import get_user_timezone
+
+    zone = get_user_timezone()
+    return datetime.now(zone).replace(hour=12, minute=0, second=0, microsecond=0).astimezone(UTC)
+
+
 def test_a_point_keeps_its_first_time_across_rewrites() -> None:
-    now = datetime.now(UTC)
+    now = _noon()
     first = (now - timedelta(minutes=30)).isoformat()
     later = now.isoformat()
     right_now.record_points("principal", HEADER, first)
@@ -74,7 +84,7 @@ def test_seen_is_per_scope() -> None:
 
 
 def test_record_points_says_what_is_new_today() -> None:
-    now = datetime.now(UTC)
+    now = _noon()
     first = right_now.record_points("principal", HEADER, (now - timedelta(minutes=30)).isoformat())
     assert len(first.new) == 2
 
@@ -139,7 +149,7 @@ def test_a_full_day_still_takes_a_point_dismissed_again(monkeypatch: pytest.Monk
 def test_a_reworded_subject_keeps_its_time_and_is_not_new() -> None:
     """The header rewords its subjects through the day ("Pricing and Alex",
     "Pricing and the Alex demo"): the same item must not turn new again."""
-    now = datetime.now(UTC)
+    now = _noon()
     first = (now - timedelta(minutes=30)).isoformat()
     right_now.record_points("principal", "**Opener.**\n- **Pricing and Alex** — due today.", first)
 
@@ -156,7 +166,7 @@ def test_a_reworded_subject_keeps_its_time_and_is_not_new() -> None:
 
 
 def test_a_new_subject_about_the_same_email_keeps_its_time() -> None:
-    now = datetime.now(UTC)
+    now = _noon()
     first = (now - timedelta(minutes=30)).isoformat()
     mail = {"kind": "mail", "message_id": "m1", "thread_id": "t1"}
     right_now.record_points("principal", "**O.**\n- **Dog bite report** — forwarded.", first,

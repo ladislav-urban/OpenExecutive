@@ -145,7 +145,7 @@ def _rebuild() -> None:
     kinds = sorted(k for k, kind in CATALOG.kinds.items() if not kind.no_item)
     FIND_IN_APP_TOOL.update({
         "description": (
-            "List things in Open Executive the person can change, with their ids: "
+            "List things in this app the person can change, with their ids: "
             + ", ".join(f"{k} ({CATALOG.kinds[k].label}s)" for k in kinds)
             + ". Call it before do_in_app to find the id of what they named. query "
             "narrows by words in the name; leave it out to list the newest."
@@ -167,7 +167,7 @@ def _rebuild() -> None:
         lines.append(f"- {name} ({action.kind}): {action.does}.{extra}")
     DO_IN_APP_TOOL.update({
         "description": (
-            "Do something in Open Executive that the person asked for, as its own "
+            "Do something in this app that the person asked for, as its own "
             "button would: pin, rename, delete, share, turn a setting on or off. "
             f"id comes from find_in_app; for the chat you are in, use id \"{THIS}\". "
             "Some actions (deletes, shares, anything that sends as them or lets more "
@@ -188,7 +188,7 @@ def _rebuild() -> None:
     screens = sorted(CATALOG.screens)
     OPEN_IN_APP_TOOL.update({
         "description": (
-            "Give the person a link to a screen in Open Executive, for something chat "
+            "Give the person a link to a screen in this app, for something chat "
             "can't do or when they ask to go somewhere ('open my settings'). Screens: "
             + "; ".join(f"{s} ({CATALOG.screens[s][1]})" for s in screens)
             + ". The link shows under your reply."

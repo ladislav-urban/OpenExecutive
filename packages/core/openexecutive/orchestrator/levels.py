@@ -175,12 +175,39 @@ _RECIPIENT_KEYS = ("to", "cc", "bcc")
 _ADDRESS = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 
 
+def _someone_elses_turn() -> bool:
+    """Whether the current turn is someone other than the owner's. The
+    owner's own unattended run (a reminder they set, their brief) is not:
+    nobody else's words are in it."""
+    import dataclasses
+
+    from openexecutive.orchestrator.outside_mode import _someone_else
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    session = current_session.get()
+    if session is None:
+        return False
+    if getattr(session, "unattended", False) is True and getattr(session, "run_for_person_id", None) is None:
+        if not dataclasses.is_dataclass(session) or isinstance(session, type):
+            return True
+        session = dataclasses.replace(session, unattended=False)
+    return _someone_else(session)
+
+
 def only_to_owner(tool_name: str, tool_input: Any) -> bool:
     """Whether a step only sends the owner a message: a direct message to
     them, or mail addressed to no one but them. Waiting for their OK would
-    only show them what it says, so it never waits. Fails closed."""
+    only show them what it says, so it never waits on the owner's own turn
+    or their own unattended run. On someone else's turn (a teammate, a
+    stranger's mail, another AI app, a host page, a teammate's queued run)
+    it waits on a card like any other send: the words are someone else's,
+    and they could press the owner for anything (the owner, Nov 9, 2026).
+    Fails closed."""
     try:
         from openexecutive.orchestrator import take_the_lead
+
+        if _someone_elses_turn():
+            return False
 
         if tool_name != "call_tool":
             return isinstance(tool_input, dict) and take_the_lead._only_to_principal(tool_name, tool_input)

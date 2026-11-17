@@ -129,8 +129,8 @@ ACCESS: dict[str, tuple[str, str]] = {
     "use_tool": (COVERED, "a step names its tools up front"),
     "show_progress": (COVERED, "a workflow shows its own steps"),
     # CHAT_ONLY: needs the person (module docstring).
-    "remember_fact": (CHAT_ONLY, "changes what the Executive takes as fact"),
-    "forget_fact": (CHAT_ONLY, "changes what the Executive takes as fact"),
+    "remember_fact": (CHAT_ONLY, "changes what it takes as fact"),
+    "forget_fact": (CHAT_ONLY, "changes what it takes as fact"),
     "update_company_profile": (CHAT_ONLY, "changes the company profile"),
     "create_goal": (CHAT_ONLY, "only the principal starts a goal"),
     "record_decision_outcome": (CHAT_ONLY, "only the principal records an outcome"),

@@ -257,7 +257,7 @@ export default function ClientsPage() {
           <div className="min-w-0">
             <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">Client companies</h1>
             <p className="mt-2 text-[15px] text-fg-muted">
-              Run several client companies from one Open Executive — one active at a
+              Run several client companies from one install — one active at a
               time. Switching saves the current client&apos;s full state (chat,
               schedule, documents, MCP tools) to its slot and
               restores the target.

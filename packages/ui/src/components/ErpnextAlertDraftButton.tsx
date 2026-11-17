@@ -8,11 +8,13 @@ import { erpName } from "@/lib/erpnextDraftWords";
 import Button from "@/components/ui/Button";
 import { getErpnextAlertDrafts, prepareErpnextAlertDraft, type ErpnextAlertDraft } from "@/lib/api";
 
-// Today: the "Prepare restock" / "Prepare follow-up" button on an ERPNext
-// alert that suggests a draft. Tapping it has ERPNext check the draft as you
-// and leaves its card in Needs you, to approve like any other; nothing is in
-// ERPNext until then. GET /erpnext/alert-drafts answers the principal only,
-// so nobody else sees a button.
+// Today: the "Prepare restock" / "Prepare follow-up" / "Prepare the raise"
+// button on an ERPNext alert that suggests a draft. Tapping it has ERPNext
+// check the draft as you and leaves its card in Needs you, to approve like any
+// other (a raise's may wait for someone with credit authority instead);
+// nothing is in ERPNext until then. GET /erpnext/alert-drafts answers the
+// principal, and the people a credit hold names for its raise, so nobody else
+// sees a button.
 //
 // One request for every alert card on screen.
 
@@ -60,9 +62,11 @@ export default function ErpnextAlertDraftButton({ alertId }: { alertId: number }
     try {
       const prepared = await prepareErpnextAlertDraft(alertId);
       setDone(
-        prepared.already_waiting
-          ? "Its draft card is already waiting in Your decision."
-          : `Its draft card is in Your decision. Nothing is in ${erp} until you approve it.`,
+        prepared.message
+          ? prepared.message
+          : prepared.already_waiting
+            ? "Its draft card is already waiting in Your decision."
+            : `Its draft card is in Your decision. Nothing is in ${erp} until you approve it.`,
       );
       void reloadErpnextDraftCards();
     } catch (err) {

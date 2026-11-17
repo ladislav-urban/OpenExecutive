@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useCallback, useEffect, useState } from "react";
 import {
   ExternalPeekChunk,
@@ -573,7 +574,7 @@ export default function ReviewQueue() {
       const n = trustedDefaults[domain] ?? 0;
       const ok = window.confirm(
         `Queue ${n} item${n === 1 ? "" : "s"} in "${domain}" for review?\n\n` +
-          `They will be withheld from the Executive until you approve them. ` +
+          `They won't be used until you approve them. ` +
           `You can undo this with "Stop curating".`,
       );
       if (!ok) return;
@@ -631,7 +632,7 @@ export default function ReviewQueue() {
     <div className="max-w-4xl">
       <div className="mb-5 max-w-2xl">
         <p className="text-[15px] text-fg-muted">
-          Approve, reject, or correct knowledge before the Executive relies on it.
+          Approve, reject, or correct knowledge before <ProductName /> relies on it.
           Pending and rejected items are withheld from retrieval.
         </p>
       </div>
@@ -663,8 +664,8 @@ export default function ReviewQueue() {
               <div className="max-w-xl mx-auto text-center">
                 <p className="text-lg font-semibold text-fg">Nothing waiting on you.</p>
                 <p className="text-[15px] text-fg-muted mt-2 leading-relaxed">
-                  The knowledge that ships with Open Executive is trusted by default — the
-                  Executive can use it right away, and it does not sit here waiting for
+                  The knowledge that ships with <ProductName /> is trusted by default — <ProductName />
+                  can use it right away, and it does not sit here waiting for
                   sign-off. Items appear in this queue when you upload something new, edit an
                   existing file, or deliberately send a domain for review.
                 </p>
@@ -673,7 +674,7 @@ export default function ReviewQueue() {
                 <div className="mt-8 max-w-xl mx-auto border-t border-line pt-6">
                   <p className="text-base font-semibold text-fg">Review a domain yourself</p>
                   <p className="text-sm text-fg-muted mt-1 mb-3 leading-relaxed">
-                    Sending a domain for review withholds it from the Executive until you
+                    Sending a domain for review withholds it from <ProductName /> until you
                     work through it.
                   </p>
                   <div className="flex flex-col sm:flex-row gap-2">

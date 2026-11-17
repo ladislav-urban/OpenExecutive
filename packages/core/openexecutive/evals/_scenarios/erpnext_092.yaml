@@ -1,0 +1,25 @@
+id: erpnext_092
+domain: operations
+product_name: Dynocortex
+forbid_repeated_text: true
+prior_turns:
+- user: Order 200 more CBL-100 cable from Orion Switchgear for the Stores warehouse.
+  assistant: 'I''ve left a Purchase Order draft card for you to approve: 200 x CBL-100 from Orion Switchgear at 4.20 EUR each, 840 EUR in all, delivered to Stores. Nothing is made until you approve it.'
+decided_cards:
+- doctype: Purchase Order
+  outcome: closed
+  closed_code: changed_since_proposed
+  hours_ago: 1
+description: 'A draft card the person approved was closed by the ERP because the draft changed after the card was left (a colleague changed a price), and the person asks what happened. The turn is told the card closed and why in fixed words. The reply says the card closed because the draft changed in the ERP after it was left (a price, a rate or a source document), that nothing was made, and how to get a fresh card. It never presents this as its own mistake ("Earlier I ..."), and never invents a specific cause or a new price the record does not give.'
+query: I approved the cable order but the card just closed. What happened?
+forbidden_reply_words:
+- ERPNext
+- Earlier I
+- I was wrong
+- my mistake
+quality_criteria:
+  says_the_card_closed_because_the_draft_changed_in_the_erp_after_the_card_was_left: true
+  says_nothing_was_made: true
+  offers_to_ask_again_for_a_card_with_the_draft_as_it_is_now: true
+  does_not_present_it_as_a_correction_of_its_own_earlier_answer: true
+  does_not_invent_a_specific_cause_or_new_price_the_record_does_not_give: true

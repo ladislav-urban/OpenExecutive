@@ -5,7 +5,7 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 import FrameConfirm from "@/components/embed/FrameConfirm";
 import { CardActionNotConfirmed, frameActionFor, type CardAction } from "@/lib/cardActions";
 import HOST_LIST from "@/lib/host-list.json";
-import { DEFAULT_PRODUCT_NAME } from "@/lib/productName";
+import { DEFAULT_PRODUCT_NAME, withProduct } from "@/lib/productName";
 import {
   acceptsEvent,
   embedRequested,
@@ -64,6 +64,12 @@ const ProductNameContext = createContext<string>(DEFAULT_PRODUCT_NAME);
 
 export function useProductName(): string {
   return useContext(ProductNameContext);
+}
+
+/** Copy with the product's name for its PRODUCT token (lib/productName.ts). */
+export function useNamed(): (text: string) => string {
+  const product = useContext(ProductNameContext);
+  return (text: string) => withProduct(text, product);
 }
 
 /** Whether this install is one product to the person: it has a name of its
@@ -174,7 +180,7 @@ export default function EmbedProvider({
     window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      const action = frameActionFor(method, url, init?.body, HOST_CALLS);
+      const action = frameActionFor(method, url, init?.body, HOST_CALLS, productName);
       // A pass is used up by the next change, whichever it is; reads leave it.
       const pass = action ? passing.current : null;
       if (action) passing.current = null;
@@ -187,7 +193,7 @@ export default function EmbedProvider({
       window.fetch = original;
       for (const type of INPUT_EVENTS) window.removeEventListener(type, onInput, true);
     };
-  }, []);
+  }, [productName]);
 
   const passOnce = useCallback<PassOnce>((method, url) => {
     passing.current = { method: method.toUpperCase(), url, until: Date.now() + PASS_ONCE_MS };

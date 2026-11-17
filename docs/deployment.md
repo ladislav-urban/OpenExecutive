@@ -178,6 +178,10 @@ approval scope other rows hold (they could have been put there by anyone while
 nobody was the principal), the demo roster's included, so a roster loaded
 before the claim keeps its scopes only from the next reset on.
 
+A reset keeps the last watch-list research run when the install already holds
+the bundle's company and one of that run's alerts is still open, so the research
+scan runs about once a week on a demo instead of after every reset.
+
 ---
 
 ## Required configuration
@@ -265,7 +269,10 @@ admin API is `http://keycloak:8180`; the API container reads the same
 repo-root `.env` as everything else, which is also how it checks
 `DIRECTORY_SYNC_ISSUER` against `AUTH_OIDC_ISSUER`. Turn it on after a dry
 run (`docker compose exec api openexecutive directory-sync --dry-run`) lists
-what you expect: on a fresh install, only you, as "linked".
+what you expect: on a fresh install, only you, as "linked". Give the UI
+`DIRECTORY_SYNC_ENABLED` too (the compose file passes it through), so someone
+just added to the group is let in when they first sign in rather than after
+the next run.
 
 ## Health checks
 
@@ -601,19 +608,16 @@ free/busy), so it is advisory in a narrower sense than Google's.
 
 ## ERPNext (oe_connector)
 
-ERPNext's data and reports come from the
-[oe_connector](https://github.com/ladislav-urban/oe_connector) Frappe app,
-installed in the ERPNext site. Unlike the two servers above it is not a child
-of the gateway: the app serves MCP over HTTP inside ERPNext, and the gateway
-reaches it by URL. It offers six read tools (`erpnext__search_catalog`,
+ERPNext's data and reports come from the oe_connector Frappe app, which
+runs inside the ERPNext site and is not part of this repository. Unlike the
+two servers above it is not a child of the gateway: the app serves MCP over
+HTTP inside ERPNext, and the gateway reaches it by URL. It offers six read tools (`erpnext__search_catalog`,
 `erpnext__run_report`, `erpnext__list_records`, …), all read-only, under a
 service user that holds only the "OE Reader" role.
 
-1. In the ERPNext bench, install the app and create the service user:
+1. In the ERPNext bench, with the app installed, create the service user:
 
    ```bash
-   bench get-app https://github.com/ladislav-urban/oe_connector
-   bench --site <site> install-app oe_connector
    bench --site <site> oe-connector-setup-reader [--company "Acme Ltd"]
    ```
 
@@ -871,6 +875,56 @@ approved. Each draft is tagged "OpenExecutive", commented with who asked and
 approved, and logged in ERPNext's "OE Draft" list; OpenExecutive's audit log
 has a row for each card proposed, created, failed or dismissed.
 
+A Dunning (a payment reminder for one overdue Sales Invoice) is made through
+ERPNext's own "Create > Dunning", with the Dunning Type's fee, interest and
+letter (the company's default type unless one is named). List it on both
+sides to turn it on:
+
+```bash
+ERPNEXT_DRAFT_DOCTYPES=ToDo,Material Request,Dunning
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_draft_doctypes '["ToDo", "Material Request", "Dunning"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Material Request": 5000, "Dunning": 500}'
+```
+
+Its cap is on what the letter adds, the fee and interest, in company
+currency. The card shows each overdue installment, the charges and the
+letter's text as ERPNext renders it, and keeps the letter date its check
+used, so approving it on a later day makes the same letter. A payment, an
+edited letter template or an installment falling due since the card closes
+it, and asking again shows the letter as it is now. Submitting a Dunning
+sends nothing: the letter reaches the customer only when someone prints or
+emails it.
+
+Two more kinds of card change what is already in ERPNext, each off until
+listed on both sides. An update changes listed fields of an unsubmitted
+Purchase Invoice the person owns or was assigned (an open ToDo they were
+given counts, so it gives nothing beyond their own write permission): the
+supplier's invoice number and date, the dates, remarks, cost center,
+project and hold, the supplier only while empty, and each line's qty, rate,
+UOM, expense account, cost center, project and description; never its
+company, currency, taxes or links. A comment adds the person's words, as
+plain text, to a listed document.
+
+```bash
+ERPNEXT_DRAFT_UPDATE_DOCTYPES=Purchase Invoice
+ERPNEXT_DRAFT_COMMENT_DOCTYPES=Purchase Invoice,Sales Invoice
+```
+
+```bash
+bench --site <site> set-config -p oe_connector_update_doctypes '["Purchase Invoice"]'
+bench --site <site> set-config -p oe_connector_comment_doctypes '["Purchase Invoice", "Sales Invoice"]'
+bench --site <site> set-config -p oe_connector_draft_max_value '{"Purchase Invoice": 20000}'
+```
+
+Set the Purchase Invoice cap before listing updates: a rate or qty can
+change, and the cap is on the grand total after the change. The card shows
+every field, line and total before and after, as ERPNext reads it, or the
+comment's whole text; a document changed since the card refuses, and the
+card closes. Nothing is ever submitted, and the workflow never moves.
+
 Teammates (phase 4b) can have drafts prepared too, each for themselves, once
 the API's environment says so:
 
@@ -895,6 +949,34 @@ check the draft as the owner and leaves the usual card to approve. The
 follow-up ToDo is worded from the invoice's figures and assigned to the
 owner. The DocType must be listed in `ERPNEXT_DRAFT_DOCTYPES` (both are by
 default); nothing else needs setting.
+
+A credit-hold alert (a draft Sales Order over its customer's credit limit)
+can suggest raising that customer's credit limit at its company, so the
+order fits. Off by default: it is the one card whose approval changes
+ERPNext at once, and the order itself is never submitted (its owner submits
+it in ERPNext). To turn it on:
+
+```bash
+ERPNEXT_DRAFTS_ENABLED=true
+ERPNEXT_CREDIT_RAISE=true
+# Set as the site's oe_connector_draft_sod: "agent" there means "agent" here.
+ERPNEXT_DRAFT_SOD=off
+```
+
+and on the site list Customer in `oe_connector_update_doctypes` and set
+`oe_connector_credit_raise_max` (the most one raise may add, in company
+currency; unset refuses every raise). **Prepare the raise** shows to the
+owner and to the people the alert names (each needs
+`ERPNEXT_DRAFTS_TEAMMATES` and signed sign-ins). ERPNext checks the raise as
+whoever taps; someone it won't let prepare one gets no card, and is told who
+can (the people given customer credit authority in People, else "your credit
+controller"). The card is approved by whoever tapped when they have customer
+credit authority in People and separation of duties is off, otherwise by the
+owner; with it on and the owner tapping, no card is left. Approval needs the
+credit authority role in ERPNext as well, within the site's cap. Keep
+`ERPNEXT_DRAFT_SOD` the same as the site's `oe_connector_draft_sod`: on there
+and off here, ERPNext refuses the approval and the card closes; on here and
+off there, only the owner approves raises. Demo people never approve one.
 
 **Suppliers' agents over A2A.** A supplier's own AI agent can ask, over A2A
 (Agent2Agent, JSON-RPC `message/send`), about that supplier's own submitted
@@ -974,8 +1056,53 @@ reports only, rows capped at 500, and a company required for totals when the
 user sees several. Every `erpnext__*` call is in the audit log as a
 `tool_invocation` row, and its result reaches the model inside an
 `<untrusted_content source="erpnext">` block, since customers and suppliers
-write some of ERPNext's text. The design, including later phases (the
-morning brief's ERP block), is in the app's `docs/erpnext-integration.md`.
+write some of ERPNext's text. The design is in the oe_connector app's
+own documentation.
+
+### Watch jobs with cards: bank matching
+
+A watch job runs unattended on a schedule and leaves cards a person approves. Each one needs settings on both sides, and refuses everything until both agree.
+
+**On the ERPNext site (an ERPNext operator, in `site_config.json`):**
+
+- **`oe_connector_watch_jobs["bank-matching"]`:** the job's reads, as `watch/jobs/bank_matching.py`'s `listing(accounts)` prints them, plus:
+  - `"as_job_user": true`. The job runs as its own ERP user, `oe-watch-bank-matching@<site>`, set up with `oe-connector-setup-watch`.
+  - `"configured_by": "<email>"`: the person who sets the job up in OpenExecutive's Settings. Every card is signed with this person. ERPNext refuses a card naming anyone else, or a job with no configurer recorded, and OpenExecutive then closes the card (`configurer_not_recorded`).
+- **`oe_connector_bank_matching`:** per company, the Bank Accounts the job may read, each company marked as carrying no payroll: `{"<Company>": {"accounts": ["<Bank Account>"], "no_payroll": true}}`.
+
+**On OpenExecutive:**
+
+- `ERPNEXT_CALLER_PRIVATE_KEY`, as for every ERPNext write.
+- `ERPNEXT_BANK_MATCH=true`, the pin as released, and the job on in Settings → Watch jobs, with:
+  - its company;
+  - the same bank accounts;
+  - `amount_cap_day` (50,000 by default, at most 1,000,000, the job's day across all approvers);
+  - its reviewer.
+- The configurer may not approve the job's cards. ERPNext also refuses a card to whoever imported the statement or made a voucher on it.
+
+### Watch jobs with cards: invoice capture
+
+The fill card for a supplier's mailed invoice. It needs everything bank matching needs on both sides (the job listing with `as_job_user` and `configured_by`, and the caller key), and:
+
+**On the ERPNext site:**
+
+- **`oe_connector_watch_jobs["invoice-capture"]`:** `watch/jobs/invoice_capture.py`'s `listing()`, including the per-draft read exactly as `{"tool": "read_attachment", "doctype": "Purchase Invoice", "name": "$mail_draft", "file": "$mail_file"}`, with `"as_job_user": true` and `"configured_by"`.
+- **The job's ERP user,** `oe-watch-invoice-capture@<site>`, limited to **exactly one Company** by User Permission. Otherwise every mailed-draft read is refused.
+- **`oe_connector_read_attachment: 1`.**
+- **An Email Account** with incoming mail on, appending to Purchase Invoice from **INBOX only**.
+- **On that Email Account,** set by a System Manager:
+  - **`oe_dmarc_enforced`:** its receiving mail server enforces DMARC (reject or quarantine).
+  - **`oe_dmarc_authserv_id`:** that server's authserv-id. Optional, but without it a `quarantine` domain gets no card. Leave it empty for a server that writes no authserv-id (Microsoft 365); then only `reject` domains get cards.
+- **An Assignment Rule on Purchase Invoice** that assigns each mailed draft to the job's reviewer. Only the person the mail pull assigned a draft to approves its fill, never someone who assigned it to themselves. Otherwise the draft is filled by hand.
+
+**On OpenExecutive:**
+
+- `ERPNEXT_INVOICE_FILL=true`, the pin as released, and the job on in Settings → Watch jobs, with:
+  - its company;
+  - `days_back` (14);
+  - `amount_cap_day`;
+  - its reviewer.
+- **What gets a card:** only mail whose own From was checked (`sender_checked` "dmarc-enforced", `sender_from` set) from a domain asking `reject`, or `quarantine` when the authserv-id check passed. Every other mail gets a "can't be filled from here" notice.
 
 ### Inside ERPNext's desk (the single UI)
 
@@ -1074,7 +1201,7 @@ UI, which reads it at start. Nothing in ERPNext needs restarting. From then on:
 
 Each app keeps working on its own: Open Executive at `exec.example.com`, ERPNext
 without the Dynocortex screens. oe_connector's half of the stop is in its
-[`docs/stop-runbook.md`](https://github.com/ladislav-urban/oe_connector/blob/main/docs/stop-runbook.md):
+own stop runbook:
 `bench --site <site> set-config oe_connector_openexecutive_ui_url None` removes
 every Dynocortex screen from the desk.
 
@@ -1132,11 +1259,25 @@ curl -s -H "x-api-key: $BACKEND_SHARED_SECRET" \
   "http://127.0.0.1:8000/audit/usage?erpnext=1&since=2026-11-01T00:00:00"
 ```
 
+### Checking the drafts log against the cards
+
+oe_connector seals each draft OpenExecutive makes in a hash chain, and each
+approval card keeps its row's seal. To check that no newest row was removed and
+the log wasn't rewritten, export the cards' seals and let oe_connector compare:
+
+```bash
+docker compose exec -T api openexecutive draft-seals > seals.json
+bench --site <site> oe-connector-verify-drafts --expect seals.json
+```
+
+`draft-seals` reads the API's ledger only and prints row hashes and their places
+in the chain. It exits 1 when the ledger holds no seals, so a wrong or empty
+ledger never passes.
+
 ### Stopping ERPNext access
 
 OpenExecutive's half of the stop runbook. ERPNext's half, its own switches
-and the quarterly rehearsal are in oe_connector's
-[`docs/stop-runbook.md`](https://github.com/ladislav-urban/oe_connector/blob/main/docs/stop-runbook.md).
+and the quarterly rehearsal are in oe_connector's own stop runbook.
 Each setting below is read at start, so restart the API after changing it.
 
 - **No new drafts:** `ERPNEXT_DRAFTS_ENABLED=false`. No card is offered, and

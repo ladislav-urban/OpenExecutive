@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -229,7 +230,7 @@ export default function ChatsPage() {
             <div className="min-w-0">
               <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg mb-1">Conversations</h1>
               <p className="text-[15px] text-fg-muted">
-                Every conversation with the Executive, from the web app and from connected
+                Every conversation with <ProductName />, from the web app and from connected
                 channels.
               </p>
             </div>

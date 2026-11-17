@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useId, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
@@ -26,15 +27,15 @@ import { getHeldBack, type HeldBackItem } from "@/lib/api";
 const SCREENS: Record<Exclude<PulseView, "overview" | "does">, { title: string; description: string }> = {
   value: {
     title: "Done for you",
-    description: "What the Executive did for you, counted from the record.",
+    description: "What it did for you, counted from the record.",
   },
   schedule: {
     title: "Schedule",
-    description: "Everything the Executive will do on its own, soonest first.",
+    description: "Everything it will do on its own, soonest first.",
   },
   activity: {
     title: "Activity",
-    description: "What the Executive did on its own, newest first.",
+    description: "What it did on its own, newest first.",
   },
   worked_out: {
     title: "What it worked out",
@@ -123,7 +124,7 @@ function Overview({ view, lastVisit }: { view: Tab; lastVisit: string | null }) 
       <header>
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">Memory</h1>
         <p className="text-[15px] text-fg-muted mt-1.5 max-w-2xl">
-          What your Executive knows and where it came from, and what it does on its own.
+          What <ProductName /> knows and where it came from, and what it does on its own.
         </p>
       </header>
       <SectionTabs<Tab>

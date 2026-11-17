@@ -436,7 +436,7 @@ def list_all_fixtures() -> list[dict[str, Any]]:
 
 
 async def _apply_state_from_source(
-    source_dir: Path, settings: Any, *, demo_reset: bool = False
+    source_dir: Path, settings: Any, *, demo_reset: bool = False, keep_research: bool = False
 ) -> dict[str, Any]:
     """Apply profile.yaml + docs/ + memory.json + people.yaml + departments.yaml
     from ``source_dir`` to the live company state.
@@ -449,6 +449,11 @@ async def _apply_state_from_source(
     the roster (``seed_demo_people``), leaves the workspace settings, the
     artifact and attachment indexes as they are, and deletes nothing from the
     audit log but the research scan's run history.
+
+    ``keep_research`` (a demo reset of the same company, decided by the
+    caller before step 1 replaces the profile) keeps the last research run's
+    alerts, watch rows and run row instead (``monitoring/research/carry.py``),
+    so the scan runs weekly rather than after every reset.
     """
     from openexecutive.knowledge.loader import ingest_file
     from openexecutive.knowledge.store import ChromaDBStore
@@ -459,6 +464,18 @@ async def _apply_state_from_source(
     #       logged and skipped, so it cannot abort the load half-way.
     workspace_wanted = _read_workspace_file(source_dir / "workspace.yaml")
     restoring_user_backup = _same_dir(source_dir, _user_backup_dir(settings))
+
+    # ── 0b. What the last research run left, read before anything is wiped.
+    #       None (nothing live to keep, or the read failed) clears at step 6.
+    research_carry = None
+    if keep_research:
+        from openexecutive.memory.episodic import DB_PATH as _CARRY_DB
+        from openexecutive.monitoring.research import carry as research_carry_mod
+
+        try:
+            research_carry = research_carry_mod.snapshot_last_research(_CARRY_DB)
+        except Exception:
+            logger.exception("fixture: research snapshot failed; clearing the run history as usual")
 
     profile_path = source_dir / "profile.yaml"
     profile = (
@@ -485,11 +502,12 @@ async def _apply_state_from_source(
     store = ChromaDBStore(persist_directory=settings.vector_store_path)
     store.delete_company_docs()
     # Recent-research artifacts are per-company; never let a new company
-    # inherit the prior company's research.
-    store.delete_documents(
-        collection=ChromaDBStore.RESEARCH_COLLECTION,
-        where={"type": "recent_research"},
-    )
+    # inherit the prior company's research. A carried run keeps its own.
+    if research_carry is None:
+        store.delete_documents(
+            collection=ChromaDBStore.RESEARCH_COLLECTION,
+            where={"type": "recent_research"},
+        )
     # Indexed artifacts (orchestrator/artifact_tools.py) and inbound
     # attachments are per-company too. A demo reset keeps them: the demo
     # company stays the same one, they are the principal's own (demo turns
@@ -592,17 +610,31 @@ async def _apply_state_from_source(
     # A demo reset too: its bundle is the same company every night, so the
     # fingerprint would match the last run and the scan would never run again.
     # The rest of the audit log, which the demo's report reads, stays.
+    # A demo reset of the same company with a live research run keeps that
+    # run instead (step 0b): its alerts and watch rows come back and one run
+    # row says when it ran, so the next tick skips until the staleness floor.
     research_history_cleared = 0
-    try:
-        from openexecutive.monitoring.research.scheduler import (
-            clear_research_run_history,
-        )
+    research_carried: dict[str, int] | None = None
+    if research_carry is not None:
+        try:
+            research_carried = research_carry_mod.restore_research(
+                research_carry,
+                EPISODIC_DB_PATH,
+                name_to_id=dict(getattr(_seed_people, "_name_to_id", {}) or {}),
+            )
+        except Exception:
+            logger.exception("fixture: research carry failed; clearing the run history as usual")
+    if research_carried is None:
+        try:
+            from openexecutive.monitoring.research.scheduler import (
+                clear_research_run_history,
+            )
 
-        research_history_cleared = clear_research_run_history(EPISODIC_DB_PATH)
-    except Exception:
-        logger.exception(
-            "fixture: clear_research_run_history failed (non-fatal)"
-        )
+            research_history_cleared = clear_research_run_history(EPISODIC_DB_PATH)
+        except Exception:
+            logger.exception(
+                "fixture: clear_research_run_history failed (non-fatal)"
+            )
 
     return {
         "display_name": profile.name,
@@ -614,6 +646,7 @@ async def _apply_state_from_source(
         "workspace": workspace_applied,
         "monitoring_cleared": monitoring_cleared,
         "research_history_cleared": research_history_cleared,
+        "research_carried": research_carried,
     }
 
 

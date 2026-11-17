@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
+import { useNamed } from "@/components/embed/EmbedProvider";
 import { useExecutiveStatus } from "@/components/executive/ExecutiveStatusContext";
 import Icon from "@/components/Icon";
 import { MODE_LABEL } from "@/components/settings/WorkspaceCard";
@@ -26,11 +27,12 @@ import {
   type NotificationSettings,
 } from "@/lib/api";
 import { retentionLabel } from "@/lib/history";
+import { PRODUCT } from "@/lib/productName";
 import { tileStatus as notificationsTileStatus } from "@/lib/notifications";
 import { versionNotice } from "@/lib/versionNotice";
 
 // Settings — a hub with a row per page (SETTINGS_PAGES), in headed groups
-// (SETTINGS_GROUPS): You and your Executive (Your Executive, Notifications,
+// (SETTINGS_GROUPS): You and the product (its own page, Notifications,
 // About you), Company (Workspace) and More (Advanced, About). Each row says,
 // where it's cheap to know, how things stand right now, and otherwise what's
 // on its page. The one-page
@@ -56,6 +58,7 @@ interface TileStatus {
 
 export default function SettingsPage() {
   const router = useRouter();
+  const named = useNamed();
   // The address's hash: null while rendering on the server, where there is
   // none to read. The hub is held back until it is known, and while an old
   // anchor link is on its way to its page, so the tiles don't flash.
@@ -83,7 +86,7 @@ export default function SettingsPage() {
       <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-6 sm:pt-10 pb-16">
         <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">Settings</h1>
         <p className="mt-2 text-[15px] text-fg-muted">
-          How the Executive runs, who it runs for, and the tools for looking under the hood.
+          {named(`How ${PRODUCT} runs, who it runs for, and the tools for looking under the hood.`)}
         </p>
         {/* The pages in headed groups, each a card with a row per page. Phones:
             one column. Wider: two columns of cards. */}
@@ -94,7 +97,7 @@ export default function SettingsPage() {
                 id={`settings-group-${group.id}`}
                 className="mx-1 mb-2.5 text-[13px] font-bold uppercase tracking-wider text-fg-subtle"
               >
-                {group.label}
+                {named(group.label)}
               </h2>
               <ul className="overflow-hidden rounded-2xl border border-line bg-surface-elevated divide-y divide-line">
                 {rows.map((page) => (
@@ -114,6 +117,7 @@ export default function SettingsPage() {
 // One page's row: its name, and under it how things stand (or, for a page
 // with no status, what's on it).
 function SettingsRow({ page, status }: { page: SettingsPageDef; status?: TileStatus }) {
+  const named = useNamed();
   return (
     <Link
       href={page.href}
@@ -123,7 +127,7 @@ function SettingsRow({ page, status }: { page: SettingsPageDef; status?: TileSta
         <Icon name={page.icon} size="w-5 h-5" />
       </span>
       <span className="min-w-0 flex-1">
-        <span className="block font-display text-base sm:text-[17px] font-bold tracking-tight text-fg">{page.label}</span>
+        <span className="block font-display text-base sm:text-[17px] font-bold tracking-tight text-fg">{named(page.label)}</span>
         <span className="mt-0.5 flex min-h-[1.25rem] items-center gap-2 text-[13px] sm:text-sm text-fg-muted">
           {status ? (
             <>

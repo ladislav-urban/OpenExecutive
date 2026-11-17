@@ -25,6 +25,9 @@ _FORBIDDEN_PREFIXES = (
     "/delegation", "/settings", "/people", "/departments", "/goals", "/company-profile",
     "/knowledge", "/documents", "/workflows", "/audit", "/executive", "/agents", "/onboarding",
     "/review", "/artifacts", "/mcp", "/webhook", "/a2a",
+    # The watch jobs' settings and run-now: the principal's own Settings only.
+    # ("/watch/" ends in a slash so the watch list's /watchlist stays allowed.)
+    "/watch/",
 )
 
 
@@ -125,3 +128,11 @@ def test_the_badge_counts_are_on_it() -> None:
     # A host's navigation shows them next to its own menu entries.
     assert ("GET", "/badges") in {(m, p) for m, p in CALLS}
     assert ("GET", "/badges") in _api_routes()
+
+
+def test_the_watch_jobs_are_not_on_it() -> None:
+    """A host origin's page never reads the watch jobs or starts a run."""
+    routes = _api_routes()
+    for call in (("GET", "/watch/jobs"), ("PUT", "/watch/jobs/{job_id}"), ("POST", "/watch/jobs/{job_id}/run")):
+        assert call in routes
+    assert not [p for _, p in CALLS if p == "/watch" or p.startswith("/watch/")]

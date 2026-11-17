@@ -27,7 +27,10 @@ never checked:
   close to a source name without being one (below): a bold label that names
   no record ("Accounts Receivable") stays.
 
-**Statuses.** ``confirmed`` (exactly a source name), ``given``, ``from_text``,
+**Statuses.** ``confirmed`` (exactly a source name, or an account's, cost
+center's or warehouse's name without its company suffix: "Truck Diesel" for
+"Truck Diesel - ABC", the suffix being 1–10 capitals or digits after
+" - " at the end), ``given``, ``from_text``,
 ``near`` (the same as exactly one source name ignoring case, spacing and
 punctuation, or within a few edits: none up to 5 characters, 1 up to 12, 2
 above, so "ACME" never becomes "ACNE"; ``right`` is that name and code writes
@@ -115,6 +118,16 @@ _FALLBACK_NAME_FIELDS = frozenset({
     "voucher_no", "sales_order", "purchase_order", "delivery_note", "parent",
 })
 _LINK_FIELDTYPES = frozenset({"Link", "Dynamic Link"})
+# DocTypes ERPNext names "<name> - <company abbr>", and the fields that link
+# to them: a reply may write them without the suffix.
+_SUFFIXED_DOCTYPES = frozenset({"Account", "Cost Center", "Warehouse"})
+_SUFFIXED_FIELDS = frozenset({
+    "account", "cost_center", "warehouse", "parent_account", "parent_cost_center", "parent_warehouse",
+    "expense_account", "income_account", "default_warehouse", "set_warehouse", "from_warehouse",
+    "to_warehouse", "s_warehouse", "t_warehouse", "target_warehouse", "set_target_warehouse",
+    "paid_from", "paid_to",
+})
+_COMPANY_SUFFIX = re.compile(r"(.*\S) - [A-Z0-9]{1,10}")
 
 
 def normalize(text: str) -> str:
@@ -177,6 +190,15 @@ class NameSources:
     labels: set[str] = field(default_factory=set)
     given: str = ""
     texts: str = ""
+    # Accounts', cost centers' and warehouses' names without their company
+    # suffix ("Truck Diesel" for "Truck Diesel - ABC"), as written.
+    short: set[str] = field(default_factory=set)
+
+    def add_short(self, raw: str) -> None:
+        """``raw``'s name without its company suffix, when it has one."""
+        m = _COMPANY_SUFFIX.fullmatch(raw.strip())
+        if m and len(self.short) < MAX_NAMES:
+            self.short.add(m.group(1))
 
     def add(self, raw: str) -> None:
         name = raw.strip()
@@ -198,7 +220,7 @@ class NameSources:
             by_norm={k: set(v) for k, v in self.by_norm.items()},
             by_word={k: set(v) for k, v in self.by_word.items()},
             by_first={k: set(v) for k, v in self.by_first.items()},
-            labels=self.labels, given=self.given, texts=self.texts,
+            labels=self.labels, given=self.given, texts=self.texts, short=set(self.short),
         )
         for name in extra:
             out.add(name)
@@ -220,13 +242,18 @@ def _is_name_field(key: str, fields: frozenset[str]) -> bool:
     return key in fields or key.endswith("_name")
 
 
-def _rows(src: NameSources, rows: list[Any], fields: frozenset[str], doctypes: dict[str, Any], doctype: object) -> None:
+def _rows(
+    src: NameSources, rows: list[Any], fields: frozenset[str], doctypes: dict[str, Any], doctype: object,
+    suffixed: frozenset[str] = _SUFFIXED_FIELDS,
+) -> None:
     for row in rows:
         if not isinstance(row, dict):
             continue
         for key, value in row.items():
             if isinstance(value, str) and _is_name_field(key, fields):
                 src.add(value)
+                if key in suffixed:
+                    src.add_short(value)
             elif isinstance(value, list):
                 _rows(src, value, _name_fields(doctypes, doctype, key), doctypes, None)
 
@@ -250,6 +277,7 @@ def name_sources_for(
         if isinstance(doctype, str):
             src.labels.add(doctype.lower())
         fields = _name_fields(doctypes, doctype)
+        suffixed = _SUFFIXED_FIELDS | ({"name"} if doctype in _SUFFIXED_DOCTYPES else set())
         columns = payload.get("columns")
         if isinstance(columns, list):
             link_columns = {
@@ -258,6 +286,11 @@ def name_sources_for(
                 and (c.get("fieldtype") in _LINK_FIELDTYPES or c["fieldname"].endswith("_name"))
             }
             fields = fields | link_columns
+            suffixed = suffixed | {
+                c["fieldname"] for c in columns
+                if isinstance(c, dict) and c.get("fieldname") in link_columns
+                and c.get("options") in _SUFFIXED_DOCTYPES
+            }
             src.labels.update(
                 normalize(str(c.get("label") or "")) for c in columns
                 if isinstance(c, dict) and c.get("fieldname") in link_columns and c.get("label")
@@ -268,10 +301,10 @@ def name_sources_for(
             src.add(payload["name"])
         rows = payload.get("rows")
         if isinstance(rows, list):
-            _rows(src, rows, fields, doctypes, doctype)
+            _rows(src, rows, fields, doctypes, doctype, frozenset(suffixed))
         record = payload.get("record")
         if isinstance(record, dict):
-            _rows(src, [record], fields, doctypes, doctype)
+            _rows(src, [record], fields, doctypes, doctype, frozenset(suffixed))
     src.labels.discard("")
     src.given = "\n".join(t.lower() for t in given)[:300_000]
     src.texts = "\n".join(t.lower() for t in texts)[-300_000:]
@@ -373,7 +406,7 @@ def _status(src: NameSources, name: str, *, loose: bool) -> tuple[NameStatus, st
     SKU-A2 never SKU-A1)."""
     norm = normalize(name)
     exact = src.by_norm.get(norm)
-    if exact and name.strip() in exact:
+    if (exact and name.strip() in exact) or name.strip() in src.short:
         return "confirmed", None
     lowered = name.strip().lower()
     if lowered and lowered in src.given:

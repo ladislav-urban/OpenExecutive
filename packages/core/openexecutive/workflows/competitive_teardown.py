@@ -16,6 +16,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -406,7 +407,7 @@ def _assemble_doc(ctx: _CTCtx) -> str:
         _ensure_heading(ctx.battlecard, "## Battle Card"),
         "",
         "---",
-        "*Drafted by Open Executive. Stress-test with the sales and CS "
+        f"*Drafted by {product_name()}. Stress-test with the sales and CS "
         "teams; their pattern-match on this competitor is the source of "
         "truth, not this document.*",
     ]

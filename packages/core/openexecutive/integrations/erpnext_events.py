@@ -66,7 +66,16 @@ KINDS: dict[str, str] = {
     "budget_exceeded": "a budget line whose actual this fiscal year is above its budget",
     "weekly_margin_drop": "last week's gross margin well below the weeks before it",
     "stalled_repost": "stock reposts that failed or stopped moving, so stock values are not up to date",
+    "credit_hold": "a sales order over its customer's credit limit, waiting as a draft",
 }
+# The kinds whose event may name who it is for (``for_users``): the ERPNext
+# users oe_connector checked can read everything the text says. Each is
+# matched to an active team member on People by email or alias; the alert
+# stays private and reaches only them and the principal
+# (alerts.models.named_people). Any other kind's list is ignored.
+NAMED_KINDS = frozenset({"credit_hold"})
+MAX_NAMED = 5
+_MAX_USER = 254
 # The alerts pipeline triages 60 events a minute from every source together
 # (pipeline._rate_limited) and drops the rest. ERPNext gets a third of that,
 # and a 429 when it is full, so oe_connector retries rather than losing them
@@ -121,7 +130,8 @@ def record_for(alert: Any) -> dict[str, str] | None:
     for Home's Open; None for any other alert, or a rule without one.
     Only an alert of source ``erpnext`` counts, which the model's
     ``create_alert`` may not use (``alert_tools.RESERVED_SOURCES``): this
-    module's events, whose ``dedup_key`` is ``private:erpnext:<kind>:<key>``,
+    module's events, whose ``dedup_key`` is ``private:erpnext:<kind>:<key>`` (a
+    named one adds ``:named:<ids>``),
     and a demo bundle's alerts (``cli.demo_reset``), shown to demo people and
     so not private, as ``erpnext:<kind>:<key>``. It names a record only;
     ERPNext decides whether the person may open it."""
@@ -161,8 +171,58 @@ def parse_events(data: Any) -> list[dict[str, Any]]:
             continue
         # The draft it suggests, if any: kept as sent, checked by
         # erpnext_alert_drafts.remember before it is stored.
-        events.append({"kind": kind, "key": key, "title": title, "text": text, "suggest": raw.get("suggest")})
+        events.append({
+            "kind": kind, "key": key, "title": title, "text": text, "suggest": raw.get("suggest"),
+            "for_users": _for_users(raw.get("for_users")) if kind in NAMED_KINDS else [],
+        })
     return events
+
+
+def _for_users(value: Any) -> list[str]:
+    """The ERPNext users an event names, lower-cased: at most ``MAX_NAMED``
+    well-formed addresses, the rest dropped."""
+    if not isinstance(value, list):
+        return []
+    users: list[str] = []
+    for item in value:
+        well_formed = (
+            isinstance(item, str) and 3 <= len(item) <= _MAX_USER and "@" in item
+            and not any(c.isspace() for c in item)
+        )
+        if well_formed and item.lower() not in users:
+            users.append(item.lower())
+        if len(users) == MAX_NAMED:
+            break
+    return users
+
+
+def named_person_ids(users: list[str]) -> list[int]:
+    """The active team members on People whose email or an alias is one of
+    ``users``, in the event's order, the principal left out (a private alert
+    is theirs anyway). Someone not on People gets nothing, and neither does a
+    contact (someone outside the team, such as a customer's buyer whose
+    address is on People for mail); a roster that can't be read names no
+    one. Never raises."""
+    if not users:
+        return []
+    from openexecutive.people.store import list_people
+
+    try:
+        # A demo person looks only, and is never told a real hold.
+        roster = [
+            p for p in list_people()
+            if p.active and p.kind == "team" and not p.is_principal and p.id is not None and not p.demo
+        ]
+    except Exception:
+        logger.exception("erpnext events: couldn't read People to name an alert's readers")
+        return []
+    ids: list[int] = []
+    for user in users:
+        for person in roster:
+            own = {a.lower() for a in [person.email or "", *person.email_aliases] if a}
+            if user in own and person.id not in ids:
+                ids.append(int(person.id))  # type: ignore[arg-type]
+    return ids
 
 
 def _schedule(event: dict[str, Any]) -> None:
@@ -194,8 +254,10 @@ def _schedule(event: dict[str, Any]) -> None:
                 ),
                 user="ERPNext",
                 dedup_hint=ref,
-                # Computed as the service user: the principal's alone.
+                # Computed as the service user: the principal's alone, and,
+                # for a kind that names its readers, theirs too.
                 private=True,
+                named_person_ids=named_person_ids(event.get("for_users") or []),
             )
         )
 

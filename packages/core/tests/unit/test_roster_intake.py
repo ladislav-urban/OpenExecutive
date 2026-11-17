@@ -535,7 +535,10 @@ def test_replay_runs_in_a_fresh_context_with_no_session(roster: SimpleNamespace)
     async def _answer_on_the_principals_turn() -> None:
         current_session.set(principal_turn)
         await roster_intake.answer(req.id, "approve", via="web", full_name="Newbie", kind="team")
-        await asyncio.sleep(0.05)
+        # Wait for the replay itself (three thread hops against SQLite), never
+        # a fixed sleep: under a loaded full run 50 ms was sometimes too short
+        # and asyncio.run cancelled it, leaving `seen` empty.
+        await asyncio.gather(*list(roster_intake._TASKS))
 
     asyncio.run(_answer_on_the_principals_turn())
     assert seen == [({"text": "hi"}, None)]

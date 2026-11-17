@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import OnboardWizard from "@/components/OnboardWizard";
@@ -245,7 +246,7 @@ function OnboardFlow() {
     <div className="max-w-2xl mx-auto px-4 sm:px-6 py-16 w-full">
       <div className="mb-8">
         <h1 className="text-xl font-semibold text-fg">
-          {conversationTurn ? "A few quick questions" : "Set up your Executive"}
+          {conversationTurn ? "A few quick questions" : <>Set up <ProductName /></>}
         </h1>
         <p className="text-sm text-fg-muted mt-1">
           {conversationTurn

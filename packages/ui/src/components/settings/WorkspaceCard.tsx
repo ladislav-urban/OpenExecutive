@@ -1,5 +1,7 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
+import ProductName from "@/components/ProductName";
 import { useEffect, useMemo, useState } from "react";
 
 import AdvancedFold from "@/components/settings/AdvancedFold";
@@ -56,6 +58,7 @@ function allTimeZones(): string[] {
 }
 
 export default function WorkspaceCard() {
+  const product = useProductName();
   const { mode, timezone, effectiveTimezone, loading, refresh } = useWorkspace();
   const [pendingMode, setPendingMode] = useState<WorkspaceMode | null>(null);
   const [busy, setBusy] = useState(false);
@@ -96,7 +99,7 @@ export default function WorkspaceCard() {
       )}
 
       <SettingsCard
-        title="Using Open Executive"
+        title={`Using ${product}`}
         titleId="ws-mode-label"
         description="Just for you, or for you and your team."
       >
@@ -161,7 +164,7 @@ export default function WorkspaceCard() {
         title={<label htmlFor="ws-timezone">Time zone</label>}
         description={
           <>
-            When your morning brief, end-of-day digest and reflection arrive, and how the Executive
+            When your morning brief, end-of-day digest and reflection arrive, and how <ProductName />
             reads &ldquo;tomorrow at 9&rdquo;.
             {effectiveTimezone && <> Now: {effectiveTimezone}.</>}
           </>
@@ -326,7 +329,7 @@ function RoleSection() {
   return (
     <SettingsCard
       title="Your role"
-      description="So the Executive's advice fits your job, whatever your role: your own business, a team you lead, or clients you advise."
+      description="So its advice fits your job, whatever your role: your own business, a team you lead, or clients you advise."
     >
       <RoleFields
         value={form}

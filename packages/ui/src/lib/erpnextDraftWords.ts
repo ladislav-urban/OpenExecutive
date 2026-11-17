@@ -6,9 +6,10 @@
 // ToDo can't be submitted: it is simply an open task, so asking them to
 // submit it would send them looking for a button that isn't there.
 //
-// An install with a product name (OE_PRODUCT_NAME), or running in a host's
-// frame, is one product to the person: it calls ERPNext "the ERP", never by
-// the name of the part it is built from (the API's `in_product_reply`).
+// What the person reads calls ERPNext "the ERP", never by the name of the
+// part it is built from, with or without a product name (OE_PRODUCT_NAME)
+// or a host's frame. The `_named` arguments are kept for the callers that
+// pass them.
 //
 // No imports, so `npm test` can exercise this.
 
@@ -16,15 +17,15 @@
 // (ERPNEXT_DRAFT_DOCTYPES, integrations/erpnext_drafts.py).
 const NOT_SUBMITTED = new Set(["ToDo"]);
 
-/** What the person is told ERPNext is called: "the ERP" in a named product. */
-export function erpName(named: boolean): string {
-  return named ? "the ERP" : "ERPNext";
+/** What the person is told ERPNext is called. */
+export function erpName(_named: boolean): string {
+  return "the ERP";
 }
 
 /** The line an approved card shows: what is in the ERP now, and what is left to do there. */
-export function draftMadeLine(doctype: string, name: string | null, alreadyCreated: boolean, named = false): string {
+export function draftMadeLine(doctype: string, name: string | null, alreadyCreated: boolean, _named = false): string {
   const now = alreadyCreated ? "was already" : "is now";
-  const erp = erpName(named);
+  const erp = erpName(true);
   if (NOT_SUBMITTED.has(doctype)) {
     return name
       ? `${doctype} ${name} ${now} in ${erp}, open. It's closed there once it's done.`
@@ -35,35 +36,94 @@ export function draftMadeLine(doctype: string, name: string | null, alreadyCreat
     : `The draft is in ${erp}, unsubmitted. Review and submit it there.`;
 }
 
+/** The line an approved change, comment, hold, bank match or invoice fill shows. */
+export function changeMadeLine(operation: string, doctype: string, name: string, already: boolean): string {
+  if (operation === "fill") {
+    // ERPNext's own mapper filled the mailed draft: still a draft, nothing submitted.
+    return already
+      ? `Invoice ${name} was already filled in the ERP.`
+      : `Invoice ${name} is filled in the ERP from its order or receipt, still a draft. Review and submit it there.`;
+  }
+  if (operation === "match") {
+    // ERPNext's own bank reconciliation: the line matched, its vouchers cleared.
+    return already
+      ? `Bank line ${name} was already matched in the ERP.`
+      : `Bank line ${name} is matched in the ERP, its vouchers cleared. Nothing was created or cancelled.`;
+  }
+  if (operation === "block") {
+    // ERPNext's own Block Invoice on a submitted invoice: held until a person unblocks it.
+    return already
+      ? `${doctype} ${name} was already on hold in the ERP, until someone unblocks it.`
+      : `${doctype} ${name} is on hold in the ERP, until someone unblocks it. Nothing was paid or cancelled.`;
+  }
+  if (operation === "comment") {
+    return already ? `Your comment was already on ${doctype} ${name}.` : `Your comment is now on ${doctype} ${name}.`;
+  }
+  return already
+    ? `${doctype} ${name} already had this change. It is still unsubmitted.`
+    : `${doctype} ${name} is changed in the ERP, still unsubmitted.`;
+}
+
+/** The line an approved credit-limit raise shows: the limit is raised at
+ * once, and the held order is still its owner's to submit. */
+export function creditMadeLine(customer: string, company: string, limit: string, already: boolean): string {
+  const now = already ? "was already" : "is now";
+  const at = company ? ` at ${company}` : "";
+  const to = limit ? ` ${limit}` : " raised";
+  return `${customer}'s credit limit${at} ${now}${to}. The order is still a draft for its owner to submit.`;
+}
+
+/** What a credit-limit raise the ERP now reads differently says on its card. */
+export const CREDIT_CHANGED_NOTE =
+  "This changed in the ERP since it was left (what the customer owes, the order or its limit). " +
+  "Approving it is refused: dismiss it and prepare the raise again from the alert.";
+
+/** The card's kind, over its headline: a new draft, a change, a comment, a raise, a hold, a bank match or a fill. */
+export function cardKind(doctype: string, operation: string | undefined, named: boolean): string {
+  if (operation === "credit") return "Raise a credit limit";
+  if (operation === "match") return "Match a bank line";
+  if (operation === "fill") return "Fill a mailed supplier invoice";
+  if (operation === "block") return `Hold a submitted ${doctype}`;
+  if (operation === "update") return `Change to a ${doctype}`;
+  if (operation === "comment") return `Comment on a ${doctype}`;
+  return draftKind(doctype, named);
+}
+
+/** A watch job's card's kind: what it drafts and the job that found it
+ * ("Dunning draft from the Collections job"). */
+export function jobCardKind(doctype: string, operation: string | undefined, jobTitle: string): string {
+  return `${cardKind(doctype, operation, true)} from the ${jobTitle} job`;
+}
+
+/** A watch job's card's reason line: a model's words, labelled as such. */
+export function whyNowLine(whyNow: string): string {
+  return `Why now: ${whyNow}`;
+}
+
 /** The card's kind, over its headline. */
-export function draftKind(doctype: string, named: boolean): string {
-  return named ? `${doctype} draft` : `ERPNext ${doctype} draft`;
+export function draftKind(doctype: string, _named: boolean): string {
+  return `${doctype} draft`;
 }
 
 /** The warning on a card asked for outside this app's own chat. */
-export function askedInNote(askedIn: "erpnext_panel" | "erpnext_desk", named: boolean): string {
+export function askedInNote(askedIn: "erpnext_panel" | "erpnext_desk", _named: boolean): string {
   if (askedIn === "erpnext_desk") {
-    return named
-      ? "Asked for from a page in the ERP. Approve it only if you asked for it there."
-      : "Asked for from ERPNext's desk. Approve it only if you asked for it there.";
+    return "Asked for from a page in the ERP. Approve it only if you asked for it there.";
   }
-  return named
-    ? "Asked for in the ERP's Ask panel. Approve it only if you asked for it there."
-    : "Asked for in ERPNext's panel. Approve it only if you asked for it there.";
+  return "Asked for in the ERP's Ask panel. Approve it only if you asked for it there.";
 }
 
 /** The link to the draft once made. */
-export function openDraftLabel(doctype: string, named: boolean): string {
-  return named ? `Open the ${doctype}` : "Open in ERPNext";
+export function openDraftLabel(doctype: string, _named: boolean): string {
+  return `Open the ${doctype}`;
 }
 
 /** What the draft cards are, for the Needs you header's tip. */
-export function draftsTip(named: boolean): string {
-  const erp = erpName(named);
+export function draftsTip(_named: boolean): string {
   return (
-    `${named ? "Drafts" : "ERPNext drafts"} you asked the Executive to prepare. Each shows exactly what will be ` +
-    `written, and ${erp} has already checked it. Nothing is created until you tap Approve, and then only an ` +
-    `unsubmitted draft, as your own ${named ? "ERP" : "ERPNext"} user, for you to review and submit in ${erp}. ` +
+    "Drafts you asked for. Each shows exactly what will be " +
+    "written, and the ERP has already checked it. Nothing is created until you tap Approve, and then only an " +
+    "unsubmitted draft, as your own ERP user, for you to review and submit in the ERP. " +
     "Only you see these."
   );
 }

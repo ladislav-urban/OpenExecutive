@@ -12,7 +12,7 @@ _DROPPED = ("Cc", "Cf")
 # the Hangul fillers, the Khmer inherent vowels, the Mongolian and other
 # variation selectors, and the unassigned ranges set aside for such marks.
 _IGNORABLE = re.compile(
-    "[͏ᅟᅠ឴឵᠋-᠏ㅤ︀-️ﾠ￰-￸"
+    "[\u2065͏ᅟᅠ឴឵᠋-᠏ㅤ︀-️ﾠ￰-￸"
     "\U0001bca0-\U0001bca3\U0001d173-\U0001d17a\U000e0000-\U000e0fff]"
 )
 
@@ -25,8 +25,19 @@ def plain(text: str) -> str:
     script that only look like Latin ones stay (NFKC doesn't fold them):
     where that matters, ``no_tags`` makes a tag impossible whatever it
     spells."""
-    folded = _IGNORABLE.sub("", unicodedata.normalize("NFKC", text))
-    return "".join(ch for ch in folded if ch in "\n\t" or unicodedata.category(ch) not in _DROPPED)
+    # Line and paragraph separators are line breaks. Folding again after the
+    # drops makes the result a fixed point: plain(plain(x)) == plain(x), so a
+    # value stored as shown is shown the same when it is checked again (a
+    # zero-width space before a combining mark would otherwise compose only
+    # on the second pass).
+    out = text.replace("\u2028", "\n").replace("\u2029", "\n")
+    for _ in range(3):
+        folded = _IGNORABLE.sub("", unicodedata.normalize("NFKC", out))
+        kept = "".join(ch for ch in folded if ch in "\n\t" or unicodedata.category(ch) not in _DROPPED)
+        if kept == out:
+            break
+        out = kept
+    return out
 
 
 def no_tags(text: str) -> str:

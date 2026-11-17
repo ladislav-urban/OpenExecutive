@@ -156,7 +156,7 @@ async def create_builtin_file(body: BuiltinFileWrite, request: Request) -> Built
     if existing is not None and existing.trusted_default:
         raise HTTPException(
             status_code=409,
-            detail="That name belongs to content shipped with Open Executive.",
+            detail="That name belongs to the built-in content.",
         )
 
     path.parent.mkdir(parents=True, exist_ok=True)

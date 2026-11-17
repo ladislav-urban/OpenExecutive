@@ -1218,6 +1218,48 @@ LAST_ROUND_NOTE = (
 )
 
 
+# Added when a round after tool results ended with no text at all: the
+# model sometimes stops there, and the reply would be nothing (or only what
+# it wrote before its last call, cut off mid-sentence). Asked once a turn.
+EMPTY_ROUND_NOTE = (
+    "You ended without writing anything for the person. Write your answer now from what you have read."
+)
+# What a turn says when the model declined to answer (stop reason
+# "refusal") and nothing was written: never an empty reply.
+REFUSED_REPLY = "I can't answer that one as it's asked. Try putting it another way."
+# A round's output cap, thinking and text together. Adaptive thinking on a
+# 5-generation model can spend all of 8,192 on thinking after a large tool
+# result and stop at max_tokens with no text (erpnext_094 at 45bd9197: 5 of
+# 10 replies empty). Streaming takes a larger cap; it limits, never spends.
+ROUND_MAX_TOKENS = 32000
+# Any other model keeps the old cap: a smaller completion limit or context
+# window (an OpenRouter or local model) could refuse the larger one.
+OTHER_ROUND_MAX_TOKENS = 8192
+# Claude models the larger cap goes to: the 4.5 and later families, whose
+# output caps all exceed it (an older Claude keeps the smaller cap).
+_CLAUDE_RE = re.compile(
+    r"(?:anthropic/)?claude-(?:opus|sonnet|haiku|fable|mythos)-(?:4[-.](?:[5-9]|\d{2})|[5-9])(?:[-.]\d{1,2})?(?:-\d{8})?"
+)
+# Claude models that take output_config.effort (the 5 generation): a retry
+# after a round that stopped at max_tokens with no text runs at low effort,
+# so it thinks less and writes.
+# Not Haiku: the loop sends no thinking, so a Haiku round already runs with
+# thinking off (feature_gate), and effort there gains nothing.
+_TAKES_EFFORT_RE = re.compile(r"(?:anthropic/)?claude-(?:opus|sonnet|fable|mythos)-5(?:[-.]\d{1,2})?")
+# The stop reasons an empty round is asked once more after: a natural end,
+# or the output limit reached with no text. Never a refusal.
+_EMPTY_RETRY_STOPS = frozenset({"end_turn", "max_tokens"})
+EMPTY_ROUND_CONTINUE_NOTE = (
+    "Your reply stopped before it was finished. Carry on from where it stopped, without repeating what you "
+    "already wrote, and finish it from what you have read."
+)
+
+
+# A reply that ends like this is whole: a trailing call after it (progress,
+# a follow-up) and a silent end are no reason to ask for more.
+_WHOLE_REPLY_END = re.compile(r"[.!?)\]\"'*_`]\s*$")
+
+
 def _round_separator(tail: str, text: str) -> str:
     """What goes between the text already streamed (its last characters,
     ``tail``) and a new round's first ``text``: a paragraph break, less what
@@ -1401,6 +1443,17 @@ class Executive:
         if followups:
             user_content_parts.append(
                 {"type": "text", "text": f"<pending_followups>\n{followups}\n</pending_followups>"}
+            )
+        # What became of the ERPNext draft cards this conversation left for
+        # its own person (approved, dismissed, expired, or closed and why, in
+        # fixed words), so a question about one is answered from the record
+        # rather than guessed. Changes as cards are decided, so the user turn.
+        from openexecutive.integrations.erpnext_drafts import decided_cards_note
+
+        decided = decided_cards_note(session, person_id)
+        if decided:
+            user_content_parts.append(
+                {"type": "text", "text": f"<decided_cards>\n{decided}\n</decided_cards>"}
             )
 
         # Attachment blocks (images) are inserted before the text message so
@@ -2715,6 +2768,14 @@ class Executive:
         # it was asked to do, since a result's first line rarely says it all.
         claim_calls: list[tuple[str, str]] = []
         claim_checked = False
+        # Whether a round with no text after tool results was asked once more
+        # (EMPTY_ROUND_NOTE): once a turn.
+        empty_retried = False
+        # The next round is offered no tool: a retry after a max_tokens stop
+        # with no text must write, not repeat the call that filled it.
+        no_tools_next = False
+        # And at low effort, where the model takes it (_TAKES_EFFORT_RE).
+        low_effort_next = False
         # The reply as it stood when the claim check asked for one more round:
         # that round's text is held and only a short line of what the reply
         # doesn't already say is kept (utils.repeats), so a rewritten answer
@@ -2791,7 +2852,12 @@ class Executive:
             flushed = False
             async with get_provider(stream_model).messages_stream(
                 model=stream_model,
-                max_tokens=8192,
+                max_tokens=ROUND_MAX_TOKENS if _CLAUDE_RE.fullmatch(stream_model.lower()) else OTHER_ROUND_MAX_TOKENS,
+                **(
+                    {"output_config": {"effort": "low"}}
+                    if low_effort_next and _TAKES_EFFORT_RE.fullmatch(stream_model.lower())
+                    else {}
+                ),
                 system=system_blocks,  # type: ignore[arg-type]
                 tools=tools_with_cache,  # type: ignore[arg-type,list-item]
                 messages=current_messages,  # type: ignore[arg-type]
@@ -2800,7 +2866,7 @@ class Executive:
                 # ending on "unable to complete". The tools and system
                 # blocks stay cached; the messages are read uncached this
                 # once, as tool_choice changes. Only a turn at its cap pays it.
-                **({"tool_choice": {"type": "none"}} if iteration == max_iterations else {}),
+                **({"tool_choice": {"type": "none"}} if iteration == max_iterations or no_tools_next else {}),
             ) as stream:
                 async for event in stream:
                     if (
@@ -2825,6 +2891,8 @@ class Executive:
                             held, flushed = "", True
 
                 final_msg = await stream.get_final_message()
+            # The retry's settings were for that one round only.
+            no_tools_next = low_effort_next = False
             if reply_before_nudge is not None:
                 # After the claim check's nudge, everything the model writes,
                 # before a tool call or after it, is gathered and trimmed once
@@ -2926,6 +2994,48 @@ class Executive:
                 # synced excerpts checked, so what they tried is flagged to
                 # the person (outside_content.settle).
                 await outside_content.settle()
+                round_empty = not any(
+                    b.get("type") == "text" and str(b.get("text", "")).strip() for b in response_content
+                )
+                if round_empty and not reply_so_far.strip():
+                    # Why a turn came back with nothing: codes and counts
+                    # only, never the text (none was written).
+                    logger.warning(
+                        "turn ended with no reply: stop_reason=%s iter=%d/%d empty_retried=%s blocks=%s",
+                        final_msg.stop_reason, iteration, max_iterations, empty_retried,
+                        ",".join(sorted({str(getattr(b, "type", "?")) for b in final_msg.content})) or "none",
+                    )
+                if (
+                    final_msg.stop_reason in _EMPTY_RETRY_STOPS
+                    and iteration < max_iterations and not empty_retried and not handing_over
+                    and reply_before_nudge is None
+                    and round_empty
+                    and not _WHOLE_REPLY_END.search(reply_so_far)
+                ):
+                    # The round ended with no text, and the reply is empty or
+                    # stopped mid-sentence before its last call: ask once more.
+                    empty_retried = True
+                    logger.warning(
+                        "empty round (stop_reason=%s) at iter %d; asking once more (reply so far %d chars)",
+                        final_msg.stop_reason, iteration, len(reply_so_far),
+                    )
+                    note = EMPTY_ROUND_CONTINUE_NOTE if reply_so_far.strip() else EMPTY_ROUND_NOTE
+                    no_tools_next = low_effort_next = final_msg.stop_reason == "max_tokens"
+                    # A hand-over the person asked for meanwhile is taken
+                    # here: the extra round writes up, and runs no tool.
+                    if inbox is not None and inbox.take_hand_over():
+                        handing_over = True
+                        yield {"type": "handing_over"}
+                        note = HAND_OVER_NOTE
+                    current_messages.append({"role": "user", "content": [{"type": "text", "text": note}]})
+                    continue
+                if final_msg.stop_reason == "refusal":
+                    # Declined: the turn ends here, never asked again (not by
+                    # the claim check either). With nothing written, say so.
+                    if round_empty and not reply_so_far.strip():
+                        for chunk in _flush_held(REFUSED_REPLY, streamed_tail):
+                            yield chunk
+                    return
                 # Do what it says: a reply that claims a change no call this
                 # turn made gets one more round to make it or say it can't.
                 if claim_checked or handing_over or iteration >= max_iterations:

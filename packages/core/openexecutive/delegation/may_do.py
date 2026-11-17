@@ -143,7 +143,7 @@ def as_you(person_id: int, *, can_have_it: bool, signing: bool, is_principal: bo
     if not can_have_it:
         return Section(
             SECTION_AS_YOU, title, available=False,
-            unavailable="Act as me isn't available to you here. The owner of this Open Executive can turn it on "
+            unavailable="Act as me isn't available to you here. The owner of this install can turn it on "
             "for team members.",
         )
 
@@ -400,12 +400,14 @@ def _rule_label(kind: str, value: str) -> str:
 def as_the_executive(*, is_principal: bool) -> Section:
     """What the Executive does in its own name, under Take the lead."""
     from openexecutive.orchestrator import take_the_lead
+    from openexecutive.utils.product_name import product_name
 
-    title = "As the Executive, on its own"
+    product = product_name()
+    title = f"As {product}, on its own"
     if not is_principal:
         return Section(
             SECTION_EXECUTIVE, title, available=False,
-            unavailable="Only the account owner sees what the Executive does on its own.",
+            unavailable=f"Only the account owner sees what {product} does on its own.",
         )
     lead = take_the_lead.get(take_the_lead.SCOPE_EXECUTIVE)
     try:
@@ -556,7 +558,7 @@ def departments() -> Section:
     footer = (
         "A level covers that department's scheduled messages and alerts"
         + (". Check-ins don't run in a personal workspace" if solo else ", its check-ins, and what its team members ask for in chat")
-        + ". It doesn't cover what the Executive does on its own under Take the lead."
+        + ". It doesn't cover what it does on its own under Take the lead."
     )
     return Section(SECTION_DEPARTMENTS, title, rows=rows, footer=footer)
 

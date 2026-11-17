@@ -23,6 +23,13 @@ from typing import Any
 # any such instance and embeds with a fresh one from the config instead.
 _EMBED_BATCH = 4
 _embedding_function_lock = threading.Lock()
+# Opening a PersistentClient isn't thread-safe in chromadb: two threads
+# opening one path at once (a turn's knowledge and failure retrievals run
+# side by side in worker threads) race on its shared system cache, and both
+# can fail ("Could not connect to tenant default_tenant", RustBindingsAPI
+# has no attribute 'bindings', a KeyError on the path). One at a time; once
+# a path's system is cached, opening it again is quick.
+_client_open_lock = threading.Lock()
 _shared_embedding_function: Any = None
 
 
@@ -154,10 +161,11 @@ class ChromaDBStore(KnowledgeStore):
         import chromadb
         from chromadb.config import Settings
 
-        self._client = chromadb.PersistentClient(
-            path=str(persist_directory),
-            settings=Settings(anonymized_telemetry=False),
-        )
+        with _client_open_lock:
+            self._client = chromadb.PersistentClient(
+                path=str(persist_directory),
+                settings=Settings(anonymized_telemetry=False),
+            )
 
     def _get_or_create_collection(self, name: str) -> Any:
         return self._client.get_or_create_collection(

@@ -34,5 +34,5 @@ export function offersApprove(actions: readonly { key: string }[] | null | undef
 export function approvedLine(kind: "decision" | "alert", status?: string, outcome?: string): string {
   if (kind === "decision") return "Approved.";
   if (status === "failed") return outcome ? `It couldn't be done: ${outcome}` : "It couldn't be done.";
-  return "Approved. The Executive is doing it in a new chat, which you'll find in Conversations.";
+  return "Approved. It's being done in a new chat, which you'll find in Conversations.";
 }

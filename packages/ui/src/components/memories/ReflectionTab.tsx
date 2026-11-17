@@ -52,7 +52,7 @@ type View = "misses" | "lessons";
 type Category = "all" | MissTopic;
 
 const EMPTY =
-  "Nothing yet. After a chat goes quiet, the Executive grades its own answers; the ones that fell short show up here.";
+  "Nothing yet. After a chat goes quiet, it grades its own answers; the ones that fell short show up here.";
 
 const TOPIC_LABEL: Record<MissTopic, string> = {
   term: "Words you use",

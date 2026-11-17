@@ -56,6 +56,13 @@ answers a supplier's agent over A2A (``integrations.erpnext_a2a_agent``) on
 one message, its tools answering from the scenario's documents as
 oe_connector would (``supplier_tools``), and ``judge_supplier`` scores the
 reply. Nothing reaches ERPNext.
+
+A ``watch_reason`` scenario (``type: watch_reason``) runs a watch job's model
+"reason" line on the real fast model through the job's own reason step
+(``watch.runner.reason_lines``), on findings the job's own code builds from
+the scenario's figures and team update (``scenarios.scenario_watch_reason``).
+``judge_watch_reason`` scores the lines that reach the notice. Nothing reaches
+ERPNext and no notice is left.
 """
 from __future__ import annotations
 
@@ -73,13 +80,16 @@ from openexecutive.evals.judges import (
     judge_inbox,
     judge_supplier,
     judge_triage,
+    judge_watch_reason,
     judge_workflow,
 )
 from openexecutive.evals.scenarios import (
+    WATCH_REASON,
     SupplierCase,
     forbidden_words_in,
     load_scenarios,
     routing_check,
+    scenario_decided_cards,
     scenario_delegation,
     scenario_inbox,
     scenario_principal_role,
@@ -87,6 +97,7 @@ from openexecutive.evals.scenarios import (
     scenario_supplier,
     scenario_turn_surface,
     scenario_voice_persona,
+    scenario_watch_reason,
     seed_prior_turns,
     view_kinds_check,
 )
@@ -209,6 +220,8 @@ def _make_run_one(
         return _make_outcome_runner(run_inbox_scenario, sem, queue, passed, total, cancel_event)
     if kind == "supplier":
         return _make_outcome_runner(run_supplier_scenario, sem, queue, passed, total, cancel_event)
+    if kind == WATCH_REASON:
+        return _make_outcome_runner(run_watch_reason_scenario, sem, queue, passed, total, cancel_event)
     if kind == "workflow":
         return _make_workflow_runner(store, sem, queue, passed, total, cancel_event)
     # chat (default) and mcp both go through Executive.chat; mcp with the
@@ -418,6 +431,53 @@ async def run_supplier_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
         if again:
             scores["repeated_text"] = again
             passed = False
+    return {"outcome": outcome, "scores": scores, "passed": passed}
+
+
+async def run_watch_reason_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
+    """One ``type: watch_reason`` scenario: the job's own reason step
+    (``watch.runner.reason_lines``, what ``reason_step`` runs: the job's
+    ``ReasonSchema`` and instruction, the runner's constant system prompt,
+    the configured fast model, then its cleaning and ``no_digits`` filter)
+    on the scenario's findings, built by the job's own code;
+    ``{"outcome", "scores", "passed"}``. Nothing is stored and no notice is
+    left."""
+    from openexecutive.watch.runner import drop_rule, reason_lines
+
+    case = scenario_watch_reason(scenario)
+    if case is None:
+        raise ValueError("watch_reason scenarios require a `watch_reason` block")
+    kept, dropped = await reason_lines(case.job, [f.spec for f in case.findings])
+    outcome = {
+        "job": case.job.id,
+        "findings": [
+            {
+                "finding": f.label,
+                "facts": dict(f.spec.facts),
+                "line": kept.get(f.spec.key),
+                "dropped": dropped.get(f.spec.key),
+                # Which filter rule dropped it (watch.runner.DROP_RULES).
+                "dropped_rule": drop_rule(dropped[f.spec.key]) if f.spec.key in dropped else None,
+            }
+            for f in case.findings
+        ],
+    }
+    scores = await judge_watch_reason(scenario, outcome)
+    passed = float(scores.get("overall", 0)) >= _PASS_THRESHOLD
+    # Deterministic checks the judge's score can't outvote: a line the
+    # scenario says must (or must not) reach the notice, and a word no line
+    # on it may say. Only kept lines count: a dropped one is never shown.
+    wrong = [
+        f.label for f in case.findings
+        if f.expect_line is not None and (f.spec.key in kept) != f.expect_line
+    ]
+    if wrong:
+        scores["expect_line_unmet"] = wrong
+        passed = False
+    said = forbidden_words_in(scenario, "\n".join(kept.values()))
+    if said:
+        scores["forbidden_reply_words"] = said
+        passed = False
     return {"outcome": outcome, "scores": scores, "passed": passed}
 
 
@@ -671,26 +731,35 @@ def _make_chat_runner(
                     views_ctx = (
                         collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
                     )
-                    with views_ctx:
-                        response = await scenario_executive.chat(
-                            user_message=query,
-                            session=session,
-                            channel_context_block=channel_block,
-                            # chat() sets the turn's speaker from this, as the chat
-                            # route passes the signed-in person: a `speaker`
-                            # scenario's caller, else None.
-                            person_id=surface.get("caller_person_id"),
-                            debug_collector=collector,
-                            # A scenario may supply the <peer_memory> body itself.
-                            # Evals run with no person_id, so the Honcho prefetch
-                            # never fires; this is the only way to exercise how the
-                            # Executive USES peer memory. None keeps chat()'s default.
-                            peer_memory_context=scenario.get("peer_memory_context"),
-                            # Likewise the <standing_facts> body (memory/facts.py):
-                            # the scenario's own lines under the shared header, or
-                            # none — an eval never reads the install's facts.
-                            standing_facts=scenario_standing_facts(scenario),
-                        )
+                    # The draft cards its conversation left, as the turn's
+                    # note is told them: never written to the ledger, and
+                    # forgotten once the turn is done.
+                    from openexecutive.integrations.erpnext_drafts import decided_cards_override
+
+                    cards_token = decided_cards_override.set(scenario_decided_cards(scenario))
+                    try:
+                        with views_ctx:
+                            response = await scenario_executive.chat(
+                                user_message=query,
+                                session=session,
+                                channel_context_block=channel_block,
+                                # chat() sets the turn's speaker from this, as the chat
+                                # route passes the signed-in person: a `speaker`
+                                # scenario's caller, else None.
+                                person_id=surface.get("caller_person_id"),
+                                debug_collector=collector,
+                                # A scenario may supply the <peer_memory> body itself.
+                                # Evals run with no person_id, so the Honcho prefetch
+                                # never fires; this is the only way to exercise how the
+                                # Executive USES peer memory. None keeps chat()'s default.
+                                peer_memory_context=scenario.get("peer_memory_context"),
+                                # Likewise the <standing_facts> body (memory/facts.py):
+                                # the scenario's own lines under the shared header, or
+                                # none — an eval never reads the install's facts.
+                                standing_facts=scenario_standing_facts(scenario),
+                            )
+                    finally:
+                        decided_cards_override.reset(cards_token)
                     if delegation is not None:
                         drafts = [asdict(d) for d in delegation.gmail.drafts]
                         scores = await judge_chat(scenario, response, drafts=drafts)

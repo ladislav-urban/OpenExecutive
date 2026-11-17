@@ -9,12 +9,16 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from openexecutive.alerts import dispatcher, preferences, store
+from openexecutive.alerts.lifecycle import TTL_EXEMPT_SOURCES
 from openexecutive.alerts.models import (
     AlertChannel,
     AlertEvent,
     TriageDecision,
     is_private_alert,
+    is_run_tag,
+    run_tag,
 )
+from openexecutive.audit.usage import get_research_run_id
 
 if TYPE_CHECKING:
     from openexecutive.people.models import Person
@@ -184,7 +188,8 @@ async def evaluate_and_dispatch(
             "headline": a.headline,
             "severity": a.severity,
             "dedup_key": a.dedup_key,
-            "topic_tags": a.topic_tags,
+            # A research run's id is bookkeeping, not a topic.
+            "topic_tags": [t for t in a.topic_tags if not is_run_tag(t)],
         }
         # Never anyone's drafted documents: they are their owners' alone.
         for a in store.recent_alerts(limit=20, db_path=path, exclude_source="artifact")
@@ -249,14 +254,36 @@ async def evaluate_and_dispatch(
     if event.raised_by:
         # One team member's alert never folds into another's card.
         dedup_key = f"raised_by:{(event.from_ or event.raised_by).lower()}:{dedup_key}"
-    topic_tags = _with_department_tag(
-        decision.topic_tags, event.department or event.channel,
-    )
+    from openexecutive.alerts.models import NAMED_TAG_PREFIX
+
+    # Only the event's own list names people (models.named_people): a tag
+    # the triage model wrote is never one.
+    topic_tags = [
+        t for t in _with_department_tag(decision.topic_tags, event.department or event.channel)
+        if not str(t).lower().startswith(NAMED_TAG_PREFIX)
+    ]
     routed_to = _person_id_from_event(event)
+    named = [i for i in dict.fromkeys(event.named_person_ids) if isinstance(i, int) and not isinstance(i, bool)]
     if event.private:
         topic_tags, routed_to, dedup_key, effective_channels = _make_private(
             topic_tags, dedup_key
         )
+        if named:
+            topic_tags = [*topic_tags, *(f"{NAMED_TAG_PREFIX}{i}" for i in named)]
+            # Still the principal's card (routed to them, theirs to act on);
+            # the named people only see it. A different set of readers is a
+            # card of its own: folding it into the open one would keep the
+            # old readers on the new figures.
+            dedup_key = f"{dedup_key}:named:{','.join(str(i) for i in sorted(named))}"
+    # Raised inside a research run: stamped with its id, so a demo reset can
+    # keep this run's alerts (``monitoring/research/carry.py``).
+    research_run = get_research_run_id()
+    run_tags = (
+        [run_tag(research_run)]
+        if research_run and event.source not in TTL_EXEMPT_SOURCES
+        else []
+    )
+    topic_tags = [t for t in topic_tags if not is_run_tag(t)] + run_tags
 
     # A replay of the SAME upstream event (webhook retry, re-poll) is a
     # no-op, exactly as before: the (source, external_id) row already exists.
@@ -281,6 +308,7 @@ async def evaluate_and_dispatch(
         needs=event.needs,
         question=event.question,
         choices=event.choices,
+        add_tags=run_tags,
         db_path=path,
     )
     if coalesced is not None:
@@ -344,6 +372,8 @@ async def evaluate_and_dispatch(
         department_slug=decision.department_slug,
         broadcast_integration=decision.broadcast_integration,
     )
+    if event.private and named:
+        await dispatcher.push_to_named(alert, named)
     return decision, alert_id
 
 

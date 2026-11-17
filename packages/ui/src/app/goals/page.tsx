@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
@@ -120,7 +121,7 @@ export default function GoalsPage() {
             <div className="min-w-0">
               <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-fg">Goals</h1>
               <p className="text-[15px] text-fg-muted mt-2">
-                What you&apos;re working towards. Each goal is checked weekly. Tell the Executive how one is
+                What you&apos;re working towards. Each goal is checked weekly. Tell <ProductName /> how one is
                 going in chat and it updates the goal for you.
               </p>
             </div>

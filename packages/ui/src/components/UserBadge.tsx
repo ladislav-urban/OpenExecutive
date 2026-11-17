@@ -2,18 +2,20 @@
 
 import { useSession } from "next-auth/react";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
 import { GUIDE_NAV_ITEM } from "@/components/shell/navConfig";
 import OverflowMenu, { type OverflowItem } from "@/components/ui/OverflowMenu";
 import { initials } from "@/lib/initials";
 import { signOutOf } from "@/lib/signOutClient";
 
-// The account menu at the foot of the sidebar: help, the Executive's
-// pause switch (on Settings → Your Executive) and signing out, kept off
-// the main menu.
-const ACCOUNT_ITEMS: OverflowItem[] = [
-  { label: GUIDE_NAV_ITEM.label, href: GUIDE_NAV_ITEM.href },
-  { label: "Pause or resume the Executive", href: "/settings/executive" },
-];
+// The account menu at the foot of the sidebar: help, the pause switch (on
+// the product's own page of Settings) and signing out, kept off the main menu.
+function accountItems(product: string): OverflowItem[] {
+  return [
+    { label: GUIDE_NAV_ITEM.label, href: GUIDE_NAV_ITEM.href },
+    { label: `Pause or resume ${product}`, href: "/settings/executive" },
+  ];
+}
 
 interface UserBadgeProps {
   /** "sidebar" (name, email and the account menu) or "compact" (single row, name only). */
@@ -31,6 +33,7 @@ interface UserBadgeProps {
 //
 export default function UserBadge({ variant = "compact" }: UserBadgeProps) {
   const { data: session, status } = useSession();
+  const product = useProductName();
 
   if (status === "loading") {
     return (
@@ -51,7 +54,7 @@ export default function UserBadge({ variant = "compact" }: UserBadgeProps) {
             ? "px-3 py-3 border-t border-line flex items-center gap-2.5 flex-shrink-0"
             : "flex items-center gap-2 text-xs text-fg-muted"
         }
-        title="Local login: only this computer can reach Open Executive"
+        title={`Local login: only this computer can reach ${product}`}
       >
         <Avatar name="ME" size={variant === "sidebar" ? "w-8 h-8" : "w-6 h-6"} />
         <div className="flex-1 min-w-0">
@@ -61,7 +64,7 @@ export default function UserBadge({ variant = "compact" }: UserBadgeProps) {
           )}
         </div>
         {variant === "sidebar" && (
-          <OverflowMenu items={ACCOUNT_ITEMS} label="Account menu" size="sm" placement="up" />
+          <OverflowMenu items={accountItems(product)} label="Account menu" size="sm" placement="up" />
         )}
       </div>
     );
@@ -85,7 +88,7 @@ export default function UserBadge({ variant = "compact" }: UserBadgeProps) {
         </div>
         <OverflowMenu
           items={[
-            ...ACCOUNT_ITEMS,
+            ...accountItems(product),
             { label: "Sign out", onSelect: () => signOutOf(session) },
           ]}
           label="Account menu"

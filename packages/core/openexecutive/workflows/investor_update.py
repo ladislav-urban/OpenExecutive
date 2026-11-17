@@ -16,6 +16,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -316,7 +317,7 @@ def _assemble_email(ctx: _IUContext) -> str:
         "Thanks as always for the support.",
         "",
         "---",
-        "*Drafted by Open Executive. Review every number against the source "
+        f"*Drafted by {product_name()}. Review every number against the source "
         "of truth before sending.*",
     ]
     return "\n".join(parts).strip() + "\n"

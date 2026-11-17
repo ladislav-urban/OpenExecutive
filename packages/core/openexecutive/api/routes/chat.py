@@ -1342,7 +1342,7 @@ async def _chat_turn(
         ):
             raise HTTPException(
                 status_code=409,
-                detail="This conversation was started in Open Executive. Continue it there.",
+                detail="This conversation was started in the web app. Continue it there.",
             )
         if turn_files:
             # Kept for the conversation, so a later message can still attach,

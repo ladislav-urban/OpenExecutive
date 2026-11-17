@@ -13,7 +13,7 @@ export interface VersionFacts {
 }
 
 export interface VersionNotice {
-  /** "Open Executive v0.4.4" */
+  /** "Version 0.4.4" */
   running: string;
   /** One line on how it compares with the latest release. */
   status: string;
@@ -22,7 +22,7 @@ export interface VersionNotice {
 }
 
 export function versionNotice(v: VersionFacts): VersionNotice {
-  const running = `Open Executive v${v.current}`;
+  const running = `Version ${v.current}`;
   if (!v.check_enabled) {
     return {
       running,

@@ -6,6 +6,7 @@ import {
   reviseOnboardAnswer,
   type OnboardTurn,
 } from "@/lib/api";
+import { useProductName } from "@/components/embed/EmbedProvider";
 import type { Bubble } from "@/components/onboard/OnboardConversation";
 
 // Where an attached file's text starts in the opening answer (the API's
@@ -39,6 +40,7 @@ export default function OnboardAnswers({
   compact = false,
   disabled = false,
 }: Props) {
+  const product = useProductName();
   const [editing, setEditing] = useState<number | null>(null);
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
@@ -89,7 +91,7 @@ export default function OnboardAnswers({
             >
               {!compact && (
                 <p className="text-[10px] uppercase tracking-wide text-fg-subtle mb-0.5">
-                  {r.role === "user" ? "You" : "Executive"}
+                  {r.role === "user" ? "You" : product}
                 </p>
               )}
               {isEditing ? (

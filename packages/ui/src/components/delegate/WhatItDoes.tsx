@@ -1,5 +1,7 @@
 "use client";
 
+import { useProductName } from "@/components/embed/EmbedProvider";
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 
@@ -23,7 +25,8 @@ import { GROUP_OF, GROUP_ORDER, changedRows, groupTitle, rowId, snapshot, type G
 
 const TAB_LABELS: Record<MayDoSection["key"], string> = {
   as_you: "As you",
-  executive: "Executive",
+  // The product's own name on screen (OE_PRODUCT_NAME), filled in below.
+  executive: "",
   departments: "Departments",
 };
 
@@ -37,11 +40,11 @@ const GROUP_DOT: Record<Group, string> = {
 // How long a changed row stays marked.
 const CHANGED_MS = 10_000;
 
-function settingHref(setting: string): { href: string; label: string } | null {
+function settingHref(setting: string, product: string): { href: string; label: string } | null {
   if (setting === "act_as_me") return { href: WRITES_HREF, label: "Act as me" };
   if (setting === "handle_it") return { href: SENDS_HREF, label: "Handle it for me" };
   if (setting === "take_the_lead") return { href: "/delegate/take-the-lead", label: "Take the lead" };
-  if (setting === "pause") return { href: "/settings/executive", label: "Your Executive" };
+  if (setting === "pause") return { href: "/settings/executive", label: product };
   if (setting.startsWith("department:")) {
     const slug = setting.slice("department:".length);
     return { href: `/departments/${encodeURIComponent(slug)}`, label: "Department settings" };
@@ -50,7 +53,7 @@ function settingHref(setting: string): { href: string; label: string } | null {
 }
 
 function Row({ row, changed }: { row: MayDoRow; changed: boolean }) {
-  const link = settingHref(row.setting);
+  const link = settingHref(row.setting, useProductName());
   return (
     <li
       className={`rounded-xl border bg-surface-elevated px-3.5 py-3 transition-shadow ${
@@ -126,6 +129,7 @@ export default function WhatItDoes() {
   const [data, setData] = useState<WhatItMayDo | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "hidden" | "error">("loading");
   const [active, setActive] = useState<MayDoSection["key"]>("as_you");
+  const product = useProductName();
   const [changed, setChanged] = useState<Set<string>>(() => new Set());
   const seen = useRef<Map<string, string> | null>(null);
   const clear = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -182,7 +186,7 @@ export default function WhatItDoes() {
     <div className="space-y-4">
       {data.paused && (
         <p className="rounded-xl border border-line bg-surface-overlay px-3 py-2.5 text-[13px] text-fg leading-relaxed">
-          The Executive is paused, so nothing here runs on its own until it resumes. What you send or approve yourself
+          <ProductName /> is paused, so nothing here runs on its own until it resumes. What you send or approve yourself
           still goes.{" "}
           <Link href="/settings/executive" className="font-medium text-accent underline-offset-2 hover:underline">
             Resume
@@ -196,7 +200,7 @@ export default function WhatItDoes() {
         onChange={setActive}
         tabs={sections.map((s) => ({
           id: s.key,
-          label: TAB_LABELS[s.key],
+          label: s.key === "executive" ? product : TAB_LABELS[s.key],
           badge: s.available ? s.goes : null,
         }))}
       />

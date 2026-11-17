@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field
 from openexecutive.api import caller as api_caller
 from openexecutive.config import get_settings
 from openexecutive.scheduler import pause as pause_store
+from openexecutive.utils.product_name import product_name
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +89,7 @@ def pause_executive(request: Request, body: PauseBody | None = None) -> Executiv
 
         audit_log(
             "executive_paused",
-            "Executive paused — autonomous work on hold"
+            f"{product_name()} paused — autonomous work on hold"
             + (f": {reason}" if reason else ""),
             actor=actor,
             details={"reason": reason},
@@ -101,7 +102,7 @@ def resume_executive(request: Request) -> ExecutiveStatus:
     """Release held work. Due actions fire on the next scheduler tick.
     Principal only (see module docstring)."""
     if not _may_resume(request):
-        raise HTTPException(status_code=403, detail="Only the principal can resume the Executive")
+        raise HTTPException(status_code=403, detail=f"Only the principal can resume {product_name()}")
     prior = pause_store.get_pause_state()
     actor = api_caller.actor(request)
     held = pause_store.count_held_actions()
@@ -111,7 +112,7 @@ def resume_executive(request: Request) -> ExecutiveStatus:
 
         audit_log(
             "executive_resumed",
-            f"Executive resumed — {held} held action(s) released",
+            f"{product_name()} resumed — {held} held action(s) released",
             actor=actor,
             details={
                 "paused_at": prior.paused_at,

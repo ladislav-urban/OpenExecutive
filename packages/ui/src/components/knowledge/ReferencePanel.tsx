@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import { useEffect, useState } from "react";
 import {
   listExternalSources,
@@ -61,7 +62,7 @@ export default function ReferencePanel() {
     <div className="space-y-6">
       <div>
         <p className="text-[15px] text-fg-muted max-w-2xl">
-          Open-licensed textbooks and handbooks the Executive draws on. Declared in{" "}
+          Open-licensed textbooks and handbooks <ProductName /> draws on. Declared in{" "}
           <code className="text-fg">knowledge/sources.yaml</code>. To add or
           refresh: run <code className="text-fg">openexecutive ingest-oer</code>.
         </p>

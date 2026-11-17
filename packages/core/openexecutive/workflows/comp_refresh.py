@@ -16,6 +16,7 @@ from openexecutive.knowledge.store import ChromaDBStore
 from openexecutive.memory.company_profile import CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 from openexecutive.orchestrator.router import route_to_specialist
+from openexecutive.utils.product_name import product_name
 from openexecutive.workflows.base import (
     Workflow,
     WorkflowEvent,
@@ -400,7 +401,7 @@ def _assemble_proposal(ctx: _CompCtx) -> str:
         _ensure_heading(ctx.rollout, "## Rollout Plan"),
         "",
         "---",
-        "*Drafted by Open Executive. Validate every band figure against "
+        f"*Drafted by {product_name()}. Validate every band figure against "
         "the current market survey and the cap table before approving.*",
     ]
     return "\n".join(parts).strip() + "\n"

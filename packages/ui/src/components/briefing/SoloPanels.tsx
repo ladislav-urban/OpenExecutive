@@ -1,5 +1,6 @@
 "use client";
 
+import ProductName from "@/components/ProductName";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 
@@ -79,7 +80,7 @@ export function ProjectsPanelBody({ state }: { state: ReturnType<typeof useActiv
   return (
     <>
       <PanelIntro>
-        The projects you&apos;re running that the Executive is keeping track of. Mention a new one in chat and it
+        The projects you&apos;re running that <ProductName /> is keeping track of. Mention a new one in chat and it
         appears here.
       </PanelIntro>
       {error && <p className={`mb-2 text-sm ${TONE_TEXT.rose}`}>{error}</p>}
@@ -87,7 +88,7 @@ export function ProjectsPanelBody({ state }: { state: ReturnType<typeof useActiv
         !error && <p className="py-2 text-[15px] text-fg-muted">Loading…</p>
       ) : projects.length === 0 ? (
         <p className="py-2 text-[15px] text-fg-muted">
-          No active projects. Tell the Executive about one you&apos;re running and it will keep track of it here.
+          No active projects. Tell <ProductName /> about one you&apos;re running and it will keep track of it here.
         </p>
       ) : (
         <div className="divide-y divide-line">
@@ -116,7 +117,7 @@ export function ProjectsPanelBody({ state }: { state: ReturnType<typeof useActiv
               {confirmDrop === p.id && (
                 <div role="alert" className="mt-2 rounded-xl border border-rose-500/30 bg-rose-500/5 px-3 py-2.5">
                   <p className="text-sm text-fg">
-                    Drop &ldquo;{p.title}&rdquo;? The Executive stops tracking it, and it is removed from Memory.
+                    Drop &ldquo;{p.title}&rdquo;? <ProductName /> stops tracking it, and it is removed from Memory.
                   </p>
                   <div className="mt-2 flex gap-2">
                     <Button size="sm" variant="danger" onClick={() => void close(p, "drop")} disabled={busyId !== null}>
@@ -183,8 +184,8 @@ export function DueSoonPanelBody({ state }: { state: ReturnType<typeof useOpenLo
   return (
     <>
       <PanelIntro>
-        What you&apos;ve promised by a date, and what others have asked of you, due in the next week. Tell the
-        Executive &ldquo;I&apos;ll send it by Friday&rdquo; and it shows up here; the Executive reminds you when
+        What you&apos;ve promised by a date, and what others have asked of you, due in the next week. Tell <ProductName />
+        &ldquo;I&apos;ll send it by Friday&rdquo; and it shows up here; <ProductName /> reminds you when
         it&apos;s due.
       </PanelIntro>
       {error && <p className={`mb-2 text-sm ${TONE_TEXT.rose}`}>{error}</p>}
@@ -251,7 +252,7 @@ export function WeeklyReviewPanelBody({ review }: { review: WeeklyReviewSummary 
   return (
     <>
       <PanelIntro>
-        Once a week the Executive looks back on your week — your goals by area, what&apos;s due, projects that went
+        Once a week <ProductName /> looks back on your week — your goals by area, what&apos;s due, projects that went
         quiet and the decisions you made — and picks next week&apos;s top three. It&apos;s also sent to you when a
         chat app or email is connected.
       </PanelIntro>
@@ -310,7 +311,7 @@ export function TopThreeList({ ownerName, id }: { ownerName: string; id?: string
         <h2 className="text-lg font-semibold text-fg">Top three today</h2>
         <InfoTip align="left">
           The three things to focus on today, picked from what&apos;s overdue or due, goals that are slipping and
-          your active projects — the same three your morning brief opens with. When the Executive can read your
+          your active projects — the same three your morning brief opens with. When <ProductName /> can read your
           calendar, each gets a free slot in today&apos;s working hours.
         </InfoTip>
       </div>

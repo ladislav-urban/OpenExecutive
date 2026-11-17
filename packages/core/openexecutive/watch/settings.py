@@ -1,0 +1,737 @@
+"""Each watch job's settings (table ``watch_jobs``), its runs (``watch_runs``,
+one row per job, day and slot, written by ``watch.runner``) and its days
+(``watch_days``: the draft cards its runs left, the checks they had ERPNext
+make and the notices they tried to leave, each counted in a transaction
+across slots and restarts, the amount its match cards proposed, and its one
+failure notice a day). ``watch_approved`` counts what each approver approved
+of a job's amount-capped cards a day (bank matching's), one row per card.
+``watch_told`` holds, for a job that raises each finding once
+(``WatchJob.once``), the findings its left notices told: their dedupe
+digests (``runner.dedup_key``), never ERPNext's text.
+
+One row per job: ``enabled`` (off until the principal turns it on), who
+configured it last and when, ``settings`` (JSON, exactly the job's
+``default_settings`` keys and types: ``registry.check_settings``) and an
+optional ``reviewer_person_id``: the person a run's notices and draft cards
+go to, but only when oe_connector says every read ran as the job's own ERP
+user (``watch.cards.route``); the principal otherwise, with notices only.
+Whoever configured it never approves its cards (separation of duties,
+``integrations.erpnext_drafts``).
+
+Only the principal changes a row, through ``PUT /watch/jobs/{id}``
+(``api.routes.watch_jobs``). ``ERPNEXT_WATCH_JOBS_ENABLED`` is the operator's
+master switch: off, no job runs whatever its row says.
+"""
+from __future__ import annotations
+
+import json
+import logging
+import sqlite3
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+from openexecutive.watch import registry
+
+logger = logging.getLogger(__name__)
+
+JOBS_TABLE = "watch_jobs"
+# watch_runs' definition, by its table name (the migration builds the new
+# table under the same name).
+_RUNS_DDL = """CREATE TABLE IF NOT EXISTS {table} (
+        job TEXT NOT NULL,
+        day TEXT NOT NULL,
+        slot TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        attempts INTEGER NOT NULL DEFAULT 1,
+        cards INTEGER NOT NULL DEFAULT 0,
+        error TEXT NOT NULL DEFAULT '',
+        reads TEXT NOT NULL DEFAULT '[]',
+        failure_noticed INTEGER NOT NULL DEFAULT 0,
+        detail TEXT NOT NULL DEFAULT '{{}}',
+        PRIMARY KEY (job, day, slot)
+    )"""
+RUNS_TABLE = "watch_runs"
+DAYS_TABLE = "watch_days"
+APPROVED_TABLE = "watch_approved"
+HEADS_TABLE = "watch_chain_heads"
+TOLD_TABLE = "watch_told"
+# A told finding is forgotten after this many days.
+TOLD_KEEP_DAYS = 400
+
+_DDL = (
+    f"""CREATE TABLE IF NOT EXISTS {JOBS_TABLE} (
+        job TEXT PRIMARY KEY,
+        enabled INTEGER NOT NULL DEFAULT 0,
+        settings TEXT NOT NULL DEFAULT '{{}}',
+        configured_by_person_id INTEGER,
+        configured_at TEXT,
+        reviewer_person_id INTEGER
+    )""",
+    # One row per job, day (the company's) and slot (its time that day, "HH:MM";
+    # "" for a job that runs once a day): `running` from its claim, then
+    # `done` or `failed`, or `skipped` when a later slot was claimed first.
+    # `error` is a reason code, never ERPNext's text; `reads` records, per
+    # read, whether oe_connector ran it as the job's own user
+    # (`acting.as_job_user`), never that user's name.
+    _RUNS_DDL.format(table=RUNS_TABLE),
+    # One row per job and day: the draft cards its runs left that day, the
+    # checks they had ERPNext make as the reviewer and the notices they tried
+    # to leave (each cap counts across slots and restarts, taken in a
+    # transaction), and whether its one failure notice for the day was left.
+    f"""CREATE TABLE IF NOT EXISTS {DAYS_TABLE} (
+        job TEXT NOT NULL,
+        day TEXT NOT NULL,
+        cards INTEGER NOT NULL DEFAULT 0,
+        failure_noticed INTEGER NOT NULL DEFAULT 0,
+        amount REAL NOT NULL DEFAULT 0,
+        checks INTEGER NOT NULL DEFAULT 0,
+        notices INTEGER NOT NULL DEFAULT 0,
+        proposals INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (job, day)
+    )""",
+    # One row per amount-capped card approved (or claimed for approval: a
+    # timeout still counts) on a day, the company's, by its approver.
+    f"""CREATE TABLE IF NOT EXISTS {APPROVED_TABLE} (
+        job TEXT NOT NULL,
+        day TEXT NOT NULL,
+        person_id INTEGER NOT NULL,
+        decision_id INTEGER NOT NULL,
+        amount REAL NOT NULL,
+        PRIMARY KEY (job, day, decision_id)
+    )""",
+    # The OE Draft chain's head a job keeps per company (its place and hash
+    # only, ``chain_head``), and, while a notice about the chain is being
+    # told, the head seen then (pending_*): it becomes the kept head once
+    # that notice was left (pending_key, the notice's own key; pending_note,
+    # its code-written line, to say again if it wasn't).
+    f"""CREATE TABLE IF NOT EXISTS {HEADS_TABLE} (
+        job TEXT NOT NULL,
+        company TEXT NOT NULL,
+        chain_index INTEGER NOT NULL,
+        row_hash TEXT NOT NULL,
+        seen_on TEXT NOT NULL,
+        pending_index INTEGER,
+        pending_hash TEXT,
+        pending_key TEXT NOT NULL DEFAULT '',
+        pending_note TEXT NOT NULL DEFAULT '',
+        PRIMARY KEY (job, company)
+    )""",
+    # One row per finding a once job's notice told (its dedupe digest), with
+    # the company's day it was first told.
+    f"""CREATE TABLE IF NOT EXISTS {TOLD_TABLE} (
+        job TEXT NOT NULL,
+        key TEXT NOT NULL,
+        day TEXT NOT NULL,
+        PRIMARY KEY (job, key)
+    )""",
+)
+# Columns added after the table first shipped: name -> its definition.
+_RUN_COLUMNS = {"detail": "TEXT NOT NULL DEFAULT '{}'"}
+_DAY_COLUMNS = {
+    "amount": "REAL NOT NULL DEFAULT 0",
+    "checks": "INTEGER NOT NULL DEFAULT 0",
+    "notices": "INTEGER NOT NULL DEFAULT 0",
+    "proposals": "INTEGER NOT NULL DEFAULT 0",
+}
+# watch_chain_heads' columns added after it was first made.
+_HEAD_COLUMNS = {
+    "pending_index": "INTEGER",
+    "pending_hash": "TEXT",
+    "pending_key": "TEXT NOT NULL DEFAULT ''",
+    "pending_note": "TEXT NOT NULL DEFAULT ''",
+}
+# What a day's row counts against a cap (``take_day``).
+DAY_COUNTS = frozenset({"cards", "checks", "notices", "proposals"})
+# The columns a run row had before slots, copied as they are by the migration.
+_PRE_SLOT_COLUMNS = (
+    "job", "day", "status", "started_at", "finished_at", "attempts", "cards", "error", "reads",
+    "failure_noticed", "detail",
+)
+
+
+def _migrate_runs(conn: sqlite3.Connection) -> None:
+    """Move a ``watch_runs`` keyed by (job, day) to (job, day, slot): every
+    old row keeps its values with slot "" (a once-a-day run). Under
+    ``BEGIN IMMEDIATE`` and checked again inside, so two connections never
+    both copy it. A day's failure notice already left is carried to
+    ``watch_days`` too."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({RUNS_TABLE})")}
+        if "slot" in have:
+            conn.execute("COMMIT")
+            return
+        old = f"{RUNS_TABLE}_before_slots"
+        conn.execute(f"ALTER TABLE {RUNS_TABLE} RENAME TO {old}")
+        conn.execute(_RUNS_DDL.format(table=RUNS_TABLE))
+        columns = ", ".join(c for c in _PRE_SLOT_COLUMNS if c in have)
+        conn.execute(
+            f"INSERT INTO {RUNS_TABLE} ({columns}, slot) SELECT {columns}, '' FROM {old}"  # noqa: S608
+        )
+        if "failure_noticed" in have:
+            conn.execute(
+                f"INSERT OR IGNORE INTO {DAYS_TABLE} (job, day, failure_noticed) "  # noqa: S608
+                f"SELECT job, day, 1 FROM {old} WHERE failure_noticed = 1"
+            )
+        conn.execute(f"DROP TABLE {old}")
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def db_path(path: Path | None = None) -> Path:
+    if path is not None:
+        return path
+    from openexecutive.memory import episodic
+
+    return Path(episodic.DB_PATH)
+
+
+def connect(path: Path | None = None) -> sqlite3.Connection:
+    """A connection with both tables in place. ``isolation_level=None``: the
+    caller opens its own transaction where it needs one (the runner's claim)."""
+    conn = sqlite3.connect(str(db_path(path)), timeout=10, isolation_level=None)
+    for statement in _DDL:
+        conn.execute(statement)
+    have = {row[1] for row in conn.execute(f"PRAGMA table_info({RUNS_TABLE})")}
+    if "slot" not in have:
+        _migrate_runs(conn)
+        have = {row[1] for row in conn.execute(f"PRAGMA table_info({RUNS_TABLE})")}
+    for column, definition in _RUN_COLUMNS.items():
+        if column not in have:
+            try:
+                conn.execute(f"ALTER TABLE {RUNS_TABLE} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                # Another connection added it meanwhile.
+                logger.debug("watch: column %s already added", column)
+    heads = {row[1] for row in conn.execute(f"PRAGMA table_info({HEADS_TABLE})")}
+    for column, definition in _HEAD_COLUMNS.items():
+        if column not in heads:
+            try:
+                conn.execute(f"ALTER TABLE {HEADS_TABLE} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                logger.debug("watch: column %s already added", column)
+    days = {row[1] for row in conn.execute(f"PRAGMA table_info({DAYS_TABLE})")}
+    for column, definition in _DAY_COLUMNS.items():
+        if column not in days:
+            try:
+                conn.execute(f"ALTER TABLE {DAYS_TABLE} ADD COLUMN {column} {definition}")
+            except sqlite3.OperationalError:
+                logger.debug("watch: column %s already added", column)
+    return conn
+
+
+def take_day_cards(job_id: str, day: str, n: int, cap: int, *, path: Path | None = None) -> int:
+    """Take up to ``n`` of the job's ``cap`` draft cards for ``day``, read and
+    counted in one ``BEGIN IMMEDIATE`` transaction so two workers (or two of
+    the day's slots) never pass the cap between them. Returns how many were
+    taken. A negative ``n`` gives that many back (a card that wasn't left
+    after all), never below 0."""
+    return take_day(job_id, day, "cards", n, cap, path=path)
+
+
+def take_day(job_id: str, day: str, what: str, n: int, cap: int, *, path: Path | None = None) -> int:
+    """``take_day_cards`` for any of the day's counts (``DAY_COUNTS``): the
+    job's checks and notices too, which nothing gives back. In the database, so a
+    restart or a second worker sees the same count."""
+    if what not in DAY_COUNTS:
+        raise ValueError(f"not a day's count: {what}")
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            f"INSERT OR IGNORE INTO {DAYS_TABLE} (job, day) VALUES (?, ?)", (job_id, day)  # noqa: S608
+        )
+        row = conn.execute(
+            f"SELECT {what} FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
+        ).fetchone()
+        used = int(row[0] or 0) if row else 0
+        taken = max(-used, n) if n < 0 else max(0, min(n, cap - used))
+        if taken:
+            conn.execute(
+                f"UPDATE {DAYS_TABLE} SET {what} = {what} + ? WHERE job = ? AND day = ?",  # noqa: S608
+                (taken, job_id, day),
+            )
+        conn.execute("COMMIT")
+        return taken
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def take_day_amount(job_id: str, day: str, amount: float, cap: float, *, path: Path | None = None) -> bool:
+    """Take ``amount`` of the job's ``cap`` for ``day``'s proposed cards, read
+    and counted in one ``BEGIN IMMEDIATE`` transaction, as ``take_day_cards``.
+    Whether it was taken: never past the cap, so a card that would pass it
+    isn't left. A negative ``amount`` gives that much back (a card not left
+    after all), never below 0."""
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute(
+            f"INSERT OR IGNORE INTO {DAYS_TABLE} (job, day) VALUES (?, ?)", (job_id, day)  # noqa: S608
+        )
+        row = conn.execute(
+            f"SELECT amount FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
+        ).fetchone()
+        used = float(row[0] or 0) if row else 0.0
+        if amount >= 0 and used + amount > cap:
+            conn.execute("ROLLBACK")
+            return False
+        conn.execute(
+            f"UPDATE {DAYS_TABLE} SET amount = ? WHERE job = ? AND day = ?",  # noqa: S608
+            (max(0.0, used + amount), job_id, day),
+        )
+        conn.execute("COMMIT")
+        return True
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def take_approved_amount(
+    job_id: str, day: str, person_id: int, decision_id: int, amount: float, cap: float, *, path: Path | None = None,
+) -> bool:
+    """Count one card's ``amount`` against what was approved of the job's
+    cards on ``day``, by anyone, read and written in one ``BEGIN IMMEDIATE``
+    transaction: whether it fits ``cap`` with what was approved already. The
+    cap is the job's day, never one approver's: a reviewer changed mid-day
+    starts from what the day already took. ``person_id`` is kept with the
+    row, for the audit.
+    A card counted that day is counted once, however often it is approved
+    again (a timeout, a refusal), and never given back: it counts from its
+    claim. Fails closed: an error raises."""
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        held = conn.execute(
+            f"SELECT 1 FROM {APPROVED_TABLE} WHERE job = ? AND day = ? AND decision_id = ?",  # noqa: S608
+            (job_id, day, decision_id),
+        ).fetchone()
+        if held is not None:
+            conn.execute("COMMIT")
+            return True
+        row = conn.execute(
+            f"SELECT COALESCE(SUM(amount), 0) FROM {APPROVED_TABLE} WHERE job = ? AND day = ?",  # noqa: S608
+            (job_id, day),
+        ).fetchone()
+        used = float(row[0] or 0) if row else 0.0
+        if used + amount > cap:
+            conn.execute("ROLLBACK")
+            return False
+        conn.execute(
+            f"INSERT INTO {APPROVED_TABLE} (job, day, person_id, decision_id, amount) VALUES (?, ?, ?, ?, ?)",  # noqa: S608
+            (job_id, day, person_id, decision_id, amount),
+        )
+        conn.execute("COMMIT")
+        return True
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> set[str]:
+    """Which of ``keys`` (dedupe digests) a notice of the job told before."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return set()
+    conn = connect(path)
+    try:
+        found: set[str] = set()
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            found.update(row[0] for row in conn.execute(
+                f"SELECT key FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            ))
+        return found
+    finally:
+        conn.close()
+
+
+def told_days(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> dict[str, str]:
+    """Which of ``keys`` the job's told store holds, with the day each was
+    written."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return {}
+    conn = connect(path)
+    try:
+        found: dict[str, str] = {}
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            found.update((row[0], row[1]) for row in conn.execute(
+                f"SELECT key, day FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            ))
+        return found
+    finally:
+        conn.close()
+
+
+def mark_told(job_id: str, keys: Sequence[str], day: str, *, path: Path | None = None) -> None:
+    """Record ``keys`` (dedupe digests) as told by a notice left on ``day``,
+    and forget those told more than ``TOLD_KEEP_DAYS`` before it."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return
+    oldest = (date.fromisoformat(day) - timedelta(days=TOLD_KEEP_DAYS)).isoformat()
+    conn = connect(path)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany(
+            f"INSERT OR IGNORE INTO {TOLD_TABLE} (job, key, day) VALUES (?, ?, ?)",  # noqa: S608
+            [(job_id, key, day) for key in wanted],
+        )
+        conn.execute(f"DELETE FROM {TOLD_TABLE} WHERE job = ? AND day < ?", (job_id, oldest))  # noqa: S608
+        conn.execute("COMMIT")
+    except Exception:
+        if conn.in_transaction:
+            conn.execute("ROLLBACK")
+        raise
+    finally:
+        conn.close()
+
+
+def forget_told(job_id: str, keys: Sequence[str], *, path: Path | None = None) -> None:
+    """Drop ``keys`` from the job's told rows (a card record whose card
+    expired or was closed by code)."""
+    wanted = sorted(set(keys))
+    if not wanted:
+        return
+    conn = connect(path)
+    try:
+        for start in range(0, len(wanted), 500):
+            part = wanted[start:start + 500]
+            marks = ", ".join("?" * len(part))
+            conn.execute(
+                f"DELETE FROM {TOLD_TABLE} WHERE job = ? AND key IN ({marks})",  # noqa: S608
+                (job_id, *part),
+            )
+    finally:
+        conn.close()
+
+
+def day_cards(job_id: str, day: str, *, path: Path | None = None) -> int:
+    """The draft cards the job's runs took for ``day`` so far."""
+    return day_count(job_id, day, "cards", path=path)
+
+
+def day_count(job_id: str, day: str, what: str, *, path: Path | None = None) -> int:
+    """One of the day's counts (``DAY_COUNTS``) for the job so far."""
+    if what not in DAY_COUNTS:
+        raise ValueError(f"not a day's count: {what}")
+    conn = connect(path)
+    try:
+        row = conn.execute(
+            f"SELECT {what} FROM {DAYS_TABLE} WHERE job = ? AND day = ?", (job_id, day)  # noqa: S608
+        ).fetchone()
+    finally:
+        conn.close()
+    return int(row[0] or 0) if row else 0
+
+
+@dataclass(frozen=True)
+class ChainState:
+    """The chain head a job keeps for a company, and the one pending while a
+    notice about it is told (``pending_key`` "" when none is)."""
+
+    index: int
+    row_hash: str
+    pending_index: int | None
+    pending_hash: str | None
+    pending_key: str
+    pending_note: str
+
+
+def get_chain_state(job_id: str, company: str, *, path: Path | None = None) -> ChainState | None:
+    """What the job keeps about the chain for ``company``, or None."""
+    conn = connect(path)
+    try:
+        row = conn.execute(
+            f"SELECT chain_index, row_hash, pending_index, pending_hash, pending_key, pending_note "  # noqa: S608
+            f"FROM {HEADS_TABLE} WHERE job = ? AND company = ?",
+            (job_id, company),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return None
+    return ChainState(
+        int(row[0]), str(row[1]), int(row[2]) if row[2] is not None else None,
+        str(row[3]) if row[3] is not None else None, str(row[4] or ""), str(row[5] or ""),
+    )
+
+
+def get_chain_head(job_id: str, company: str, *, path: Path | None = None) -> tuple[int, str] | None:
+    """The chain head the job keeps for ``company``, or None."""
+    state = get_chain_state(job_id, company, path=path)
+    return (state.index, state.row_hash) if state is not None else None
+
+
+def set_chain_head(
+    job_id: str, company: str, index: int, row_hash: str, day: str, *, path: Path | None = None,
+) -> None:
+    """Keep ``(index, row_hash)`` as the job's chain head for ``company``,
+    with nothing pending."""
+    conn = connect(path)
+    try:
+        conn.execute(
+            f"INSERT INTO {HEADS_TABLE} (job, company, chain_index, row_hash, seen_on) "  # noqa: S608
+            "VALUES (?, ?, ?, ?, ?) ON CONFLICT (job, company) DO UPDATE SET "
+            "chain_index = excluded.chain_index, row_hash = excluded.row_hash, seen_on = excluded.seen_on, "
+            "pending_index = NULL, pending_hash = NULL, pending_key = '', pending_note = ''",
+            (job_id, company, index, row_hash, day),
+        )
+    finally:
+        conn.close()
+
+
+def set_chain_pending(
+    job_id: str, company: str, index: int | None, row_hash: str | None, key: str, note: str,
+    *, path: Path | None = None,
+) -> None:
+    """Hold the head seen now (None: none was) as pending while the notice
+    keyed ``key`` is told; the kept head stays until it is left."""
+    conn = connect(path)
+    try:
+        conn.execute(
+            f"UPDATE {HEADS_TABLE} SET pending_index = ?, pending_hash = ?, pending_key = ?, "  # noqa: S608
+            "pending_note = ? WHERE job = ? AND company = ?",
+            (index, row_hash, key, note, job_id, company),
+        )
+    finally:
+        conn.close()
+
+
+def take_failure_notice(job_id: str, day: str, *, path: Path | None = None) -> bool:
+    """True once per job and calendar day, whichever of its slots asks first:
+    whether this caller leaves the day's failure notice."""
+    conn = connect(path)
+    try:
+        conn.execute(
+            f"INSERT OR IGNORE INTO {DAYS_TABLE} (job, day) VALUES (?, ?)", (job_id, day)  # noqa: S608
+        )
+        cur = conn.execute(
+            f"UPDATE {DAYS_TABLE} SET failure_noticed = 1 "  # noqa: S608
+            "WHERE job = ? AND day = ? AND failure_noticed = 0",
+            (job_id, day),
+        )
+        return cur.rowcount == 1
+    finally:
+        conn.close()
+
+
+@dataclass(frozen=True)
+class JobRow:
+    job: str
+    enabled: bool = False
+    settings: dict[str, Any] = field(default_factory=dict)
+    configured_by_person_id: int | None = None
+    configured_at: str | None = None
+    reviewer_person_id: int | None = None
+
+
+def get_row(job_id: str, *, path: Path | None = None) -> JobRow:
+    """The job's row; a job never configured is off, with no settings."""
+    conn = connect(path)
+    try:
+        row = conn.execute(
+            f"SELECT enabled, settings, configured_by_person_id, configured_at, reviewer_person_id "  # noqa: S608
+            f"FROM {JOBS_TABLE} WHERE job = ?",
+            (job_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        return JobRow(job_id)
+    try:
+        stored = json.loads(row[1] or "{}")
+    except ValueError:
+        stored = {}
+    return JobRow(
+        job_id,
+        enabled=bool(row[0]),
+        settings=stored if isinstance(stored, dict) else {},
+        configured_by_person_id=row[2],
+        configured_at=row[3],
+        reviewer_person_id=row[4],
+    )
+
+
+# Why a job's assign_to can't take its tasks, by code: our words.
+ASSIGN_TO_SAVE: dict[str, str] = {
+    "configurer": "assign_to can't be the person who sets up the job: they never take its tasks.",
+    "demo": "assign_to can't be a demo account.",
+    "not_ascii": "assign_to must be a plain email address (ASCII letters only).",
+}
+ASSIGN_TO_LINES: dict[str, str] = {
+    "configurer": (
+        "The job's assign_to names the person who set it up, who never takes its tasks, so no tasks were "
+        "prepared. Name someone else in Settings → Watch jobs."
+    ),
+    "demo": "The job's assign_to names a demo account, so no tasks were prepared. Name someone else in Settings → Watch jobs.",
+    "not_ascii": (
+        "The job's assign_to isn't a plain email address (ASCII letters only), so no tasks were prepared. "
+        "Correct it in Settings → Watch jobs."
+    ),
+}
+
+
+def _address(value: str) -> str:
+    """An address as assign_to is compared: trimmed and casefolded."""
+    return value.strip().casefold()
+
+
+def _demo_addresses() -> set[str]:
+    """Every address of every People row marked demo, its own and its
+    aliases, archived ones too, casefolded: a demo person is never masked by
+    another row sharing the address."""
+    from openexecutive.people import store
+
+    if not store._resolve_db_path(None).exists():
+        return set()
+    with store._get_conn(None) as conn:
+        if not store._table_exists(conn, "people"):
+            return set()
+        rows = [r[0] for r in conn.execute("SELECT email FROM people WHERE directory_demo = 1")]
+        if store._table_exists(conn, "person_emails"):
+            rows += [r[0] for r in conn.execute(
+                "SELECT pe.email FROM person_emails pe JOIN people p ON p.id = pe.person_id"
+                " WHERE p.directory_demo = 1"
+            )]
+    return {_address(r) for r in rows if isinstance(r, str) and r.strip()}
+
+
+def assign_to_problem(value: object, configured_by_person_id: object) -> str:
+    """Why ``value`` (a job's ``assign_to``) can't take the job's tasks, as a
+    code in ``ASSIGN_TO_LINES``, or "": not a plain ASCII address (a
+    look-alike of another), the address or an alias of the person who set
+    the job up (separation of duties), or of any person marked demo.
+    Compared casefolded; People is read fresh each time."""
+    from openexecutive.people.store import get_person
+
+    if not isinstance(value, str) or not value.strip():
+        return ""
+    if not value.isascii():
+        return "not_ascii"
+    email = _address(value)
+    if isinstance(configured_by_person_id, int) and not isinstance(configured_by_person_id, bool):
+        configurer = get_person(configured_by_person_id)
+        if configurer is not None and email in {
+            _address(a) for a in [configurer.email or "", *configurer.email_aliases] if a
+        }:
+            return "configurer"
+    if email in _demo_addresses():
+        return "demo"
+    return ""
+
+
+def assign_to_notice(job: registry.WatchJob, settings: Mapping[str, Any], today: date) -> registry.CardSpec | None:
+    """The principal's notice that the job's ``assign_to`` can't take its
+    tasks (read fresh against the job's configurer and People), once a week
+    for a once job; None when it can."""
+    problem = assign_to_problem(settings.get("assign_to"), get_row(job.id).configured_by_person_id)
+    if not problem:
+        return None
+    year, week, _ = today.isocalendar()
+    return registry.CardSpec(
+        key=f"assign-to:{job.id}:{year}-W{week:02d}",
+        summary="A setting of this job needs a change",
+        notes=(ASSIGN_TO_LINES[problem],),
+        to_principal=True,
+    )
+
+
+def effective_settings(job: registry.WatchJob, row: JobRow) -> dict[str, Any]:
+    """The settings a run uses: the stored ones while they still fit the job,
+    else its defaults (a job whose settings changed in code)."""
+    if not row.settings:
+        return dict(job.default_settings)
+    try:
+        return registry.check_settings(job, row.settings)
+    except registry.SettingsError:
+        logger.warning("watch: job %s's stored settings no longer fit it; using its defaults", job.id)
+        return dict(job.default_settings)
+
+
+def save(
+    job: registry.WatchJob,
+    *,
+    enabled: bool | None,
+    settings: dict[str, Any] | None,
+    reviewer_person_id: int | None,
+    set_reviewer: bool,
+    configured_by_person_id: int,
+    now: datetime,
+    path: Path | None = None,
+) -> tuple[JobRow, JobRow]:
+    """Write the job's row; returns it before and after. ``settings`` must
+    already be ``registry.check_settings``'s."""
+    before = get_row(job.id, path=path)
+    after = JobRow(
+        job.id,
+        enabled=before.enabled if enabled is None else enabled,
+        settings=dict(before.settings) if settings is None else dict(settings),
+        configured_by_person_id=configured_by_person_id,
+        configured_at=now.isoformat(),
+        reviewer_person_id=reviewer_person_id if set_reviewer else before.reviewer_person_id,
+    )
+    conn = connect(path)
+    try:
+        conn.execute(
+            f"INSERT INTO {JOBS_TABLE} "  # noqa: S608
+            "(job, enabled, settings, configured_by_person_id, configured_at, reviewer_person_id) "
+            "VALUES (?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(job) DO UPDATE SET enabled = excluded.enabled, settings = excluded.settings, "
+            "configured_by_person_id = excluded.configured_by_person_id, "
+            "configured_at = excluded.configured_at, reviewer_person_id = excluded.reviewer_person_id",
+            (
+                job.id,
+                1 if after.enabled else 0,
+                json.dumps(after.settings, sort_keys=True),
+                after.configured_by_person_id,
+                after.configured_at,
+                after.reviewer_person_id,
+            ),
+        )
+    finally:
+        conn.close()
+    return before, after
+
+
+def master_on() -> bool:
+    """``ERPNEXT_WATCH_JOBS_ENABLED``: the operator's switch over every job."""
+    from openexecutive.config import get_settings
+
+    return bool(get_settings().erpnext_watch_jobs_enabled)
+
+
+def job_enabled(job_id: str, *, path: Path | None = None) -> bool:
+    """Whether ``job_id`` may run now: registered, the master switch on and
+    its row on. Fails closed: a read error is off."""
+    if registry.get(job_id) is None or not master_on():
+        return False
+    try:
+        return get_row(job_id, path=path).enabled
+    except Exception:
+        logger.warning("watch: couldn't read job %s's row; treating it as off", job_id, exc_info=True)
+        return False
