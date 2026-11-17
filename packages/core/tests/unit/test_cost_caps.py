@@ -534,3 +534,149 @@ def test_with_only_a_spender_bound_the_principal_is_still_exempt_from_the_person
     with pytest.raises(cost_caps.CostCapReached) as month:
         check_as(db.principal)
     assert month.value.scope == "total"
+
+
+def _start_principals_workflow(db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, caller: int) -> dict[str, Any]:
+    """``caller`` starts, over POST /workflows/{name}/runs, a custom
+    workflow the principal created, whose one step makes a model call."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from pydantic import create_model
+
+    from openexecutive.api.routes import workflows as workflows_route
+    from openexecutive.workflows import persistence
+    from openexecutive.workflows.base import WorkflowEvent, WorkflowStepDef
+    from openexecutive.workflows.chat_tools import in_workflow
+
+    seen: dict[str, Any] = {}
+
+    class _Custom:
+        name = "principals_custom"
+        title = "Principal's custom"
+
+        def input_model(self) -> Any:
+            return create_model("_In", topic=(str, ""))
+
+        def steps(self) -> list[Any]:
+            return [WorkflowStepDef(id="s", title="Step", description="One call.")]
+
+        async def run(self, inputs: Any, store: Any) -> Any:
+            # As action_step runs a custom workflow's step: on a bare
+            # unattended session, inside in_workflow with its creator.
+            from openexecutive.orchestrator.schedule_tools import set_session
+
+            with set_session(Session(unattended=True)), in_workflow(self.name, db.principal):
+                seen["key"] = cost_caps._person_key(Session(unattended=True))
+                seen["turn"] = cost_caps.current_turn() is not None
+                try:
+                    cost_caps.check(MODEL, {"model": MODEL, "max_tokens": 10, "messages": []}, now=NOW)
+                    seen["refused"] = None
+                except cost_caps.CostCapReached as refused:
+                    seen["refused"] = refused
+            yield WorkflowEvent(type="artifact", content="done")
+
+    persistence.initialize_runs_db(db.path)
+    monkeypatch.setattr(persistence, "DB_PATH", db.path)
+    monkeypatch.setattr(workflows_route, "get_workflow", lambda name: _Custom())
+    monkeypatch.setattr(workflows_route, "_caller_person_id", lambda request: caller)
+    monkeypatch.setattr(workflows_route, "refuse_principal_only_run", lambda *a, **k: None)
+    monkeypatch.setattr(workflows_route, "create_run", lambda **kw: persistence.create_run(db_path=db.path, **kw))
+    monkeypatch.setattr(workflows_route, "complete_run", lambda **kw: None)
+    app = FastAPI()
+    app.include_router(workflows_route.router)
+    app.state.store = object()
+    with TestClient(app) as client:
+        resp = client.post("/workflows/principals_custom/runs", json={"topic": "x"})
+    assert resp.status_code == 200
+    return seen
+
+
+def test_a_teammate_running_the_principals_workflow_is_held_to_their_own_person_cap(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    token = current_session.set(None)
+    try:
+        with cost_caps.bind_spender(db.teammate):
+            cost_caps.add(MODEL, {"cost_usd": 5.0}, now=NOW)
+    finally:
+        current_session.reset(token)
+    _caps(monkeypatch, person=1.0)
+    seen = _start_principals_workflow(db, monkeypatch, caller=db.teammate)
+    # Counted under and refused by the teammate's own cap, never the
+    # creator's exemption; and the run is a turn of its own.
+    assert seen["key"] == str(db.teammate) and seen["turn"] is True
+    assert seen["refused"] is not None and seen["refused"].scope == "person"
+    assert seen["refused"].key == str(db.teammate)
+
+
+def test_the_principal_running_their_own_workflow_stays_exempt(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    token = current_session.set(None)
+    try:
+        with cost_caps.bind_spender(db.principal):
+            cost_caps.add(MODEL, {"cost_usd": 5.0}, now=NOW)
+    finally:
+        current_session.reset(token)
+    _caps(monkeypatch, person=1.0)
+    seen = _start_principals_workflow(db, monkeypatch, caller=db.principal)
+    assert seen["key"] == str(db.principal) and seen["refused"] is None
+
+
+def test_a_resumed_run_is_spent_for_whoever_started_it(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.workflows import persistence, resumer
+    from openexecutive.workflows.chat_tools import in_workflow
+
+    persistence.initialize_runs_db(db.path)
+    persistence.create_run("r1", "principals_custom", "t", {}, db_path=db.path, owner_person_id=db.teammate)
+    seen: list[Any] = []
+
+    async def drive(row: dict, claim: str, db_path: Any = None) -> bool:
+        with in_workflow("principals_custom", db.principal):
+            seen.append((cost_caps._person_key(Session(unattended=True)), cost_caps.current_turn()))
+        return True
+
+    monkeypatch.setattr(resumer, "_drive_resume", drive)
+    asyncio.run(resumer._execute_resume({"run_id": "r1"}, "claim", db_path=db.path))
+    assert seen[0][0] == str(db.teammate) and seen[0][1] is not None
+
+
+@pytest.mark.parametrize("key", ["02", "\u0663", "\u00b2", "1\u0663", "+1", " 1", ""])
+def test_only_plain_ascii_digits_are_a_people_id(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, key: str,
+) -> None:
+    # Never normalised to someone's id (the principal's exemption), never a
+    # crash out of reserve.
+    assert cost_caps._people_id(key) is None
+    assert cost_caps._exempt_from_person_cap(key) is False
+    _caps(monkeypatch, person=1.0)
+    from openexecutive.orchestrator.schedule_tools import current_session
+
+    token = current_session.set(None)
+    try:
+        with cost_caps.bind_spender(key or None):
+            cost_caps.check(MODEL, {"model": MODEL, "max_tokens": 10, "messages": []}, now=NOW)
+    finally:
+        current_session.reset(token)
+    assert cost_caps._people_id(str(db.principal)) == db.principal
+
+
+def test_a_scope_that_cant_be_told_refuses_the_call_closed(
+    db: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def broken(*_a: Any) -> Any:
+        raise RuntimeError("no")
+
+    monkeypatch.setattr(cost_caps, "_scopes", broken)
+    _caps(monkeypatch, monthly=100.0)
+    with pytest.raises(cost_caps.CostCapReached) as refused:
+        _check()
+    assert refused.value.scope == "unreadable"
+    _caps(monkeypatch)
+    _check()  # every cap off: never refused

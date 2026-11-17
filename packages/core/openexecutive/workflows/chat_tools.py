@@ -229,8 +229,11 @@ def in_workflow(workflow_name: str, creator_id: int | None) -> Iterator[None]:
     # Its steps' model calls are spent for whoever asked for the run; the
     # workflow's owner only when nobody did (the scheduler's own run).
     asker = cost_caps.spender_of(current_session.get())
+    if asker is None:
+        # Whoever started the run by hand, bound by its route or the resumer.
+        asker = cost_caps._spender.get()
     spender = cost_caps._spender.set(
-        asker if asker is not None else str(creator_id) if creator_id is not None else cost_caps._spender.get()
+        asker if asker is not None else str(creator_id) if creator_id is not None else None
     )
     try:
         yield

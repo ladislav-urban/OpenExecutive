@@ -268,11 +268,24 @@ def bind_spender(key: int | str | None) -> Iterator[None]:
     if key is None:
         yield
         return
-    token = _spender.set(str(key))
+    # Saved and restored rather than Token.reset: a streamed run's generator
+    # may be closed from another task than the one that bound it.
+    outer = _spender.get()
+    _spender.set(str(key))
     try:
         yield
     finally:
-        _spender.reset(token)
+        _spender.set(outer)
+
+
+def _people_id(text: str | None) -> int | None:
+    """``text`` as a People id: ASCII digits only, so "02", "٣" or "²" never
+    normalise to someone else's id (or raise)."""
+    if text is None or not text.isascii() or not text.isdigit():
+        return None
+    if len(text) > 1 and text.startswith("0"):
+        return None
+    return int(text)
 
 
 def spender_of(session: Any) -> str | None:
@@ -427,10 +440,7 @@ def _person_id(session: Any) -> int | None:
 
 def _bound_person() -> int | None:
     """The People id bound with :func:`bind_spender`, if a People id is."""
-    bound = _spender.get()
-    if bound is not None and bound.isdigit():
-        return int(bound)
-    return None
+    return _people_id(_spender.get())
 
 
 def _outside_channel(session: Any) -> str | None:
@@ -473,7 +483,8 @@ def _exempt_from_person_cap(person_key: str | None) -> bool:
     """Whether the person scope's key is the principal's: the one test of
     the exemption, read from the same key the person cap counts under, so
     the two can never disagree."""
-    return person_key is not None and person_key.isdigit() and _is_principal(int(person_key))
+    person = _people_id(person_key)
+    return person is not None and _is_principal(person)
 
 
 # --------------------------------------------------------------------------- #
@@ -769,8 +780,20 @@ def reserve(
     session = _session()
     job = current_job()
     day = day_key(now)
-    scopes = tuple(_scopes(session, job))
     limits = caps()
+    try:
+        scopes = tuple(_scopes(session, job))
+    except Exception as exc:
+        # Whom it is spent for can't be told: with a cap on, refused as
+        # counters that can't be read (fail closed); off, counted in total.
+        if not limits.any_on:
+            return Reservation((("total", "all"),), day, 0.0)
+        logger.error("cost caps: couldn't tell whom a call is spent for (%s) - refusing it", type(exc).__name__)
+        sick = _refusal("unreadable", type(exc).__name__, 0.0, 0.0, _next_day(now))
+        _record(sick)
+        if tell:
+            _tell_principal(sick, now)
+        raise sick from exc
     if not limits.any_on or _is_local(model):
         return Reservation(scopes, day, 0.0)
     estimate = worst_case(model, kwargs)
@@ -912,7 +935,8 @@ def _name_of(scope: str, key: str) -> str:
     try:
         from openexecutive.people.store import get_person
 
-        person = get_person(int(key))
+        person_id = _people_id(key)
+        person = get_person(person_id) if person_id is not None else None
     except Exception:  # noqa: BLE001
         person = None
     return person.full_name if person is not None and person.full_name else f"Person {key}"

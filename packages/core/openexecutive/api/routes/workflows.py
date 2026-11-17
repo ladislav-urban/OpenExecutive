@@ -12,6 +12,7 @@ Endpoints:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import time
@@ -681,6 +682,18 @@ async def start_workflow_run(name: str, request: Request) -> StreamingResponse:
         raise HTTPException(status_code=503, detail="Knowledge store not initialized")
 
     async def event_stream():
+        # Spent for whoever started the run (the person cap), as one turn of
+        # its own (the turn cap), bound here, in the generator Starlette
+        # drives, so every step of the run sees it; a custom workflow's steps
+        # then never fall back to its creator's budget (chat_tools.in_workflow).
+        from openexecutive.audit import cost_caps
+
+        with cost_caps.bind_spender(owner_person_id), cost_caps.bind_turn(fresh=True):
+            async with contextlib.aclosing(_run_events()) as events:
+                async for frame in events:
+                    yield frame
+
+    async def _run_events():
         t_start = time.monotonic()
         artifact: str = ""
         private_to_principal = False
