@@ -299,14 +299,20 @@ async def classify(
 ) -> Verdict | None:
     """The verdict on ``message``, or None when there is none to trust (the
     call failed or returned something malformed). ``earlier`` is the
-    person's own last email in the thread (``their_last_words``). Never
-    raises."""
+    person's own last email in the thread (``their_last_words``). Raises
+    only a cost cap's refusal (``CostCapReached``): the message then waits
+    for a later scan without spending one of its attempts."""
     try:
         payload = await _call_model(
             model or classifier_model(),
             render_email(message, relation=relation, addressed=addressed, earlier=earlier),
         )
-    except Exception:
+    except Exception as exc:
+        from openexecutive.audit import cost_caps
+
+        cap = cost_caps.capped(exc)
+        if cap is not None:
+            raise cap from None
         logger.warning("delegation.inbox: classifying an email failed", exc_info=True)
         return None
     needs_reply, kind, confidence = (

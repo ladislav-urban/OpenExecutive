@@ -826,6 +826,7 @@ _REPAIR_INSTRUCTION = (
 
 async def _repair(draft: str, context: str, system: str, report: GroundingReport) -> str:
     from openexecutive.agents.utility_fast import get_fast_model
+    from openexecutive.audit import cost_caps
     from openexecutive.audit.usage import log_model_usage
     from openexecutive.providers import get_provider
 
@@ -834,12 +835,15 @@ async def _repair(draft: str, context: str, system: str, report: GroundingReport
         f"{context}\n\n---\nDRAFT:\n{draft}\n\n"
         + _REPAIR_INSTRUCTION.format(items=report.summary())
     )
-    response = await get_provider(model).messages_create(
-        model=model,
-        max_tokens=700,
-        system=system,
-        messages=[{"role": "user", "content": content}],
-    )
+    # Kept off the turn's cost cap (never the others): a cap never switches
+    # the check off.
+    with cost_caps._check_exempt():
+        response = await get_provider(model).messages_create(
+            model=model,
+            max_tokens=700,
+            system=system,
+            messages=[{"role": "user", "content": content}],
+        )
     log_model_usage(response, model=model, actor="briefing_grounding")
     blocks = [b for b in response.content if getattr(b, "type", "") == "text"]
     return blocks[0].text.strip() if blocks else ""
@@ -875,8 +879,9 @@ async def ground_brief(
     ``enforce``: one repair call when something is ungrounded (only when
     ``system`` is given), then drop the lines still ungrounded, drop headers
     left empty, add the held-back note and the citations. ``report``: audit
-    only, text unchanged. ``off``: nothing. Never raises; on an internal
-    error the text comes back unchanged."""
+    only, text unchanged. ``off``: nothing. On an internal error the text
+    comes back unchanged. Raises only ``CostCapReached``, when a cap refused
+    the repair call: the brief is then held, never passed unchecked."""
     mode = grounding_mode()
     if mode == "off" or not text.strip():
         return text, None
@@ -888,7 +893,11 @@ async def ground_brief(
         if not report.ok and mode == "enforce" and system:
             try:
                 fixed = await _repair(text, context, system, report)
-            except Exception:
+            except Exception as exc:
+                from openexecutive.audit import cost_caps
+
+                if cost_caps.capped(exc) is not None:
+                    raise
                 logger.warning("grounding: repair call failed; dropping lines instead", exc_info=True)
                 fixed = ""
             if fixed:
@@ -928,7 +937,13 @@ async def ground_brief(
                 held=result.held if mode == "enforce" else None,
             )
         return out, result
-    except Exception:
+    except Exception as exc:
+        from openexecutive.audit import cost_caps
+
+        cap = cost_caps.capped(exc)
+        if cap is not None:
+            # Held, never passed: the brief waits for the cap to reset.
+            raise cap from None
         logger.exception("grounding: brief check failed; delivering unchanged")
         return text, None
 

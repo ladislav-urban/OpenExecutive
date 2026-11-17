@@ -56,6 +56,7 @@ test("a failed run's reason comes from a known code, else plain 'it failed'", ()
   const odd = lastRunLine({ ...RUN, status: "failed", error: "Customer 'Acme' not found" });
   assert.equal(odd, "Last run 2026-11-16: didn't finish, it failed.");
   assert.equal(lastRunLine({ ...RUN, status: "failed", error: "constructor" }), "Last run 2026-11-16: didn't finish, it failed.");
+  assert.equal(lastRunLine({ ...RUN, status: "capped", error: "cost_cap_job" }), "Last run 2026-11-16: stopped at a spend limit.");
 });
 
 test("the button is offered only for a job that's on, not running, under the master switch", () => {

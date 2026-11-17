@@ -74,15 +74,14 @@ import contextvars
 import dataclasses
 import hashlib
 import hmac
-import importlib
 import json
 import logging
 import math
 import re
 import secrets
 import unicodedata
-from collections.abc import Mapping, Sequence
-from contextlib import AbstractContextManager, nullcontext
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -158,6 +157,13 @@ REASONS: dict[str, str] = {
     "rules_failed": "the job's rules couldn't use what ERPNext returned",
     "run_stalled": "the run stopped twice before it finished",
     "run_failed": "the run failed",
+    # A cost cap refused one of its model calls (audit.cost_caps): the run
+    # ends with the status "capped", and the notice names the cap.
+    "cost_cap_turn": "it reached the spend limit for one run",
+    "cost_cap_job": "it reached its own spend limit for the day",
+    "cost_cap_person": "it reached the spend limit of the person it runs for",
+    "cost_cap_total": "this month's spend limit is reached",
+    "cost_cap_unreadable": "the spend counters couldn't be read, so no model call was made",
 }
 # Turned off between its claim and its reads: nothing to tell the principal,
 # who turned it off.
@@ -196,6 +202,14 @@ REASON_SYSTEM = (
     "200 characters: no markdown, no links, no line breaks. Never state a "
     "number, amount or date that is not in that finding's facts."
 )
+
+
+class _Capped(Exception):
+    """Ends a run a cost cap refused a model call of (``cap``)."""
+
+    def __init__(self, cap: Any) -> None:
+        super().__init__(str(cap.scope))
+        self.cap = cap
 
 
 class _Stop(Exception):
@@ -267,25 +281,19 @@ class RunOutcome:
 
 
 # --------------------------------------------------------------------------- #
-# Cost caps (S7) hook
+# Cost caps
 # --------------------------------------------------------------------------- #
 
 
-def _cost_budget(job_id: str) -> AbstractContextManager[Any]:
-    """The job's own cost budget, ``cost_caps.bind_job("watch:<id>")``.
+@contextmanager
+def _cost_budget(job_id: str) -> Iterator[None]:
+    """The run's cost budget (audit.cost_caps): every model call counts
+    against the job (``watch:<id>``, its daily cap), and the run is one turn
+    of its own (the turn cap), so a stuck run stops before the job's day."""
+    from openexecutive.audit import cost_caps
 
-    HOOK for S7: ``audit.cost_caps`` isn't on this branch. It's imported by
-    name, so once it lands this binds every model call of a run to the job's
-    budget with no change here; until then it binds nothing."""
-    try:
-        module = importlib.import_module("openexecutive.audit.cost_caps")
-    except ImportError:
-        return nullcontext()
-    bind = getattr(module, "bind_job", None)
-    if not callable(bind):
-        return nullcontext()
-    budget: AbstractContextManager[Any] = bind(f"watch:{job_id}")
-    return budget
+    with cost_caps.bind_job(f"watch:{job_id}"), cost_caps.bind_turn(fresh=True):
+        yield
 
 
 # --------------------------------------------------------------------------- #
@@ -663,7 +671,22 @@ async def run_job(job: registry.WatchJob, day: str, *, slot: str = "", path: Pat
     reads: list[dict[str, Any]] = []
     with set_turn(turn_id=f"watch:{job.id}:{day}" + (f":{slot}" if slot else "")), _cost_budget(job.id):
         try:
-            outcome = await _run(job, day, reads)
+            try:
+                outcome = await _run(job, day, reads)
+            except Exception as exc:
+                from openexecutive.audit import cost_caps
+
+                cap = cost_caps.capped(exc)
+                if cap is None:
+                    raise
+                raise _Capped(cap) from None
+        except _Capped as stopped:
+            cap = stopped.cap
+            reason = f"cost_cap_{cap.scope}"
+            logger.warning("watch: job %s stopped at a cost cap (%s)", job.id, cap.scope)
+            outcome = RunOutcome("capped", error=reason)
+            if _take_failure_notice(job.id, day, path=path):
+                _fail_notice(job, day, reason, "")
         except _Stop as stop:
             if stop.refusal:
                 # Ids, a hash and a length only: never oe_connector's text,
@@ -1723,7 +1746,7 @@ async def reason_step(
     call per finding (up to its ``max_findings``), each shown that finding's
     facts alone, so one finding's outside text never reaches another's
     line; a call that fails drops only its own line. {} when nothing usable
-    comes back. Never raises."""
+    comes back. Raises only ``CostCapReached`` (``reason_lines``)."""
     kept, dropped = await reason_lines(job, specs)
     if outcome is not None:
         # A count only, for the run's detail (reasons_dropped).
@@ -1737,7 +1760,10 @@ async def reason_lines(
     """``reason_step``'s work: the lines kept, and those its ``no_digits``
     filter dropped (never shown on a notice; the eval runner's
     ``watch_reason`` scenarios report them), both by the specs' keys.
-    Never raises."""
+    Raises only ``CostCapReached``, when a cost cap refused a call: the run
+    then ends as ``capped`` rather than going on without its reasons."""
+    from openexecutive.audit import cost_caps
+
     schema = job.reason_schema
     if schema is None:
         return {}, {}
@@ -1751,6 +1777,8 @@ async def reason_lines(
             )
             failed = 0
             for got in asked:
+                if isinstance(got, BaseException) and (cap := cost_caps.capped(got)) is not None:
+                    raise cap
                 if isinstance(got, BaseException):
                     failed += 1
                 else:
@@ -1761,7 +1789,10 @@ async def reason_lines(
                                job.id, failed)
         else:
             reasons, too_long = await _ask(job, specs, REASON_MAX_TOKENS)
-    except Exception:
+    except Exception as exc:
+        cap = cost_caps.capped(exc)
+        if cap is not None:
+            raise cap from None
         logger.warning("watch: job %s's reason step failed; its notices go without reasons", job.id)
         return {}, {}
     kept = without_digits(reasons)[0] if schema.no_digits else dict(reasons)

@@ -19,6 +19,7 @@ from pypdf import PdfReader, PdfWriter
 
 from openexecutive.knowledge import isolated, pdf_reader
 from openexecutive.knowledge.pdf_reader import PdfReadResult, read_pdf_text
+from openexecutive.providers.registry import backend_of
 
 
 @pytest.fixture(autouse=True)
@@ -260,13 +261,13 @@ def test_each_deployment_gets_its_own_pdf_reader(monkeypatch):
 
     registry._reset_for_tests()
     try:
-        assert isinstance(pdf_reader._model_provider("claude-sonnet-5"), AnthropicProvider)
+        assert isinstance(backend_of(pdf_reader._model_provider("claude-sonnet-5")), AnthropicProvider)
 
         registry._reset_for_tests()
         monkeypatch.setenv("OPENROUTER_ENABLED", "true")
         monkeypatch.setenv("OPENROUTER_API_KEY", "sk-or-test")
-        assert isinstance(pdf_reader._model_provider("claude-sonnet-5"), OpenRouterProvider)
-        assert isinstance(pdf_reader._model_provider("openai/gpt-6-astra"), OpenRouterProvider)
+        assert isinstance(backend_of(pdf_reader._model_provider("claude-sonnet-5")), OpenRouterProvider)
+        assert isinstance(backend_of(pdf_reader._model_provider("openai/gpt-6-astra")), OpenRouterProvider)
 
         registry._reset_for_tests()
         monkeypatch.setenv("LOCAL_MODELS_ENABLED", "true")
@@ -274,7 +275,7 @@ def test_each_deployment_gets_its_own_pdf_reader(monkeypatch):
         monkeypatch.setenv("LOCAL_MODELS", "llama3.3")
         assert pdf_reader._model_provider("llama3.3") is None
         monkeypatch.setenv("LOCAL_PDF_INPUT", "true")
-        assert isinstance(pdf_reader._model_provider("llama3.3"), OpenAICompatibleProvider)
+        assert isinstance(backend_of(pdf_reader._model_provider("llama3.3")), OpenAICompatibleProvider)
     finally:
         registry._reset_for_tests()
 

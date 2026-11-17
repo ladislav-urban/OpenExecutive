@@ -24,6 +24,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+from openexecutive.providers.registry import backend_of
+
 os.environ.setdefault("ANTHROPIC_API_KEY", "sk-test-not-used")
 
 import pytest  # noqa: E402
@@ -209,7 +211,7 @@ def test_claude_model_with_openrouter_off_routes_to_anthropic(
     from openexecutive.providers.anthropic_provider import AnthropicProvider
 
     provider = get_provider("claude-sonnet-4-6")
-    assert isinstance(provider, AnthropicProvider)
+    assert isinstance(backend_of(provider), AnthropicProvider)
 
 
 def test_claude_model_with_openrouter_on_routes_to_openrouter(
@@ -223,7 +225,7 @@ def test_claude_model_with_openrouter_on_routes_to_openrouter(
     from openexecutive.providers.openrouter_provider import OpenRouterProvider
 
     provider = get_provider("claude-sonnet-4-6")
-    assert isinstance(provider, OpenRouterProvider)
+    assert isinstance(backend_of(provider), OpenRouterProvider)
 
 
 def test_non_claude_model_with_openrouter_on_routes_to_openrouter(
@@ -237,7 +239,7 @@ def test_non_claude_model_with_openrouter_on_routes_to_openrouter(
     from openexecutive.providers.openrouter_provider import OpenRouterProvider
 
     provider = get_provider("openai/gpt-5")
-    assert isinstance(provider, OpenRouterProvider)
+    assert isinstance(backend_of(provider), OpenRouterProvider)
 
 
 def test_non_claude_model_with_openrouter_off_raises_400(
@@ -333,9 +335,9 @@ def test_local_model_routes_to_local_provider(monkeypatch: pytest.MonkeyPatch) -
 
     _local_stub(monkeypatch, enabled=False)
     provider = get_provider("llama3.3")
-    assert isinstance(provider, OpenAICompatibleProvider)
+    assert isinstance(backend_of(provider), OpenAICompatibleProvider)
     # The local backend is the plain base class, never the OpenRouter subclass.
-    assert not isinstance(provider, OpenRouterProvider)
+    assert not isinstance(backend_of(provider), OpenRouterProvider)
     # Cached singleton — same object across calls.
     assert get_provider("qwen2.5") is provider
 
@@ -418,7 +420,7 @@ def test_anthropic_free_deployment_hides_claude_and_serves_local(
 
     _local_stub(monkeypatch, enabled=False, anthropic_key=None)
     assert allowed_models() == ["llama3.3", "qwen2.5"]
-    assert isinstance(get_provider("llama3.3"), OpenAICompatibleProvider)
+    assert isinstance(backend_of(get_provider("llama3.3")), OpenAICompatibleProvider)
 
 
 def test_claude_without_key_or_openrouter_raises_actionable_400(

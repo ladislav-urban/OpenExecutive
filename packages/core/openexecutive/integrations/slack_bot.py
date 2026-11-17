@@ -8,6 +8,7 @@ import time
 from collections import OrderedDict
 from typing import Any
 
+from openexecutive.audit import cost_caps
 from openexecutive.audit.redaction import ERROR_DETAIL_LEN
 from openexecutive.orchestrator.people_tools import audit_rows_on_senders_turn
 from openexecutive.utils.product_name import product_name
@@ -780,6 +781,7 @@ async def create_slack_app():
         sender_ref=lambda args: str(args["event"].get("user") or ""),
         find_sender=_find_slack_sender,
     )
+    @cost_caps.as_turn  # one inbound message, one turn for the cost cap
     async def _handle_message(
         event: dict, say, client=None, mode: str = "mention"
     ) -> None:

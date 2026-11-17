@@ -202,13 +202,17 @@ async def evaluate_and_dispatch(
     except Exception:
         initiatives = []
 
+    from openexecutive.audit import cost_caps
+
     agent = TriageAgent()
-    decision = await agent.triage(
-        event,
-        recent_alerts=recent,
-        mute_patterns=mutes,
-        active_initiatives=initiatives,
-    )
+    # One event's triage is one turn for the turn cap.
+    with cost_caps.bind_job("alert-triage"), cost_caps.bind_turn(fresh=True):
+        decision = await agent.triage(
+            event,
+            recent_alerts=recent,
+            mute_patterns=mutes,
+            active_initiatives=initiatives,
+        )
 
     # Post-decision mute check: triage may have produced a tag we mute.
     if decision.alert and preferences.matches_mute(decision.topic_tags, mutes):

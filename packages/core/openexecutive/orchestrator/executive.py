@@ -13,7 +13,7 @@ from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
 
-from openexecutive.audit import bind_turn, clear_turn, private_rows, set_turn
+from openexecutive.audit import bind_turn, clear_turn, cost_caps, private_rows, set_turn
 from openexecutive.audit import log_event as audit_log
 from openexecutive.audit.redaction import (
     ERROR_DETAIL_LEN,
@@ -1227,6 +1227,32 @@ EMPTY_ROUND_NOTE = (
 # What a turn says when the model declined to answer (stop reason
 # "refusal") and nothing was written: never an empty reply.
 REFUSED_REPLY = "I can't answer that one as it's asked. Try putting it another way."
+
+
+def _cap_stop(cap: cost_caps.CostCapReached, streamed_tail: str) -> list[str]:
+    """The end of a turn a cost cap stopped: the cap's sentence as its own
+    last paragraph, after what was already written (or alone, when nothing
+    was), by the same exit as ``REFUSED_REPLY``. Marks the turn stopped, so
+    no route or adapter replaces or repeats the reply."""
+    sentence = cap.reply()
+    cost_caps.mark_stopped(sentence)
+    return _flush_held(sentence, streamed_tail)
+
+
+def _with_stop(text: str, sentence: str) -> str:
+    """``text`` with a cap stop's ``sentence`` kept as its last paragraph."""
+    body = text.rstrip()
+    return f"{body}\n\n{sentence}" if body else sentence
+
+
+def _without_stop(text: str, sentence: str | None) -> str:
+    """``text`` less a cap stop's ``sentence`` at its end (the part the end
+    checks read)."""
+    if sentence and text.rstrip().endswith(sentence):
+        return text.rstrip()[: -len(sentence)].rstrip()
+    return text
+
+
 # A round's output cap, thinking and text together. Adaptive thinking on a
 # 5-generation model can spend all of 8,192 on thinking after a large tool
 # result and stop at max_tokens with no text (erpnext_094 at 45bd9197: 5 of
@@ -1538,6 +1564,9 @@ class Executive:
         # Expose the current session to tool handlers (e.g. schedule_followup)
         # without threading it through every signature.
         current_session.set(session)
+        # The turn the cost cap counts (audit.cost_caps): the caller's when it
+        # bound one (the web chat route, Executive.chat), else one from here.
+        cost_caps.ensure_turn()
         # The resolved speaker for THIS turn (None for an unrostered sender),
         # so tool handlers can tell who is asking — e.g. close_open_loop only
         # lets the principal or the loop's owner close a loop.
@@ -1747,12 +1776,21 @@ class Executive:
                 outside_content.end_turn(outside_turn)
             # Every figure held to this turn's ERPNext results, and the reply
             # corrected in place when one isn't (orchestrator.answer_check).
-            checked = await answer_check.check_reply(
-                full_response, check_turn, question=memory_text or user_message, model=effective_model,
-            )
-            if checked != full_response:
-                full_response = checked
-                yield {"type": "reply_replaced", "content": checked, "session_id": session.session_id}
+            # A cost cap's stop sentence stays the reply's last paragraph.
+            stop = cost_caps.stop_sentence()
+            body = _without_stop(full_response, stop)
+            try:
+                checked = await answer_check.check_reply(
+                    body, check_turn, question=memory_text or user_message, model=effective_model,
+                )
+            except cost_caps.CostCapReached as cap:
+                full_response, event = self._capped_check(full_response, cap, session.session_id)
+                if event:
+                    yield event
+            else:
+                if checked != body:
+                    full_response = _with_stop(checked, stop) if stop else checked
+                    yield {"type": "reply_replaced", "content": full_response, "session_id": session.session_id}
 
         if debug_collector:
             evt = debug_collector.emit("synthesis_done", {
@@ -1836,7 +1874,13 @@ class Executive:
         # session_id=NULL and be invisible in the per-session audit view.
         # private_rows: the passes scheduled here copy the context, so a turn
         # that touched the speaker's mailbox keeps their rows private too.
-        with set_turn(session_id=session.session_id, turn_id=turn_id), private_rows(touched_mail):
+        # unbind_turn: the passes scheduled here outlive the turn and are
+        # no part of it, so the turn cap never refuses them.
+        with (
+            set_turn(session_id=session.session_id, turn_id=turn_id),
+            private_rows(touched_mail),
+            cost_caps.unbind_turn(),
+        ):
             # Inside the wrapper: schedule_extraction snapshots the vars at
             # call time, so scheduling it out here would snapshot (None,
             # None) and the memory_extractor's model call would record
@@ -1978,6 +2022,7 @@ class Executive:
             extra={"turn_break": True},
         )
         current_session.set(session)
+        cost_caps.ensure_turn()
         # The resolved speaker for THIS turn (None for an unrostered sender),
         # so tool handlers can tell who is asking — e.g. close_open_loop only
         # lets the principal or the loop's owner close a loop.
@@ -2198,6 +2243,62 @@ class Executive:
             len(draft),
         )
 
+        # A draft a cost cap stopped is the reply as it stands: no review and
+        # no revision (each would spend past the cap), and the stop sentence
+        # stays its last paragraph. It still passes the answer check first;
+        # nothing of it was shown, so a check a cap refused holds all of it.
+        if cost_caps.turn_stopped() and draft.strip():
+            for phase in ("reviewing", "finalizing"):
+                yield {"type": "phase", "phase": phase, "session_id": session.session_id}
+            final_draft = await self._checked_stopped_draft(
+                draft, check_turn, question=memory_text or user_message, model=effective_model,
+            )
+            yield final_draft
+            session.add_user_message(user_message)
+            for added_text in inbox.taken_texts() if inbox is not None else []:
+                session.add_user_message(added_text)
+            session.add_assistant_message(final_draft)
+            # The same rows the reviewed path writes (no figures: the cap's
+            # are in the principal's own cost_cap_reached row).
+            stopped_private = delegation_pin.touched_mail
+            audit_log(
+                "chat_turn",
+                f"Executive: {final_draft[:200]}",
+                session_id=session.session_id,
+                turn_id=_committee_turn_id,
+                actor="executive",
+                details={
+                    "direction": "out",
+                    "response_len": len(final_draft),
+                    "duration_s": round(time.monotonic() - t0, 3),
+                    "model": effective_model,
+                    "committee": True,
+                    "draft_length": len(draft),
+                    "stopped_by_cap": True,
+                },
+                # Only the reply as kept: a draft a capped check held never
+                # reaches a row either.
+                full={"response": final_draft},
+                private=stopped_private,
+            )
+            audit_log(
+                "committee_review",
+                f"Committee review skipped: a cost cap stopped the draft (consulted={consulted})",
+                session_id=session.session_id,
+                turn_id=_committee_turn_id,
+                actor="committee",
+                private=stopped_private,
+                details={
+                    "draft_length": len(draft),
+                    "final_length": len(final_draft),
+                    "consulted": consulted,
+                    "skipped": "cost_cap",
+                    "critiques": [],
+                },
+            )
+            clear_turn()
+            return
+
         # If the draft came back empty (timeout, max_iterations, etc.) skip
         # review — there is nothing to critique. Still emit the remaining
         # phase events so the UI's stepper completes; otherwise it stays
@@ -2313,29 +2414,47 @@ class Executive:
         revision_t0 = time.monotonic()
         final_response = ""
         revision_final_msg: Any = None
-        async with get_provider(effective_model).messages_stream(
-            model=effective_model,
-            max_tokens=8192,
-            system=system_blocks,  # type: ignore[arg-type]
-            messages=revision_messages,  # type: ignore[arg-type]
-        ) as stream:
-            async for event in stream:
-                if (
-                    hasattr(event, "type")
-                    and event.type == "content_block_delta"
-                    and hasattr(event, "delta")
-                    and hasattr(event.delta, "type")
-                    and event.delta.type == "text_delta"
-                ):
-                    final_response += event.delta.text
-                    yield event.delta.text
-            try:
-                revision_final_msg = await stream.get_final_message()
-            except Exception:
-                # Provider variance — some adapters may not implement
-                # get_final_message after we've already iterated. Don't
-                # let an audit-only branch break the revision response.
-                revision_final_msg = None
+        # Set when a cap refused the revision: the draft was checked already.
+        revision_capped = False
+        try:
+            async with get_provider(effective_model).messages_stream(
+                model=effective_model,
+                max_tokens=8192,
+                system=system_blocks,  # type: ignore[arg-type]
+                messages=revision_messages,  # type: ignore[arg-type]
+            ) as stream:
+                async for event in stream:
+                    if (
+                        hasattr(event, "type")
+                        and event.type == "content_block_delta"
+                        and hasattr(event, "delta")
+                        and hasattr(event.delta, "type")
+                        and event.delta.type == "text_delta"
+                    ):
+                        final_response += event.delta.text
+                        yield event.delta.text
+                try:
+                    revision_final_msg = await stream.get_final_message()
+                except Exception:
+                    # Provider variance — some adapters may not implement
+                    # get_final_message after we've already iterated. Don't
+                    # let an audit-only branch break the revision response.
+                    revision_final_msg = None
+        except Exception as exc:
+            # A cost cap refused the revision before any of it streamed: the
+            # draft is the reply, ending with the cap's sentence. Nothing of
+            # it was shown yet, so it passes the answer check first, and a
+            # check a cap refuses holds all of it (_checked_stopped_draft).
+            cap = cost_caps.capped(exc)
+            if cap is None or final_response:
+                raise
+            sentence = cap.reply()
+            cost_caps.mark_stopped(sentence)
+            final_response = await self._checked_stopped_draft(
+                _with_stop(draft, sentence), check_turn, question=memory_text or user_message, model=effective_model,
+            )
+            revision_capped = True
+            yield final_response
         revision_ms = round((time.monotonic() - revision_t0) * 1000)
         if revision_final_msg is not None:
             _emit_cache_event(
@@ -2348,12 +2467,20 @@ class Executive:
             )
         # The final revision held to the draft run's ERPNext results, as a
         # reply is (orchestrator.answer_check).
-        checked = await answer_check.check_reply(
-            final_response, check_turn, question=memory_text or user_message, model=effective_model,
-        )
-        if checked != final_response:
-            final_response = checked
-            yield {"type": "reply_replaced", "content": checked, "session_id": session.session_id}
+        stop = cost_caps.stop_sentence()
+        body = _without_stop(final_response, stop)
+        try:
+            checked = body if revision_capped else await answer_check.check_reply(
+                body, check_turn, question=memory_text or user_message, model=effective_model,
+            )
+        except cost_caps.CostCapReached as cap:
+            final_response, event = self._capped_check(final_response, cap, session.session_id)
+            if event:
+                yield event
+        else:
+            if checked != body:
+                final_response = _with_stop(checked, stop) if stop else checked
+                yield {"type": "reply_replaced", "content": final_response, "session_id": session.session_id}
 
         if debug_collector:
             evt = debug_collector.emit("synthesis_done", {
@@ -2398,7 +2525,9 @@ class Executive:
                     "committee": True,
                     "draft_length": len(draft),
                 },
-                full={"response": final_response, "draft": draft},
+                # A draft a cap left unreviewed is kept only as it passed
+                # the answer check (the response).
+                full={"response": final_response, **({} if revision_capped else {"draft": draft})},
                 private=touched_mail,
             )
 
@@ -2443,7 +2572,7 @@ class Executive:
         # A replay (memory.replay) is kept nowhere — see stream_chat.
         kept = not touched_mail and not host_words and not chat_replay.is_replay(session)
         mail_words = _mail_turn_words(session, own_text, touched_mail=touched_mail, host_words=host_words)
-        with private_rows(touched_mail):
+        with private_rows(touched_mail), cost_caps.unbind_turn():
             if should_extract(speaker_text, session=session):
                 schedule_extraction(
                     speaker_text, final_response, session_id=session.session_id
@@ -2799,6 +2928,8 @@ class Executive:
             full_text = ""
             tool_uses: list[dict[str, Any]] = []
             response_content: list[dict[str, Any]] = []
+            # The round's last text, held for the claim check (below).
+            end_held = ""
 
             # If specialists were already consulted, this is the synthesis pass.
             # Emit synthesis_start before text chunks begin streaming.
@@ -2850,47 +2981,57 @@ class Executive:
             # note between calls, never part of the reply. Longer text streams.
             held = ""
             flushed = False
-            async with get_provider(stream_model).messages_stream(
-                model=stream_model,
-                max_tokens=ROUND_MAX_TOKENS if _CLAUDE_RE.fullmatch(stream_model.lower()) else OTHER_ROUND_MAX_TOKENS,
-                **(
-                    {"output_config": {"effort": "low"}}
-                    if low_effort_next and _TAKES_EFFORT_RE.fullmatch(stream_model.lower())
-                    else {}
-                ),
-                system=system_blocks,  # type: ignore[arg-type]
-                tools=tools_with_cache,  # type: ignore[arg-type,list-item]
-                messages=current_messages,  # type: ignore[arg-type]
-                # The last round runs no tool, so a turn that used up its
-                # steps still answers from what it gathered instead of
-                # ending on "unable to complete". The tools and system
-                # blocks stay cached; the messages are read uncached this
-                # once, as tool_choice changes. Only a turn at its cap pays it.
-                **({"tool_choice": {"type": "none"}} if iteration == max_iterations or no_tools_next else {}),
-            ) as stream:
-                async for event in stream:
-                    if (
-                        hasattr(event, "type")
-                        and event.type == "content_block_delta"
-                        and hasattr(event, "delta")
-                        and hasattr(event.delta, "type")
-                        and event.delta.type == "text_delta"
-                    ):
-                        full_text += event.delta.text
-                        if flushed:
-                            streamed_tail = (streamed_tail + event.delta.text)[-2:]
-                            reply_so_far += event.delta.text
-                            yield event.delta.text
-                            continue
-                        held += event.delta.text
-                        if reply_before_nudge is None and not _is_note(held):
-                            for chunk in _flush_held(held, streamed_tail):
-                                yield chunk
-                            streamed_tail = (streamed_tail + held)[-2:]
-                            reply_so_far += held
-                            held, flushed = "", True
+            try:
+                async with get_provider(stream_model).messages_stream(
+                    model=stream_model,
+                    max_tokens=ROUND_MAX_TOKENS if _CLAUDE_RE.fullmatch(stream_model.lower()) else OTHER_ROUND_MAX_TOKENS,
+                    **(
+                        {"output_config": {"effort": "low"}}
+                        if low_effort_next and _TAKES_EFFORT_RE.fullmatch(stream_model.lower())
+                        else {}
+                    ),
+                    system=system_blocks,  # type: ignore[arg-type]
+                    tools=tools_with_cache,  # type: ignore[arg-type,list-item]
+                    messages=current_messages,  # type: ignore[arg-type]
+                    # The last round runs no tool, so a turn that used up its
+                    # steps still answers from what it gathered instead of
+                    # ending on "unable to complete". The tools and system
+                    # blocks stay cached; the messages are read uncached this
+                    # once, as tool_choice changes. Only a turn at its cap pays it.
+                    **({"tool_choice": {"type": "none"}} if iteration == max_iterations or no_tools_next else {}),
+                ) as stream:
+                    async for event in stream:
+                        if (
+                            hasattr(event, "type")
+                            and event.type == "content_block_delta"
+                            and hasattr(event, "delta")
+                            and hasattr(event.delta, "type")
+                            and event.delta.type == "text_delta"
+                        ):
+                            full_text += event.delta.text
+                            if flushed:
+                                streamed_tail = (streamed_tail + event.delta.text)[-2:]
+                                reply_so_far += event.delta.text
+                                yield event.delta.text
+                                continue
+                            held += event.delta.text
+                            if reply_before_nudge is None and not _is_note(held):
+                                for chunk in _flush_held(held, streamed_tail):
+                                    yield chunk
+                                streamed_tail = (streamed_tail + held)[-2:]
+                                reply_so_far += held
+                                held, flushed = "", True
 
-                final_msg = await stream.get_final_message()
+                    final_msg = await stream.get_final_message()
+            except Exception as exc:
+                # A cost cap refused the round's own call: nothing of it was
+                # sent or streamed. The turn ends with the cap's sentence.
+                round_stop = cost_caps.capped(exc)
+                if round_stop is None:
+                    raise
+                for chunk in _cap_stop(round_stop, streamed_tail):
+                    yield chunk
+                return
             # The retry's settings were for that one round only.
             no_tools_next = low_effort_next = False
             if reply_before_nudge is not None:
@@ -2910,6 +3051,13 @@ class Executive:
                             yield chunk
                         streamed_tail = (streamed_tail + line)[-2:]
                         reply_so_far += line
+            elif (
+                held and final_msg.stop_reason not in ("tool_use", "refusal")
+                and not claim_checked and not handing_over and iteration < max_iterations
+            ):
+                # A reply the claim check reads next: held until it has (a
+                # check a cost cap refused holds it, never passes it).
+                end_held = held
             elif held and final_msg.stop_reason != "tool_use":
                 for chunk in _flush_held(held, streamed_tail):
                     yield chunk
@@ -3044,9 +3192,24 @@ class Executive:
                 reply_text = "\n".join(
                     str(b.get("text", "")) for b in response_content if b.get("type") == "text"
                 )
-                claim = await claim_check.unbacked_claim(
-                    claim_check.last_person_message(messages), reply_text, claim_calls,
-                )
+                try:
+                    claim = await claim_check.unbacked_claim(
+                        claim_check.last_person_message(messages), reply_text, claim_calls,
+                    )
+                except cost_caps.CostCapReached as check_cap:
+                    # Held, never passed: what wasn't shown yet is withheld,
+                    # and the cap's sentence ends the reply.
+                    if end_held:
+                        logger.info("withheld %d chars a capped claim check couldn't read", len(end_held))
+                    for chunk in _cap_stop(check_cap, streamed_tail):
+                        yield chunk
+                    return
+                if end_held:
+                    for chunk in _flush_held(end_held, streamed_tail):
+                        yield chunk
+                    streamed_tail = (streamed_tail + end_held)[-2:]
+                    reply_so_far += end_held
+                    end_held = ""
                 if claim is None:
                     return
                 audit_log(
@@ -3390,6 +3553,12 @@ class Executive:
             yield self._THINKING
 
             results_by_id: dict[str, str] = dict(group_results)
+            # A cost cap a tool's own model call hit this round: the round
+            # ends on it once its calls are done, and so does the turn.
+            round_cap: cost_caps.CostCapReached | None = None
+            # Those a script's calls hit (the script reads each as a failed
+            # call; the round then ends on it).
+            script_caps: list[cost_caps.CostCapReached] = []
 
             event_cursor = len(debug_collector._events) if debug_collector else 0
             session_id = getattr(current_session.get(), "session_id", None)
@@ -3463,26 +3632,36 @@ class Executive:
                 session_stage = getattr(
                     getattr(current_session.get(), "company_profile", None), "stage", None
                 )
-                specialist_results = await route_parallel(
-                    run_calls,
-                    episodic_context=episodic_context,
-                    session_id=session_id,
-                    debug_collector=debug_collector,
-                    company_stage=(
-                        session_stage if isinstance(session_stage, str) else None
-                    ),
-                    # Solo: what the principal does, so a specialist advises
-                    # a VP inside a large company differently from an owner.
-                    # Resolved with the turn's mode; team sends no tag.
-                    principal_role=principal_role_tag,
-                    record_source=turn_sources.add if turn_sources is not None else None,
-                    failed_calls_out=failed_calls,
-                    # The web chat shows a missing area under the reply;
-                    # everywhere else the reply itself has to say so.
-                    tell_user_when_unavailable=not getattr(
-                        current_session.get(), "from_web_chat", False
-                    ),
-                )
+                try:
+                    specialist_results = await route_parallel(
+                        run_calls,
+                        episodic_context=episodic_context,
+                        session_id=session_id,
+                        debug_collector=debug_collector,
+                        company_stage=(
+                            session_stage if isinstance(session_stage, str) else None
+                        ),
+                        # Solo: what the principal does, so a specialist advises
+                        # a VP inside a large company differently from an owner.
+                        # Resolved with the turn's mode; team sends no tag.
+                        principal_role=principal_role_tag,
+                        record_source=turn_sources.add if turn_sources is not None else None,
+                        failed_calls_out=failed_calls,
+                        # The web chat shows a missing area under the reply;
+                        # everywhere else the reply itself has to say so.
+                        tell_user_when_unavailable=not getattr(
+                            current_session.get(), "from_web_chat", False
+                        ),
+                    )
+                except Exception as exc:
+                    # A specialist a cost cap stopped: the turn ends here,
+                    # before any of this round's results reach the model.
+                    spec_cap = cost_caps.capped(exc)
+                    if spec_cap is None:
+                        raise
+                    for chunk in _cap_stop(spec_cap, streamed_tail):
+                        yield chunk
+                    return
                 # Only a specialist that actually answered counts as
                 # consulted: the committee picks its critics from that list,
                 # and each consulted department's memory records the turn.
@@ -3565,6 +3744,11 @@ class Executive:
                         # api/routes/chat.py silently stop working.
                         if isinstance(raw, asyncio.CancelledError):
                             raise raw
+                        # A cost cap's refusal is no tool error for the model
+                        # to read: it ends the round (below).
+                        if (tool_cap := cost_caps.capped(raw)) is not None:
+                            round_cap = round_cap or tool_cap
+                            continue
                         logger.exception(
                             "skill:%s raised — session=%s turn=%s iteration=%d",
                             tu["name"], session_id, turn_id, iteration,
@@ -3717,6 +3901,9 @@ class Executive:
                     if isinstance(raw, BaseException):
                         if isinstance(raw, asyncio.CancelledError):
                             raise raw
+                        if (mcp_cap := cost_caps.capped(raw)) is not None:
+                            round_cap = round_cap or mcp_cap
+                            continue
                         logger.exception(
                             "mcp:%s raised — session=%s turn=%s iteration=%d",
                             tool_label, session_id, turn_id, iteration,
@@ -3818,6 +4005,7 @@ class Executive:
                     _iteration: int = iteration,
                     _session_id: str | None = session_id,
                     _turn_id: str | None = turn_id,
+                    _caps: list[cost_caps.CostCapReached] = script_caps,
                 ) -> tuple[str, bool]:
                     own = tool in _own
                     call_input: dict[str, Any] = {"name": tool, "arguments": arguments}
@@ -3902,6 +4090,8 @@ class Executive:
                         )
                         raise
                     except Exception as exc:
+                        if (call_cap := cost_caps.capped(exc)) is not None:
+                            _caps.append(call_cap)
                         logger.warning(
                             "script call_tool:%s raised %s", _loggable_tool(tool), type(exc).__name__
                         )
@@ -4126,6 +4316,16 @@ class Executive:
                 for evt in debug_collector._events[event_cursor:]:
                     yield debug_collector.to_sse_dict(evt)
 
+            # A cost cap a tool's or a script's call hit ends the turn here,
+            # before any result reaches the model: never "it failed with
+            # CostCapReached" for it to work around.
+            if round_cap is None and script_caps:
+                round_cap = script_caps[0]
+            if round_cap is not None:
+                for chunk in _cap_stop(round_cap, streamed_tail):
+                    yield chunk
+                return
+
             # What this round read from outside reaches the model with its
             # results: from the next round on the turn is held.
             # The check sees each read's result first (orchestrator.content_scan):
@@ -4234,6 +4434,48 @@ class Executive:
         logger.warning("max_iterations=%d reached — returning partial result", max_iterations)
         yield last_full_text or "I was unable to complete the analysis. Please try again."
 
+    @staticmethod
+    async def _checked_stopped_draft(
+        draft: str, check_turn: Any, *, question: str, model: str,
+    ) -> str:
+        """A committee draft a cost cap stopped, as the reply: held to the
+        answer check like any reply, its stop sentence kept last. Nothing of
+        it was shown yet, so a check a cap refuses holds all of it: the
+        sentence alone is the reply."""
+        stop = cost_caps.stop_sentence()
+        body = _without_stop(draft, stop)
+        try:
+            checked = (
+                await answer_check.check_reply(body, check_turn, question=question, model=model)
+                if body.strip()
+                else body
+            )
+        except cost_caps.CostCapReached as check_cap:
+            sentence = stop or check_cap.reply()
+            cost_caps.mark_stopped(sentence)
+            return sentence
+        return _with_stop(checked, stop) if stop else checked
+
+    @staticmethod
+    def _capped_check(
+        reply: str, cap: cost_caps.CostCapReached, session_id: str,
+    ) -> tuple[str, str | dict[str, Any]]:
+        """A reply whose answer check a cost cap refused: held, never passed.
+        A collected reply (a chat app, an email) hasn't been shown, so all of
+        it is withheld and the cap's sentence is the reply; text already
+        streamed can't be taken back, so the sentence follows it. The new
+        reply, and what to yield for it."""
+        stop = cost_caps.stop_sentence()
+        if _COLLECTING.get():
+            sentence = stop or cap.reply()
+            cost_caps.mark_stopped(sentence)
+            return sentence, {"type": "reply_replaced", "content": sentence, "session_id": session_id}
+        if stop:
+            # Already ends with a stop sentence: nothing to add.
+            return reply, ""
+        chunk = "".join(_cap_stop(cap, reply[-2:]))
+        return reply + chunk, chunk
+
     async def chat(
         self,
         user_message: str,
@@ -4331,20 +4573,33 @@ class Executive:
             with (
                 turn_files.bind(offered or None) if offered else contextlib.nullcontext(),
                 answer_check.collect(answer_check.AnswerCheckTurn()) if bound is None else contextlib.nullcontext(),
+                # One message, one turn for the cost cap (audit.cost_caps):
+                # the channel handler's when it bound one.
+                cost_caps.bind_turn() as cap_turn,
             ):
-                async for chunk in stream:
-                    if isinstance(chunk, str) and chunk != self._THINKING:
-                        result += chunk
-                    elif isinstance(chunk, dict) and chunk.get("type") == "reply_replaced":
-                        # The checked reply, in place of what streamed.
-                        result = str(chunk.get("content") or "")
-                    elif isinstance(chunk, dict) and chunk.get("type") == "rewrite":
-                        # The next round writes the reply again.
-                        before, result, rewritten = result, "", True
-                    elif cards is not None and isinstance(chunk, dict) and chunk.get("type") == "action_taken":
-                        decision_id = chunk.get("decision_id")
-                        if isinstance(decision_id, int) and not isinstance(decision_id, bool) and decision_id not in cards:
-                            cards.append(decision_id)
+                try:
+                    async for chunk in stream:
+                        if isinstance(chunk, str) and chunk != self._THINKING:
+                            result += chunk
+                        elif isinstance(chunk, dict) and chunk.get("type") == "reply_replaced":
+                            # The checked reply, in place of what streamed.
+                            result = str(chunk.get("content") or "")
+                        elif isinstance(chunk, dict) and chunk.get("type") == "rewrite":
+                            # The next round writes the reply again.
+                            before, result, rewritten = result, "", True
+                        elif cards is not None and isinstance(chunk, dict) and chunk.get("type") == "action_taken":
+                            decision_id = chunk.get("decision_id")
+                            if (
+                                isinstance(decision_id, int) and not isinstance(decision_id, bool)
+                                and decision_id not in cards
+                            ):
+                                cards.append(decision_id)
+                except Exception:
+                    # A turn a cost cap stopped already has its reply: what
+                    # failed after the stop never replaces or repeats it.
+                    if not cap_turn.stopped_by_cap or not result.strip():
+                        raise
+                    logger.warning("executive.chat: a step after a cost cap stop failed; keeping the reply")
         finally:
             _COLLECTING.reset(collecting)
         if rewritten:

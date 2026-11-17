@@ -198,6 +198,7 @@ STATUS_MESSAGES: dict[str, str] = {
     "ok": "On.",
     "checking": "Checking your inbox now.",
     "daily_limit": "On, but today's limit of drafts is reached. It carries on tomorrow.",
+    "spend_limit": "On, but a spend limit is reached. It carries on once the limit resets.",
     "backlog_full": "On, but 25 replies are already waiting for you. Send or dismiss some first.",
     "act_as_me_off": "Paused: Act as me is off.",
     "client_slot": "Paused while a client is active.",
@@ -1182,6 +1183,16 @@ async def _scan(person: Any, client: Any, watch: InboxWatch, now: datetime) -> S
         except GmailError:
             raise  # Gmail itself is failing: the whole scan backs off
         except Exception as exc:
+            from openexecutive.audit import cost_caps
+
+            if cost_caps.capped(exc) is not None:
+                # A spend limit: the message waits for a later scan without
+                # spending an attempt (a cap is never the message's fault),
+                # and so does the rest of this scan.
+                _retry_later(person.id, message_id, "cost_cap", count=False, thread_id=thread_id)
+                result.deferred += 1
+                result.status = "spend_limit"
+                break
             # One message's trouble never holds up the rest: it is tried again
             # on later scans, and given up on after MAX_ATTEMPTS.
             logger.warning("delegation.inbox: a message failed (%s)", type(exc).__name__)
@@ -1208,8 +1219,9 @@ async def answer_thread(person: Any, client: Any, thread_id: str, *, now: dateti
     for me's rules allow, otherwise a card for the person. For a workflow
     step (``delegation.workflow_reply``). Returns what happened: ``sent``,
     ``card``, ``not_needed``, ``skipped``, ``theirs_last`` (nothing to
-    answer), ``backlog_full``, ``busy`` or ``not_now`` (too new, already
-    looked at, or a limit). Raises a Gmail error as a scan does."""
+    answer), ``backlog_full``, ``busy``, ``spend_limit`` (a cost cap: the
+    email waits for a later scan) or ``not_now`` (too new, already looked
+    at, or a limit). Raises a Gmail error as a scan does."""
     from openexecutive.audit import rows_for_person
     from openexecutive.config import get_settings
 
@@ -1249,6 +1261,8 @@ async def _answer(person: Any, client: Any, thread_id: str, *, now: datetime, ex
         return "not_needed"
     if result.skipped:
         return "skipped"
+    if result.status == "spend_limit":
+        return "spend_limit"
     return "not_now"
 
 
@@ -1260,12 +1274,6 @@ async def _consider(
     Once claimed, a message is finished or left for a later scan
     (``_retry_later``); a Gmail failure is raised for the scan to back off."""
     from openexecutive.delegation import invites
-    from openexecutive.delegation.inbox_classifier import (
-        addressing,
-        classify,
-        their_last_words,
-        wants_draft,
-    )
 
     thread = await client.get_thread(thread_id)
     message = next((m for m in thread.messages if m.id == message_id), None)
@@ -1300,6 +1308,38 @@ async def _consider(
         return False
     if not _claim(person.id, message, relation=relation, outcome=PROCESSING, now=now):
         return False
+    # Claimed: whatever stops it now must leave it for a later scan, never
+    # PROCESSING for good (every path that reads it then thinks it settled).
+    try:
+        return await _consider_claimed(
+            person, client, message, thread, relation=relation, known_as=known_as, own=own,
+            exec_address=exec_address, now=now, result=result,
+        )
+    except Exception as exc:
+        from openexecutive.audit import cost_caps
+
+        if cost_caps.capped(exc) is None:
+            raise
+        # A spend limit: back to the watcher without spending an attempt (a
+        # cap is never the message's fault), and the scan stops here.
+        _retry_later(person.id, message.id, "cost_cap", count=False, thread_id=thread.id)
+        result.deferred += 1
+        result.status = "spend_limit"
+        return True
+
+
+async def _consider_claimed(
+    person: Any, client: Any, message: Any, thread: Any, *, relation: str, known_as: str, own: set[str],
+    exec_address: str, now: datetime, result: ScanResult,
+) -> bool:
+    """``_consider``'s work once the message is claimed (``PROCESSING``)."""
+    from openexecutive.delegation.inbox_classifier import (
+        addressing,
+        classify,
+        their_last_words,
+        wants_draft,
+    )
+
     _note_mail(person.id, message, relation=relation)
     asked = addressing(message, name=person.full_name or "", own=own, exec_address=exec_address)
     verdict = await classify(
@@ -1350,6 +1390,10 @@ async def _draft_card(
         except ComposeError:
             reply = "compose_failed"
         except Exception as exc:
+            from openexecutive.audit import cost_caps
+
+            if cost_caps.capped(exc) is not None:
+                raise  # left for a later scan, uncounted (_scan)
             logger.warning("delegation.inbox: writing a reply failed (%s)", type(exc).__name__)
             reply = "compose_error"
         if isinstance(reply, str):
@@ -1525,12 +1569,16 @@ async def draft_on_request(
             person, client, message, thread, relation=relation, known_as=known_as, verdict=verdict,
             own=own, exec_address=exec_address, now=now, result=result, asked=True,
         )
-    except Exception:
+    except Exception as exc:
         # Never left PROCESSING (every later Reply would say "busy"): it
-        # goes back to the watcher for a later scan, as a scan's failure does.
+        # goes back to the watcher for a later scan, as a scan's failure does
+        # (a spend limit's without spending an attempt).
+        from openexecutive.audit import cost_caps
+
+        capped = cost_caps.capped(exc) is not None
         left = _row_for(person_id, message_id)
         if left is not None and left["outcome"] == PROCESSING:
-            _retry_later(person_id, message_id, "error")
+            _retry_later(person_id, message_id, "cost_cap" if capped else "error", count=not capped)
         raise
     if result.drafted:
         done = _row_for(person_id, message_id)
@@ -1860,6 +1908,7 @@ def _due(now: datetime) -> list[int]:
 
 
 async def _scan_due(person_ids: list[int], now: datetime) -> None:
+    from openexecutive.audit import cost_caps
     from openexecutive.people.store import get_person
 
     for person_id in person_ids:
@@ -1873,7 +1922,10 @@ async def _scan_due(person_ids: list[int], now: datetime) -> None:
             _update_watch(person_id, status="act_as_me_off", last_poll_at=now.isoformat())
             _LAST_SETTLE[person_id] = now
             continue
-        await scan_person(person, now=now)
+        # Each person's scan is spent for them (the person cap) and is a turn
+        # of its own (the turn cap): one inbox's burst never uses up another's.
+        with cost_caps.bind_spender(person_id), cost_caps.bind_turn(fresh=True):
+            await scan_person(person, now=now)
 
 
 def maybe_scan(now: datetime) -> bool:

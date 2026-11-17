@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 
+from openexecutive.audit import cost_caps
 from openexecutive.config import get_settings
 from openexecutive.orchestrator.people_tools import audit_rows_on_senders_turn
 
@@ -283,6 +284,7 @@ def _find_telegram_sender(chat_id: str) -> object:
     sender_ref=lambda args: str(args["chat_id"]),
     find_sender=_find_telegram_sender,
 )
+@cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _process_and_reply(
     message_text: str,
     sender_name: str,

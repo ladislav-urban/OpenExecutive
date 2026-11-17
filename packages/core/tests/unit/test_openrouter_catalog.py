@@ -32,6 +32,7 @@ from openexecutive.providers import registry as registry_mod  # noqa: E402
 from openexecutive.providers.registry import (  # noqa: E402
     ANTHROPIC_DIRECT_MODELS,
     OPENROUTER_MODELS,
+    backend_of,
     get_provider,
     openrouter_models,
     openrouter_slug_for_claude,
@@ -380,8 +381,8 @@ def test_previous_generation_claude_id_still_routes_to_anthropic(
         "openexecutive.providers.anthropic_provider.anthropic.AsyncAnthropic",
         lambda **_kw: SimpleNamespace(),
     )
-    assert isinstance(get_provider("claude-opus-4-7"), AnthropicProvider)
-    assert isinstance(get_provider("claude-haiku-4-5-20251001"), AnthropicProvider)
+    assert isinstance(backend_of(get_provider("claude-opus-4-7")), AnthropicProvider)
+    assert isinstance(backend_of(get_provider("claude-haiku-4-5-20251001")), AnthropicProvider)
 
 
 def test_local_slug_that_looks_like_claude_stays_local(
@@ -398,11 +399,11 @@ def test_local_slug_that_looks_like_claude_stays_local(
     settings.local_models = ["claude-proxy-1", "llama3.3"]
     monkeypatch.setattr("openexecutive.providers.registry.get_settings", lambda: settings)
 
-    provider = get_provider("claude-proxy-1")
+    provider = backend_of(get_provider("claude-proxy-1"))
     assert isinstance(provider, OpenAICompatibleProvider)
     assert not isinstance(provider, OpenRouterProvider)
     # A real Claude id NOT in LOCAL_MODELS still takes the Claude path.
-    assert isinstance(get_provider("claude-sonnet-5"), OpenRouterProvider)
+    assert isinstance(backend_of(get_provider("claude-sonnet-5")), OpenRouterProvider)
 
 
 def test_every_direct_model_keeps_cache_spec_on_openrouter_path(
@@ -414,7 +415,7 @@ def test_every_direct_model_keeps_cache_spec_on_openrouter_path(
         "openexecutive.providers.registry.get_settings",
         lambda: _registry_settings(enabled=True),
     )
-    provider = get_provider(ANTHROPIC_DIRECT_MODELS[0])
+    provider = backend_of(get_provider(ANTHROPIC_DIRECT_MODELS[0]))
     for model in ANTHROPIC_DIRECT_MODELS:
         slug, spec = provider._resolve(model)
         assert slug.startswith("anthropic/claude-"), model
@@ -430,7 +431,7 @@ def test_openrouter_provider_resolves_specs_by_rule(
         "openexecutive.providers.registry.get_settings",
         lambda: _registry_settings(enabled=True),
     )
-    provider = get_provider("openai/gpt-6")
+    provider = backend_of(get_provider("openai/gpt-6"))
     assert isinstance(provider, OpenRouterProvider)
 
     slug, spec = provider._resolve("claude-sonnet-5")

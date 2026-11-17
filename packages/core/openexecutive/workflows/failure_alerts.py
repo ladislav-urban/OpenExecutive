@@ -167,9 +167,12 @@ def rerun_target(run: dict[str, Any]) -> tuple[str, str, int | None]:
     raise RerunRefused(409, "Start this one again from its page.")
 
 
-def queue_rerun(run: dict[str, Any]) -> int:
+def queue_rerun(run: dict[str, Any], *, started_by: int | None = None) -> int:
     """Queue the scheduled action that reruns ``run``, due now, and close its
-    failure card. Returns the action's id.
+    failure card. Returns the action's id. ``started_by``: who asked for it
+    again, kept as the action's ``created_by_person_id``, so the rerun is
+    spent for them (and counts in their own job bucket), never the workflow's
+    creator.
 
     Refuses (409) while a rerun of the same scheduled action is already
     queued (from this run or an earlier one on the same card), so a double
@@ -201,6 +204,7 @@ def queue_rerun(run: dict[str, Any]) -> int:
             kind=kind,
             assigned_to_person_id=assignee,
             scope_key=scope_key,
+            created_by_person_id=started_by,
         )
     _close_cards(_dedup_key(str(run.get("workflow_name") or ""), ref))
     return action_id

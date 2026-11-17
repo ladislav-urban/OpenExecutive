@@ -456,6 +456,14 @@ async def _scan(content: Any, *, model: str | None, entries: int) -> Verdict:
                 )
                 return CLEAN
     except Exception as exc:
+        # A cost cap refused the check's call: held like content too big to
+        # check, never let through as merely unchecked (a cap must never
+        # switch the check off).
+        from openexecutive.audit import cost_caps
+
+        if cost_caps.capped(exc) is not None:
+            logger.warning("content_scan: a cost cap refused the check — holding the content")
+            return TOO_BIG
         # The provider refusing the content itself (a 4xx on its blocks) is
         # content that switches the check off, and a check that can't sign
         # in (401/403) is a check switched off for good: both hold like

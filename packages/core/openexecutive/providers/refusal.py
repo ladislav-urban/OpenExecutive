@@ -157,6 +157,12 @@ def refusal_reply(exc: BaseException) -> str | None:
     :func:`fail_fast` held back is not noted again: that would push the
     window out on every new question, and after a top-up nothing would ever
     be sent to find out the account answers again."""
+    from openexecutive.audit.cost_caps import capped
+
+    cap = capped(exc)
+    if cap is not None:
+        # Our own cost cap, not the provider's: the cap told the principal.
+        return cap.reply()
     hit = classify(exc)
     if hit is None:
         return None

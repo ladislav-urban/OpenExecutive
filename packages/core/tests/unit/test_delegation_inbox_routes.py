@@ -322,3 +322,26 @@ def test_reply_from_home_makes_a_card(client: TestClient, ids: dict[str, int], m
     set_enabled(ids["principal"], False, updated_by="t")
     off = client.post("/delegation/mail/reply", json={"thread_id": "t1", "message_id": "m1"}, headers=OWNER)
     assert off.status_code == 409 and off.json()["detail"]["code"] == "act_as_me_off"
+
+
+def test_reply_from_home_at_a_spend_limit_is_a_clean_refusal(
+    client: TestClient, ids: dict[str, int], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.audit import cost_caps
+    from openexecutive.delegation import inbox as inbox_mod
+
+    mailbox, _ = _card(ids["principal"], monkeypatch)
+    monkeypatch.setattr(route, "gmail_for", lambda email: mailbox)
+    seen: list[Any] = []
+
+    async def capped(person: Any, thread_id: str, message_id: str, **_k: Any) -> Any:
+        seen.append((cost_caps._spender.get(), cost_caps.current_turn()))
+        raise cost_caps.CostCapReached("total", "all", 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(inbox_mod, "draft_on_request", capped)
+    resp = client.post("/delegation/mail/reply", json={"thread_id": "t5", "message_id": "m5"}, headers=OWNER)
+    assert resp.status_code == 409
+    assert resp.json()["detail"]["code"] == "spend_limit"
+    assert resp.json()["detail"]["message"] == "This month's usage limit is reached. The principal can raise it."
+    # Spent for the person who asked, as a turn of its own.
+    assert seen[0][0] == str(ids["principal"]) and seen[0][1] is not None

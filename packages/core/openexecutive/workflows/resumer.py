@@ -362,6 +362,7 @@ async def _execute_resume(
     its steps read and draft is theirs (`artifact_records.pinned_viewer`),
     and nobody's for a team run, so no one's documents reach the run's
     history that someone else may read."""
+    from openexecutive.audit import cost_caps
     from openexecutive.delegation.workflow_reads import private_run
     from openexecutive.orchestrator.artifact_records import (
         NOBODY,
@@ -374,6 +375,11 @@ async def _execute_resume(
     with (
         pinned_viewer(viewer_for_person(owner) if owner is not None else NOBODY),
         private_run(str(run.get("workflow_name") or "")),
+        # Spent for whoever started it, never whoever answered its question
+        # (nor its creator, when someone started it by hand); a scheduled run
+        # with no one keeps its creator (chat_tools.in_workflow). One turn.
+        cost_caps.bind_spender(owner if isinstance(owner, int) and not isinstance(owner, bool) else None),
+        cost_caps.bind_turn(fresh=True),
     ):
         return await _drive_resume(row, claim, db_path=db_path)
 
