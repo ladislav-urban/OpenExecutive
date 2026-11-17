@@ -53,16 +53,18 @@ def _as(session: Session | None) -> Any:
     return current_session.set(session)
 
 
-def _spend(usd: float, *, session: Session | None = None, job: str | None = None) -> None:
+def _spend(
+    usd: float, *, session: Session | None = None, job: str | None = None, now: datetime | None = NOW,
+) -> None:
     from openexecutive.orchestrator.schedule_tools import current_session
 
     token = current_session.set(session)
     try:
         if job:
             with cost_caps.bind_job(job):
-                cost_caps.add(MODEL, {"cost_usd": usd}, now=NOW)
+                cost_caps.add(MODEL, {"cost_usd": usd}, now=now)
         else:
-            cost_caps.add(MODEL, {"cost_usd": usd}, now=NOW)
+            cost_caps.add(MODEL, {"cost_usd": usd}, now=now)
     finally:
         current_session.reset(token)
 
@@ -123,7 +125,8 @@ def test_a_capped_job_stops_before_its_next_call(db: SimpleNamespace, monkeypatc
     from openexecutive.providers.capped import CappedProvider
 
     _caps(monkeypatch, job=2.0)
-    _spend(2.0, job="scheduled:principal_brief_morning")
+    # Today's spend: the provider checks against the real clock.
+    _spend(2.0, job="scheduled:principal_brief_morning", now=None)
     sent: list[dict[str, Any]] = []
 
     class _Backend:

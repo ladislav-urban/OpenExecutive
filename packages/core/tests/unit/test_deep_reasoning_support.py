@@ -29,6 +29,7 @@ from openexecutive.providers import openrouter_catalog as catalog  # noqa: E402
 from openexecutive.providers import registry as registry_mod  # noqa: E402
 from openexecutive.providers.feature_gate import apply_feature_gates  # noqa: E402
 from openexecutive.providers.registry import (  # noqa: E402
+    backend_of,
     get_provider,
     model_supports_deep_reasoning,
 )
@@ -221,7 +222,7 @@ def test_openrouter_provider_keeps_thinking_only_for_reasoning_capable_models(
         ["openai/gpt-6", "meta-llama/llama-4-scout", "anthropic/claude-opus-4.8"],
         ["openai/gpt-6", "anthropic/claude-opus-4.8"],
     )
-    provider = get_provider("openai/gpt-6")
+    provider = backend_of(get_provider("openai/gpt-6"))
 
     def _body_for(model: str) -> dict[str, Any]:
         slug, spec = provider._resolve(model)

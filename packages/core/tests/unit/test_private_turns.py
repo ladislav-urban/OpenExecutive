@@ -1009,7 +1009,7 @@ def test_a_scheduled_action_starts_with_no_audit_scope(
     async def _execute(_row: Any, _gateway: Any) -> None:
         seen.append((rows_private(), rows_on_principal_turn()))
 
-    claimed = [SimpleNamespace(id=1)]
+    claimed = [SimpleNamespace(id=1, kind="principal_brief", department=None)]
     for name, value in {
         "requeue_orphaned_running": lambda: 0,
         "seed_principal_briefs": lambda: 0,
