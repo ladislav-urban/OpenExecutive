@@ -64,6 +64,7 @@ from __future__ import annotations
 import html
 import math
 import re
+import unicodedata
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, time, timedelta
@@ -554,6 +555,65 @@ _QUOTE_MARKS = str.maketrans({mark: "'" for mark in (
     "`\u2018\u2019\u201a\u201b\u2032\u2035\u2039\u203a\u275b\u275c\u275d\u275e\u02ba\u02bb\u02bc\u02ee\uff07"
 )})
 _APOSTROPHES = re.compile(r"'{2,}")
+# A double mark that is a unit, after a number, said in words before marks
+# become apostrophes, so a quantity never changes ('2" conduit' would show as
+# "2' conduit", a foot): seconds after degrees and minutes, inches otherwise.
+# The words are already cleaned (NFKC), so a double prime arrives as two.
+_DOUBLE_MARK = "(?:[\"\u201c\u201d\u02ba\u02ee\uff02]|[\u2032'\u2019]{2})"
+# Seconds of arc: a double mark right after the seconds of "45° 30' 15".
+_ARC_SECONDS = re.compile(
+    rf"(\d\s?\u00b0\s?\d+(?:\.\d+)?\s?[\u2032'\u2019]\s?\d+(?:\.\d+)?){_DOUBLE_MARK}(?=[\s.,;:!?)]|$)"
+)
+# Any double mark, to walk a text's quoted spans and tell "phase 2" (a mark
+# that closes a span) from 2" (inches).
+_SPAN_MARK = re.compile(rf"{_DOUBLE_MARK}|[„‟«»]")
+# Marks that only open a span („fáze 2“, «2»), never inches, and one that
+# only closes it.
+_SPAN_OPENERS = frozenset("„‟«")
+_SPAN_CLOSER = "»"
+# What may follow an inch mark: a space, punctuation, the end, or the
+# "x", "×", "-" and "/" of 2"x4", 3/4"-thick and 2"/3".
+_UNIT_AFTER = re.compile(r"[\s.,;:!?)x×/-]|$")
+
+
+def _units(words: str) -> str:
+    """``words`` with a double mark that is a unit written as one: " sec"
+    after degrees and minutes, else " in". A mark is inches only right after
+    a digit, followed by a space, punctuation or the end, and not closing a
+    quoted span the text opened ("phase 2", room 4 "the big one" keep their
+    marks). Walked left to right; an inch mark opens no span, and „ ‟ «
+    always open one. A quote inside a quote ('He said "use 2" pipe"') and a
+    double mark after degrees and minutes that means inches are read the
+    one way; a letter right after an inch mark (6"dia) keeps it a mark:
+    known residuals."""
+    text = _ARC_SECONDS.sub(r"\1 sec", words)
+    out: list[str] = []
+    at = 0
+    open_span = False
+    for mark in _SPAN_MARK.finditer(text):
+        before = text[at:mark.start()]
+        start = mark.start()
+        if mark.group(0) in _SPAN_OPENERS:
+            open_span = True
+        elif open_span or mark.group(0) == _SPAN_CLOSER:
+            open_span = False
+        elif start and text[start - 1].isdigit() and _UNIT_AFTER.match(text, mark.end()):
+            out.append(before + " in")
+            at = mark.end()
+            continue
+        else:
+            open_span = True
+        out.append(before + mark.group(0))
+        at = mark.end()
+    out.append(text[at:])
+    return "".join(out)
+
+
+def _cut(text: str) -> str:
+    """``text`` at most ``QUOTE_MAX``, ending in ``CUT_MARK`` when it was cut."""
+    if len(text) <= QUOTE_MAX:
+        return text
+    return text[:QUOTE_MAX - len(CUT_MARK)].rstrip() + CUT_MARK
 
 
 def _quote(words: str) -> str:
@@ -562,7 +622,27 @@ def _quote(words: str) -> str:
     ("In short: on schedule") stays the team's, and the whole a fixed point
     of the notice's cleaning, so the closing mark is never lost (a text
     ending "www." would join it into a link). "" when no form holds."""
-    inner = _APOSTROPHES.sub("'", words.translate(_QUOTE_MARKS))
+    units = _units(words)
+    # A combining mark on an apostrophe would keep two of them apart ("'\u0301'").
+    kept: list[str] = []
+    for ch in units.translate(_QUOTE_MARKS):
+        if kept and kept[-1] == "'" and unicodedata.category(ch).startswith("M"):
+            continue
+        kept.append(ch)
+    inner = _cut(_APOSTROPHES.sub("'", "".join(kept)))
+    # Settled again: a mark that hid a link from the first cleaning
+    # ("\u02bchttp://x") exposes it now, and it reads "link" rather than the
+    # whole quote failing. Settled past the limit so cleaning never cuts it
+    # silently; any cut is ours, with its mark (written-out units lengthen it).
+    cut = inner.endswith(CUT_MARK)
+    again = settled(inner, QUOTE_MAX + 40)
+    inner = _APOSTROPHES.sub("'", settled(_cut(again)) if again else inner)
+    if cut and not inner.endswith(CUT_MARK):
+        # Settling at the cut joined the mark into a link ("...http://a..."):
+        # the quote still says it was cut.
+        inner = settled(inner[:QUOTE_MAX - len(CUT_MARK) - 1].rstrip() + " " + CUT_MARK) or inner
+    if not inner:
+        return ""
     # The closing mark spaced off when the text's end would take it in.
     for wrapped in (f"{OPEN_QUOTE}{inner}{CLOSE_QUOTE}", f"{OPEN_QUOTE}{inner} {CLOSE_QUOTE}"):
         if (

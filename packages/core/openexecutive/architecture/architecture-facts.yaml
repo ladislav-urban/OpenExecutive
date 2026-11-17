@@ -12718,7 +12718,16 @@ watch:
     quoted inside the untrusted block, in quotation marks that hold
     (project_status._quote: the team's own quotation marks, primes and
     quote ornaments made apostrophes and a run of them one, so two single
-    marks can't pass for a double; other look-alikes a known residual; the quote a fixed point of runner.clean, its closing mark
+    marks can't pass for a double; other look-alikes a known residual; a
+    double mark right after a digit and before a space, punctuation or the
+    end first written as its unit, " in" or, after degrees and minutes,
+    " sec", so 2" conduit never reads as 2 feet, unless it closes a quoted
+    span ("phase 2" and „fáze 2“ keep their marks; „ ‟ « always open
+    one; x, ×, - and / may follow an inch mark; a quote in a quote, a letter
+    after an inch mark and inches after degrees and minutes are known
+    residuals); any cut, ours, keeps "..."; an empty result is unshown; a
+    combining mark after an apostrophe dropped; the words settled again
+    after mapping, so a link a letter-like mark hid reads "link"; the quote a fixed point of runner.clean, its closing mark
     spaced off when the text ends like a link, UNSHOWN_UPDATE if no form
     holds), so text in it that imitates "In short" reads as the team's); value_chars 302
     (WatchJob's own notice width, 120-400, refused on a job with a

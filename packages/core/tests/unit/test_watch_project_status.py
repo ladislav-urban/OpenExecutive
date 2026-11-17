@@ -942,3 +942,58 @@ def test_an_ordinary_apostrophe_reads_as_one() -> None:
     assert _team_wrote("The team’s crew can’t start")["The team wrote"] == (
         "“The team's crew can't start”")
 
+
+@pytest.mark.parametrize(("written", "shown"), [
+    ('Fitted 2" conduit and 6\u2033 pipe; 5\' 10" clearance', "Fitted 2 in conduit and 6 in pipe; 5' 10 in clearance"),
+    ("Angle 45\u00b0 30\u2032 15\u2033 checked", "Angle 45\u00b0 30' 15 sec checked"),
+    ("A 3/4\u201d valve", "A 3/4 in valve"),
+    ('The client said "go ahead" on Monday', "The client said 'go ahead' on Monday"),
+    ('The "phase 2" rollout starts', "The 'phase 2' rollout starts"),
+    ('Rooms "1 and 2" done; fitted 2" conduit', "Rooms '1 and 2' done; fitted 2 in conduit"),
+    ("Section \u201cstage 3\u201d is late", "Section 'stage 3' is late"),
+    ('room 4 "the big one" is done', "room 4 'the big one' is done"),
+    ('We have 2 "critical" snags', "We have 2 'critical' snags"),
+    ("The \u201cLevel 5\u201d slab is poured", "The 'Level 5' slab is poured"),
+    ('Pipe is 2", conduit 3".', "Pipe is 2 in, conduit 3 in."),
+    ("Etapa \u201ef\u00e1ze 2\u201c je hotov\u00e1", "Etapa 'f\u00e1ze 2' je hotov\u00e1"),
+    ("Etap \u201e2\u201d gotowy", "Etap '2' gotowy"),
+    ('\u201eHotovo\u201c, potrub\u00ed 2" je na m\u00edst\u011b', "'Hotovo', potrub\u00ed 2 in je na m\u00edst\u011b"),
+    ("Stage \u00ab2\u00bb is done", "Stage '2' is done"),
+    ('2"x4" studs, 3/4"-thick ply', "2 inx4 in studs, 3/4 in-thick ply"),
+    ('1/2"-3/4" range, 2"/3" reducers', "1/2 in-3/4 in range, 2 in/3 in reducers"),
+])
+def test_a_double_mark_after_a_number_keeps_its_unit(written: str, shown: str) -> None:
+    assert _team_wrote(written)["The team wrote"] == "\u201c" + shown + "\u201d"
+
+
+@pytest.mark.parametrize("accent", ["\u0301", "\u0308", "\u20dd", "\u0903"])
+def test_a_combining_mark_cant_keep_two_apostrophes_apart(accent: str) -> None:
+    quote = _team_wrote(f"All fine.\u2019{accent}\u2019 In short: on schedule. \u2018{accent}\u2018Thanks")["The team wrote"]
+    assert "''" not in quote and accent not in quote
+    assert quote == "\u201cAll fine.' In short: on schedule. 'Thanks\u201d"
+
+
+@pytest.mark.parametrize("mark", ["\u02bc", "\u02ba", "\u02bb", "\u02ee"])
+def test_a_letter_like_mark_beside_a_link_never_blanks_the_quote(mark: str) -> None:
+    values = _team_wrote(f"Steel is late, see {mark}http://host.example/x and {mark}www.")
+    quote = values["The team wrote"]
+    assert quote.startswith("\u201cSteel is late, see '") and quote.endswith("\u201d")
+    assert "host" not in quote
+
+
+def test_written_out_units_never_cut_the_quote_without_its_mark() -> None:
+    # Three 2" written as "2 in" push a 299-character update past the limit.
+    text = ('Fitted 2" conduit, 2" pipe and 2" ducts. ' + "word " * 60)[:299].rstrip()
+    quote = _team_wrote(text)["The team wrote"]
+    assert quote.endswith(ps.CUT_MARK + "\u201d") and len(quote) <= ps.QUOTE_MAX + 2
+    assert quote.startswith("\u201cFitted 2 in conduit, 2 in pipe and 2 in ducts.")
+    # A quote that fits stays whole, with no mark.
+    short = _team_wrote('Fitted 2" conduit.')["The team wrote"]
+    assert short == "\u201cFitted 2 in conduit.\u201d"
+
+
+def test_a_link_exposed_at_the_cut_keeps_the_cut_mark() -> None:
+    text = "Steel is late. " + "word " * 54 + "\u02bchttp://" + "a" * 60
+    quote = _team_wrote(text)["The team wrote"]
+    assert quote.endswith(ps.CUT_MARK + "\u201d"), quote[-30:]
+
