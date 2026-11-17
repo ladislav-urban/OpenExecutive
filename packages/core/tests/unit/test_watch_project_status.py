@@ -948,6 +948,13 @@ def test_an_ordinary_apostrophe_reads_as_one() -> None:
     ("Angle 45\u00b0 30\u2032 15\u2033 checked", "Angle 45\u00b0 30' 15 sec checked"),
     ("A 3/4\u201d valve", "A 3/4 in valve"),
     ('The client said "go ahead" on Monday', "The client said 'go ahead' on Monday"),
+    ('The "phase 2" rollout starts', "The 'phase 2' rollout starts"),
+    ('Rooms "1 and 2" done; fitted 2" conduit', "Rooms '1 and 2' done; fitted 2 in conduit"),
+    ("Section \u201cstage 3\u201d is late", "Section 'stage 3' is late"),
+    ('room 4 "the big one" is done', "room 4 'the big one' is done"),
+    ('We have 2 "critical" snags', "We have 2 'critical' snags"),
+    ("The \u201cLevel 5\u201d slab is poured", "The 'Level 5' slab is poured"),
+    ('Pipe is 2", conduit 3".', "Pipe is 2 in, conduit 3 in."),
 ])
 def test_a_double_mark_after_a_number_keeps_its_unit(written: str, shown: str) -> None:
     assert _team_wrote(written)["The team wrote"] == "\u201c" + shown + "\u201d"
@@ -966,4 +973,21 @@ def test_a_letter_like_mark_beside_a_link_never_blanks_the_quote(mark: str) -> N
     quote = values["The team wrote"]
     assert quote.startswith("\u201cSteel is late, see '") and quote.endswith("\u201d")
     assert "host" not in quote
+
+
+def test_written_out_units_never_cut_the_quote_without_its_mark() -> None:
+    # Three 2" written as "2 in" push a 299-character update past the limit.
+    text = ('Fitted 2" conduit, 2" pipe and 2" ducts. ' + "word " * 60)[:299].rstrip()
+    quote = _team_wrote(text)["The team wrote"]
+    assert quote.endswith(ps.CUT_MARK + "\u201d") and len(quote) <= ps.QUOTE_MAX + 2
+    assert quote.startswith("\u201cFitted 2 in conduit, 2 in pipe and 2 in ducts.")
+    # A quote that fits stays whole, with no mark.
+    short = _team_wrote('Fitted 2" conduit.')["The team wrote"]
+    assert short == "\u201cFitted 2 in conduit.\u201d"
+
+
+def test_a_link_exposed_at_the_cut_keeps_the_cut_mark() -> None:
+    text = "Steel is late. " + "word " * 54 + "\u02bchttp://" + "a" * 60
+    quote = _team_wrote(text)["The team wrote"]
+    assert quote.endswith(ps.CUT_MARK + "\u201d"), quote[-30:]
 
