@@ -443,6 +443,10 @@ class WatchJob:
             or not (self.value_chars == 0 or DEFAULT_FACT_CHARS <= self.value_chars <= MAX_FACT_CHARS)
         ):
             raise ValueError(f"a job's values are {DEFAULT_FACT_CHARS} to {MAX_FACT_CHARS} characters")
+        if self.value_chars and schema is not None:
+            # value_chars also sets the width of the model's text facts
+            # (runner.value_chars), so it would widen what the schema declares.
+            raise ValueError("a job with a reason step sets its width with ReasonSchema.max_fact_chars")
         if schema is not None and not isinstance(schema.no_digits, bool):
             raise ValueError("a reason's no_digits is true or false")
         if schema is not None and not isinstance(schema.per_finding, bool):
