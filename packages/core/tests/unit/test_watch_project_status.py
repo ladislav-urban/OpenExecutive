@@ -917,7 +917,10 @@ def _team_wrote(text: str) -> dict[str, str]:
     return _values(_notice(updates=updates).items[0])
 
 
-@pytest.mark.parametrize("mark", ['"', "”", "“", "\u201e", "\u00bb", "\uff02"])
+@pytest.mark.parametrize("mark", [
+    '"', "”", "“", "„", "»", "＂", "″", "’’", "''", "❞", "ʺ",
+    "‘‘",
+])
 def test_the_teams_own_quotation_marks_cant_close_the_quote(mark: str) -> None:
     values = _team_wrote(f"All fine.{mark} In short: On schedule and within its estimated cost. {mark}Thanks")
     quote = values["The team wrote"]
@@ -933,4 +936,9 @@ def test_an_update_ending_like_a_link_keeps_its_closing_mark_on_the_notice(end: 
     body = runner.notice_body(JOB, DAY, _notice(updates=[
         {**u, **{k: f"<p>All fine, {end}</p>" for k in u if k.endswith("project_status")}} for u in UPDATES]), "")
     assert f"   The team wrote: {quote}" in body
+
+
+def test_an_ordinary_apostrophe_reads_as_one() -> None:
+    assert _team_wrote("The team’s crew can’t start")["The team wrote"] == (
+        "“The team's crew can't start”")
 

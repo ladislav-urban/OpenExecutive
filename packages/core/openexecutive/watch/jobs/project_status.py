@@ -542,9 +542,18 @@ def _row(status: Status, today: date) -> CardSpec:
     )
 
 
-# Every double quotation mark a team's text could close the quote with, as
-# written or once a notice's cleaning (NFKC) reads it: made a plain apostrophe.
-_QUOTE_MARKS = str.maketrans({mark: "'" for mark in '"\u201c\u201d\u201e\u201f\u00ab\u00bb\u2033\u301d\u301e\u301f\uff02'})
+# Every quotation mark, prime or quote ornament a team's text could close the
+# quote with or imitate one with (two single marks look like a double one),
+# as written or once a notice's cleaning (NFKC) reads it: made a plain
+# apostrophe, and a run of them one apostrophe (``_quote``). NFKC has already
+# split a double prime into two primes by then. Other look-alike symbols are
+# a known residual: the quote stays on its own labelled line, inside the
+# untrusted block, under code's own "In short".
+_QUOTE_MARKS = str.maketrans({mark: "'" for mark in (
+    '"\u201c\u201d\u201e\u201f\u00ab\u00bb\u2033\u2036\u301d\u301e\u301f\uff02'
+    "`\u2018\u2019\u201a\u201b\u2032\u2035\u2039\u203a\u275b\u275c\u275d\u275e\u02ba\u02bb\u02bc\u02ee\uff07"
+)})
+_APOSTROPHES = re.compile(r"'{2,}")
 
 
 def _quote(words: str) -> str:
@@ -553,7 +562,7 @@ def _quote(words: str) -> str:
     ("In short: on schedule") stays the team's, and the whole a fixed point
     of the notice's cleaning, so the closing mark is never lost (a text
     ending "www." would join it into a link). "" when no form holds."""
-    inner = words.translate(_QUOTE_MARKS)
+    inner = _APOSTROPHES.sub("'", words.translate(_QUOTE_MARKS))
     # The closing mark spaced off when the text's end would take it in.
     for wrapped in (f"{OPEN_QUOTE}{inner}{CLOSE_QUOTE}", f"{OPEN_QUOTE}{inner} {CLOSE_QUOTE}"):
         if (
