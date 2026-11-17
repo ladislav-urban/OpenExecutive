@@ -467,7 +467,9 @@ async def _drive_resume(
     try:
         inputs = workflow.input_model().model_validate(row["inputs"])
     except Exception as exc:
-        _abort(f"the workflow's inputs no longer validate: {exc}")
+        # The detail stays in the log; the record says what happened.
+        logger.warning("resumer: run %s inputs no longer validate (%s)", run_id, type(exc).__name__)
+        _abort("the workflow's inputs no longer validate")
         return True
 
     store = ChromaDBStore(persist_directory=get_settings().vector_store_path)
@@ -487,6 +489,9 @@ async def _drive_resume(
             # A scheduled run still owes its artifact to its recipient.
             if event.resume_state is not None and state.deliver_to_person_id is not None:
                 event.resume_state.deliver_to_person_id = state.deliver_to_person_id
+            # And whoever tapped Run again stays the one it is spent for.
+            if event.resume_state is not None and state.spent_for_person_id is not None:
+                event.resume_state.spent_for_person_id = state.spent_for_person_id
             try:
                 await checkpoint_gate(
                     run_id=run_id,

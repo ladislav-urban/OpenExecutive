@@ -695,6 +695,10 @@ def _cap_reason(person_id: int, message: Any, relation: str, now: datetime, db_p
 
 
 # Limits that hold for the rest of the scan, not just this sender.
+# Outcomes _consider recorded for an exception it re-raised (by its id), so
+# the scan that catches it counts it without recording it twice.
+_RESTORED: dict[int, str] = {}
+
 _SCAN_STOPPING_LIMITS = frozenset({"classify_limit", "inbox_limit", "daily_limit", "uncountable"})
 
 
@@ -1194,9 +1198,15 @@ async def _scan(person: Any, client: Any, watch: InboxWatch, now: datetime) -> S
                 result.status = "spend_limit"
                 break
             # One message's trouble never holds up the rest: it is tried again
-            # on later scans, and given up on after MAX_ATTEMPTS.
+            # on later scans, and given up on after MAX_ATTEMPTS (counted once:
+            # _consider already left a claimed message for later).
             logger.warning("delegation.inbox: a message failed (%s)", type(exc).__name__)
-            _count_retry(result, _retry_later(person.id, message_id, "error", thread_id=thread_id))
+            restored = _RESTORED.pop(id(exc), None)
+            _count_retry(
+                result,
+                restored if restored is not None
+                else _retry_later(person.id, message_id, "error", thread_id=thread_id),
+            )
             continue
         if stop:
             break
@@ -1252,19 +1262,9 @@ async def _answer(person: Any, client: Any, thread_id: str, *, now: datetime, ex
     result = ScanResult("ok")
     # Only staleness bounds it: the step named this thread, whenever the
     # watcher started watching (if it does at all).
-    message_id = shown[-1].id
-    try:
-        await _consider(person, client, message_id, thread.id, own, exec_address, now - STALE, now, result)
-    except BaseException as exc:
-        # Never left PROCESSING (it would count as settled for good): back to
-        # the watcher, an error spending one of its attempts, a cancellation
-        # (the step stopped) none.
-        cancelled = isinstance(exc, asyncio.CancelledError)
-        left = _row_for(person.id, message_id)
-        if left is not None and left["outcome"] == PROCESSING:
-            _retry_later(person.id, message_id, "cancelled" if cancelled else "error", count=not cancelled,
-                         thread_id=thread.id)
-        raise
+    # _consider leaves the message for a later scan on any raise after its
+    # own claim (never a claim someone else holds).
+    await _consider(person, client, shown[-1].id, thread.id, own, exec_address, now - STALE, now, result)
     if result.handled:
         return "sent"
     if result.drafted:
@@ -1318,6 +1318,10 @@ async def _consider(
             result.status = "daily_limit"
             return True
         return False
+    # Why it was last left for later (a claim overwrites it): a cancellation
+    # that repeats counts (below).
+    before = _row_for(person.id, message.id)
+    left_for = before.get("reason") if before is not None and before["outcome"] == RETRY else None
     if not _claim(person.id, message, relation=relation, outcome=PROCESSING, now=now):
         return False
     # Claimed: whatever stops it now must leave it for a later scan, never
@@ -1327,17 +1331,34 @@ async def _consider(
             person, client, message, thread, relation=relation, known_as=known_as, own=own,
             exec_address=exec_address, now=now, result=result,
         )
-    except Exception as exc:
+    except BaseException as exc:
         from openexecutive.audit import cost_caps
+        from openexecutive.delegation.gmail import GmailError
 
-        if cost_caps.capped(exc) is None:
-            raise
-        # A spend limit: back to the watcher without spending an attempt (a
-        # cap is never the message's fault), and the scan stops here.
-        _retry_later(person.id, message.id, "cost_cap", count=False, thread_id=thread.id)
-        result.deferred += 1
-        result.status = "spend_limit"
-        return True
+        if isinstance(exc, Exception) and cost_caps.capped(exc) is not None:
+            # A spend limit: back to the watcher without spending an attempt
+            # (a cap is never the message's fault), and the scan stops here.
+            _retry_later(person.id, message.id, "cost_cap", count=False, thread_id=thread.id)
+            result.deferred += 1
+            result.status = "spend_limit"
+            return True
+        # Anything else: this claim's own message goes back to the watcher,
+        # never left PROCESSING (it would count as settled for good). A real
+        # error spends an attempt; the mailbox failing spends none; a
+        # cancellation spends none the first time (the step was stopped), but
+        # one that repeats (a step timing out on it every time) does.
+        left = _row_for(person.id, message.id)
+        if left is not None and left["outcome"] == PROCESSING:
+            if isinstance(exc, asyncio.CancelledError):
+                reason, count = "cancelled", left_for == "cancelled"
+            elif isinstance(exc, GmailError):
+                reason, count = "gmail_error", False
+            else:
+                reason, count = "error", True
+            outcome = _retry_later(person.id, message.id, reason, count=count, thread_id=thread.id)
+            if isinstance(exc, Exception):
+                _RESTORED[id(exc)] = outcome
+        raise
 
 
 async def _consider_claimed(
@@ -1518,7 +1539,7 @@ def _row_for(person_id: int, message_id: str, db_path: Path | None = None) -> di
     conn = _connect(db_path)
     try:
         row = conn.execute(
-            f"SELECT outcome, decision_id FROM {INBOX_MESSAGES_TABLE} "  # noqa: S608 — constant table name
+            f"SELECT outcome, decision_id, reason FROM {INBOX_MESSAGES_TABLE} "  # noqa: S608 — constant table name
             "WHERE person_id = ? AND message_id = ?",
             (person_id, message_id),
         ).fetchone()

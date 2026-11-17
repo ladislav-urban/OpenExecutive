@@ -4,6 +4,7 @@ or stream, a resumed rerun spent for whoever tapped it, and a reply whose
 check a cap refused saying its figures weren't checked."""
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import re
@@ -57,16 +58,103 @@ def test_a_failed_runs_record_never_holds_the_exceptions_text() -> None:
         assert run_failure_text(wrapped) == cap.reply()
 
 
+def _fail_run_messages_tainted_by_an_exception(tree: ast.Module) -> list[int]:
+    """Lines of every fail_run call in ``tree`` whose message can carry an
+    exception's text: a name bound by ``except ... as`` reaching it other
+    than through ``run_failure_text``, directly, through a local assigned
+    from one, or (one hop) through a parameter a caller in the module fills
+    from one."""
+    functions = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef | ast.AsyncFunctionDef)]
+
+    def enclosing(node: ast.AST) -> Any:
+        best = None
+        for fn in functions:
+            within = fn.lineno <= node.lineno <= (fn.end_lineno or fn.lineno)
+            if within and (best is None or fn.lineno >= best.lineno):
+                best = fn
+        return best
+
+    def exc_names(fn: Any) -> set[str]:
+        return {h.name for h in ast.walk(fn) if isinstance(h, ast.ExceptHandler) and h.name}
+
+    def tainted(expr: ast.AST, names: set[str]) -> bool:
+        if isinstance(expr, ast.Call) and getattr(expr.func, "id", getattr(expr.func, "attr", "")) == "run_failure_text":
+            return False
+        if isinstance(expr, ast.Name) and expr.id in names:
+            return True
+        return any(tainted(child, names) for child in ast.iter_child_nodes(expr))
+
+    def assigned(fn: Any, name: str) -> list[ast.AST]:
+        values: list[ast.AST] = []
+        for node in ast.walk(fn):
+            plain = isinstance(node, ast.Assign) and any(getattr(t, "id", None) == name for t in node.targets)
+            other = (
+                isinstance(node, ast.AnnAssign | ast.AugAssign)
+                and getattr(node.target, "id", None) == name
+                and node.value is not None
+            )
+            if plain or other:
+                values.append(node.value)  # type: ignore[union-attr]
+        return values
+
+    def bad(expr: ast.AST, fn: Any, depth: int = 0) -> bool:
+        if fn is None:
+            return False
+        names = exc_names(fn)
+        if tainted(expr, names):
+            return True
+        if isinstance(expr, ast.Name):
+            if any(bad(v, fn, depth) for v in assigned(fn, expr.id) if v is not expr):
+                return True
+            params = [a.arg for a in [*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs]]
+            if expr.id in params and depth < 2:
+                index = params.index(expr.id)
+                for call in ast.walk(tree):
+                    if isinstance(call, ast.Call) and getattr(call.func, "id", getattr(call.func, "attr", "")) == fn.name:
+                        args = [a for a in call.args]
+                        arg = args[index] if index < len(args) else next(
+                            (k.value for k in call.keywords if k.arg == expr.id), None,
+                        )
+                        if arg is not None and bad(arg, enclosing(call), depth + 1):
+                            return True
+        return False
+
+    lines = []
+    for call in ast.walk(tree):
+        if isinstance(call, ast.Call) and getattr(call.func, "id", getattr(call.func, "attr", "")) == "fail_run":
+            message = call.args[1] if len(call.args) > 1 else next(
+                (k.value for k in call.keywords if k.arg in ("error", "reason")), None,
+            )
+            if message is not None and bad(message, enclosing(call)):
+                lines.append(call.lineno)
+    return lines
+
+
 def test_no_run_record_is_written_from_an_exceptions_text() -> None:
-    # Every fail_run in the package passes fixed text (or run_failure_text).
-    raw = re.compile(r"fail_run\([^)]*\b(str\(exc\)|\{exc\}|last_error = str\(exc\))")
+    # Every fail_run in the package passes fixed text (or run_failure_text),
+    # however the message reaches it.
     offenders = [
-        f"{path.relative_to(PACKAGE)}:{n}"
+        f"{path.relative_to(PACKAGE)}:{line}"
         for path in PACKAGE.rglob("*.py")
-        for n, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1)
-        if raw.search(line)
+        for line in _fail_run_messages_tainted_by_an_exception(ast.parse(path.read_text(encoding="utf-8")))
     ]
     assert offenders == []
+
+
+def test_the_guard_finds_a_message_that_reaches_fail_run_through_a_variable_or_a_parameter() -> None:
+    source = (
+        "def a(run_id):\n"
+        "    try:\n        x()\n"
+        "    except Exception as exc:\n        msg = str(exc)\n        fail_run(run_id, msg)\n"
+        "def _abandon(run_id, reason):\n    fail_run(run_id, reason)\n"
+        "def b(run_id):\n"
+        "    try:\n        x()\n"
+        "    except Exception as exc:\n        _abandon(run_id, f'bad: {exc}')\n"
+        "def c(run_id):\n"
+        "    try:\n        x()\n"
+        "    except Exception as exc:\n        fail_run(run_id, run_failure_text(exc))\n"
+    )
+    assert sorted(_fail_run_messages_tainted_by_an_exception(ast.parse(source))) == [6, 8]
 
 
 def test_the_run_route_stores_the_fixed_sentence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -196,3 +284,70 @@ def test_someone_off_people_hears_only_that_the_figures_werent_checked() -> None
         cap = _cap("total", "all")
         assert cap.unchecked_reply() == cost_caps.UNCHECKED_FIGURES
     assert "usage limit" not in cost_caps.UNCHECKED_FIGURES
+
+
+# F2/F1. The resumer -------------------------------------------------------------
+
+
+def test_a_second_held_writes_pause_keeps_the_starter() -> None:
+    source = (PACKAGE / "workflows/resumer.py").read_text(encoding="utf-8")
+    assert "event.resume_state.spent_for_person_id = state.spent_for_person_id" in source
+
+
+def test_a_resumed_run_through_two_pauses_stays_spent_for_its_starter(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    from openexecutive.workflows import persistence, resumer
+    from openexecutive.workflows.wait_for_human import WaitForHumanEvent, WorkflowResumeState
+
+    db = tmp_path / "runs.db"
+    persistence.initialize_runs_db(db)
+    persistence.create_run("r1", "team_wf", "t", {}, db_path=db)
+    first = WorkflowResumeState(
+        workflow_name="team_wf", gate_step_id="g", gate_step_index=0, next_step_index=1,
+        kind="held_writes", spent_for_person_id=7,
+    )
+    checkpoints: list[Any] = []
+
+    async def checkpoint(*, event: Any, **_k: Any) -> None:
+        checkpoints.append(event.resume_state)
+
+    class _Workflow:
+        title = "Team"
+
+        def input_model(self) -> Any:
+            from pydantic import create_model
+
+            return create_model("_In")
+
+        async def resume(self, **_k: Any) -> Any:
+            # The second segment pauses on held writes again.
+            yield WaitForHumanEvent(
+                person_id=1, question="Approve?",
+                resume_state=WorkflowResumeState(
+                    workflow_name="team_wf", gate_step_id="g2", gate_step_index=1, next_step_index=2,
+                    kind="held_writes",
+                ),
+            )
+
+    monkeypatch.setattr("openexecutive.workflows.gate.checkpoint_gate", checkpoint)
+    monkeypatch.setattr("openexecutive.workflows.get_workflow", lambda name: _Workflow())
+    monkeypatch.setattr("openexecutive.workflows.dynamic.DynamicWorkflow", _Workflow)
+    monkeypatch.setattr("openexecutive.knowledge.store.ChromaDBStore", lambda **_k: object())
+    row = {"run_id": "r1", "workflow_name": "team_wf", "title": "t", "inputs": {},
+           "resume_state_json": first.model_dump_json(), "resolution_json": None}
+    asyncio.run(resumer._drive_resume(row, "claim", db_path=db))
+    (second,) = checkpoints
+    # The third segment resumes from this payload: still spent for 7.
+    assert second.spent_for_person_id == 7
+    assert resumer._spent_for({"resume_state_json": second.model_dump_json()}) == 7
+
+
+def test_inputs_that_no_longer_validate_record_no_exception_text() -> None:
+    source = (PACKAGE / "workflows/resumer.py").read_text(encoding="utf-8")
+    assert "no longer validate: {exc}" not in source
+
+
+def test_run_workflows_crash_reaches_neither_record_nor_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    source = (PACKAGE / "orchestrator/workflow_run_tools.py").read_text(encoding="utf-8")
+    assert "last_error = run_failure_text(exc)" in source and "str(exc)[:" not in source

@@ -2116,14 +2116,16 @@ async def _chat_turn(
                     sentence = cap.unchecked_reply()
                     if not cost_caps.turn_stopped():
                         cost_caps.mark_stopped(sentence)
-                    cap_evt = {"type": "chunk", "content": f"\n\n{sentence}", "session_id": session.session_id}
-                    full_response += cap_evt["content"]
+                    # Once: the Executive's own check may have said it already.
+                    if cost_caps.UNCHECKED_FIGURES not in full_response:
+                        cap_evt = {"type": "chunk", "content": f"\n\n{sentence}", "session_id": session.session_id}
+                        full_response += cap_evt["content"]
+                        if not client_disconnected:
+                            if live_turn:
+                                chat_live.turn_event(session.session_id, live_key, cap_evt)
+                            yield f"data: {json.dumps(cap_evt)}\n\n"
                     # Nothing to replace: the reply stands as shown, plus that.
                     checked = full_response
-                    if not client_disconnected:
-                        if live_turn:
-                            chat_live.turn_event(session.session_id, live_key, cap_evt)
-                        yield f"data: {json.dumps(cap_evt)}\n\n"
                 if checked != full_response:
                     full_response = in_product_reply(checked) if words is not None else checked
                     replaced_evt = {

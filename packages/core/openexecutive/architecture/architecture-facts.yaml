@@ -713,12 +713,18 @@ providers:
     events (other workflows' error events are their own words, passed as
     is). A rerun that pauses on held writes keeps its starter on the resume
     payload (WorkflowResumeState.spent_for_person_id), which the resumer
-    binds when the run has no owner. answer_thread returns a row it claimed
-    to RETRY on any raise (an error spends an attempt, a cancellation none).
+    binds when the run has no owner, and a second held-writes pause carries
+    it on to the next payload. run_workflow's crash text and a resume's
+    invalid inputs reach no record either (a test checks every fail_run's
+    message through locals and one hop of parameters). inbox._consider
+    returns the message it claimed itself to RETRY on any raise after that
+    claim, never a claim someone else holds: a real error spends an attempt,
+    a Gmail failure none, a cancellation none the first time and one each
+    time it repeats (a step that times out on it); the scan counts it once.
     Home's Reply has its own turn-cap sentence. A reply already shown whose
     answer check a cap refused gets UNCHECKED_FIGURES ("I couldn't check the
     figures above, so don't rely on them yet.") before the cap's sentence,
-    or alone for anyone off People.
+    or alone for anyone off People, and the web route adds it only once.
     Owner decisions (Nov 17, 2026): recommended values when switched on are
     COST_CAP_TURN_USD=1, COST_CAP_PERSON_DAILY_USD=5,
     COST_CAP_JOB_DAILY_USD=2, COST_CAP_MONTHLY_USD=100 (commented in

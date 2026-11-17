@@ -1483,3 +1483,58 @@ def test_an_answer_step_that_raises_never_leaves_the_email_processing(
         asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
     assert _ledger(db)["m1"] == ("retry", reason)
     assert _attempts(db, "m1") == spent
+
+
+def test_a_raise_before_the_claim_leaves_someone_elses_claim_alone(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Home's Reply holds the message (PROCESSING); an answer step that fails
+    # before it claims anything must not hand that claim back to the watcher.
+    mailbox = FakeInbox()
+    message = _msg("m1", "t1")
+    mailbox.add(message)
+    assert inbox._claim(owner.id, message, relation="contact", outcome=inbox.PROCESSING, now=NOW)
+
+    async def broken(*_a: Any, **_k: Any) -> str:
+        raise RuntimeError("before the claim")
+
+    monkeypatch.setattr(inbox, "relation_of", broken)
+    with pytest.raises(RuntimeError):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
+    assert _ledger(db)["m1"][0] == "processing"
+    assert _attempts(db, "m1") == 0
+
+
+def test_a_cancellation_that_repeats_spends_an_attempt(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A step that times out on the same email every time (asyncio.wait_for
+    # cancels it) must not hold it forever: the first stop is free, the next
+    # ones count, and MAX_ATTEMPTS gives it up.
+    async def stopped(*_a: Any, **_k: Any) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inbox, "_draft_card", stopped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    spent = []
+    for i in range(inbox.MAX_ATTEMPTS + 1):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW + timedelta(minutes=i)))
+        spent.append(_attempts(db, "m1"))
+    assert spent[:2] == [0, 1]
+    assert _ledger(db)["m1"][0] == "failed"
+
+
+def test_a_scan_counts_a_claimed_messages_error_once(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise RuntimeError("after the claim")
+
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    result = _scan(owner, mailbox)
+    assert result.deferred == 1
+    assert _ledger(db)["m1"] == ("retry", "error") and _attempts(db, "m1") == 1
