@@ -740,6 +740,16 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         words = s["forbidden_reply_words"]
         if not isinstance(words, list) or not words or not all(isinstance(w, str) and w.strip() for w in words):
             raise ValueError("`forbidden_reply_words`: a list of non-empty strings")
+    if s.get("reply_must_name") is not None:
+        names = s["reply_must_name"]
+        if (
+            not isinstance(names, list)
+            or not names
+            or not all(isinstance(n, str) and all(o.strip() for o in n.split("|")) for n in names)
+        ):
+            raise ValueError(
+                "`reply_must_name`: a list of non-empty strings (alternatives split by |, none of them empty)"
+            )
     if s.get("speaker") is not None:
         try:
             scenario_speaker(s)
@@ -919,3 +929,47 @@ def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
         if word and re.search(r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE):
             found.append(word)
     return found
+
+
+def _plain(text: str) -> str:
+    import re
+
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def reply_must_name_missing(scenario: dict[str, Any], reply: str) -> list[str]:
+    """The scenario's ``reply_must_name`` items the reply leaves out: each is
+    there when it, or one of its ``|``-separated alternatives ("Panel
+    wiring|DEMO-WIR-25"), appears anywhere in the reply, in any case and
+    spacing. A deterministic check the judge's score can't outvote: a table
+    that drops one line of four fails, however good the rest reads."""
+    said = _plain(reply)
+    missing = []
+    for item in scenario.get("reply_must_name") or []:
+        options = [_plain(o) for o in str(item).split("|") if o.strip()]
+        if options and not any(o in said for o in options):
+            missing.append(str(item))
+    return missing
+
+
+def reply_check_failures(scenario: dict[str, Any], reply: str, *, repeated: bool = True) -> dict[str, list[str]]:
+    """The deterministic checks every runner holds a reply to, whatever the
+    judge's score, keyed as they are recorded in the run's scores: a
+    ``forbidden_reply_words`` word it says, a sentence it says twice (with
+    ``forbid_repeated_text``; ``repeated=False`` for text that isn't one
+    reply, such as a watch notice's lines) and a ``reply_must_name`` item it
+    leaves out. Empty when the reply passes them all."""
+    from openexecutive.utils.repeats import repeated_sentences
+
+    out: dict[str, list[str]] = {}
+    said = forbidden_words_in(scenario, reply)
+    if said:
+        out["forbidden_reply_words"] = said
+    if repeated and scenario.get("forbid_repeated_text") is True:
+        again = repeated_sentences(reply)
+        if again:
+            out["repeated_text"] = again
+    missing = reply_must_name_missing(scenario, reply)
+    if missing:
+        out["reply_must_name_missing"] = missing
+    return out

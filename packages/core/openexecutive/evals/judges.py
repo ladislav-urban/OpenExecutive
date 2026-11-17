@@ -216,6 +216,52 @@ def _decided_cards_section(scenario: dict[str, Any]) -> str:
     return section
 
 
+def _panel_section(scenario: dict[str, Any]) -> str:
+    """Judge context for a turn from ERPNext's panel (``surface:
+    erpnext_panel``): the scenario's ``quality_criteria``, unless an earlier
+    section already listed them. Only rendered for those scenarios; every
+    other chat judge prompt stays byte-identical. Without it a panel
+    scenario's criteria never reached the judge, which passed a reply that
+    said the Installation Note "covers every line" over a table of three of
+    the four (where-is-my-order step 4, Nov 17, 2026)."""
+    from openexecutive.evals.scenarios import SURFACE_ERPNEXT_PANEL, decided_cards_section
+
+    if scenario.get("surface") != SURFACE_ERPNEXT_PANEL:
+        return ""
+    criteria = [k.replace("_", " ") for k, v in (scenario.get("quality_criteria") or {}).items() if v]
+    if (
+        not criteria
+        or scenario.get("peer_memory_context")
+        or scenario.get("workspace_mode") == "solo"
+        or scenario.get("delegation") is not None
+        or scenario.get("standing_facts")
+        or decided_cards_section(scenario)
+    ):
+        return ""
+    return (
+        "\nTHE ASKER is in a narrow side panel beside the ERP record they have open."
+        f"\nAdditional criteria this response must satisfy: {', '.join(criteria)}. "
+        "Check each one. If any is not satisfied, overall must be 2 or lower and "
+        "notes must name the criterion that failed.\n"
+    )
+
+
+def chat_judge_context(scenario: dict[str, Any], drafts: list[dict[str, Any]] | None = None) -> str:
+    """The scenario-specific sections of a chat judge's prompt (peer memory,
+    solo, Act as me with its ``drafts``, standing facts, decided cards, the
+    panel), each only when the scenario has it; "" for any other scenario.
+    The repo's ``evals/run_evals.py`` puts the same into its own judge's
+    prompt, so both runners judge a scenario against the same criteria."""
+    return (
+        _peer_memory_section(scenario)
+        + _solo_section(scenario)
+        + _delegation_section(scenario, drafts)
+        + _standing_facts_section(scenario)
+        + _decided_cards_section(scenario)
+        + _panel_section(scenario)
+    )
+
+
 async def judge_chat(
     scenario: dict[str, Any],
     response: str,
@@ -232,7 +278,7 @@ Evaluate this response to an executive question on a 1-5 scale for each dimensio
 RESPONSE: {response}
 
 Expected topics to cover: {', '.join(scenario.get('expected_topics', []))}
-{_peer_memory_section(scenario)}{_solo_section(scenario)}{_delegation_section(scenario, drafts)}{_standing_facts_section(scenario)}{_decided_cards_section(scenario)}
+{chat_judge_context(scenario, drafts)}
 Rate each dimension (1=poor, 3=acceptable, 5=excellent):
 1. persona_coherence: Does it sound like a senior executive, not a generic AI?
 2. domain_accuracy: Is the advice factually correct and professionally sound?

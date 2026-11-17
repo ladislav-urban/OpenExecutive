@@ -20,72 +20,52 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent.parent / "packages" / "core"))
 
 
+def failed_checks(scores: dict) -> list[str]:
+    # The deterministic checks chat_checks recorded as failed, by key, for
+    # the run's one-line summary (the scores keep the details).
+    failed = [k for k in ("forbidden_reply_words", "repeated_text", "reply_must_name_missing") if scores.get(k)]
+    return failed + [k for k in ("routing", "views") if isinstance(scores.get(k), dict) and not scores[k].get("ok")]
+
+
 async def run_eval(scenario: dict, executive, session_factory) -> dict:
-    from openexecutive.memory.company_profile import CompanyProfile
-    from openexecutive.orchestrator.session import Session
+    """One chat or mcp scenario's turn, run by the package's own
+    ``run_chat_turn``: the same session, surface, product name, advice policy
+    and overrides as ``openexecutive.evals.runner`` gives it. The result's
+    ``turn`` is the ``ChatTurn`` for ``chat_checks`` (``evaluate_chat``
+    takes it out before the result is written)."""
+    from openexecutive.evals.runner import run_chat_turn
 
-    ctx = scenario.get("company_context", {})
-    profile = CompanyProfile(
-        name=ctx.get("name", "Eval Company"),
-        industry=ctx.get("industry", ""),
-        stage=ctx.get("stage", ""),
-        headcount=ctx.get("headcount"),
-        annual_revenue_arr=ctx.get("arr"),
-    )
-
-    if ctx.get("monthly_burn"):
-        profile.financials.burn_rate_monthly = ctx["monthly_burn"]
-    if ctx.get("runway_months"):
-        profile.financials.runway_months = ctx["runway_months"]
-
-    from openexecutive.evals.scenarios import (
-        scenario_decided_cards,
-        scenario_principal_role,
-        scenario_query,
-        scenario_turn_surface,
-        seed_prior_turns,
-    )
-
-    # `workspace_mode: solo` runs the scenario as solo mode on this session
-    # only (see openexecutive.evals.runner), and a `principal_role` block
-    # plays a principal with that role; unset uses the install's settings.
-    # `surface: erpnext_panel` runs it as a turn from ERPNext's panel.
-    surface, channel_block = scenario_turn_surface(scenario)
-    session = Session(
-        company_profile=profile,
-        workspace_mode=scenario.get("workspace_mode"),
-        principal_role=scenario_principal_role(scenario),
-        **surface,
-    )
-    # A follow-up: the turns it follows, in the session's history.
-    seed_prior_turns(session, scenario)
-    # The draft cards its conversation left, as the turn's note is told them
-    # (never written to the ledger, and forgotten after the turn).
-    from openexecutive.integrations.erpnext_drafts import decided_cards_override
-
-    cards_token = decided_cards_override.set(scenario_decided_cards(scenario))
-    try:
-        response = await executive.chat(
-            user_message=scenario_query(scenario),
-            session=session,
-            channel_context_block=channel_block,
-            # chat() sets the turn's speaker from this, as the chat route
-            # passes the signed-in person: a `speaker` scenario's caller, else None.
-            person_id=surface.get("caller_person_id"),
-        )
-    finally:
-        decided_cards_override.reset(cards_token)
-
+    turn = await run_chat_turn(executive, scenario)
     return {
         "id": scenario["id"],
         "domain": scenario["domain"],
         "query": scenario["query"],
-        "response": response,
-        "response_length": len(response),
+        "response": turn.response,
+        "response_length": len(turn.response),
+        "turn": turn,
     }
 
 
+async def evaluate_chat(scenario: dict, executive) -> dict:
+    """Run, judge and check one chat or mcp scenario. It passes only when the
+    judge's overall is at least 3.5 and every deterministic check the
+    package runner holds a chat reply to holds too (``chat_checks``: a
+    forbidden word, a repeated sentence, a ``reply_must_name`` item left
+    out, the routing and the panel's views), whatever the judge's score, so
+    both runners fail the same replies."""
+    from openexecutive.evals.runner import chat_checks
+
+    result = await run_eval(scenario, executive, None)
+    turn = result.pop("turn")
+    scores = await judge_response(scenario, turn.response)
+    held = chat_checks(scenario, turn, scores)
+    result["scores"] = scores
+    result["passed"] = float(scores.get("overall", 0) or 0) >= 3.5 and held
+    return result
+
+
 async def judge_response(scenario: dict, response: str) -> dict:
+    from openexecutive.evals.judges import chat_judge_context
     from openexecutive.evals.scenarios import prior_turns_section
 
     judge_prompt = f"""You are an evaluator for an AI executive advisory system.
@@ -97,7 +77,7 @@ Evaluate this response to an executive question on a 1-5 scale for each dimensio
 RESPONSE: {response}
 
 Expected topics to cover: {', '.join(scenario.get('expected_topics', []))}
-
+{chat_judge_context(scenario)}
 Rate each dimension (1=poor, 3=acceptable, 5=excellent):
 1. persona_coherence: Does it sound like a senior executive, not a generic AI?
 2. domain_accuracy: Is the advice factually correct and professionally sound?
@@ -427,13 +407,15 @@ async def main() -> None:
             for scenario in scenarios:
                 print(f"  [{scenario['id']}] {scenario['description']}")
                 try:
-                    result = await run_eval(scenario, executive, None)
-                    scores = await judge_response(scenario, result["response"])
-                    result["scores"] = scores
-                    result["passed"] = scores.get("overall", 0) >= 3.5
+                    result = await evaluate_chat(scenario, executive)
                     results.append(result)
+                    scores = result["scores"]
                     status = "PASS" if result["passed"] else "FAIL"
-                    print(f"    → {status} (overall: {scores.get('overall', 0):.1f}/5)")
+                    failed = failed_checks(scores)
+                    print(
+                        f"    → {status} (overall: {scores.get('overall', 0):.1f}/5)"
+                        + (f"; failed: {', '.join(failed)}" if failed else "")
+                    )
                 except Exception as e:
                     print(f"    → ERROR: {e}")
                     results.append({"id": scenario["id"], "error": str(e), "passed": False})

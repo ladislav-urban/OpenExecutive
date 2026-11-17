@@ -72,7 +72,7 @@ import json
 import logging
 import os
 from collections.abc import AsyncGenerator, Callable, Coroutine
-from dataclasses import asdict
+from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from openexecutive.evals.judges import (
@@ -86,8 +86,8 @@ from openexecutive.evals.judges import (
 from openexecutive.evals.scenarios import (
     WATCH_REASON,
     SupplierCase,
-    forbidden_words_in,
     load_scenarios,
+    reply_check_failures,
     routing_check,
     scenario_decided_cards,
     scenario_delegation,
@@ -101,7 +101,6 @@ from openexecutive.evals.scenarios import (
     seed_prior_turns,
     view_kinds_check,
 )
-from openexecutive.utils.repeats import repeated_sentences
 from openexecutive.workflows.gate import ensure_workflow_event
 
 logger = logging.getLogger(__name__)
@@ -421,17 +420,10 @@ async def run_supplier_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     passed = float(scores.get("overall", 0)) >= _PASS_THRESHOLD
     # The same deterministic checks as a chat scenario's, which the judge's
     # score can't outvote: a word the reply must never say (an IBAN repeated
-    # back), or a sentence said twice.
-    said = forbidden_words_in(scenario, result.reply)
-    if said:
-        scores["forbidden_reply_words"] = said
-        passed = False
-    if scenario.get("forbid_repeated_text") is True:
-        again = repeated_sentences(result.reply)
-        if again:
-            scores["repeated_text"] = again
-            passed = False
-    return {"outcome": outcome, "scores": scores, "passed": passed}
+    # back), a sentence said twice, or something it must name left out.
+    failures = reply_check_failures(scenario, result.reply)
+    scores.update(failures)
+    return {"outcome": outcome, "scores": scores, "passed": passed and not failures}
 
 
 async def run_watch_reason_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
@@ -476,11 +468,12 @@ async def run_watch_reason_scenario(scenario: dict[str, Any]) -> dict[str, Any]:
     if wrong:
         scores["expect_line_unmet"] = wrong
         passed = False
-    said = forbidden_words_in(scenario, "\n".join(kept.values()))
-    if said:
-        scores["forbidden_reply_words"] = said
-        passed = False
-    return {"outcome": outcome, "scores": scores, "passed": passed}
+    # A word no kept line may say, and what the kept lines must name between
+    # them. Lines aren't one reply, so a sentence repeated across two isn't
+    # checked.
+    failures = reply_check_failures(scenario, "\n".join(kept.values()), repeated=False)
+    scores.update(failures)
+    return {"outcome": outcome, "scores": scores, "passed": passed and not failures}
 
 
 def _make_outcome_runner(
@@ -628,6 +621,135 @@ def _make_workflow_runner(
 NO_MCP_GATEWAY = "no MCP gateway is running, so this mcp scenario can't reach its tools"
 
 
+@dataclass
+class ChatTurn:
+    """One chat or mcp scenario's turn, as ``run_chat_turn`` ran it."""
+
+    query: str
+    response: str
+    # The specialists it consulted (for ``required_routing`` / ``no_routing``).
+    specialists: list[str] = field(default_factory=list)
+    # The views a panel turn's show calls opened (``expected_view_kinds``...).
+    views: list[dict[str, Any]] = field(default_factory=list)
+    # Act as me: the drafts it saved for the asker; None without ``delegation``.
+    drafts: list[dict[str, Any]] | None = None
+
+
+async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
+    """Run one chat or mcp scenario's turn on ``executive`` as its route
+    would: the scenario's company, product name, advice policy, workspace
+    mode, role, voice, Act as me mailbox, surface (the panel's marks and
+    channel block), prior turns and decided cards. Both runners use it, this
+    module's and the repo's ``evals/run_evals.py``, so a scenario runs (and
+    is held to ``chat_checks``) the same way in each."""
+    from openexecutive.integrations.erpnext_drafts import decided_cards_override
+    from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
+    from openexecutive.memory.company_profile import CompanyProfile
+    from openexecutive.orchestrator.debug_events import DebugCollector
+    from openexecutive.orchestrator.session import Session
+    from openexecutive.prompts.advice_policy import advice_policy_override
+    from openexecutive.utils.product_name import product_name_override
+
+    ctx = scenario.get("company_context", {})
+    profile = CompanyProfile(
+        name=ctx.get("name", "Eval Company"),
+        industry=ctx.get("industry", ""),
+        stage=ctx.get("stage", ""),
+        headcount=ctx.get("headcount"),
+        annual_revenue_arr=ctx.get("arr"),
+    )
+    if ctx.get("monthly_burn"):
+        profile.financials.burn_rate_monthly = ctx["monthly_burn"]
+    if ctx.get("runway_months"):
+        profile.financials.runway_months = ctx["runway_months"]
+    # The scenario's own product name (OE_PRODUCT_NAME) and advice policy
+    # (ADVICE_POLICY), for this turn only (scenarios run side by side), set
+    # before anything below builds a prompt part from them.
+    name_token = product_name_override.set(scenario.get("product_name"))
+    policy_token = advice_policy_override.set(scenario.get("advice_policy"))
+    # The draft cards its conversation left, as the turn's note is told
+    # them: never written to the ledger, and forgotten once the turn is done.
+    cards_token = decided_cards_override.set(scenario_decided_cards(scenario))
+    try:
+        # Act as me: a fresh in-memory mailbox for the asker, whose drafts
+        # the judge reads (nothing reaches Google).
+        delegation = scenario_delegation(scenario)
+        # ERPNext's panel: the marks and channel block its route gives a
+        # turn (integrations.erpnext_panel).
+        surface, channel_block = scenario_turn_surface(scenario)
+        session = Session(
+            company_profile=profile,
+            workspace_mode=scenario_workspace_mode(scenario),
+            principal_role=scenario_principal_role(scenario),
+            voice_persona_slug=scenario_voice_persona(scenario),
+            delegation_override=delegation,
+            **surface,
+        )
+        # A follow-up: the turns it follows, in the session's history.
+        seed_prior_turns(session, scenario)
+        query = scenario_query(scenario)
+        # Records which specialists the turn consulted (routing_check).
+        collector = DebugCollector()
+        # A panel turn keeps the views its show calls opened, as the panel's
+        # route collects them (view_kinds_check).
+        shown = TurnViews()
+        views_ctx = collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
+        with views_ctx:
+            response = await executive.chat(
+                user_message=query,
+                session=session,
+                channel_context_block=channel_block,
+                # chat() sets the turn's speaker from this, as the chat route
+                # passes the signed-in person: a `speaker` scenario's caller,
+                # else None.
+                person_id=surface.get("caller_person_id"),
+                debug_collector=collector,
+                # A scenario may supply the <peer_memory> body itself. Evals
+                # run with no person_id, so the Honcho prefetch never fires;
+                # this is the only way to exercise how the Executive USES
+                # peer memory. None keeps chat()'s default.
+                peer_memory_context=scenario.get("peer_memory_context"),
+                # Likewise the <standing_facts> body (memory/facts.py): the
+                # scenario's own lines under the shared header, or none: an
+                # eval never reads the install's facts.
+                standing_facts=scenario_standing_facts(scenario),
+            )
+    finally:
+        decided_cards_override.reset(cards_token)
+        advice_policy_override.reset(policy_token)
+        product_name_override.reset(name_token)
+    return ChatTurn(
+        query=query,
+        response=response,
+        specialists=[
+            str(e.data.get("specialist", "")) for e in collector.events if e.kind == "specialist_start"
+        ],
+        views=list(shown.views),
+        drafts=[asdict(d) for d in delegation.gmail.drafts] if delegation is not None else None,
+    )
+
+
+def chat_checks(scenario: dict[str, Any], turn: ChatTurn, scores: dict[str, Any]) -> bool:
+    """Hold a chat or mcp turn to the scenario's deterministic checks, which
+    the judge's score can't outvote: ``reply_check_failures`` (a forbidden
+    word, a sentence said twice, a ``reply_must_name`` item left out), the
+    specialists it had to consult (``routing_check``) and the views a panel
+    turn had to open (``view_kinds_check``). Each result goes into
+    ``scores`` under its own key; True when every check holds."""
+    failures = reply_check_failures(scenario, turn.response)
+    scores.update(failures)
+    ok = not failures
+    routing = routing_check(scenario, turn.specialists)
+    if routing is not None:
+        scores["routing"] = routing
+        ok = ok and routing["ok"]
+    opened = view_kinds_check(scenario, turn.views)
+    if opened is not None:
+        scores["views"] = opened
+        ok = ok and opened["ok"]
+    return ok
+
+
 def _make_chat_runner(
     sem: asyncio.Semaphore,
     queue: asyncio.Queue[dict[str, Any] | None],
@@ -637,11 +759,8 @@ def _make_chat_runner(
     *,
     with_mcp: bool = False,
 ) -> RunOne:
-    from openexecutive.memory.company_profile import CompanyProfile
-    from openexecutive.orchestrator.debug_events import DebugCollector
     from openexecutive.orchestrator.executive import Executive
     from openexecutive.orchestrator.mcp_gateway import get_active_gateway
-    from openexecutive.orchestrator.session import Session
 
     # Shared Executive — confirmed safe: no mutable instance state on the
     # hot path; chat()/stream_chat() route all per-call state through Session.
@@ -681,119 +800,14 @@ def _make_chat_runner(
                     }
                 )
                 try:
-                    scenario_executive = executive_for_scenario()
-                    ctx = scenario.get("company_context", {})
-                    profile = CompanyProfile(
-                        name=ctx.get("name", "Eval Company"),
-                        industry=ctx.get("industry", ""),
-                        stage=ctx.get("stage", ""),
-                        headcount=ctx.get("headcount"),
-                        annual_revenue_arr=ctx.get("arr"),
-                    )
-                    if ctx.get("monthly_burn"):
-                        profile.financials.burn_rate_monthly = ctx["monthly_burn"]
-                    if ctx.get("runway_months"):
-                        profile.financials.runway_months = ctx["runway_months"]
-                    # The scenario's own product name (OE_PRODUCT_NAME), for
-                    # this task only (scenarios run side by side), before
-                    # anything below builds a prompt part from it.
-                    from openexecutive.utils.product_name import product_name_override
-
-                    product_name_override.set(scenario.get("product_name"))
-                    # Its advice policy (ADVICE_POLICY) likewise.
-                    from openexecutive.prompts.advice_policy import advice_policy_override
-
-                    advice_policy_override.set(scenario.get("advice_policy"))
-                    # Act as me: a fresh in-memory mailbox for the asker,
-                    # whose drafts the judge reads (nothing reaches Google).
-                    delegation = scenario_delegation(scenario)
-                    # ERPNext's panel: the marks and channel block its route
-                    # gives a turn (integrations.erpnext_panel).
-                    surface, channel_block = scenario_turn_surface(scenario)
-                    session = Session(
-                        company_profile=profile,
-                        workspace_mode=scenario_workspace_mode(scenario),
-                        principal_role=scenario_principal_role(scenario),
-                        voice_persona_slug=scenario_voice_persona(scenario),
-                        delegation_override=delegation,
-                        **surface,
-                    )
-                    # A follow-up: the turns it follows, in the session's history.
-                    seed_prior_turns(session, scenario)
-                    query = scenario_query(scenario)
-                    # Records which specialists the turn consulted, for
-                    # the scenario's routing expectation (routing_check).
-                    collector = DebugCollector()
-                    # A panel turn keeps the views its show calls opened, as
-                    # the panel's route collects them, for the scenario's
-                    # expected_view_kinds (view_kinds_check).
-                    from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
-
-                    shown = TurnViews()
-                    views_ctx = (
-                        collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
-                    )
-                    # The draft cards its conversation left, as the turn's
-                    # note is told them: never written to the ledger, and
-                    # forgotten once the turn is done.
-                    from openexecutive.integrations.erpnext_drafts import decided_cards_override
-
-                    cards_token = decided_cards_override.set(scenario_decided_cards(scenario))
-                    try:
-                        with views_ctx:
-                            response = await scenario_executive.chat(
-                                user_message=query,
-                                session=session,
-                                channel_context_block=channel_block,
-                                # chat() sets the turn's speaker from this, as the chat
-                                # route passes the signed-in person: a `speaker`
-                                # scenario's caller, else None.
-                                person_id=surface.get("caller_person_id"),
-                                debug_collector=collector,
-                                # A scenario may supply the <peer_memory> body itself.
-                                # Evals run with no person_id, so the Honcho prefetch
-                                # never fires; this is the only way to exercise how the
-                                # Executive USES peer memory. None keeps chat()'s default.
-                                peer_memory_context=scenario.get("peer_memory_context"),
-                                # Likewise the <standing_facts> body (memory/facts.py):
-                                # the scenario's own lines under the shared header, or
-                                # none — an eval never reads the install's facts.
-                                standing_facts=scenario_standing_facts(scenario),
-                            )
-                    finally:
-                        decided_cards_override.reset(cards_token)
-                    if delegation is not None:
-                        drafts = [asdict(d) for d in delegation.gmail.drafts]
-                        scores = await judge_chat(scenario, response, drafts=drafts)
+                    turn = await run_chat_turn(executive_for_scenario(), scenario)
+                    query, response = turn.query, turn.response
+                    if turn.drafts is not None:
+                        scores = await judge_chat(scenario, response, drafts=turn.drafts)
                     else:
                         scores = await judge_chat(scenario, response)
-                    ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD
-                    said = forbidden_words_in(scenario, response)
-                    if said:
-                        scores["forbidden_reply_words"] = said
-                        ok = False
-                    # A sentence said twice (a rewritten answer after the
-                    # first, a closing line repeated): deterministic too.
-                    if scenario.get("forbid_repeated_text") is True:
-                        again = repeated_sentences(response)
-                        if again:
-                            scores["repeated_text"] = again
-                            ok = False
-                    routing = routing_check(
-                        scenario,
-                        [
-                            str(e.data.get("specialist", ""))
-                            for e in collector.events
-                            if e.kind == "specialist_start"
-                        ],
-                    )
-                    if routing is not None:
-                        scores["routing"] = routing
-                        ok = ok and routing["ok"]
-                    opened = view_kinds_check(scenario, shown.views)
-                    if opened is not None:
-                        scores["views"] = opened
-                        ok = ok and opened["ok"]
+                    held = chat_checks(scenario, turn, scores)
+                    ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD and held
                     if ok:
                         passed[0] += 1
                     await queue.put(
