@@ -167,8 +167,8 @@ class _Replying:
 def _evaluate(monkeypatch: pytest.MonkeyPatch, scenario: dict[str, Any], executive: Any) -> dict[str, Any]:
     run_evals = _run_evals()
 
-    async def judge_passes(_scenario: dict[str, Any], _response: str) -> dict[str, Any]:
-        return {"overall": 5}
+    async def judge_passes(_scenario: dict[str, Any], _response: str, drafts: Any = None) -> dict[str, Any]:
+        return {"overall": 5, "drafts_seen": drafts}
 
     monkeypatch.setattr(run_evals, "judge_response", judge_passes)
     result: dict[str, Any] = asyncio.run(run_evals.evaluate_chat(scenario, executive))
@@ -202,6 +202,21 @@ def test_run_evals_gives_the_turn_the_scenarios_product_name(monkeypatch: pytest
     _evaluate(monkeypatch, {"id": "m", "domain": "mcp", "query": "q", "product_name": "Dynocortex"}, executive)
     assert executive.product == "Dynocortex"
     assert configured_product_name() != "Dynocortex"  # for that turn only
+
+
+def test_run_evals_hands_the_judge_an_act_as_me_turns_drafts(monkeypatch: pytest.MonkeyPatch) -> None:
+    drafts = [{"to": ["ana@co.example"], "subject": "Re: invoice", "body": "Paid on Friday."}]
+
+    async def turn(_executive: Any, scenario: dict[str, Any]) -> runner_module.ChatTurn:
+        return runner_module.ChatTurn(query="q", response="Saved a draft.", drafts=drafts)
+
+    monkeypatch.setattr(runner_module, "run_chat_turn", turn)
+    result = _evaluate(monkeypatch, {"id": "d", "domain": "chat", "query": "q"}, _Replying("unused"))
+    assert result["scores"]["drafts_seen"] == drafts
+    # And its judge's prompt shows them, as judge_chat's does.
+    from openexecutive.evals.judges import chat_judge_context
+
+    assert "Paid on Friday." in chat_judge_context({"delegation": {}}, drafts)
 
 
 def test_both_judges_see_a_panel_scenarios_criteria() -> None:

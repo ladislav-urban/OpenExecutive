@@ -5716,12 +5716,17 @@ chat:
     finds each figure's source (a date or time is neither: _DATE_RES masks
     numeric dates and dates with a month's name, so the turn's own
     <current_time> or the brief's NOW line never sources a figure, and a
-    number inside a record's name is the name's: figure_check._in_a_name,
-    the word before it, the number and the word after it, as written, part
-    of one of the turn's name-field values from name_check, e.g. "2.5" in
-    an item "Panel wiring 2.5 mm2 (per metre)"; before Nov 17, 2026 that
-    "2.5" was flagged and its table row left out, under a reply saying
-    "covers every line"); answer_review (check 2, ROUTING_MODEL) sees
+    plain number inside an item's or project's name is the name's:
+    figure_check._in_a_name, only where the reply writes the whole value
+    as whole tokens (any case and spacing, its punctuation as is), from
+    _ITEM_NAME_FIELDS (item_name, item_code, item_group, project_name) and
+    the Item / Item Group / Project titles only, which staff set up; never
+    a party-set name (customer, supplier, lead, company, contact, sender,
+    file), so a customer name holding "paid 12,500" never clears a
+    figure; a currency mark, scale, percent or sign keeps it a figure.
+    E.g. "2.5" in "Panel wiring 2.5 mm2 (per metre)"; before Nov 17, 2026
+    that "2.5" was flagged and its table row left out, under a reply
+    saying "covers every line"); answer_review (check 2, ROUTING_MODEL) sees
     only flagged ones and code works out every operation it names from
     ERPNext's own numbers; answer_correct writes known values in by code,
     calls the turn's model once (tools=[], constant prompt, draft as

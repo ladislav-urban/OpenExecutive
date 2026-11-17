@@ -303,15 +303,12 @@ async def _sources(turn: AnswerCheckTurn) -> tuple[NumberFormat, figure_check.So
         types = ResultTypes(described)
 
         def read() -> tuple[figure_check.Sources, name_check.NameSources]:
-            names = name_check.name_sources_for(
-                turn.results, doctypes=described, given=turn.given, texts=figure_check._capped(turn.texts),
-            )
             figures = figure_check.sources_for(
                 turn.results, types=types, given=turn.given, texts=turn.texts, fmt=fmt,
                 currencies=context.get("currencies"),
-                # A number inside a record's name ("Panel wiring 2.5 mm2") is
-                # the name's, never a figure to hold to the results.
-                names=(name for written in names.by_norm.values() for name in written),
+            )
+            names = name_check.name_sources_for(
+                turn.results, doctypes=described, given=turn.given, texts=figure_check._capped(turn.texts),
             )
             return figures, names
 

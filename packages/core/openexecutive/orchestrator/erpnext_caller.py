@@ -138,9 +138,12 @@ ERPNEXT_PROPOSAL_TOOLS = frozenset({PROPOSE_RULE_TOOL})
 
 
 # oe_connector's refusal of a record, a DocType or a report the caller can't
-# see ("Permission denied: this ERPNext user cannot read Project 'PROJ-0217'",
-# "… (this ERPNext user cannot read it)", "… cannot run 'Stock Ledger'").
-_THIS_USER_CANNOT = re.compile(r"\bthis ERPNext user (?:cannot|can't|can not) (read|run)\b")
+# see, as its tools write it: "Permission denied: this ERPNext user cannot
+# read Project 'PROJ-0217'" (records, attachments, common), "… (this ERPNext
+# user cannot read it)" (history, answer_check), "… this ERPNext user can't
+# read." (customer_record), "This ERPNext user can't read payments, …"
+# (bank_changes), "… cannot run 'Stock Ledger'" (reports). Any case.
+_THIS_USER_CANNOT = re.compile(r"\b(this) ERPNext user (?:cannot|can't) (read|run)\b", re.IGNORECASE)
 
 
 def in_askers_words(text: str, caller: ErpnextCaller | None) -> str:
@@ -153,14 +156,17 @@ def in_askers_words(text: str, caller: ErpnextCaller | None) -> str:
     user is the person themselves. Any other caller (the service user, a
     watch job, a supplier) keeps the text as it is: there the refused user
     is the install's, not theirs."""
-    if caller is None or caller.kind != "user" or "this ERPNext user" not in text:
+    if caller is None or caller.kind != "user" or "erpnext user" not in text.lower():
         return text
-    return _THIS_USER_CANNOT.sub(
-        lambda m: "the asker's own access doesn't include"
-        if m.group(1) == "read"
-        else "the asker's own access doesn't let them run",
-        text,
-    )
+
+    def words(m: re.Match[str]) -> str:
+        said = "the asker's own access " + (
+            "doesn't include" if m.group(2).lower() == "read" else "doesn't let them run"
+        )
+        # "This ERPNext user can't read payments" opens a sentence.
+        return said[0].upper() + said[1:] if m.group(1)[0].isupper() else said
+
+    return _THIS_USER_CANNOT.sub(words, text)
 
 
 def is_erpnext_write(normalized: str) -> bool:

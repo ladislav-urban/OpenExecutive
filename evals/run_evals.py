@@ -57,14 +57,16 @@ async def evaluate_chat(scenario: dict, executive) -> dict:
 
     result = await run_eval(scenario, executive, None)
     turn = result.pop("turn")
-    scores = await judge_response(scenario, turn.response)
+    # Act as me: the drafts it saved, which the judge reads, as the package
+    # runner gives them to judge_chat.
+    scores = await judge_response(scenario, turn.response, drafts=turn.drafts)
     held = chat_checks(scenario, turn, scores)
     result["scores"] = scores
     result["passed"] = float(scores.get("overall", 0) or 0) >= 3.5 and held
     return result
 
 
-async def judge_response(scenario: dict, response: str) -> dict:
+async def judge_response(scenario: dict, response: str, drafts: list[dict] | None = None) -> dict:
     from openexecutive.evals.judges import chat_judge_context
     from openexecutive.evals.scenarios import prior_turns_section
 
@@ -77,7 +79,7 @@ Evaluate this response to an executive question on a 1-5 scale for each dimensio
 RESPONSE: {response}
 
 Expected topics to cover: {', '.join(scenario.get('expected_topics', []))}
-{chat_judge_context(scenario)}
+{chat_judge_context(scenario, drafts)}
 Rate each dimension (1=poor, 3=acceptable, 5=excellent):
 1. persona_coherence: Does it sound like a senior executive, not a generic AI?
 2. domain_accuracy: Is the advice factually correct and professionally sound?
