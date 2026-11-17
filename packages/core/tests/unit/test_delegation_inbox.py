@@ -1450,3 +1450,36 @@ def test_a_composer_a_cap_refused_leaves_the_email_for_a_later_scan(
     assert _ledger(db)["m1"] == ("retry", "cost_cap")
     monkeypatch.setattr(gw, "_call_model", working)
     assert _scan(owner, mailbox, now=NOW + timedelta(minutes=30)).drafted == 1
+
+
+def _attempts(db: Path, message_id: str) -> int:
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT attempts FROM delegation_inbox_messages WHERE message_id = ?", (message_id,),
+        ).fetchone()
+    return int(row[0]) if row else -1
+
+
+@pytest.mark.parametrize(("raised", "reason", "spent"), [
+    (RuntimeError("the composer broke"), "error", 1),
+    (asyncio.CancelledError(), "cancelled", 0),
+])
+def test_an_answer_step_that_raises_never_leaves_the_email_processing(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+    raised: BaseException, reason: str, spent: int,
+) -> None:
+    # oe__answer_email_as_me's step: an error goes back to the watcher and
+    # spends an attempt; a cancellation (the step stopped) spends none.
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise raised
+
+    # Raised after the claim, past every handler inside the step.
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with pytest.raises(type(raised)):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
+    assert _ledger(db)["m1"] == ("retry", reason)
+    assert _attempts(db, "m1") == spent

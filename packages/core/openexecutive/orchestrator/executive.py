@@ -1229,12 +1229,13 @@ EMPTY_ROUND_NOTE = (
 REFUSED_REPLY = "I can't answer that one as it's asked. Try putting it another way."
 
 
-def _cap_stop(cap: cost_caps.CostCapReached, streamed_tail: str) -> list[str]:
-    """The end of a turn a cost cap stopped: the cap's sentence as its own
-    last paragraph, after what was already written (or alone, when nothing
-    was), by the same exit as ``REFUSED_REPLY``. Marks the turn stopped, so
-    no route or adapter replaces or repeats the reply."""
-    sentence = cap.reply()
+def _cap_stop(cap: cost_caps.CostCapReached, streamed_tail: str, sentence: str | None = None) -> list[str]:
+    """The end of a turn a cost cap stopped: the cap's sentence (or
+    ``sentence``) as its own last paragraph, after what was already written
+    (or alone, when nothing was), by the same exit as ``REFUSED_REPLY``.
+    Marks the turn stopped, so no route or adapter replaces or repeats the
+    reply."""
+    sentence = sentence or cap.reply()
     cost_caps.mark_stopped(sentence)
     return _flush_held(sentence, streamed_tail)
 
@@ -4470,10 +4471,12 @@ class Executive:
             sentence = stop or cap.reply()
             cost_caps.mark_stopped(sentence)
             return sentence, {"type": "reply_replaced", "content": sentence, "session_id": session_id}
+        # Already shown: the figures stay on screen, so say they weren't
+        # checked (after a stop sentence too: it says nothing of them).
         if stop:
-            # Already ends with a stop sentence: nothing to add.
-            return reply, ""
-        chunk = "".join(_cap_stop(cap, reply[-2:]))
+            chunk = "".join(_flush_held(cap.unchecked_reply(), reply[-2:]))
+            return reply + chunk, chunk
+        chunk = "".join(_cap_stop(cap, reply[-2:], cap.unchecked_reply()))
         return reply + chunk, chunk
 
     async def chat(

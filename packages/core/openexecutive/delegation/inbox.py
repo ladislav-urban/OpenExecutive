@@ -1252,7 +1252,19 @@ async def _answer(person: Any, client: Any, thread_id: str, *, now: datetime, ex
     result = ScanResult("ok")
     # Only staleness bounds it: the step named this thread, whenever the
     # watcher started watching (if it does at all).
-    await _consider(person, client, shown[-1].id, thread.id, own, exec_address, now - STALE, now, result)
+    message_id = shown[-1].id
+    try:
+        await _consider(person, client, message_id, thread.id, own, exec_address, now - STALE, now, result)
+    except BaseException as exc:
+        # Never left PROCESSING (it would count as settled for good): back to
+        # the watcher, an error spending one of its attempts, a cancellation
+        # (the step stopped) none.
+        cancelled = isinstance(exc, asyncio.CancelledError)
+        left = _row_for(person.id, message_id)
+        if left is not None and left["outcome"] == PROCESSING:
+            _retry_later(person.id, message_id, "cancelled" if cancelled else "error", count=not cancelled,
+                         thread_id=thread.id)
+        raise
     if result.handled:
         return "sent"
     if result.drafted:

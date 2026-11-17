@@ -448,12 +448,12 @@ async def handle_run_workflow(tool_input: dict[str, Any]) -> str:
     try:
         store = ChromaDBStore(persist_directory=get_settings().vector_store_path)
     except Exception as exc:
-        logger.exception("run_workflow: knowledge store init failed")
+        logger.exception("run_workflow: knowledge store init failed (%s)", type(exc).__name__)
         with contextlib.suppress(Exception):
-            fail_run(run_id, f"knowledge store unavailable: {exc}")
+            fail_run(run_id, "The knowledge store is unavailable.")
         return _err(
             "run_workflow",
-            f"knowledge store unavailable: {exc}",
+            "knowledge store unavailable",
             kind="write",
         )
 
