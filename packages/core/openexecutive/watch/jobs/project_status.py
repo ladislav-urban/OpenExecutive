@@ -566,8 +566,14 @@ _ARC_SECONDS = re.compile(
 )
 # Any double mark, to walk a text's quoted spans and tell "phase 2" (a mark
 # that closes a span) from 2" (inches).
-_SPAN_MARK = re.compile(_DOUBLE_MARK)
-_UNIT_AFTER = re.compile(r"[\s.,;:!?)]|$")
+_SPAN_MARK = re.compile(rf"{_DOUBLE_MARK}|[„‟«»]")
+# Marks that only open a span („fáze 2“, «2»), never inches, and one that
+# only closes it.
+_SPAN_OPENERS = frozenset("„‟«")
+_SPAN_CLOSER = "»"
+# What may follow an inch mark: a space, punctuation, the end, or the
+# "x", "×", "-" and "/" of 2"x4", 3/4"-thick and 2"/3".
+_UNIT_AFTER = re.compile(r"[\s.,;:!?)x×/-]|$")
 
 
 def _units(words: str) -> str:
@@ -575,7 +581,11 @@ def _units(words: str) -> str:
     after degrees and minutes, else " in". A mark is inches only right after
     a digit, followed by a space, punctuation or the end, and not closing a
     quoted span the text opened ("phase 2", room 4 "the big one" keep their
-    marks). Walked left to right; an inch mark opens no span."""
+    marks). Walked left to right; an inch mark opens no span, and „ ‟ «
+    always open one. A quote inside a quote ('He said "use 2" pipe"') and a
+    double mark after degrees and minutes that means inches are read the
+    one way; a letter right after an inch mark (6"dia) keeps it a mark:
+    known residuals."""
     text = _ARC_SECONDS.sub(r"\1 sec", words)
     out: list[str] = []
     at = 0
@@ -583,7 +593,9 @@ def _units(words: str) -> str:
     for mark in _SPAN_MARK.finditer(text):
         before = text[at:mark.start()]
         start = mark.start()
-        if open_span:
+        if mark.group(0) in _SPAN_OPENERS:
+            open_span = True
+        elif open_span or mark.group(0) == _SPAN_CLOSER:
             open_span = False
         elif start and text[start - 1].isdigit() and _UNIT_AFTER.match(text, mark.end()):
             out.append(before + " in")
@@ -629,6 +641,8 @@ def _quote(words: str) -> str:
         # Settling at the cut joined the mark into a link ("...http://a..."):
         # the quote still says it was cut.
         inner = settled(inner[:QUOTE_MAX - len(CUT_MARK) - 1].rstrip() + " " + CUT_MARK) or inner
+    if not inner:
+        return ""
     # The closing mark spaced off when the text's end would take it in.
     for wrapped in (f"{OPEN_QUOTE}{inner}{CLOSE_QUOTE}", f"{OPEN_QUOTE}{inner} {CLOSE_QUOTE}"):
         if (
