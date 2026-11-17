@@ -2258,6 +2258,44 @@ class Executive:
             for added_text in inbox.taken_texts() if inbox is not None else []:
                 session.add_user_message(added_text)
             session.add_assistant_message(final_draft)
+            # The same rows the reviewed path writes (no figures: the cap's
+            # are in the principal's own cost_cap_reached row).
+            stopped_private = delegation_pin.touched_mail
+            audit_log(
+                "chat_turn",
+                f"Executive: {final_draft[:200]}",
+                session_id=session.session_id,
+                turn_id=_committee_turn_id,
+                actor="executive",
+                details={
+                    "direction": "out",
+                    "response_len": len(final_draft),
+                    "duration_s": round(time.monotonic() - t0, 3),
+                    "model": effective_model,
+                    "committee": True,
+                    "draft_length": len(draft),
+                    "stopped_by_cap": True,
+                },
+                # Only the reply as kept: a draft a capped check held never
+                # reaches a row either.
+                full={"response": final_draft},
+                private=stopped_private,
+            )
+            audit_log(
+                "committee_review",
+                f"Committee review skipped: a cost cap stopped the draft (consulted={consulted})",
+                session_id=session.session_id,
+                turn_id=_committee_turn_id,
+                actor="committee",
+                private=stopped_private,
+                details={
+                    "draft_length": len(draft),
+                    "final_length": len(final_draft),
+                    "consulted": consulted,
+                    "skipped": "cost_cap",
+                    "critiques": [],
+                },
+            )
             clear_turn()
             return
 
@@ -2376,6 +2414,8 @@ class Executive:
         revision_t0 = time.monotonic()
         final_response = ""
         revision_final_msg: Any = None
+        # Set when a cap refused the revision: the draft was checked already.
+        revision_capped = False
         try:
             async with get_provider(effective_model).messages_stream(
                 model=effective_model,
@@ -2402,12 +2442,18 @@ class Executive:
                     revision_final_msg = None
         except Exception as exc:
             # A cost cap refused the revision before any of it streamed: the
-            # draft is the reply, ending with the cap's sentence.
+            # draft is the reply, ending with the cap's sentence. Nothing of
+            # it was shown yet, so it passes the answer check first, and a
+            # check a cap refuses holds all of it (_checked_stopped_draft).
             cap = cost_caps.capped(exc)
             if cap is None or final_response:
                 raise
-            stop_chunks = _cap_stop(cap, draft[-2:])
-            final_response = draft + "".join(stop_chunks)
+            sentence = cap.reply()
+            cost_caps.mark_stopped(sentence)
+            final_response = await self._checked_stopped_draft(
+                _with_stop(draft, sentence), check_turn, question=memory_text or user_message, model=effective_model,
+            )
+            revision_capped = True
             yield final_response
         revision_ms = round((time.monotonic() - revision_t0) * 1000)
         if revision_final_msg is not None:
@@ -2424,7 +2470,7 @@ class Executive:
         stop = cost_caps.stop_sentence()
         body = _without_stop(final_response, stop)
         try:
-            checked = await answer_check.check_reply(
+            checked = body if revision_capped else await answer_check.check_reply(
                 body, check_turn, question=memory_text or user_message, model=effective_model,
             )
         except cost_caps.CostCapReached as cap:
@@ -2479,7 +2525,9 @@ class Executive:
                     "committee": True,
                     "draft_length": len(draft),
                 },
-                full={"response": final_response, "draft": draft},
+                # A draft a cap left unreviewed is kept only as it passed
+                # the answer check (the response).
+                full={"response": final_response, **({} if revision_capped else {"draft": draft})},
                 private=touched_mail,
             )
 

@@ -1070,8 +1070,10 @@ async def check_delegation_inbox(request: Request) -> InboxOut:
         raise _refuse(409, "in_progress", "It's checking your inbox already.")
     from openexecutive.audit import cost_caps
 
-    with unscoped_audit_rows():
-        # The check runs as one turn of its own (the turn cap).
+    # The check counts as the scheduled scan does (its job), for the person
+    # it reads for (the person cap), and is one turn of its own (the turn
+    # cap). The task copies these bindings as it is created.
+    with unscoped_audit_rows(), cost_caps.bind_job("scan-inbox"), cost_caps.bind_spender(person_id):
         task = asyncio.create_task(cost_caps.run_as_turn(inbox.scan_person(person)))
     _CHECKS.add(task)
     task.add_done_callback(_CHECKS.discard)

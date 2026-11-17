@@ -21,6 +21,16 @@ from openexecutive.audit import cost_caps
 from openexecutive.providers.provider import LLMProvider
 
 
+def _usage_reported(stream: Any) -> bool:
+    """Whether an OpenAI-compatible stream got a usage chunk: its
+    accumulator (providers.translator) keeps what the chunks said, and an
+    empty one means none came. A stream without one is taken at its word."""
+    accumulator = getattr(stream, "_accumulator", None)
+    if accumulator is None:
+        return True
+    return bool(getattr(accumulator, "_usage", None))
+
+
 def _snapshot(stream: Any, *, finished_only: bool = False) -> Any:
     """What the stream had used when it ended: Anthropic's MessageStream
     keeps the message assembled so far, usage included; a translated backend
@@ -35,7 +45,12 @@ def _snapshot(stream: Any, *, finished_only: bool = False) -> Any:
     except Exception:  # noqa: BLE001
         # The OpenAI-compatible stream (OpenRouter) keeps its message here
         # instead, set only once the stream ended: finished whenever there.
-        return getattr(stream, "_finalized", None)
+        # Its usage defaults to 0 when the usage chunk never came, so a
+        # reserved call whose stream reported none keeps its worst case.
+        finalized = getattr(stream, "_finalized", None)
+        if finished_only and finalized is not None and not _usage_reported(stream):
+            return None
+        return finalized
     if finished_only and getattr(snap, "stop_reason", None) is None:
         return None
     return snap

@@ -815,3 +815,164 @@ def test_a_voice_note_at_a_cap_tells_an_outsider_only_the_general_sentence(monke
     with set_session(stranger), pytest.raises(transcription.TranscriptionError) as failed:
         asyncio.run(transcription.transcribe(b"OggS", "note.ogg"))
     assert str(failed.value) == reply_text()
+
+
+# --------------------------------------------------------------------------- #
+# Security re-review (Nov 17)
+# --------------------------------------------------------------------------- #
+
+PERSON_SENTENCE = "You've reached today's usage limit. It resets at midnight."
+
+
+def _committee_turn(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, check: Any, loop: Any = None,
+) -> tuple[list[Any], Session, list[tuple[str, dict[str, Any]]]]:
+    """One committee turn whose draft is written (``loop``, else a plain
+    draft), whose revision a person cap refuses, and whose answer check is
+    ``check``."""
+    from openexecutive.memory import episodic
+    from openexecutive.orchestrator import committee as committee_mod
+    from openexecutive.orchestrator import executive as executive_mod
+
+    path = tmp_path / "e.db"
+    monkeypatch.setattr(episodic, "DB_PATH", path)
+    episodic.initialize_db(path)
+
+    async def draft_loop(self: Any, *_a: Any, **_k: Any) -> Any:
+        yield "North owes $12,900."
+
+    async def no_critiques(self: Any, **_k: Any) -> list[Any]:
+        return []
+
+    class _Refused:
+        async def __aenter__(self) -> Any:
+            raise cost_caps.CostCapReached("person", "4", 1.0, 1.0, datetime.now(UTC))
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+    rows: list[tuple[str, dict[str, Any]]] = []
+    monkeypatch.setattr(executive_mod.Executive, "_stream_agent_loop", loop or draft_loop)
+    monkeypatch.setattr(committee_mod.Committee, "review", no_critiques)
+    monkeypatch.setattr(executive_mod, "get_provider", lambda model: SimpleNamespace(
+        messages_stream=lambda **_k: _Refused(),
+    ))
+    monkeypatch.setattr(executive_mod.answer_check, "check_reply", check)
+    monkeypatch.setattr(executive_mod, "audit_log", lambda event, summary, **kw: rows.append((event, kw)))
+    session = Session()
+    out: list[Any] = []
+
+    async def go() -> None:
+        with set_session(session), cost_caps.bind_turn(fresh=True):
+            async for item in Executive().stream_chat_with_committee(
+                user_message="Who owes us?", session=session, peer_memory_context="", standing_facts="",
+            ):
+                out.append(item)
+
+    asyncio.run(go())
+    return out, session, rows
+
+
+def test_a_capped_revision_whose_check_is_capped_shows_nothing_of_the_draft(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    async def capped(*_a: Any, **_k: Any) -> str:
+        raise cost_caps.CostCapReached("person", "4", 1.0, 1.0, datetime.now(UTC))
+
+    out, session, rows = _committee_turn(monkeypatch, tmp_path, check=capped)
+    shown = [i for i in out if isinstance(i, str) and i != Executive._THINKING]
+    assert shown == [PERSON_SENTENCE]
+    assert not any("12,900" in json.dumps(i, default=str) for i in out)
+    assert session.get_recent_history()[-1]["content"] == PERSON_SENTENCE
+    assert not any("12,900" in json.dumps(kw.get("full"), default=str) for event, kw in rows if event == "chat_turn")
+
+
+def test_a_capped_revision_shows_the_checked_draft(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    async def corrected(text: str, *_a: Any, **_k: Any) -> str:
+        return text.replace("12,900", "12,500")
+
+    out, _, _ = _committee_turn(monkeypatch, tmp_path, check=corrected)
+    shown = [i for i in out if isinstance(i, str) and i != Executive._THINKING]
+    assert shown == [f"North owes $12,500.\n\n{PERSON_SENTENCE}"]
+
+
+def test_a_committee_draft_a_cap_stopped_writes_its_audit_rows(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    async def stopped_loop(self: Any, *_a: Any, **_k: Any) -> Any:
+        yield "North owes $12,500."
+        cost_caps.mark_stopped(STOP)
+        yield f"\n\n{STOP}"
+
+    async def unchanged(text: str, *_a: Any, **_k: Any) -> str:
+        return text
+
+    out, _, rows = _committee_turn(monkeypatch, tmp_path, check=unchanged, loop=stopped_loop)
+    shown = [i for i in out if isinstance(i, str) and i != Executive._THINKING]
+    assert shown == [f"North owes $12,500.\n\n{STOP}"]
+    kinds = {event: kw for event, kw in rows if event in ("chat_turn", "committee_review")}
+    assert kinds["chat_turn"]["details"]["stopped_by_cap"] is True
+    assert kinds["chat_turn"]["details"]["direction"] == "out"
+    assert kinds["committee_review"]["details"]["skipped"] == "cost_cap"
+    assert "usd" not in json.dumps(kinds, default=str).lower()
+
+
+def test_the_inbox_check_counts_for_its_person_and_job_and_each_scan_is_a_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    route = (PACKAGE / "api/routes/delegation.py").read_text(encoding="utf-8")
+    assert 'cost_caps.bind_job("scan-inbox"), cost_caps.bind_spender(person_id)' in route
+    from openexecutive.delegation import inbox
+
+    seen: list[Any] = []
+
+    async def scan(person: Any, now: Any = None) -> None:
+        seen.append((cost_caps.current_job(), cost_caps._spender.get(), cost_caps.current_turn()))
+
+    monkeypatch.setattr(inbox, "scan_person", scan)
+    monkeypatch.setattr("openexecutive.people.store.get_person", lambda pid: SimpleNamespace(id=pid, active=True))
+
+    async def due() -> None:
+        with cost_caps.bind_job("scan-inbox"), cost_caps.bind_turn(fresh=True, close=False):
+            await inbox._scan_due([3, 4], datetime.now(UTC))
+
+    asyncio.run(due())
+    # Each due person is spent for, and is a turn of their own.
+    assert [(job, spender) for job, spender, _ in seen] == [("scan-inbox", "3"), ("scan-inbox", "4")]
+    assert seen[0][2] is not seen[1][2] and seen[0][2].closed
+
+
+def test_an_openrouter_stream_with_no_usage_chunk_keeps_its_worst_case(caps: SimpleNamespace) -> None:
+    from openexecutive.providers.translator import StreamAccumulator
+
+    class _Stream:
+        def __init__(self, usage: dict[str, Any]) -> None:
+            self._accumulator = StreamAccumulator()
+            self._accumulator._usage = dict(usage)
+            self._finalized = self._accumulator.finalize()
+
+        async def __aenter__(self) -> Any:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+    def spent(usage: dict[str, Any]) -> float:
+        class _Inner:
+            def messages_stream(self, **_kw: Any) -> Any:
+                return _Stream(usage)
+
+        provider = CappedProvider(_Inner())  # type: ignore[arg-type]
+
+        async def go() -> float:
+            with cost_caps.bind_turn(fresh=True) as turn:
+                async with provider.messages_stream(model="claude-test", max_tokens=10, messages=[]):
+                    pass
+                return turn.spent
+
+        return asyncio.run(go())
+
+    caps.turn = 10.0
+    with patch.object(cost_caps, "charge", lambda model, counts: 0.02):
+        assert spent({}) == 1.0  # no usage chunk: the worst case stays
+        assert spent({"prompt_tokens": 10, "completion_tokens": 5}) == pytest.approx(0.02)

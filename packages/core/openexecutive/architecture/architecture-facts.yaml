@@ -673,6 +673,16 @@ providers:
     and answers with CostCapReached.reply(). A call is held to its worst
     case (whole prompt plus max_tokens), so a large attachment (a PDF of
     about 250 KB) can trip a 1 USD turn cap on its own.
+    Security re-review fixes (Nov 17, 2026): a committee revision a cap
+    refused yields the draft only after _checked_stopped_draft (a capped
+    check holds all of it), and the cap-stopped committee branch writes the
+    chat_turn (stopped_by_cap) and committee_review (skipped: cost_cap) rows
+    with no figures. An OpenRouter stream that ended with no usage chunk
+    (its translator usage defaults to 0) keeps its worst case. The manual
+    inbox check binds the job scan-inbox and the person as spender; the
+    scheduled scan binds each due person as spender and a fresh turn, and a
+    message a cap refused (classifier, composer) waits with reason cost_cap
+    without spending one of its MAX_ATTEMPTS (scan status spend_limit).
     Owner decisions (Nov 17, 2026): recommended values when switched on are
     COST_CAP_TURN_USD=1, COST_CAP_PERSON_DAILY_USD=5,
     COST_CAP_JOB_DAILY_USD=2, COST_CAP_MONTHLY_USD=100 (commented in
