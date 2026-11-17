@@ -1,4 +1,5 @@
-"""Cost caps: a limit per person a day, per job a day and a monthly one.
+"""Cost caps: a limit per turn, per person a day, per job a day and a
+monthly one.
 
 Every model call the package makes goes through ``providers.registry.
 get_provider()``, which wraps the hosted backends in
@@ -9,6 +10,13 @@ calls :func:`add`. So:
 * **Counted against whom.** Each call counts against up to three scopes:
   the turn's speaker (``person``), the unattended job it runs in (``job``,
   bound with :func:`bind_job`) and everything (``total``).
+* **The turn.** ``COST_CAP_TURN_USD`` holds one turn (everything a single
+  message causes, or one unattended run) to a limit, the principal's too:
+  it stops a runaway loop rather than rationing a budget. It is counted in
+  memory (:func:`bind_turn`), never in the DB, since a turn never outlives
+  the process. The reply checks (``claim_check``, ``grounding``,
+  ``answer_check``) are kept off it (:func:`_check_exempt`, theirs alone),
+  never off the other caps.
 * **Counters survive a restart.** They are rows of ``usage_counters`` in
   the episodic DB, keyed by scope, key and day. A day runs in the company's
   time zone (``workspace_settings.get_user_timezone``); the month is the
@@ -33,23 +41,195 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import json
 import logging
 import math
 import sqlite3
-from collections.abc import Iterator
+import threading
+import uuid
+from collections.abc import Awaitable, Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, ParamSpec, TypeVar
 
 logger = logging.getLogger(__name__)
 
 TABLE = "usage_counters"
 SOURCE = "cost_cap"
+# The audit event each refusal writes (scope, key, figures; never a name).
+EVENT = "cost_cap_reached"
 
 Scope = Literal["person", "job", "total"]
+RefusedScope = Literal["turn", "person", "job", "total", "unreadable"]
+
+# What a turn stopped by its own cap says, to someone on People.
+TURN_STOP_REPLY = (
+    "I stopped here: this answer reached its spend limit. Ask me to continue and "
+    "I'll pick up from this point."
+)
+
+_T = TypeVar("_T")
+_P = ParamSpec("_P")
+
+
+# --------------------------------------------------------------------------- #
+# The turn
+# --------------------------------------------------------------------------- #
+
+# One lock for every turn's total: reservations run in worker threads
+# (asyncio.to_thread), so the check and the add must be one step.
+_turn_lock = threading.Lock()
+
+
+class TurnSpend:
+    """What one turn has spent so far, in memory. Bound by :func:`bind_turn`
+    and shared by every task and thread the turn's context reaches (the
+    object, not a copy). Closed when the turn ends: a call charged to a
+    closed turn counts against no turn."""
+
+    def __init__(self) -> None:
+        self.id = uuid.uuid4().hex[:16]
+        self.spent = 0.0
+        self.closed = False
+        # Set once a cap stopped the turn: its reply already says so, and no
+        # route or adapter replaces or repeats it.
+        self.stopped_by_cap = False
+        # The sentence the stop added, so a later check can keep it last.
+        self.stop_sentence: str | None = None
+
+    def take(self, amount: float, cap: float) -> tuple[bool, float]:
+        """Add ``amount`` unless that would pass ``cap`` (0 is no cap): one
+        check-and-add under the lock. ``(taken, spent before)``."""
+        with _turn_lock:
+            if self.closed:
+                return True, self.spent
+            before = self.spent
+            if cap > 0 and before + amount > cap:
+                return False, before
+            self.spent = before + amount
+            return True, before
+
+    def adjust(self, delta: float) -> None:
+        with _turn_lock:
+            if not self.closed:
+                self.spent = max(self.spent + delta, 0.0)
+
+    def close(self) -> None:
+        with _turn_lock:
+            self.closed = True
+
+
+_turn: ContextVar[TurnSpend | None] = ContextVar("cost_cap_turn", default=None)
+# Set only by the reply checks, through _check_exempt.
+_exempt: ContextVar[bool] = ContextVar("cost_cap_check_exempt", default=False)
+
+
+def current_turn() -> TurnSpend | None:
+    """The open turn the current call counts against, or None."""
+    turn = _turn.get()
+    return turn if turn is not None and not turn.closed else None
+
+
+@contextlib.contextmanager
+def bind_turn(*, fresh: bool = False) -> Iterator[TurnSpend]:
+    """Count every model call inside the block against one turn, closed at
+    the end. Bind it where the turn's session is bound: the SSE turn, each
+    channel's handler, each unattended run. Inside an open turn it yields
+    that one (one message is one turn, however many layers bind it) unless
+    ``fresh``. Saves and restores rather than ``Token.reset``, so it holds
+    across the task hops of a stepped stream (as ``set_session`` does)."""
+    outer = _turn.get()
+    if not fresh and outer is not None and not outer.closed:
+        yield outer
+        return
+    turn = TurnSpend()
+    _turn.set(turn)
+    try:
+        yield turn
+    finally:
+        turn.close()
+        _turn.set(outer)
+
+
+def ensure_turn() -> TurnSpend:
+    """The open turn, or a new one bound for the rest of this context (for a
+    caller that drives ``Executive.stream_chat`` with nothing bound: the CLI,
+    a test). Never closed, as ``current_session.set`` is never reset there."""
+    turn = current_turn()
+    if turn is None:
+        turn = TurnSpend()
+        _turn.set(turn)
+    return turn
+
+
+def as_turn(handler: Callable[_P, Awaitable[_T]]) -> Callable[_P, Awaitable[_T]]:
+    """A channel's message handler as one turn of its own (:func:`bind_turn`,
+    fresh), so every model call one inbound message causes counts against
+    one turn, the handler's own (a transcription, a triage) included."""
+
+    @functools.wraps(handler)
+    async def handle(*args: _P.args, **kwargs: _P.kwargs) -> _T:
+        with bind_turn(fresh=True):
+            return await handler(*args, **kwargs)
+
+    return handle
+
+
+async def run_as_turn(work: Awaitable[_T]) -> _T:
+    """Await ``work`` as one turn of its own: an unattended run (a watch
+    job's, a scheduled action's) counts as one turn under the turn cap."""
+    with bind_turn(fresh=True):
+        return await work
+
+
+@contextlib.contextmanager
+def unbind_turn() -> Iterator[None]:
+    """Count nothing inside the block against the current turn: for a task
+    the turn spawns that outlives it (a memory pass, an alert)."""
+    outer = _turn.get()
+    _turn.set(None)
+    try:
+        yield
+    finally:
+        _turn.set(outer)
+
+
+@contextlib.contextmanager
+def _check_exempt() -> Iterator[None]:
+    """Private to the reply checks (``orchestrator.claim_check``,
+    ``briefing.grounding``, ``orchestrator.answer_check``): their calls are
+    neither charged to nor refused by the turn cap, so a cap never switches
+    a check off. The person, job and month caps still hold. A test greps
+    the package so no other module uses it."""
+    token = _exempt.set(True)
+    try:
+        yield
+    finally:
+        _exempt.reset(token)
+
+
+def mark_stopped(sentence: str) -> None:
+    """Mark the current turn as stopped by a cap, its reply ending with
+    ``sentence``."""
+    turn = _turn.get()
+    if turn is not None:
+        turn.stopped_by_cap = True
+        turn.stop_sentence = sentence
+
+
+def turn_stopped() -> bool:
+    """Whether a cap stopped the current turn (its reply already says so)."""
+    turn = _turn.get()
+    return turn is not None and turn.stopped_by_cap
+
+
+def stop_sentence() -> str | None:
+    """The sentence a cap stop added to the current turn's reply, if any."""
+    turn = _turn.get()
+    return turn.stop_sentence if turn is not None and turn.stopped_by_cap else None
 
 # The job an unattended run is part of. Bound by every unattended runner;
 # an unattended session with none bound counts as UNNAMED_JOB.
@@ -111,10 +291,16 @@ class Caps:
     person_daily: float
     job_daily: float
     monthly: float
+    turn: float = 0.0
+
+    @property
+    def stored_on(self) -> bool:
+        """Whether a cap counted in the DB is on (all but the turn's)."""
+        return self.person_daily > 0 or self.job_daily > 0 or self.monthly > 0
 
     @property
     def any_on(self) -> bool:
-        return self.person_daily > 0 or self.job_daily > 0 or self.monthly > 0
+        return self.stored_on or self.turn > 0
 
 
 def caps() -> Caps:
@@ -128,6 +314,7 @@ def caps() -> Caps:
         person_daily=float(getattr(s, "cost_cap_person_daily_usd", 0.0) or 0.0),
         job_daily=float(getattr(s, "cost_cap_job_daily_usd", 0.0) or 0.0),
         monthly=float(getattr(s, "cost_cap_monthly_usd", 0.0) or 0.0),
+        turn=float(getattr(s, "cost_cap_turn_usd", 0.0) or 0.0),
     )
 
 
@@ -135,8 +322,8 @@ class CostCapReached(Exception):
     """A model call not sent because it would pass a cost cap."""
 
     def __init__(
-        self, scope: Scope | Literal["unreadable"], key: str, cap: float, spent: float,
-        resets_at: datetime, name: str = "",
+        self, scope: RefusedScope, key: str, cap: float, spent: float,
+        resets_at: datetime, name: str = "", worst_case: float = 0.0,
     ) -> None:
         super().__init__(f"cost cap reached: {scope} {key} at {spent:.2f} of {cap:.2f} USD")
         self.scope = scope
@@ -145,18 +332,23 @@ class CostCapReached(Exception):
         self.spent = spent
         self.resets_at = resets_at
         self.name = name
+        self.worst_case = worst_case
+        # Whether the asker is off People, read where the call was refused
+        # (the session is bound there), for reply() wherever it is asked.
+        self.outside = (scope == "person" and key.startswith(OUTSIDE_PREFIX)) or (
+            scope != "person" and _asker_is_outside()
+        )
 
     def reply(self) -> str:
         """What the person whose call it was is told. Anyone off People (a
         stranger's mail, a chat space, a supplier's agent, an AI app) hears
         only that it can't answer: the company's budget is not theirs to know."""
-        outside = (self.scope == "person" and self.key.startswith(OUTSIDE_PREFIX)) or (
-            self.scope != "person" and _asker_is_outside()
-        )
-        if outside:
+        if self.outside or (self.scope != "person" and _asker_is_outside()):
             from openexecutive.providers.refusal import reply_text
 
             return reply_text()
+        if self.scope == "turn":
+            return TURN_STOP_REPLY
         if self.scope == "person":
             return "You've reached today's usage limit. It resets at midnight."
         if self.scope == "job":
@@ -430,6 +622,10 @@ def attribution() -> dict[str, Any]:
     job = current_job()
     if job:
         out["job_id"] = job
+    # The turn it counted against (null outside one, or for a reply check,
+    # which no turn is charged for).
+    turn = current_turn()
+    out["turn_id"] = turn.id if turn is not None and not _exempt.get() else None
     return out
 
 
@@ -448,6 +644,9 @@ class Reservation:
     scopes: tuple[tuple[str, str], ...]
     day: str
     amount: float
+    # What it put on its turn (0 when no turn or no turn cap applies).
+    turn: TurnSpend | None = None
+    turn_amount: float = 0.0
 
 
 def _write(scopes: Any, day: str, amount: float, *, calls: int) -> None:
@@ -475,6 +674,8 @@ def _write(scopes: Any, day: str, amount: float, *, calls: int) -> None:
 def release(reservation: Reservation) -> None:
     """Take back a call's reservation: it was never billed (refused or
     failed before an answer). Never raises."""
+    if reservation.turn is not None and reservation.turn_amount:
+        reservation.turn.adjust(-reservation.turn_amount)
     if not reservation.amount:
         return
     try:
@@ -488,6 +689,9 @@ def add(model: str, counts: dict[str, Any] | None, *, now: datetime | None = Non
     Never raises."""
     try:
         cost = charge(model, counts or {})
+        turn = current_turn()
+        if turn is not None and not _exempt.get():
+            turn.adjust(cost)
         _write(_scopes(_session(), current_job()), day_key(now), cost, calls=1)
     except Exception:  # noqa: BLE001 - counting must never fail the call it follows
         logger.exception("cost caps: couldn't count a %s call", model)
@@ -536,7 +740,11 @@ def reserve(
     made together can't all pass on the same spend. :func:`settle` turns it
     into the real cost; a call that never settles (a stream the person
     closed) stays counted at its worst case. With every cap off nothing is
-    read and nothing reserved."""
+    read and nothing reserved.
+
+    The turn's cap (in memory) is checked and its worst case added first,
+    under one lock; a refusal by any other cap gives it back. A reply check
+    (:func:`_check_exempt`) is neither checked against nor charged to it."""
     session = _session()
     job = current_job()
     day = day_key(now)
@@ -545,6 +753,18 @@ def reserve(
     if not limits.any_on or _is_local(model):
         return Reservation(scopes, day, 0.0)
     estimate = worst_case(model, kwargs)
+    turn = current_turn() if limits.turn > 0 and not _exempt.get() else None
+    turn_amount = 0.0
+    if turn is not None:
+        taken, before = turn.take(estimate, limits.turn)
+        if not taken:
+            refused = _refusal("turn", turn.id, limits.turn, before, datetime.now(UTC), worst_case=estimate)
+            logger.warning("cost caps: refused a call - %s", refused)
+            _record(refused)
+            raise refused
+        turn_amount = estimate
+    if not limits.stored_on:
+        return Reservation(scopes, day, 0.0, turn, turn_amount)
     person = _person_id(session)
     person_key = _person_key(session)
     try:
@@ -557,15 +777,17 @@ def reserve(
                 if limits.monthly > 0:
                     spent = _spent(conn, "total", "all", day, month=True)
                     if spent + estimate > limits.monthly:
-                        raise _refusal("total", "all", limits.monthly, spent, _next_month(now))
+                        raise _refusal("total", "all", limits.monthly, spent, _next_month(now), worst_case=estimate)
                 if limits.job_daily > 0 and job:
                     spent = _spent(conn, "job", job, day)
                     if spent + estimate > limits.job_daily:
-                        raise _refusal("job", job, limits.job_daily, spent, _next_day(now))
+                        raise _refusal("job", job, limits.job_daily, spent, _next_day(now), worst_case=estimate)
                 if limits.person_daily > 0 and person_key is not None and not exempt:
                     spent = _spent(conn, "person", person_key, day)
                     if spent + estimate > limits.person_daily:
-                        raise _refusal("person", person_key, limits.person_daily, spent, _next_day(now))
+                        raise _refusal(
+                            "person", person_key, limits.person_daily, spent, _next_day(now), worst_case=estimate,
+                        )
                 for scope, key in scopes:
                     conn.execute(_UPSERT, (scope, key, day, estimate, 1))
                 conn.execute("COMMIT")
@@ -573,17 +795,25 @@ def reserve(
                 conn.execute("ROLLBACK")
                 raise
     except CostCapReached as refused:
+        if turn is not None:
+            turn.adjust(-turn_amount)
         logger.warning("cost caps: refused a call - %s", refused)
+        _record(refused)
         if tell:
             _tell_principal(refused, now)
         raise
-    except Exception as exc:
+    except BaseException as exc:
+        if turn is not None:
+            turn.adjust(-turn_amount)
+        if not isinstance(exc, Exception):
+            raise
         logger.exception("cost caps: couldn't read the counters - refusing the call")
-        sick = _refusal("unreadable", type(exc).__name__, 0.0, 0.0, _next_day(now))
+        sick = _refusal("unreadable", type(exc).__name__, 0.0, 0.0, _next_day(now), worst_case=estimate)
+        _record(sick)
         if tell:
             _tell_principal(sick, now)
         raise sick from exc
-    return Reservation(scopes, day, estimate)
+    return Reservation(scopes, day, estimate, turn, turn_amount)
 
 
 def settle(reservation: Reservation, model: str, message: Any) -> None:
@@ -602,6 +832,8 @@ def settle(reservation: Reservation, model: str, message: Any) -> None:
         if counts.get("cost_usd") is None:
             _priced(counts, model)
         cost = charge(model, counts)
+        if reservation.turn is not None:
+            reservation.turn.adjust(cost - reservation.turn_amount)
         calls = 1 if reservation.amount == 0.0 else 0
         _write(reservation.scopes, reservation.day, cost - reservation.amount, calls=calls)
     except Exception:  # noqa: BLE001
@@ -616,9 +848,40 @@ def check(model: str, kwargs: dict[str, Any], *, now: datetime | None = None) ->
 
 
 def _refusal(
-    scope: Scope | Literal["unreadable"], key: str, cap: float, spent: float, resets_at: datetime,
+    scope: RefusedScope, key: str, cap: float, spent: float, resets_at: datetime, *, worst_case: float = 0.0,
 ) -> CostCapReached:
-    return CostCapReached(scope, key, cap, spent, resets_at, name=_name_of(scope, key))
+    return CostCapReached(scope, key, cap, spent, resets_at, name=_name_of(scope, key), worst_case=worst_case)
+
+
+def _record(exc: CostCapReached) -> None:
+    """The refusal's audit row (``cost_cap_reached``, source ``cost_cap``):
+    the scope and its key (a People id, an outside bucket, a job id or a
+    turn id; never an email or a name), the figures, the reset and the
+    session. The principal's alone. Never raises."""
+    try:
+        from openexecutive.audit import log_event
+
+        session = _session()
+        session_id = getattr(session, "session_id", None)
+        log_event(
+            EVENT,
+            f"Cost cap reached: {exc.scope} at {exc.spent:.4f} of {exc.cap:.4f} USD",
+            session_id=session_id if isinstance(session_id, str) else None,
+            actor=SOURCE,
+            details={
+                "source": SOURCE,
+                "scope": exc.scope,
+                "key": exc.key,
+                "cap_usd": round(exc.cap, 6),
+                "spent_usd": round(exc.spent, 6),
+                "worst_case_usd": round(exc.worst_case, 6),
+                "resets_at": exc.resets_at.astimezone(UTC).isoformat(),
+                "session_id": session_id if isinstance(session_id, str) else None,
+            },
+            principal_only=True,
+        )
+    except Exception:  # noqa: BLE001
+        logger.warning("cost caps: couldn't record a refusal", exc_info=True)
 
 
 def _name_of(scope: str, key: str) -> str:
@@ -709,7 +972,10 @@ async def _alert_principal(exc: CostCapReached, now: datetime | None) -> None:
         if principal is None:
             return
         with set_session(None):
-            sent = await deliver_to_person(principal, f"{_headline(exc)}.\n\n{_body(exc)}", label="Usage limit")
+            # A fixed template: no name and no figures (those are on the
+            # card), sent the way the briefs reach them, through the send
+            # tools and their outbound guard (orchestrator.outbound_guard).
+            sent = await deliver_to_person(principal, channel_text(exc), label="Usage limit")
         if not sent.ok:
             logger.warning("cost caps: card %s filed, not delivered: %s", card_id, sent.detail)
     except Exception:
@@ -725,7 +991,22 @@ def tell_principal(exc: CostCapReached) -> None:
     _tell_principal(exc, None)
 
 
+def channel_text(exc: CostCapReached) -> str:
+    """The principal's message on their usual channel: one fixed sentence
+    per scope, naming no one; the card on Home has the rest."""
+    what = {
+        "person": "Someone on People reached today's usage limit",
+        "job": "An unattended job reached today's usage limit",
+        "total": "This month's usage limit is reached",
+    }.get(str(exc.scope), "Usage limits can't be checked, so model calls are refused")
+    return f"{what}. The details are on your Home page."
+
+
 def _tell_principal(exc: CostCapReached, now: datetime | None) -> None:
+    # A turn's own cap makes no card: the asker sees the stop sentence, and
+    # the audit row records it.
+    if exc.scope == "turn":
+        return
     told = (str(exc.scope), exc.key, day_key(now) if exc.scope != "unreadable" else _local(now).isoformat()[:13])
     if told in _told:
         return
@@ -752,4 +1033,6 @@ def _bare_context() -> Any:
     ctx = contextvars.copy_context()
     ctx.run(_job.set, None)
     ctx.run(_spender.set, None)
+    ctx.run(_turn.set, None)
+    ctx.run(_exempt.set, False)
     return ctx

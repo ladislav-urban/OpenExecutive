@@ -654,7 +654,10 @@ class Settings(BaseSettings):
     # call; 0 is off, the default. A day runs in the company's time zone. The
     # principal is never held to the person cap; the monthly cap holds for
     # every call. A capped call is refused before it is sent, and the
-    # principal is told once per cap a day.
+    # principal is told once per cap a day. The turn cap holds one turn
+    # (everything one message causes, or one unattended run), the
+    # principal's too; a turn it stops ends with a plain sentence.
+    cost_cap_turn_usd: float = Field(0.0, ge=0, le=1_000_000, alias="COST_CAP_TURN_USD")
     cost_cap_person_daily_usd: float = Field(0.0, ge=0, le=1_000_000, alias="COST_CAP_PERSON_DAILY_USD")
     cost_cap_job_daily_usd: float = Field(0.0, ge=0, le=1_000_000, alias="COST_CAP_JOB_DAILY_USD")
     cost_cap_monthly_usd: float = Field(0.0, ge=0, le=10_000_000, alias="COST_CAP_MONTHLY_USD")
