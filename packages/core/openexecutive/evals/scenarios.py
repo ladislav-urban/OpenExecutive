@@ -1040,84 +1040,109 @@ class NameVariant(NamedTuple):
     any_case: bool
 
 
-# Titles dropped from a name before it is split (with or without a dot).
+# Titles dropped from a name's words (with or without a dot).
 _HONORIFICS = frozenset({"mr", "mrs", "ms", "mx", "dr", "prof"})
-# Generational suffixes dropped from the end of a name; never a variant.
-_SUFFIXES = frozenset({"jr", "sr", "ii", "iii", "iv"})
-# A shorter name part (an initial, "Al") would match ordinary words.
+# Suffixes and credentials that sit beside a name and are never a variant.
+_SUFFIXES = frozenset(
+    {"jr", "sr", "ii", "iii", "iv", "v", "phd", "md", "mba", "cpa", "esq", "jd", "dds", "rn", "ceo", "cfo", "coo", "cto"}
+)
+# A shorter name token alone (an initial, "Al") would match ordinary words;
+# the demo guard's own words are kept whatever their length.
 _MIN_NAME_PART = 3
 # An email local part is a name only when it joins parts ("o.owner"); a bare
 # word ("principal", "ceo", "info") is an ordinary word in a reply.
 _LOCAL_PART_SEPARATORS = (".", "_", "-")
+# What a word of a stored name keeps (outer punctuation off).
+_WORD_PUNCTUATION = ".,;:!?'\"()[]-"
 
 
-def _is_suffix(token: str) -> bool:
-    return token.strip(".,").casefold() in _SUFFIXES
+def _bare(word: str) -> str:
+    return word.strip(_WORD_PUNCTUATION)
 
 
-def _is_credential(token: str) -> bool:
-    """A suffix or a short credential after a name ("CPA", "MBA", "PhD")."""
-    core = token.strip(".,")
-    return _is_suffix(token) or (0 < len(core) <= 5 and sum(c.isupper() for c in core) >= 2)
+def _is_name_word(word: str) -> bool:
+    """Whether ``word`` (outer punctuation off) is part of a name: not empty,
+    an honorific or a suffix or credential (``_SUFFIXES``)."""
+    bare = _bare(word).casefold()
+    return bool(bare) and bare not in _HONORIFICS and bare not in _SUFFIXES
 
 
-def _name_tokens(full_name: str | None) -> list[str]:
-    """``full_name``'s tokens, given name first: a parenthesised part ("(CEO)")
-    and a comma-tail of credentials (", CPA") dropped, "Owner, Olivia" read
-    as surname, given, honorifics dropped and trailing suffixes (Jr, III)
-    taken off."""
-    name = re.sub(r"\([^)]*\)", " ", full_name or "")
-    head, *rest = (part.strip() for part in name.split(","))
-    given_parts = [part for part in rest if part and not all(_is_credential(t) for t in part.split())]
-    tokens = head.split()
-    if len(tokens) == 1 and given_parts:
-        tokens = given_parts[0].split() + tokens
-    tokens = [t for t in tokens if t.rstrip(".").casefold() not in _HONORIFICS]
-    while tokens and _is_suffix(tokens[-1]):
-        tokens.pop()
-    return [t for t in tokens if not _is_suffix(t)]
+def _capitalised(token: str) -> list[str]:
+    """``token`` with its first letter capitalised, and, when it is stored in
+    capitals ("ANNA"), as a name is written ("Anna") too."""
+    forms = [token[:1].upper() + token[1:]]
+    if token.isupper() and len(token) > 1:
+        forms.append(token.capitalize())
+    return forms
 
 
-def _capitalised(token: str) -> str:
-    return token[:1].upper() + token[1:]
+def _given_and_surname(full_name: str) -> tuple[str, str] | None:
+    """The stored name's given name and surname when both are known: after
+    and before the comma of an inverted name ("De La Cruz, Maria"), else its
+    first and last name words. Honorifics, suffixes and credentials and a
+    parenthesised part are left out; a comma followed only by suffixes or
+    credentials (", CPA") isn't an inverted name."""
+    name = re.sub(r"\([^)]*\)", " ", full_name)
+    before, comma, after = name.partition(",")
+    after_words = [w for w in re.split(r"[\s,]+", after) if _is_name_word(w)]
+    if comma and after_words:
+        surname_words = [w for w in before.split() if _is_name_word(w)]
+        if surname_words:
+            return _bare(after_words[0]), " ".join(surname_words)
+        return None
+    words = [w for w in re.split(r"[\s,]+", name) if _is_name_word(w) and _bare(w)]
+    if len(words) < 2:
+        return None
+    return _bare(words[0]), _bare(words[-1])
 
 
 def name_variants(full_name: str | None, *emails: str | None) -> list[NameVariant]:
-    """The ways a reply may name a person, longest first. In any case: the
-    full name, "Surname, Given", the given name (first token), each whole
-    email address and each address's local part when it has a separator
-    (``_LOCAL_PART_SEPARATORS``). Capitalised only: the surname (last token)
-    and, when it is hyphenated, each of its parts, so "Owner approves" names
-    Olivia Owner and "the account owner" doesn't. The name is read by
-    ``_name_tokens`` (no honorific, suffix, credential or parenthesised
-    part), and a part shorter than ``_MIN_NAME_PART`` characters is left
-    out ("Al" alone, or "Owner, Al")."""
+    """The ways a reply may name a person, longest first.
+
+    In any case: every word the demo guard hides for them
+    (``people.demo.principal_name_words``: the full name as stored, its
+    first word and each whole address), outer punctuation off and
+    honorifics dropped; each address's local part when it has a separator
+    (``_LOCAL_PART_SEPARATORS``); and "Surname, Given" and "Given Surname"
+    when both are known (``_given_and_surname``), and then the given name
+    on its own.
+
+    Capitalised only: every other word of the stored name, split on spaces,
+    commas, hyphens and parentheses, of ``_MIN_NAME_PART`` characters or
+    more and not a suffix or credential (``_SUFFIXES``), so "Owner approves"
+    names Olivia Owner and "the account owner" doesn't. A surname of
+    several words or an inverted name gives every one of its name words,
+    with no guess at which is the given name."""
+    from openexecutive.people.demo import principal_name_words
+
     found: dict[str, bool] = {}
 
     def add(text: str, any_case: bool) -> None:
-        if len(text) >= _MIN_NAME_PART:
+        if text:
             found[text] = found.get(text, False) or any_case
 
-    tokens = _name_tokens(full_name)
-    if tokens:
-        given, surname = tokens[0], tokens[-1]
-        add(given, True)
-        if len(tokens) > 1:
-            add(" ".join(tokens), True)
-            if len(given) >= _MIN_NAME_PART and len(surname) >= _MIN_NAME_PART:
-                add(f"{surname}, {given}", True)
-            add(_capitalised(surname), False)
-            if "-" in surname:
-                for part in surname.split("-"):
-                    add(_capitalised(part), False)
-    for email in emails:
-        address = (email or "").strip()
-        if not address:
-            continue
-        add(address, True)
+    stored = " ".join((full_name or "").split())
+    addresses = [a.strip() for a in emails if a and a.strip()]
+    for word in principal_name_words([stored] if stored else [], addresses):
+        word = word.strip(".,;:")
+        if word.casefold() not in _HONORIFICS:
+            add(word, True)
+    for address in addresses:
         local = address.partition("@")[0]
         if any(sep in local for sep in _LOCAL_PART_SEPARATORS):
             add(local, True)
+    if stored:
+        pair = _given_and_surname(stored)
+        if pair:
+            given, surname = pair
+            add(f"{surname}, {given}", True)
+            add(f"{given} {surname}", True)
+            add(given, True)
+        for token in re.split(r"[\s,()\-]+", stored):
+            bare = _bare(token)
+            if len(bare) >= _MIN_NAME_PART and _is_name_word(bare):
+                for form in _capitalised(bare):
+                    add(form, False)
     return sorted((NameVariant(t, a) for t, a in found.items()), key=lambda v: (-len(v.text), v.text))
 
 
@@ -1141,25 +1166,15 @@ def _principal_names_and_addresses() -> tuple[list[str], list[str]]:
 
 def principal_name_variants() -> list[NameVariant]:
     """Every principal row's ``name_variants`` (archived and suspended rows
-    too, every address and alias), read from the roster at run time, merged
-    with what the demo guard hides (``people.demo.principal_name_words``:
-    each whole address and full name, in any case), so the check holds a
-    reply to at least that guard. The guard's raw first token is read by
-    ``_name_tokens`` instead, so an honorific ("Dr.") or a surname before a
-    comma ("Owner,") never becomes a word of its own. ``principal_name_in``
-    checks for them and ``scrub_principal_name`` replaces them. Empty
-    without a principal; raises when the roster can't be read."""
-    from openexecutive.people.demo import principal_name_words
-
+    too, with every address and alias), read from the roster at run time.
+    They hold every word the demo guard hides
+    (``people.demo.principal_name_words``) but honorifics, so the check is
+    at least that guard. ``principal_name_in`` checks for them and
+    ``scrub_principal_name`` replaces them. Empty without a principal;
+    raises when the roster can't be read."""
     names, addresses = _principal_names_and_addresses()
     found: dict[str, bool] = {}
-    variants = [v for name in names for v in name_variants(name)] + name_variants(None, *addresses)
-    variants += [
-        NameVariant(word, True)
-        for word in principal_name_words(names, addresses)
-        if (" " in word or "@" in word) and len(word) >= _MIN_NAME_PART
-    ]
-    for v in variants:
+    for v in [v for name in names for v in name_variants(name)] + name_variants(None, *addresses):
         found[v.text] = found.get(v.text, False) or v.any_case
     return sorted((NameVariant(t, a) for t, a in found.items()), key=lambda v: (-len(v.text), v.text))
 

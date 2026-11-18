@@ -265,24 +265,22 @@ def _olivia(monkeypatch: pytest.MonkeyPatch, *names: str, addresses: tuple[str, 
 FORBID = {"forbid_principal_name": True}
 
 
-def test_the_name_variants_are_the_full_given_surname_and_inverted_names() -> None:
+def test_the_name_variants_say_which_match_in_any_case() -> None:
     from openexecutive.evals.scenarios import name_variants
 
-    # (text, any_case): the surname is matched capitalised only.
+    # (text, any_case): the guard's words, the pairs and the addresses in any
+    # case; another name word capitalised only.
     assert name_variants("Dr. Olivia  Owner") == [
-        ("Owner, Olivia", True), ("Olivia Owner", True), ("Olivia", True), ("Owner", False),
+        ("Dr. Olivia Owner", True), ("Owner, Olivia", True), ("Olivia Owner", True), ("Olivia", True),
+        ("Owner", False),
     ]
-    assert name_variants("Prof Olivia Mae Owner", "olivia.owner@example.com") == [
-        ("olivia.owner@example.com", True), ("Olivia Mae Owner", True), ("Owner, Olivia", True),
+    assert name_variants("Olivia Owner", "olivia.owner@example.com") == [
+        ("olivia.owner@example.com", True), ("Owner, Olivia", True), ("Olivia Owner", True),
         ("olivia.owner", True), ("Olivia", True), ("Owner", False),
     ]
-    assert name_variants("olivia owner") == [
-        ("owner, olivia", True), ("olivia owner", True), ("olivia", True), ("Owner", False),
-    ]
-    # A part shorter than three characters is left out, and so is an
-    # inverted name built from one.
-    assert name_variants("Al Owner") == [("Al Owner", True), ("Owner", False)]
-    assert name_variants("Ms. Jo") == []
+    # The guard's words have no length minimum; another short word is left out.
+    assert name_variants("Jo Owner") == [("Owner, Jo", True), ("Jo Owner", True), ("Owner", False), ("Jo", True)]
+    assert ("Al", True) not in name_variants("Olivia Al Owner")
     assert name_variants(None) == [] and name_variants("  ") == []
     # An email's local part only when it joins parts; the whole address always.
     assert ("o.owner", True) in name_variants("Olivia Owner", "o.owner@x")
@@ -293,30 +291,51 @@ def test_the_name_variants_are_the_full_given_surname_and_inverted_names() -> No
 
 
 @pytest.mark.parametrize(
-    ("full_name", "expected"),
+    ("full_name", "reply"),
     [
-        ("Olivia Owner, CPA", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
-        ("Olivia Owner Jr", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
-        ("Olivia Owner III, PhD", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
-        ("Olivia Owner (CEO)", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
-        ("Owner, Olivia", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
-        (
-            "Olivia Owner-Smith",
-            ["Owner-Smith, Olivia", "Olivia Owner-Smith", "Owner-Smith", "Olivia", "Owner", "Smith"],
-        ),
+        ("Olivia Owner, CPA", "Ms. Owner approves."),
+        ("Olivia Owner Jr", "Ms. Owner approves."),
+        ("Olivia Owner III, PhD", "Ms. Owner approves."),
+        ("Olivia Owner (CEO)", "Ms. Owner approves."),
+        ("Owner, Olivia", "Ms. Owner approves."),
+        ("Olivia Owner-Smith", "Ms. Owner approves."),
+        ("Olivia Owner-Smith", "Ms. Smith approves."),
+        ("Olivia Owner PhD", "Owner approves."),
+        ("Olivia Owner Esq.", "Owner approves."),
+        ("Olivia Owner - CEO", "Owner approves."),
+        ("De La Cruz, Maria", "Ask Maria."),
+        ("De La Cruz, Maria", "Maria De La Cruz approves."),
+        ("van der Berg, Anna", "Ask Anna."),
+        ("St. John, Olivia", "Ask Olivia."),
+        ("St. John, Olivia", "Olivia St. John approves."),
+        ("Owner Jr., Olivia", "Ask Olivia."),
+        ("Owner, JoAnn", "Ask JoAnn."),
+        ("Owner, McKay", "Ask McKay."),
+        ("OWNER, ANNA", "Ask Anna."),
+        ("Jo Owner", "Ask Jo."),
     ],
 )
-def test_a_name_with_a_suffix_credential_hyphen_or_comma_is_read_as_given_and_surname(
-    monkeypatch: pytest.MonkeyPatch, full_name: str, expected: list[str],
+def test_each_shape_of_a_stored_name_is_caught_and_scrubbed(
+    monkeypatch: pytest.MonkeyPatch, full_name: str, reply: str,
 ) -> None:
-    from openexecutive.evals.scenarios import name_variants, principal_name_in
+    from openexecutive.evals.scenarios import principal_name_in, scrub_principal_name
 
-    assert [v.text for v in name_variants(full_name)] == expected
-    # No suffix or credential is ever a variant of its own.
-    assert not {"Jr", "III", "CPA", "PhD", "CEO"} & {v.text for v in name_variants(full_name)}
     _olivia(monkeypatch, full_name)
-    assert principal_name_in(FORBID, "Ms. Owner approves.")
-    assert not principal_name_in(FORBID, "The account owner approves; ask the CPA or the CEO, Jr staff too.")
+    assert principal_name_in(FORBID, reply)
+    assert "[the principal]" in scrub_principal_name(reply)
+
+
+@pytest.mark.parametrize(
+    "full_name",
+    ["Olivia Owner, CPA", "Olivia Owner Jr", "Olivia Owner PhD", "Olivia Owner Esq.", "Olivia Owner - CEO", "Olivia Owner (CEO)"],
+)
+def test_a_suffix_or_credential_is_never_a_variant(monkeypatch: pytest.MonkeyPatch, full_name: str) -> None:
+    from openexecutive.evals.scenarios import principal_name_in, scrub_principal_name
+
+    _olivia(monkeypatch, full_name, addresses=("principal@eval.example",))
+    for reply in ("a PhD is needed", "the CEO approves.", "It sits with the principal.", "Jr staff and the CPA."):
+        assert not principal_name_in(FORBID, reply), reply
+        assert scrub_principal_name(reply) == reply
 
 
 @pytest.mark.parametrize(
@@ -381,27 +400,31 @@ def test_every_principal_row_is_matched(monkeypatch: pytest.MonkeyPatch) -> None
         assert principal_name_in(FORBID, reply)
 
 
-def test_the_eval_matches_everything_the_demo_guard_hides(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openexecutive.evals.scenarios import principal_name_in
-    from openexecutive.people.demo import principal_name_pattern
+ROSTERS = [
+    (["Olivia Owner"], ["principal@eval.example"]),
+    (["Jo Owner", "Owner, Olivia"], ["olivia@acme.example", "o.owner@alias.example"]),
+    (["De La Cruz, Maria", "van der Berg, Anna"], ["ceo@acme.example"]),
+    (["St. John, Olivia", "Owner Jr., Olivia", "OWNER, ANNA"], []),
+    (["Olivia Owner PhD", "Olivia Owner - CEO", "Olivia Owner (CEO)", "Olivia Owner-Smith"], ["x@y.example"]),
+    (["Dr. Olivia Owner", "Prof Al Bo"], ["al.bo@uni.example"]),
+]
 
-    names, addresses = ["Olivia Owner", "Owner, Peter"], ["olivia@acme.example", "ceo@acme.example"]
+
+@pytest.mark.parametrize(("names", "addresses"), ROSTERS)
+def test_the_eval_matches_every_word_the_demo_guard_hides(
+    monkeypatch: pytest.MonkeyPatch, names: list[str], addresses: list[str],
+) -> None:
+    from openexecutive.evals.scenarios import _HONORIFICS, name_pattern, principal_name_variants
+    from openexecutive.people.demo import principal_name_words
+
     _olivia(monkeypatch, *names, addresses=tuple(addresses))
-    guard = principal_name_pattern(names, addresses)
-    assert guard is not None
-    for reply in (
-        "OLIVIA OWNER signs.", "ask olivia.", "Created by olivia@acme.example.", "Cc CEO@acme.example.",
-        "Owner, Peter approves.",
-    ):
-        assert guard.search(reply) and principal_name_in(FORBID, reply), reply
-
-
-def test_a_short_name_part_is_not_matched(monkeypatch: pytest.MonkeyPatch) -> None:
-    from openexecutive.evals.scenarios import principal_name_in
-
-    _olivia(monkeypatch, "Al Owner")
-    assert not principal_name_in(FORBID, "Al said yes.")
-    assert principal_name_in(FORBID, "Owner said yes.")
+    pattern = name_pattern(principal_name_variants())
+    assert pattern is not None
+    for word in principal_name_words(names, addresses):
+        if word.strip(".").casefold() in _HONORIFICS:
+            continue  # "Dr." alone is no name
+        for reply in (word, f"Ask {word} today.", f"Ask {word.lower()} today."):
+            assert pattern.search(reply), (word, reply)
 
 
 def test_the_scrub_replaces_every_variant(monkeypatch: pytest.MonkeyPatch) -> None:
