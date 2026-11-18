@@ -158,3 +158,73 @@ def test_a_suspended_teammate_reads_only_their_own_rows(
     assert people_store.suspend_person(ids["teammate"], by="principal")
     people_registry.invalidate()
     assert _feed(monkeypatch, False, "teammate") <= {TEAMMATE_ACTION, TEAMMATE_RUN, TEAMMATE_CARD}
+
+
+@pytest.mark.parametrize("who", ["principal", "teammate", "demo", "stranger"])
+def test_the_heatmap_counts_only_what_the_callers_feed_shows(
+    ids: dict[str, int], monkeypatch: pytest.MonkeyPatch, who: str
+) -> None:
+    client = app_client(monkeypatch, signed=True)
+    feed = call(client, True, who, "GET", PATH).json()["items"]
+    r = call(client, True, who, "GET", "/today/activity/daily?days=7")
+    assert r.status_code == 200, r.text
+    days = r.json()["days"]
+    assert len(days) == 7
+    total = sum(d["count"] for d in days)
+    if who == "principal":
+        # The whole-company count, from every source.
+        assert total >= len(EVERY_ROW) - 2
+    else:
+        assert total == len(feed)
+    expected = {"teammate": 7, "demo": 4, "stranger": 0}
+    if who in expected:
+        assert total == expected[who]
+
+
+def _header_input(caller: int | None) -> tuple[str, str, list[dict[str, object]]]:
+    """(scope, context, activity) of the header ``caller``'s Home would ask
+    for, as `_today_for` and `_attach_narrative` build it."""
+    from openexecutive.api.routes import today
+    from openexecutive.orchestrator.artifact_records import viewer_for_person
+
+    snapshot = today._build_today(
+        stale_out=[], include_private=today._is_principal(caller), viewer=viewer_for_person(caller),
+    )
+    scope, data, desc, viewer = today._narrative_inputs(snapshot, caller)
+    context, activity = today._narrative_context(data, viewer, desc, scope=scope)
+    return scope, context, activity or []
+
+
+HIDDEN_FROM_HEADER = (ADVICE, NUDGE, PRINCIPAL_ACTION, TEAMMATE_ACTION)
+
+
+@pytest.mark.parametrize("who", ["demo", "stranger"])
+def test_a_demo_or_unrostered_callers_header_never_reads_the_principals_feed(
+    ids: dict[str, int], monkeypatch: pytest.MonkeyPatch, who: str
+) -> None:
+    from openexecutive.briefing import narrative_cache
+
+    caller = ids.get(who)  # a signed-in email on no People entry resolves to None
+    scope, context, activity = _header_input(caller)
+    assert scope != narrative_cache.DEFAULT_SCOPE
+    # A real header input (the board is not quiet), so the feed was read.
+    assert context not in (narrative_cache.QUIET_CONTEXT, narrative_cache.NOTHING_MOVED_CONTEXT)
+    texts = " ".join(str(a.get("summary")) for a in activity)
+    for hidden in (*HIDDEN_FROM_HEADER, DECISION, INITIATIVE):
+        assert hidden not in texts
+    for hidden in HIDDEN_FROM_HEADER:
+        assert hidden not in context
+    if who == "stranger":
+        assert scope == narrative_cache.COMPANY_SCOPE
+        assert activity == []
+
+
+def test_the_principals_header_still_reads_the_whole_feed(
+    ids: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.briefing import narrative_cache
+
+    scope, _context, activity = _header_input(ids["principal"])
+    assert scope == narrative_cache.DEFAULT_SCOPE
+    texts = " ".join(str(a.get("summary")) for a in activity)
+    assert ADVICE in texts and NUDGE in texts

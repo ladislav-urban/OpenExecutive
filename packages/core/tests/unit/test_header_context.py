@@ -344,7 +344,7 @@ def test_a_follow_up_due_today_on_an_otherwise_empty_board_reaches_the_model(
     # Empty live signals: other tests' audit rows in the shared default DB
     # would otherwise show up as mail in and stuck sends.
     monkeypatch.setattr(today_route, "_header_live", lambda **_kw: (LiveSignals(), "today so far", "NOW"))
-    monkeypatch.setattr(today_route, "_narrative_activity", lambda *_a: [])
+    monkeypatch.setattr(today_route, "_narrative_activity", lambda *_a, **_kw: [])
     data = {
         "departments": [], "people": [], "proposals": [],
         "in_flight": [{"intent": "Chase Acme", "run_at": datetime.now(UTC).isoformat(), "overdue": True}],
@@ -393,7 +393,7 @@ def test_a_meetings_only_day_is_quiet_without_a_model_call(monkeypatch: pytest.M
 
     live = LiveSignals(calendar=("10:00–11:00 Board meeting",))
     monkeypatch.setattr(today_route, "_header_live", lambda **_kw: (live, "today so far", "NOW"))
-    monkeypatch.setattr(today_route, "_narrative_activity", lambda *_a: [])
+    monkeypatch.setattr(today_route, "_narrative_activity", lambda *_a, **_kw: [])
     ctx, _ = today_route._narrative_context(
         {"departments": [], "people": [], "proposals": []}, None, None, "team",
         narrative_cache.COMPANY_SCOPE, reader=None,

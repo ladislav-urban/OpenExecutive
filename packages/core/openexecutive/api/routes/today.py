@@ -1826,17 +1826,19 @@ def _build_activity(
     return ActivityResponse(items=items[:limit])
 
 
-def _build_daily_activity(days: int) -> DailyActivityResponse:
+def _build_daily_activity(days: int, counts: dict[str, int] | None = None) -> DailyActivityResponse:
     """Dense per-day activity counts for the Pulse heartbeat heatmap.
 
     Delegates the bucketing to `episodic.count_activity_by_day` (sparse: only
     days with activity), then fills every calendar day in the window so the
     grid has no holes. Window = the last `days` days inclusive of today (UTC),
-    returned oldest → newest. The caller clamps `days`.
+    returned oldest → newest. The caller clamps `days`. ``counts`` (date →
+    count) replaces the whole-company bucketing: a narrower caller's own.
     """
     from openexecutive.memory.episodic import count_activity_by_day
 
-    counts = dict(count_activity_by_day(days))
+    if counts is None:
+        counts = dict(count_activity_by_day(days))
     start = datetime.now(UTC).date() - timedelta(days=days - 1)
     out: list[DailyActivityCount] = []
     for offset in range(days):
@@ -2021,7 +2023,7 @@ def _narrative_inputs(
 
 
 def _narrative_activity(
-    viewer: PersonBriefItem | None, viewer_desc: dict[str, str] | None
+    viewer: PersonBriefItem | None, viewer_desc: dict[str, str] | None, *, whole: bool = False,
 ) -> list[dict[str, Any]]:
     """The activity list the narrative reasons over.
 
@@ -2040,8 +2042,17 @@ def _narrative_activity(
     Taken as-is rather than as a bool so the call site passes what it already
     holds instead of re-deriving the same condition.
     """
-    # A teammate's (or demo person's) header reasons over their own feed.
-    audience = _viewer_audience(viewer) if viewer_desc is not None and viewer is not None else None
+    # Only the principal's own scope (``whole``) reasons over the whole feed.
+    # A teammate's or demo person's header reads their own feed, and the
+    # shared ``company`` scope (a caller who resolved to no one) the feed of
+    # nobody in particular: none of it.
+    audience: ActivityAudience | None
+    if viewer_desc is not None and viewer is not None:
+        audience = _viewer_audience(viewer)
+    elif whole:
+        audience = None
+    else:
+        audience = ActivityAudience(person_id=None, demo=True)
     activity = [
         item.model_dump()
         for item in _build_activity(
@@ -2278,7 +2289,7 @@ def _header_context(
     )
     if not ctx.moved and not open_items:
         return narrative_cache.QUIET_CONTEXT, None
-    activity = _narrative_activity(viewer, None)
+    activity = _narrative_activity(viewer, None, whole=own)
     ctx = render(activity)
     if not ctx.moved:
         return narrative_cache.NOTHING_MOVED_CONTEXT, None
@@ -3464,12 +3475,27 @@ def get_today_activity(
     # Defensive secondary check in case the signature changes later.
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be in [1, 100]")
-    built = _build_activity(limit, audience=_activity_audience(request))
+    return _caller_activity(request, limit, _activity_audience(request))
+
+
+def _caller_activity(
+    request: Request, limit: int, audience: ActivityAudience | None, since: datetime | None = None,
+) -> ActivityResponse:
+    """The feed ``request``'s caller reads (GET /today/activity), at most
+    ``limit`` rows, at/after ``since`` when given."""
+    built = _build_activity(limit, since=since, audience=audience)
     mine = [*_sent_as_caller(request), *_contacts_kept_for_caller(request)]
+    if since is not None:
+        mine = [i for i in mine if (at := _parse_aware(i.at)) is not None and at >= since]
     if mine:
         merged = sorted([*built.items, *mine], key=lambda i: i.at, reverse=True)
         built = ActivityResponse(items=merged[:limit])
     return _activity_for_demo(request, built)
+
+
+# Rows a non-principal's heatmap counts at most: their own feed is small, and
+# the whole-company count never runs for them.
+_CALLER_DAILY_LIMIT = 500
 
 
 def _activity_audience(request: Request) -> ActivityAudience | None:
@@ -3602,6 +3628,7 @@ def _sent_as_caller(request: Request) -> list[ActivityItem]:
     tags=["today"],
 )
 def get_today_activity_daily(
+    request: Request,
     days: int = Query(90, ge=1, le=365),
 ) -> DailyActivityResponse:
     """Per-day activity counts for the Pulse heartbeat heatmap.
@@ -3609,11 +3636,24 @@ def get_today_activity_daily(
     Default 90 days, clamped to [1, 365]. Returns a dense list (every calendar
     day present, count 0 when nothing fired), oldest → newest. Same source set
     and exclusions as `GET /today/activity` — see `_build_daily_activity`.
+    The principal's counts cover the whole feed; anyone else's count only the
+    rows their own GET /today/activity shows (`_activity_audience`).
     """
     # Query(ge=, le=) clamps to 422; defensive check mirrors get_today_activity.
     if days < 1 or days > 365:
         raise HTTPException(status_code=400, detail="days must be in [1, 365]")
-    return _build_daily_activity(days)
+    audience = _activity_audience(request)
+    if audience is None:
+        return _build_daily_activity(days)
+    start = datetime.now(UTC).date() - timedelta(days=days - 1)
+    since = datetime(start.year, start.month, start.day, tzinfo=UTC)
+    counts: dict[str, int] = {}
+    for item in _caller_activity(request, _CALLER_DAILY_LIMIT, audience, since).items:
+        at = _parse_aware(item.at)
+        if at is not None:
+            day = at.astimezone(UTC).date().isoformat()
+            counts[day] = counts.get(day, 0) + 1
+    return _build_daily_activity(days, counts)
 
 
 class BriefDeliveryNotice(BaseModel):

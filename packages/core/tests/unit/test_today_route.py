@@ -2239,7 +2239,8 @@ def test_alert_raises_never_reach_the_synthesizer(
 
     monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _synth)
 
-    c = _make_client()
+    # The principal's header: only their scope reads the whole feed.
+    c = _owner_client()
     c.get("/today")
 
     assert "St. Albans reconciliation gap" not in seen["summaries"]
