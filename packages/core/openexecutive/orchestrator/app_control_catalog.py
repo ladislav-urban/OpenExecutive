@@ -502,15 +502,15 @@ async def _find_memories(request: Any) -> list[Item]:
 
     items = [
         Item(id=f"decision:{d.id}", title=d.summary[:120], detail="decision")
-        for d in await _call(episodic.get_decisions)
+        for d in await _call(episodic.get_decisions, request)
     ]
     items += [
         Item(id=f"initiative:{i.id}", title=i.title[:120], detail=f"initiative, {i.status}")
-        for i in await _call(episodic.get_initiatives)
+        for i in await _call(episodic.get_initiatives, request)
     ]
     items += [
         Item(id=f"advice:{a.id}", title=(a.query_summary or a.advice_summary)[:120], detail="advice")
-        for a in await _call(episodic.get_advice_list)
+        for a in await _call(episodic.get_advice_list, request)
     ]
     return items
 
@@ -529,9 +529,9 @@ async def _edit_memory(request: Any, ref: str, value: str) -> str:
     if kind == "decision":
         await _call(episodic.patch_decision, mid, episodic.DecisionUpdate(summary=value), request)
     elif kind == "initiative":
-        await _call(episodic.patch_initiative, mid, episodic.InitiativeUpdate(summary=value))
+        await _call(episodic.patch_initiative, mid, episodic.InitiativeUpdate(summary=value), request)
     else:
-        await _call(episodic.patch_advice, mid, episodic.AdviceUpdate(advice_summary=value))
+        await _call(episodic.patch_advice, mid, episodic.AdviceUpdate(advice_summary=value), request)
     return f"Updated the {kind}"
 
 
@@ -543,7 +543,7 @@ async def _delete_memory(request: Any, ref: str, value: str) -> str:
         await _call(episodic.remove_decision, mid, request)
     else:
         remove = {"initiative": episodic.remove_initiative, "advice": episodic.remove_advice}[kind]
-        await _call(remove, mid)
+        await _call(remove, mid, request)
     return f"Deleted the {kind} from memory"
 
 
