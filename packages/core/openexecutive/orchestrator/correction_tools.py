@@ -244,6 +244,13 @@ def _mine(action: Any, person: Any, session: Any) -> bool:
         return False
     if action.channel == "__internal__":
         return False
+    # Anyone but the principal is held to the rows their own turns queued
+    # (created_by_person_id), the rule GET /scheduled applies: a follow-up
+    # the principal queued in a teammate's own conversation stays theirs.
+    if not getattr(person, "is_principal", False) and (
+        person.id is None or action.created_by_person_id != person.id
+    ):
+        return False
     return _scheduled_by(action, person, session)
 
 

@@ -5340,7 +5340,12 @@ scheduler:
     every turn by a verified speaker carries <pending_followups> in the user
     turn (correction_tools.pending_followups_block, list_followups' ownership
     rule, up to 10) asking the Executive to cancel_followup one the message
-    shows is settled. The conversation review cannot do this for a chat that
+    shows is settled. The ownership rule (correction_tools._mine): a pending
+    follow-up queued from a conversation the speaker owns; anyone but the
+    principal is also held to the rows their own turns queued
+    (created_by_person_id), as GET /scheduled is, so list, cancel and move
+    never reach the principal's follow-up in a teammate's own chat.
+    The conversation review cannot do this for a chat that
     read mail (it skips those turns), which is the case that prompted it.
   monthly_value: |
     The owner's monthly tally (briefing/value_summary.py). A tick hook,

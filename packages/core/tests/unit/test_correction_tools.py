@@ -180,11 +180,11 @@ def test_a_raise_line_alone_is_not_a_quiet_day(db: Path, roster: SimpleNamespace
 
 
 def _followup(session_id: str | None, *, channel: str = "slack_dm", ref: str = "UOTHER",
-              run_at: datetime | None = None) -> int:
+              run_at: datetime | None = None, by: int | None = None) -> int:
     return episodic.insert_scheduled_action(
         run_at=(run_at or datetime.now(UTC) + timedelta(days=1)).isoformat(),
         channel=channel, channel_ref=ref, intent_text="Remind about the board deck",
-        originating_session_id=session_id,
+        originating_session_id=session_id, created_by_person_id=by,
     )
 
 
@@ -194,7 +194,7 @@ def test_list_shows_only_their_followups(db: Path, roster: SimpleNamespace) -> N
     create_session("ben-web", "t", datetime.now(UTC).isoformat(), caller_person_id=roster.teammate.id,
                    db_path=db)
     mine = _followup("s-1")
-    bens = _followup("ben-web")
+    bens = _followup("ben-web", by=roster.teammate.id)
     _followup(None, channel="slack_dm", ref="UBEN")  # addressed to Ben, scheduled by someone else
     _followup("someone-else")
     out = _call(ct.handle_list_followups, {}, _web(roster.principal))
@@ -212,6 +212,29 @@ def test_a_shared_thread_is_not_enough(db: Path, roster: SimpleNamespace) -> Non
                       caller_person_id=roster.teammate.id)
     assert _call(ct.handle_cancel_followup, {"action_id": action}, session)["status"] == "refused"
     assert episodic.get_scheduled_action(action).status == "pending"  # type: ignore[union-attr]
+
+
+def test_a_teammate_is_held_to_what_their_own_turns_queued(db: Path, roster: SimpleNamespace) -> None:
+    """In a conversation Ben owns, a follow-up the principal queued (or one
+    with no recorded creator) is not his to list, cancel or move: anyone but
+    the principal is held to their own rows (created_by_person_id), as on
+    GET /scheduled."""
+    from openexecutive.memory.session_store import create_session
+
+    create_session("ben-web", "t", datetime.now(UTC).isoformat(), caller_person_id=roster.teammate.id,
+                   db_path=db)
+    olivias = _followup("ben-web", by=roster.principal.id)
+    nobodys = _followup("ben-web")
+    bens = _followup("ben-web", by=roster.teammate.id)
+    ben = _web(roster.teammate, "ben-web")
+    assert [f["action_id"] for f in _call(ct.handle_list_followups, {}, ben)["followups"]] == [bens]
+    when = (datetime.now(UTC) + timedelta(days=3)).replace(microsecond=0).isoformat()
+    for action in (olivias, nobodys):
+        assert _call(ct.handle_cancel_followup, {"action_id": action}, ben)["status"] == "refused"
+        assert _call(ct.handle_move_followup, {"action_id": action, "run_at": when}, ben)["status"] == "refused"
+        assert episodic.get_scheduled_action(action).status == "pending"  # type: ignore[union-attr]
+    assert "#" + str(olivias) not in ct.pending_followups_block(ben)
+    assert _call(ct.handle_cancel_followup, {"action_id": bens}, ben)["status"] == "cancelled"
 
 
 def test_cancel_and_move_their_own(roster: SimpleNamespace) -> None:
