@@ -161,25 +161,73 @@ def test_a_checked_rewrite_replaces_the_reply_not_the_first_draft(turn: dict[str
     assert _response_rows(turn["rows"]) == [want]
 
 
-def test_a_rewrite_that_writes_nothing_keeps_the_first_reply(turn: dict[str, Any]) -> None:
-    session = Session(session_id="s-empty", company_profile=CompanyProfile())
-    provider = StreamingProvider([
+KEPT = FIRST + "\n\n" + executive_mod.REWRITE_EMPTY_NOTE
+
+
+def _empty_retry() -> StreamingProvider:
+    # The retry writes nothing, and so does the round asked once more.
+    return StreamingProvider([
         FinalMsg([TextBlock(FIRST)], "end_turn"),
         FinalMsg([], "end_turn"),
         FinalMsg([], "end_turn"),
     ])
 
-    async def same(text: str, _turn: Any, **_kw: Any) -> str:
-        return text
 
+async def _same(text: str, _turn: Any, **_kw: Any) -> str:
+    return text
+
+
+def test_an_empty_rewrite_keeps_the_first_reply_with_the_not_done_line(turn: dict[str, Any]) -> None:
+    # chat(): the flagged first reply never goes out as if its claim stood.
+    session = Session(session_id="s-empty", company_profile=CompanyProfile())
     with (
-        patch("openexecutive.orchestrator.executive.get_provider", return_value=provider),
-        patch.object(executive_mod.answer_check, "check_reply", new=same),
+        patch("openexecutive.orchestrator.executive.get_provider", return_value=_empty_retry()),
+        patch.object(executive_mod.answer_check, "check_reply", new=_same),
     ):
         out = asyncio.run(Executive().chat("Who owes us?", session, peer_memory_context=""))
 
-    assert out == FIRST
-    assert session.get_recent_history()[-1]["content"] == FIRST
+    assert out == KEPT
+    assert session.get_recent_history()[-1]["content"] == KEPT
+    assert _response_rows(turn["rows"]) == [KEPT]
+
+
+def test_stream_chat_sends_the_kept_reply_it_records(turn: dict[str, Any]) -> None:
+    # stream_chat on a collected turn: what it sends (reply_replaced) is what
+    # history and the audit row keep.
+    session = Session(session_id="s-empty-stream", company_profile=CompanyProfile())
+    items: list[Any] = []
+
+    async def go() -> None:
+        token = executive_mod._COLLECTING.set(True)
+        try:
+            with answer_check.collect(answer_check.AnswerCheckTurn()):
+                async for item in Executive().stream_chat(user_message="Who owes us?", session=session):
+                    items.append(item)
+        finally:
+            executive_mod._COLLECTING.reset(token)
+
+    with (
+        patch("openexecutive.orchestrator.executive.get_provider", return_value=_empty_retry()),
+        patch.object(executive_mod.answer_check, "check_reply", new=_same),
+    ):
+        asyncio.run(go())
+
+    replaced = [i["content"] for i in items if isinstance(i, dict) and i.get("type") == "reply_replaced"]
+    assert replaced == [KEPT]
+    assert session.get_recent_history()[-1]["content"] == KEPT
+    assert _response_rows(turn["rows"]) == [KEPT]
+
+
+def test_chat_adds_the_line_when_a_stream_keeps_nothing() -> None:
+    # chat()'s own fallback, for a stream that sends no replacement.
+    async def stream(**_kw: Any) -> Any:
+        yield "I've removed the hold on Acme."
+        yield {"type": "rewrite"}
+
+    executive = Executive()
+    executive.stream_chat = stream  # type: ignore[method-assign]
+    out = asyncio.run(executive.chat(user_message="x", session=Session()))
+    assert out == "I've removed the hold on Acme.\n\n" + executive_mod.REWRITE_EMPTY_NOTE
 
 
 def test_the_streaming_web_chat_still_adds_only_a_short_line(turn: dict[str, Any]) -> None:
@@ -276,3 +324,73 @@ def test_the_committee_reviews_the_rewritten_draft(monkeypatch: pytest.MonkeyPat
     assert "Second draft, whole." in reviewed and "First draft, flagged." not in "".join(reviewed)
     drafts = [r["full"].get("draft") for r in rows if r["event_type"] == "chat_turn"]
     assert drafts == ["Second draft, whole."]
+
+
+def test_the_committee_keeps_the_line_after_an_empty_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.orchestrator.committee_reviewers import Critique
+
+    rows: list[dict[str, Any]] = []
+    monkeypatch.setattr(
+        "openexecutive.orchestrator.executive.audit_log",
+        lambda event_type, summary, **kw: rows.append({"event_type": event_type, **kw}),
+    )
+    monkeypatch.setattr("openexecutive.audit.log_event", lambda *a, **kw: None, raising=False)
+    session = Session(session_id="s-c-empty", company_profile=CompanyProfile())
+
+    async def draft_loop(*_a: Any, **_kw: Any) -> Any:
+        yield "I've removed the hold on Acme."
+        yield {"type": "rewrite"}
+
+    async def review(_self: Any, *_args: Any, **_kwargs: Any) -> list[Critique]:
+        return [Critique("quality_judge", "low", "ok", "none")]
+
+    class _Stream:
+        """A revision that drops the line."""
+
+        def __init__(self) -> None:
+            self._events = [SimpleNamespace(
+                type="content_block_delta",
+                delta=SimpleNamespace(type="text_delta", text="The hold on Acme is removed."),
+            )]
+
+        async def __aenter__(self) -> _Stream:
+            return self
+
+        async def __aexit__(self, *_a: Any) -> None:
+            return None
+
+        def __aiter__(self) -> _Stream:
+            return self
+
+        async def __anext__(self) -> Any:
+            if not self._events:
+                raise StopAsyncIteration
+            return self._events.pop(0)
+
+        async def get_final_message(self) -> None:
+            return None
+
+    class _Provider:
+        def messages_stream(self, **_kw: Any) -> _Stream:
+            return _Stream()
+
+    sent: list[str] = []
+
+    async def go() -> None:
+        async for item in Executive().stream_chat_with_committee(user_message="Hi", session=session):
+            if isinstance(item, str):
+                sent.append(item)
+
+    with (
+        patch.object(Executive, "_stream_agent_loop", new=draft_loop),
+        patch("openexecutive.orchestrator.committee.Committee.review", new=review),
+        patch("openexecutive.orchestrator.executive.get_provider", return_value=_Provider()),
+    ):
+        asyncio.run(go())
+
+    want = "The hold on Acme is removed.\n\n" + executive_mod.REWRITE_EMPTY_NOTE
+    assert "".join(sent) == want
+    turn_rows = [r for r in rows if r["event_type"] == "chat_turn"]
+    assert [r["full"]["response"] for r in turn_rows] == [want]
+    assert turn_rows[0]["full"]["draft"] == "I've removed the hold on Acme.\n\n" + executive_mod.REWRITE_EMPTY_NOTE
+    assert session.get_recent_history()[-1]["content"] == want

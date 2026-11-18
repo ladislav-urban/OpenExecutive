@@ -240,6 +240,17 @@ logger = logging.getLogger(__name__)
 # correction after it.
 _COLLECTING: ContextVar[bool] = ContextVar("executive_collecting", default=False)
 
+# After a collected reply's claim-check retry that wrote nothing: the first
+# reply is kept, but the check found it claims a change no call made, so
+# this follows it rather than letting the claim stand.
+REWRITE_EMPTY_NOTE = "I couldn't confirm that this was done, so treat it as not done."
+
+
+def _kept_after_empty_rewrite(first: str) -> str:
+    """The first reply of a collected turn whose rewrite came back empty
+    ("" when there was none)."""
+    return f"{first.rstrip()}\n\n{REWRITE_EMPTY_NOTE}" if first.strip() else ""
+
 # The tools that read the speaker's own notes or earlier chats: private rows,
 # withheld from the process log, and checked like a mail read.
 _OWN_RECALL_TOOL_NAMES: frozenset[str] = HISTORY_TOOL_NAMES | CHAT_SEARCH_TOOL_NAMES
@@ -1792,8 +1803,14 @@ class Executive:
             finally:
                 outside_content.end_turn(outside_turn)
             if before_rewrite:
-                # A retry that wrote nothing keeps the first reply.
-                full_response = full_response.lstrip() or before_rewrite
+                rewritten = full_response.lstrip()
+                if rewritten:
+                    full_response = rewritten
+                else:
+                    # A retry that wrote nothing keeps the first reply, with
+                    # the line that its claim isn't confirmed; sent as kept.
+                    full_response = _kept_after_empty_rewrite(before_rewrite)
+                    yield {"type": "reply_replaced", "content": full_response, "session_id": session.session_id}
             # Every figure held to this turn's ERPNext results, and the reply
             # corrected in place when one isn't (orchestrator.answer_check).
             # A cost cap's stop sentence stays the reply's last paragraph.
@@ -2261,9 +2278,11 @@ class Executive:
                     yield item
         finally:
             outside_content.end_turn(outside_turn)
+        # A retry that wrote nothing keeps the first draft, with the line
+        # that its claim isn't confirmed (kept in the revision below).
+        kept_first = bool(before_rewrite) and not draft.strip()
         if before_rewrite:
-            # A retry that wrote nothing keeps the first draft.
-            draft = draft.lstrip() or before_rewrite
+            draft = draft.lstrip() or _kept_after_empty_rewrite(before_rewrite)
 
         draft_ms = round((time.monotonic() - t0) * 1000)
         logger.info(
@@ -2487,6 +2506,11 @@ class Executive:
             )
             revision_capped = True
             yield final_response
+        if kept_first and final_response.strip() and REWRITE_EMPTY_NOTE not in final_response:
+            # The revision of a kept first draft never drops that line.
+            note = "".join(_flush_held(REWRITE_EMPTY_NOTE, final_response[-2:]))
+            final_response += note
+            yield note
         revision_ms = round((time.monotonic() - revision_t0) * 1000)
         if revision_final_msg is not None:
             _emit_cache_event(
@@ -4657,8 +4681,9 @@ class Executive:
         finally:
             _COLLECTING.reset(collecting)
         if rewritten:
-            # A retry that wrote nothing keeps the first reply.
-            result = result.lstrip() or before
+            # A retry that wrote nothing keeps the first reply, with the
+            # line that its claim isn't confirmed (stream_chat sends it so).
+            result = result.lstrip() or _kept_after_empty_rewrite(before)
         if product_words:
             from openexecutive.prompts.connected_systems import in_product_reply
 
