@@ -13253,10 +13253,13 @@ evals:
     under their own keys: forbidden_reply_words (the scenario's own words,
     whole words, any case), principal_name (forbid_principal_name: any of
     the install principal's name variants, read from the roster at run time
-    (scenarios.name_variants: the full name, the given name, the surname,
-    "Surname, Given" and the email's local part, honorifics such as Ms. or
-    Dr. dropped first and any part under three characters left out), whole
-    words and any case, recorded only
+    (scenarios.name_variants: the full name, "Surname, Given" and the
+    email's local part when it joins parts with . _ or - ("o.owner"; a
+    bare one such as "principal" or "ceo" is an ordinary word), each in any
+    case, and the given name and surname capitalised only, so "Owner
+    approves" names the principal and "the account owner" doesn't;
+    honorifics such as Ms. or Dr. dropped first and any part under three
+    characters left out), whole words (scenarios.name_pattern), recorded only
     as "the principal's name appeared in the reply", never the name, and
     kept apart so a fixture name such as erpnext_064's "Rachel" never reads
     as a principal leak), forbid_repeated_text
@@ -13275,8 +13278,8 @@ evals:
     scenario's quality_criteria reach both judges (judges._panel_section,
     judges.chat_judge_context); other chat judge prompts are unchanged.
     The principal's name is never stored in an eval result, whatever the
-    scenario's flags: both runners replace every whole-word, any-case
-    mention of it (scenarios.principal_name_variants) with "[the
+    scenario's flags: both runners replace every mention the check would
+    catch (scenarios.principal_name_variants, name_pattern) with "[the
     principal]" (scenarios.scrub_principal_name, PRINCIPAL_SCRUBBED) in a
     chat or mcp scenario's stored response, in every string of the judge's
     scores (its notes and reasons) and in each stored live turn's response
