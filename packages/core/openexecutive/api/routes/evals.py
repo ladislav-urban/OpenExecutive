@@ -84,7 +84,7 @@ def _principal_only(request: Request) -> None:
     if not api_caller.from_host(request) and _caller_is_the_principal(request):
         return
     logger.warning(
-        "evals refused: not the principal method=%s path=%s",
+        "evals refused: not the principal method=%s path=%r",
         request.method, request.url.path[:200],
     )
     raise HTTPException(status_code=403, detail=PRINCIPAL_ONLY_DETAIL)

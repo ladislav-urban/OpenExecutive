@@ -94,7 +94,7 @@ def test_the_principal_still_resets_and_loads(
     assert work == ["list", "status", "reset", "load", "unload", "snapshot"]
 
 
-@pytest.mark.parametrize("value", ["", "0", "off"])
+@pytest.mark.parametrize("value", ["", "0", "off", "disabled", "none"])
 def test_the_routes_are_not_served_unless_turned_on(
     work: list[str], monkeypatch: pytest.MonkeyPatch, value: str
 ) -> None:
