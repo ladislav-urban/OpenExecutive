@@ -2944,6 +2944,37 @@ def _cards_for_caller(response: TodayResponse, caller: int | None, *, principal:
         p for p in proposals
         if _card_for_caller(p.routed_to_person_id, p.decision_instance_id, caller, instances)
     ]
+    handled = getattr(response, "handled_overnight", None)
+    if handled:
+        response.handled_overnight = _handled_for_caller(handled, caller)
+
+
+def _handled_for_caller(rows: list[Any], caller: int | None) -> list[Any]:
+    """Handled-overnight rows a non-principal may read: only those about a
+    card their own Home would keep (`_card_for_caller`). A row about no card
+    (a watch the review added or stopped) is the company's monitoring, the
+    principal's to read. Fails closed."""
+    from openexecutive.alerts.store import get_alert
+
+    if caller is None:
+        return []
+    kept: list[Any] = []
+    for row in rows:
+        alert_id = getattr(row, "alert_id", None)
+        if alert_id is None:
+            continue
+        try:
+            alert = get_alert(alert_id)
+        except Exception:
+            logger.warning("today: reading a handled card failed — the row stays hidden", exc_info=True)
+            continue
+        if alert is None:
+            continue
+        instance_id = _parse_decision_instance_id(alert.topic_tags or [])
+        instances = _decision_instances([instance_id] if instance_id is not None else [])
+        if _card_for_caller(alert.routed_to_person_id, instance_id, caller, instances):
+            kept.append(row)
+    return kept
 
 
 def home_for_person(caller: int | None, *, principal: bool) -> TodayResponse:

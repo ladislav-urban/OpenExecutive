@@ -1831,7 +1831,9 @@ def test_handled_overnight_shows_private_rows_only_to_the_principal(
         return {r["headline"] for r in res.json()["handled_overnight"]}
 
     assert headlines("p@co.com") == {"Shared thing", "Note from a contact"}
-    assert headlines("t@co.com") == {"Shared thing"}
+    # Neither row is about a card on the teammate's Home (they name no card
+    # at all): only the principal reads them (today._handled_for_caller).
+    assert headlines("t@co.com") == set()
 
 
 def test_handled_overnight_rows_are_structured_and_track_current_status(
