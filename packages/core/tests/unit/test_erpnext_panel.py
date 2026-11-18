@@ -251,7 +251,7 @@ def test_both_panel_blocks_say_a_dynocortex_screen_is_not_seen() -> None:
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
         assert erpnext_panel.SCREEN_RULE in block
         assert "suggest Conversations" in block and "Never guess what the screen shows" in block
-        assert "never send them to it" in block and "the screen beside the panel shows it" in block
+        assert "never send them to it" in block and "say the screen they have open shows it" in block
         assert "its headline is all you have of it" in block
 
 
@@ -280,7 +280,83 @@ def test_both_panel_blocks_read_a_follow_up_with_the_turns_before_it() -> None:
 def test_both_panel_blocks_keep_a_table_to_four_columns() -> None:
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
         assert erpnext_panel.TABLE_RULE in block
-        assert "four at most" in block and "wider detail goes in the place you open" in block
+        assert "four at most" in block and "wider detail goes in the view you open" in block
+
+
+def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
+    # Eval erpnext_094 under ADVICE_POLICY=explain: a follow-up came back as a
+    # 13-row week table with 8 rows unchanged, the starting cash by account
+    # again and every step of the arithmetic.
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert erpnext_panel.BRIEF_RULE in block
+        assert "also when you explain figures" in block
+        assert "Lead with the answer in a sentence or two" in block
+        assert "never the rows that stay the same" in block
+        assert "Don't list again what an earlier answer in the panel already showed" in block
+        # A starting figure is one figure (the Nov 18, 2026 gate: today's cash by
+        # account listed under a question about one week).
+        assert "is one figure, not broken down by account or invoice" in block
+        assert "arithmetic for each result in one short line, not every step" in block
+        # Never optional (eval erpnext_094, Nov 18, 2026: one reply had none).
+        assert "Always name the assumptions, in one short line" in block
+        assert "that is how you show the arithmetic and every assumption" in block
+        assert "rather than print it" in block
+        # Not repeating is not skipping the read (FOLLOW_UP_RULE).
+        assert "still read from ERPNext on this turn every figure the answer rests on" in block
+        assert "also the ones you don't repeat" in block
+        # A short line is fewer steps, never fewer terms (the answer check).
+        assert "leave out steps, never a term" in block
+        assert "still adds up to the result it gives" in block
+        # The view holds the detail, and a view is opened, not offered, where
+        # one may be (eval erpnext_054 lost its chart under "or offer it").
+        assert "let the view you open hold it (a chart for amounts over weeks" in block
+        assert "offer it only when no view may be opened" in block
+        # Only a view SHOW_RULE allows: no bank or payroll view.
+        assert "bank accounts, bank transactions, payroll, employees" in block
+        assert "stays in words, kept short" in block
+    assert "cash by account" not in erpnext_panel.BRIEF_RULE
+    # Nothing a reply might echo: "beside the panel" is a phrase the panel's
+    # replies must not say (SHOW_RULE; eval erpnext_094).
+    assert "beside the panel" not in erpnext_panel.BRIEF_RULE
+
+
+def test_no_panel_block_says_beside_the_panel() -> None:
+    # Replies echoed the blocks' own phrase ("I opened the Accounts Payable
+    # report beside the panel", "is open beside the panel"), and eight panel
+    # evals forbid it (erpnext_054 among them).
+    from openexecutive.api.models import ErpnextPage
+    from openexecutive.api.routes.chat import _host_page_block
+
+    host = _host_page_block(ErpnextPage(doctype="Sales Invoice"), None)
+    assert host
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK, host):
+        assert "beside the panel" not in block.lower()
+    # And the rule against narrating the opening says so outright.
+    assert erpnext_panel.SHOW_RULE.endswith(
+        "Never mention opening or showing it, or where it appears: the person already sees it."
+    )
+    # Still the turn's own context, not a rule against explaining: nothing
+    # tells it to drop the arithmetic or the assumptions.
+    assert "no arithmetic" not in erpnext_panel.BRIEF_RULE
+    assert "without the assumptions" not in erpnext_panel.BRIEF_RULE
+
+
+def test_the_product_name_does_not_touch_the_brief_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "openexecutive.utils.product_name.configured_product_name", lambda: "Dynocortex"
+    )
+    named = erpnext_panel._in_product_words(erpnext_panel.PANEL_CONTEXT_BLOCK)
+    assert erpnext_panel.BRIEF_RULE in named
+
+
+@pytest.mark.parametrize("channel", ["slack", "discord", "telegram", "google_chat", "email"])
+def test_no_other_channel_block_carries_the_panel_brief_rule(channel: str) -> None:
+    from openexecutive.integrations.channel_context import build_channel_context_block
+
+    block = build_channel_context_block(channel, ui_base_url="https://oe.test")
+    assert block
+    assert erpnext_panel.BRIEF_RULE.strip() not in block
+    assert "On the panel" not in block
 
 
 # ── the route ───────────────────────────────────────────────────────────────
