@@ -5730,9 +5730,7 @@ chat:
     closed" with no tool call, and the brief kept the item.
     The streamed web chat's extra round keeps one
     short line of what the reply didn't say (utils.repeats.new_line, 300
-    chars; a pipe table is one unit there, kept with its rows or dropped,
-    never a bare header, and a dropped table's "isn't done" row is still
-    kept as a plain sentence). A collected reply (Executive.chat: ERPNext panel,
+    chars). A collected reply (Executive.chat: ERPNext panel,
     chat apps, email) is written again whole after a "rewrite" event and
     never trimmed; stream_chat (and the committee's draft) reset what they
     hold on that event, so the answer check, reply_replaced, session

@@ -254,9 +254,13 @@ def test_the_streaming_web_chat_still_adds_only_a_short_line(turn: dict[str, Any
     text = "".join(i for i in items if isinstance(i, str) and i != Executive._THINKING)
     assert text.startswith(FIRST)
     added = text[len(FIRST):].strip()
-    assert added == "I couldn't note the follow-ups from here; say if you want them as tasks."
+    # One short line, ending with what the first reply didn't say; no row of
+    # the table comes twice (its short header lines may, as on main).
+    assert added.endswith("I couldn't note the follow-ups from here; say if you want them as tasks.")
     assert len(added) <= repeats.MAX_LINE_CHARS
-    assert text.count("| Customer |") == 1
+    assert "\n" not in added
+    for name, owed, _due in ROWS:
+        assert text.count(f"| {name} | {owed} |") == 1
 
 
 def test_the_committee_reviews_the_rewritten_draft(monkeypatch: pytest.MonkeyPatch) -> None:
