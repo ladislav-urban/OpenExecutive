@@ -240,6 +240,7 @@ def list_runs(
     *,
     visible_to: int | None | Literal["all"] = "all",
     with_body: bool = False,
+    started_by: int | None = None,
 ) -> list[dict[str, Any]]:
     """Recent runs, newest-updated first. `workflow_name` and `status` are
     optional SQL filters — pushing `status` into the query (rather than letting
@@ -249,11 +250,15 @@ def list_runs(
     (`run_visible_to`; None = nobody on the roster: team runs only); the
     default "all" is for the server's own reads, never a person's.
     `with_body` adds each run's `inputs` (parsed) and the start of its
-    `artifact` (`BODY_CHARS`), enough to say what came of it."""
+    `artifact` (`BODY_CHARS`), enough to say what came of it. `started_by`
+    keeps only the runs that person started (`owner_person_id`)."""
     if not _resolve(db_path).exists():
         return []
     clauses: list[str] = []
     params: list[Any] = []
+    if started_by is not None:
+        clauses.append("owner_person_id = ?")
+        params.append(started_by)
     if visible_to != "all":
         clause, clause_params = _visible_clause(visible_to)
         clauses.append(clause)

@@ -1497,14 +1497,46 @@ RHYTHM_WORKFLOWS: frozenset[str] = frozenset({
 })
 
 
+class ActivityAudience(BaseModel):
+    """Who a feed narrower than the principal's is for (`_activity_audience`).
+
+    ``person_id`` is the caller's People id (None: nobody resolved, so no row
+    is theirs). ``demo`` keeps only rows about the caller's own activity; a
+    teammate (``demo`` False) also gets what is company-public. What each
+    gets, source by source, is in `_build_activity`.
+    """
+
+    person_id: int | None
+    demo: bool
+
+
 def _build_activity(
     limit: int,
     since: datetime | None = None,
     *,
     include_alert_raised: bool = True,
     exclude_workflows: frozenset[str] = frozenset(),
+    audience: ActivityAudience | None = None,
 ) -> ActivityResponse:
     """Aggregate recent self-initiated Executive activity across sources.
+
+    ``audience`` None is the whole feed: the principal's, and the server's
+    own reads (the briefs, the reflection, the alert review). Anyone else's
+    feed (``ActivityAudience``) keeps, per source:
+
+      • scheduled actions — only those the caller's own turns queued
+        (``created_by_person_id``), never a nudge;
+      • decisions and initiatives — a teammate's yes (active decisions and
+        the initiatives render into every person's turns), a demo caller's no;
+      • advice — the principal's alone (it comes from their conversations);
+      • workflow runs — a teammate the runs they may see (team runs, their
+        own, those waiting on them: ``persistence.run_visible_to``); a demo
+        caller only the runs they started;
+      • resolved cards — only those routed to or resolved by the caller;
+      • Take the lead rows — the principal's alone (they name the mail it
+        sent);
+      • raised alerts — a teammate those routed to no one (the shared board)
+        or to them; a demo caller only those routed to them.
 
     ``since`` bounds the feed to items at/after that instant (the briefs pass
     the previous delivery time so "what changed" is a real delta); the pool
@@ -1577,8 +1609,22 @@ def _build_activity(
 
     from openexecutive.alerts.models import is_private_alert, visible_alert
 
-    for action in list_scheduled_actions(status="done", limit=pool, exclude_internal=True):
+    everything = audience is None
+    teammate = audience is not None and not audience.demo
+    viewer_id = audience.person_id if audience is not None else None
+
+    if everything:
+        fired = list_scheduled_actions(status="done", limit=pool, exclude_internal=True)
+    elif viewer_id is None:
+        fired = []
+    else:
+        fired = list_scheduled_actions(
+            status="done", limit=pool, exclude_internal=True, created_by_person_id=viewer_id,
+        )
+    for action in fired:
         if action.kind == "nudge_scan" or action.channel == "__internal__":
+            continue
+        if not everything and action.kind == "proactive_nudge":
             continue
         # `created_at` is when the action was queued, not when it fired.
         # For ad-hoc follow-ups these are typically minutes apart, but
@@ -1598,7 +1644,7 @@ def _build_activity(
             at=action.created_at,
         ))
 
-    for decision in get_recent_decisions(limit=pool):
+    for decision in get_recent_decisions(limit=pool) if everything or teammate else []:
         items.append(ActivityItem(
             kind="decision_logged",
             summary=decision.summary,
@@ -1608,7 +1654,7 @@ def _build_activity(
             at=decision.timestamp,
         ))
 
-    for advice in get_recent_advice(limit=pool):
+    for advice in get_recent_advice(limit=pool) if everything else []:
         items.append(ActivityItem(
             kind="advice_given",
             summary=advice.advice_summary,
@@ -1622,15 +1668,21 @@ def _build_activity(
     # the Executive finished on its own. The status filter is pushed into SQL
     # (not applied after the pull) so a backlog of running/awaiting runs can't
     # starve the done ones out of the pool. Bucket at `updated_at` (completion).
-    # Team runs only: the rail is shown to everyone, and a run someone started
-    # by hand is theirs alone (`persistence.run_visible_to`).
+    # The whole feed lists team runs only: a run someone started by hand is
+    # theirs alone (`persistence.run_visible_to`), so it is in their own feed.
     # Rows say what the work was and what came of it (`run_outcome`), never
     # the run's log title ("Executive Research (periodic)").
     from openexecutive.workflows import run_outcome
 
-    for run in wf_persistence.list_runs(
-        status="done", limit=pool, visible_to=None, with_body=True,
-    ):
+    if everything:
+        runs = wf_persistence.list_runs(status="done", limit=pool, visible_to=None, with_body=True)
+    elif teammate:
+        runs = wf_persistence.list_runs(status="done", limit=pool, visible_to=viewer_id, with_body=True)
+    elif viewer_id is None:
+        runs = []
+    else:
+        runs = wf_persistence.list_runs(status="done", limit=pool, started_by=viewer_id, with_body=True)
+    for run in runs:
         if run.get("workflow_name") in exclude_workflows:
             continue
         items.append(ActivityItem(
@@ -1646,7 +1698,7 @@ def _build_activity(
 
     # Initiatives the Executive kicked off / is tracking. `created_at` marks
     # when it started; a non-active status is appended so the row reads true.
-    for initiative in get_recent_initiatives(limit=pool):
+    for initiative in get_recent_initiatives(limit=pool) if everything or teammate else []:
         summary = initiative.title
         if initiative.status and initiative.status != "active":
             summary = f"{summary} ({initiative.status})"
@@ -1662,6 +1714,11 @@ def _build_activity(
     # Gated decisions that reached a terminal state (approved / rejected /
     # reversed / …). The pending ones are surfaced as proposals, not activity.
     for instance in decision_ledger.list_recent_resolved(limit=pool):
+        if not everything and (
+            viewer_id is None
+            or viewer_id not in (instance.approver_person_id, instance.resolver_person_id)
+        ):
+            continue  # someone else's card
         if _payload_is_private(instance.proposed_payload_json):
             continue  # a meeting with one of the principal's contacts
         if instance.decision_class == TAKE_THE_LEAD_CLASS:
@@ -1702,7 +1759,7 @@ def _build_activity(
     from openexecutive.orchestrator import take_the_lead
 
     try:
-        led = take_the_lead.done([take_the_lead.SCOPE_EXECUTIVE], days=30, limit=pool)
+        led = take_the_lead.done([take_the_lead.SCOPE_EXECUTIVE], days=30, limit=pool) if everything else []
     except Exception:
         logger.warning("activity: couldn't read Take the lead's rows", exc_info=True)
         led = []
@@ -1747,6 +1804,10 @@ def _build_activity(
     ) if include_alert_raised else []):
         if is_private_alert(alert) or not visible_alert(alert, None):
             continue  # the rail is shown to everyone
+        routed = alert.routed_to_person_id
+        theirs = viewer_id is not None and routed == viewer_id
+        if not (everything or theirs or (teammate and routed is None)):
+            continue  # someone else's card (a demo caller: their own only)
         items.append(ActivityItem(
             kind="alert_raised",
             summary=alert.headline,
@@ -1979,10 +2040,12 @@ def _narrative_activity(
     Taken as-is rather than as a bool so the call site passes what it already
     holds instead of re-deriving the same condition.
     """
+    # A teammate's (or demo person's) header reasons over their own feed.
+    audience = _viewer_audience(viewer) if viewer_desc is not None and viewer is not None else None
     activity = [
         item.model_dump()
         for item in _build_activity(
-            20, include_alert_raised=False, exclude_workflows=RHYTHM_WORKFLOWS,
+            20, include_alert_raised=False, exclude_workflows=RHYTHM_WORKFLOWS, audience=audience,
         ).items
     ]
     if viewer_desc is not None and viewer is not None:
@@ -3391,20 +3454,51 @@ def get_today_activity(
     """Recent self-initiated Executive activity for the briefing rail.
 
     Default limit 20, clamped to [1, 100]. Sources: fired scheduled_actions,
-    decisions, advice. See `_build_activity` for the merge rules. On top,
-    the caller's own replies and follow-ups Handle it for me sent as them
-    (``actor`` "you"): theirs alone, never in the shared feed.
+    decisions, advice. See `_build_activity` for the merge rules. The
+    principal reads the whole feed; anyone else the part that is theirs or
+    company-public (`_activity_audience`), possibly empty, never a refusal.
+    On top, the caller's own replies and follow-ups Handle it for me sent as
+    them (``actor`` "you"): theirs alone, never in the shared feed.
     """
     # FastAPI's Query(ge=, le=) does the clamping/422 for out-of-range.
     # Defensive secondary check in case the signature changes later.
     if limit < 1 or limit > 100:
         raise HTTPException(status_code=400, detail="limit must be in [1, 100]")
-    built = _build_activity(limit)
+    built = _build_activity(limit, audience=_activity_audience(request))
     mine = [*_sent_as_caller(request), *_contacts_kept_for_caller(request)]
     if mine:
         merged = sorted([*built.items, *mine], key=lambda i: i.at, reverse=True)
         built = ActivityResponse(items=merged[:limit])
     return _activity_for_demo(request, built)
+
+
+def _activity_audience(request: Request) -> ActivityAudience | None:
+    """Whose feed GET /today/activity serves: None (the whole feed) for the
+    principal; a teammate's for an active, non-demo People entry; the demo
+    treatment (their own rows only) for a demo person and for anyone who
+    can't be told apart from one: a signed-in email on no People entry, a
+    service call, an inactive entry, or a roster that can't be read."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.people.store import get_person
+
+    caller = _resolve_caller_person_id(request)
+    if caller is None:
+        return ActivityAudience(person_id=None, demo=True)
+    if _is_principal(caller):
+        return None
+    try:
+        person = get_person(caller)
+    except Exception:
+        logger.warning("activity: reading the caller failed — their own rows only", exc_info=True)
+        return ActivityAudience(person_id=caller, demo=True)
+    teammate = person is not None and person.active and not person.demo
+    return ActivityAudience(person_id=caller, demo=not teammate)
+
+
+def _viewer_audience(viewer: PersonBriefItem) -> ActivityAudience:
+    """The feed a teammate's or demo person's header reasons over: the same
+    one their activity rail shows (`_activity_audience`)."""
+    return ActivityAudience(person_id=viewer.id, demo=_demo_caller(viewer.id, principal=False))
 
 
 def _other_demo_names(caller: int) -> set[str] | None:

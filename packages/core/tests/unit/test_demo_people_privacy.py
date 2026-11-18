@@ -430,7 +430,7 @@ def test_the_activity_feed_names_the_principal_by_role_to_a_demo_person(
 ) -> None:
     from openexecutive.api.routes import today
 
-    def feed(_limit: int) -> today.ActivityResponse:
+    def feed(_limit: int, **_kw: object) -> today.ActivityResponse:
         return today.ActivityResponse.model_validate({
             "items": [
                 {"kind": "nudge", "actor": "executive", "summary": "Follow up with Olivia Owner about the quote", "at": "2026-10-30T09:00:00Z",

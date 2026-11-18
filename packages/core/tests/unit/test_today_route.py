@@ -86,6 +86,15 @@ def _make_client() -> TestClient:
     return TestClient(app)
 
 
+def _owner_client() -> TestClient:
+    """``_make_client`` with a principal on the roster, so a header-less
+    request reads the whole activity feed as theirs (an unresolved caller
+    reads only their own rows: none)."""
+    people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    people_registry.invalidate()
+    return _make_client()
+
+
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     _setup_isolated_db(tmp_path / "today.db", monkeypatch)
@@ -817,7 +826,7 @@ def test_activity_includes_fired_scheduled_actions(
     for aid in (aid_dm, aid_nudge, aid_cad):
         assert episodic.mark_action_done(aid, db_path=db)
 
-    resp = _make_client().get("/today/activity")
+    resp = _owner_client().get("/today/activity")
     assert resp.status_code == 200
     items = resp.json()["items"]
     kinds = {item["kind"] for item in items}
@@ -855,7 +864,7 @@ def test_activity_excludes_internal_and_nudge_scan(
     for aid in (aid_scan, aid_internal, aid_real):
         assert episodic.mark_action_done(aid, db_path=db)
 
-    items = _make_client().get("/today/activity").json()["items"]
+    items = _owner_client().get("/today/activity").json()["items"]
     summaries = [i["summary"] for i in items]
     assert "Real DM" in summaries
     assert "internal nudge scan tick" not in summaries
@@ -883,7 +892,7 @@ def test_activity_reclassifies_propose_only_to_proposal_routed(
     )
     assert episodic.mark_action_done(aid, db_path=db)
 
-    items = _make_client().get("/today/activity").json()["items"]
+    items = _owner_client().get("/today/activity").json()["items"]
     rows = [i for i in items if i["summary"].startswith("Proposal: hire")]
     assert len(rows) == 1
     assert rows[0]["kind"] == "proposal_routed"
@@ -906,7 +915,7 @@ def test_activity_includes_decisions_and_advice(
         db_path=db,
     )
 
-    items = _make_client().get("/today/activity").json()["items"]
+    items = _owner_client().get("/today/activity").json()["items"]
     kinds = {i["kind"] for i in items}
     assert "decision_logged" in kinds
     assert "advice_given" in kinds
@@ -956,7 +965,7 @@ def test_a_card_left_from_chat_reads_as_what_it_did(
         final_payload={"did": "Deleted the chat “Private plans”"}, db_path=db,
     )
 
-    items = _make_client().get("/today/activity?limit=100").json()["items"]
+    items = _owner_client().get("/today/activity?limit=100").json()["items"]
     summaries = sorted(i["summary"] for i in items if i["kind"] == "decision_resolved")
     assert summaries == [
         "Deleted the department “Finance” (asked for in chat, approved on its card)",
@@ -1013,7 +1022,7 @@ def test_activity_includes_workflow_initiative_decision_alert(
         topic_tags=["decision_instance:1"], db_path=db,
     )
 
-    items = _make_client().get("/today/activity?limit=100").json()["items"]
+    items = _owner_client().get("/today/activity?limit=100").json()["items"]
     by_kind: dict[str, list[dict]] = {}
     for it in items:
         by_kind.setdefault(it["kind"], []).append(it)
@@ -1046,7 +1055,7 @@ def test_activity_orders_by_timestamp_desc(
     time.sleep(0.01)
     episodic.store_decision(domain="finance", summary="NEW decision", db_path=db)
 
-    items = _make_client().get("/today/activity").json()["items"]
+    items = _owner_client().get("/today/activity").json()["items"]
     # Find the two decisions in the order returned.
     decision_items = [i for i in items if i["kind"] == "decision_logged"]
     assert decision_items[0]["summary"] == "NEW decision"
@@ -1065,7 +1074,7 @@ def test_activity_respects_limit(
             domain="finance", summary=f"Decision {i}", db_path=db,
         )
 
-    items = _make_client().get("/today/activity?limit=3").json()["items"]
+    items = _owner_client().get("/today/activity?limit=3").json()["items"]
     assert len(items) == 3
 
 
