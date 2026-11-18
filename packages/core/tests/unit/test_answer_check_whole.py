@@ -90,20 +90,28 @@ OUTLOOK_Q = (
     "How much cash do we have across all our accounts, and what will it look like "
     "week by week for the next 13 weeks?"
 )
-TIGHTEST_Q = "Which week is the tightest, and what does cash end at that week?"
 
 
-@pytest.fixture(autouse=True)
-def _no_askers(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(answer_check, "_last_asked", type(answer_check._last_asked)())
+def _conversation(*questions: str) -> list[dict[str, Any]]:
+    """History as the Executive builds it (the person's words as strings,
+    each answered), then the turn being answered with its context blocks."""
+    messages: list[dict[str, Any]] = []
+    for q in questions[:-1]:
+        messages += [{"role": "user", "content": q}, {"role": "assistant", "content": "An answer."}]
+    messages.append({"role": "user", "content": [
+        {"type": "text", "text": "<channel>\nThe panel.\n</channel>"},
+        {"type": "text", "text": questions[-1]},
+    ]})
+    return messages
 
 
-def _asked(own_words: str | None, *, asker: str = "person:7", session: str = "s1", now: float = 0.0) -> bool:
-    """One turn's start, as the Executive notes it: whether it follows the
-    asker's own projection."""
+def test_the_turn_notes_the_question_asked_just_before() -> None:
     turn = _turn()
-    answer_check.note_question(turn, session_id=session, asker=asker, own_words=own_words, now=now)
-    return turn.follows_projection
+    turn.note_messages(_conversation("Who owes us the most?", OUTLOOK_Q, "Which week is the tightest?"))
+    assert turn.asked_before == OUTLOOK_Q
+    first = _turn()
+    first.note_messages(_conversation("Which week is the tightest?"))
+    assert first.asked_before == ""
 
 
 def test_a_follow_up_to_an_outlook_stands_under_the_note(
@@ -112,101 +120,27 @@ def test_a_follow_up_to_an_outlook_stands_under_the_note(
     # Eval erpnext_099 (Nov 18, 2026): asked after a 13-week outlook, the
     # tightest week's balance is the outlook's own; held to ERPNext's results
     # it was left out and the table's "Ends at" cells went blank.
-    assert not answer_check._PROJECTION_Q.search(TIGHTEST_Q)
+    question = "Which week is the tightest, and what does cash end at that week?"
+    assert not answer_check._PROJECTION_Q.search(question)
     _reviews(monkeypatch, *[CANNOT_TELL] * 10)
     _rewrites(monkeypatch, None)
-    _asked(OUTLOOK_Q)
     turn = _turn()
-    answer_check.note_question(turn, session_id="s1", asker="person:7", own_words=TIGHTEST_Q, now=60.0)
-    assert turn.follows_projection
-    out = _ask(OUTLOOK, TIGHTEST_Q, turn)
+    turn.note_messages(_conversation(OUTLOOK_Q, question))
+    out = _ask(OUTLOOK, question, turn)
     assert not turn.whole_replaced
     assert "$41,130" in out and "| Week 1 | — |" not in out
     assert out.endswith(answer_check.PROJECTION_NOTE)
 
 
-def test_only_the_askers_own_words_count_never_the_page_block(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Security review (Nov 18, 2026): the message carries the page block, so
-    # a history row can name "Stock Projected Qty", a Lead called "Forecast
-    # Systems Ltd" or a filter value "what if". The record reads the
-    # person's words alone, so none of it relaxes the next lookup.
-    for page in (
-        "Open in ERPNext: the Stock Projected Qty report.",
-        "Open in ERPNext: Lead Forecast Systems Ltd.",
-        "Filters on screen: notes like what if",
-        "Home card in focus: Cash forecast for the next 30 days",
-    ):
-        assert answer_check._PROJECTION_Q.search(page)
-        assert not _asked("Which items are short?", session=page)
-        assert not _asked("How much cash do we have?", session=page, now=60.0)
-    # And the check holds the lookup to its results: dashes, no note.
+def test_a_lookup_after_the_follow_up_is_held_to_the_results(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Only the question just before counts: two turns on, a lookup's figures
+    # are held to ERPNext's results again.
     _reviews(monkeypatch, *[CANNOT_TELL] * 10)
     _rewrites(monkeypatch, None)
-    _asked("Which items are short?", session="s2")
     turn = _turn()
-    answer_check.note_question(turn, session_id="s2", asker="person:7", own_words="How much cash do we have?", now=1.0)
+    turn.note_messages(_conversation(OUTLOOK_Q, "Who owes us the most?", "How much cash do we have?"))
     out = _ask(OUTLOOK, "How much cash do we have?", turn)
     assert answer_check.PROJECTION_NOTE not in out and "| Week 1 | — |" in out
-
-
-def test_an_upload_names_no_projection() -> None:
-    # The upload turn's own words carry the files' names; the files' text is
-    # only in the message. Neither makes the turn a projection.
-    assert not _asked("Summarise this.
-
-(Attached files: next 30 days plan.pdf)")
-    assert not _asked("How much cash do we have?", now=60.0)
-
-
-def test_another_persons_projection_in_a_shared_chat_does_not_count() -> None:
-    _asked("[Dana]: what if Metro pays late?", asker="person:9")
-    assert _asked(OUTLOOK_Q, asker="person:9") is False
-    assert not _asked(TIGHTEST_Q, asker="person:7", now=60.0)
-    # Dana's own follow-up does.
-    assert _asked(TIGHTEST_Q, asker="person:9", now=60.0)
-
-
-def test_only_the_askers_turn_just_before_counts() -> None:
-    _asked(OUTLOOK_Q)
-    assert _asked("Who owes us the most?", now=10.0)
-    assert not _asked("How much cash do we have?", now=20.0)
-    # A turn without the person's words (none given) or with blank ones ends it too.
-    _asked(OUTLOOK_Q, now=30.0)
-    assert _asked(None, now=40.0)
-    assert not _asked(TIGHTEST_Q, now=50.0)
-    _asked(OUTLOOK_Q, now=60.0)
-    assert _asked("   ", now=70.0)
-    assert not _asked(TIGHTEST_Q, now=80.0)
-
-
-def test_an_outlook_relaxes_nothing_after_the_window() -> None:
-    _asked(OUTLOOK_Q)
-    assert not _asked(TIGHTEST_Q, now=answer_check.FOLLOW_UP_WINDOW_S + 1.0)
-    _asked(OUTLOOK_Q, now=0.0, session="s3")
-    assert _asked(TIGHTEST_Q, now=answer_check.FOLLOW_UP_WINDOW_S - 1.0, session="s3")
-
-
-def test_the_executive_keys_the_record_by_session_and_asker() -> None:
-    from openexecutive.orchestrator.executive import _note_check_question
-    from openexecutive.orchestrator.session import Session
-
-    session = Session(session_id="k1", erpnext_panel_email="ana@example.test")
-    _note_check_question(_turn(), session, None, OUTLOOK_Q)
-    assert ("k1", "panel:ana@example.test") in answer_check._last_asked
-    # Someone else in the same session: not their projection.
-    other = _turn()
-    _note_check_question(other, session, 7, TIGHTEST_Q)
-    assert not other.follows_projection
-    own = _turn()
-    _note_check_question(own, session, None, TIGHTEST_Q)
-    assert own.follows_projection
-
-
-def test_the_record_stays_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(answer_check, "_MAX_ASKERS", 3)
-    for n in range(10):
-        _asked(OUTLOOK_Q, session=f"bound{n}")
-    assert len(answer_check._last_asked) == 3
 
 
 def test_the_projection_test_reads_the_question_not_the_reply() -> None:

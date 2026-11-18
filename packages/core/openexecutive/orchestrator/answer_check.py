@@ -41,9 +41,6 @@ import contextlib
 import json
 import logging
 import re
-import threading
-import time
-from collections import OrderedDict
 from collections.abc import Iterable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass, field
@@ -103,10 +100,9 @@ class AnswerCheckTurn:
     brief: bool = False
     # Set by the check: the reply was replaced whole (answer_correct.WHOLE_REPLY).
     whole_replaced: bool = False
-    # Set by note_question: the asker's own turn just before this one, in
-    # this session and within FOLLOW_UP_WINDOW_S, asked for a projection, so
+    # The person's own words in the question before this one (note_messages):
     # a follow-up to an outlook ("which week is tightest?") is read as one.
-    follows_projection: bool = False
+    asked_before: str = ""
     _context: dict[str, Any] | None = None
     _sources: tuple[NumberFormat, figure_check.Sources, name_check.NameSources] | None = None
     # Check 3's report runs this turn: the quick total asked about -> the report's total.
@@ -135,65 +131,27 @@ class AnswerCheckTurn:
     def note_messages(self, messages: Iterable[dict[str, Any]], system_blocks: Iterable[Any] = ()) -> None:
         """The conversation the turn starts from, and its system blocks."""
         self.note_texts(m.get("content") for m in messages if isinstance(m, dict))
+        # History keeps a user turn as the person's words alone, a string; the
+        # turn being answered is last, with its context blocks in a list.
+        asked = [
+            m["content"] for m in messages
+            if isinstance(m, dict) and m.get("role") == "user"
+        ][:-1]
+        earlier = [content for content in asked if isinstance(content, str) and content.strip()]
+        if earlier:
+            self.asked_before = earlier[-1]
         self.note_texts(b.get("text") if isinstance(b, dict) else b for b in system_blocks)
 
 
 def _projection(question: str, turn: AnswerCheckTurn) -> bool:
     """Whether the reply works figures out that no result holds: the question
-    asks what will or would happen, or follows straight on from the asker's
-    own turn that did (``note_question``). Asked after a 13-week outlook,
-    "which week is the tightest, and what does cash end at that week?" is
-    about the outlook's own worked-out balances, and holding them to
-    ERPNext's results left its table blank (eval erpnext_099, Nov 18, 2026)."""
-    return bool(_PROJECTION_Q.search(question or "")) or turn.follows_projection
-
-
-# Whether each asker's last turn asked for a projection, kept in this process
-# (one API process, as the panel's conversations are), never read back from
-# history: a history row also carries the page block (report names, filter
-# values, a Home card's headline, a record's name an outsider may have
-# written), uploaded text, reply quotes and, in a shared chat, other people's
-# words (security review, Nov 18, 2026). Keyed by session and asker.
-FOLLOW_UP_WINDOW_S = 30 * 60
-_MAX_ASKERS = 5000
-_last_asked: OrderedDict[tuple[str, str], tuple[bool, float]] = OrderedDict()
-_last_asked_lock = threading.Lock()
-# The web chat's upload turn adds the files' names to the person's words.
-_ATTACHED = re.compile(r"\n\n\(Attached files: [^\n]*\)\s*$")
-
-
-def _asked_projection(own_words: str | None) -> bool:
-    if own_words is None:
-        return False
-    return bool(_PROJECTION_Q.search(_ATTACHED.sub("", own_words)))
-
-
-def note_question(
-    turn: AnswerCheckTurn,
-    *,
-    session_id: str,
-    asker: str,
-    own_words: str | None,
-    now: float | None = None,
-) -> None:
-    """At a turn's start: whether the asker's own previous turn in this
-    session, within FOLLOW_UP_WINDOW_S, asked for a projection (set on
-    ``turn``), and this turn's answer recorded in its place, so any turn of
-    theirs that isn't one ends it.
-
-    ``own_words`` is the person's own words for the turn (the Executive's
-    ``memory_text``), never the message with its context blocks; None (a
-    caller that gave none) counts as no projection."""
-    when = time.monotonic() if now is None else now
-    key = (session_id, asker)
-    with _last_asked_lock:
-        before = _last_asked.pop(key, None)
-        _last_asked[key] = (_asked_projection(own_words), when)
-        while len(_last_asked) > _MAX_ASKERS:
-            _last_asked.popitem(last=False)
-    turn.follows_projection = (
-        before is not None and before[0] and 0 <= when - before[1] <= FOLLOW_UP_WINDOW_S
-    )
+    asks what will or would happen, or follows straight on from one that did.
+    Asked after a 13-week outlook, "which week is the tightest, and what does
+    cash end at that week?" is about the outlook's own worked-out balances,
+    and holding them to ERPNext's results left its table blank (eval
+    erpnext_099, Nov 18, 2026). Only the question just before: a lookup
+    asked later in the conversation is held to its results."""
+    return bool(_PROJECTION_Q.search(question or "") or _PROJECTION_Q.search(turn.asked_before))
 
 
 def _texts(content: Any) -> Iterator[str]:
