@@ -288,6 +288,13 @@ def _may_see_card(instance: DecisionInstance, request: Request) -> bool:
     except Exception:
         logger.exception("decisions: caller lookup failed — the card stays hidden")
         return False
+    return card_is_for(instance, caller)
+
+
+def card_is_for(instance: DecisionInstance, caller: int | None) -> bool:
+    """Whether ``caller`` (a resolved People id, not the principal) is who
+    the card is for: its approver, the person its companion alert was routed
+    to, or the owner of the conversation it came from. Fails closed."""
     if caller is None:
         return False
     if instance.approver_person_id == caller:

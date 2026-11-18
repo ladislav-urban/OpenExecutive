@@ -2233,6 +2233,7 @@ def test_the_morning_brief_alias_attaches_the_header_before_the_home_rules(
     # The request here is a bare stand-in: who reads what is tested elsewhere.
     monkeypatch.setattr(today_route, "_departments_for_members", lambda *_a, **_k: None)
     monkeypatch.setattr(today_route, "_empty_for_no_one", lambda *_a, **_k: False)
+    monkeypatch.setattr(today_route, "_runs_as_principal", lambda _r: False)
     from starlette.responses import Response
 
     today_route.get_morning_brief(SimpleNamespace(), Response())  # type: ignore[arg-type]

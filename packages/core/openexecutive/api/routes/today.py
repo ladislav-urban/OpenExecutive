@@ -2629,6 +2629,8 @@ async def _regen_briefing_narrative_locked(
             _audience_for(caller_person_id) or ActivityAudience(person_id=None, demo=True)
         )
         snapshot = _build_today(include_private=own, in_flight_for=audience)
+        # Their Home keeps only their cards (`_cards_for_caller`).
+        _cards_for_caller(snapshot, caller_person_id, principal=own)
         if audience is not None and audience.demo:
             # Their Home carries no departments (`_departments_for_members`).
             snapshot.departments = []
@@ -2836,6 +2838,7 @@ def _today_for(
         in_flight_for=_audience_for(caller),
     )
     response.caller_person_id = caller
+    _cards_for_caller(response, caller, principal=principal or _runs_as_principal(request))
     _departments_for_members(response, request, principal=principal)
     no_one = _empty_for_no_one(response, request, caller, principal=principal)
     if stale:
@@ -2892,6 +2895,57 @@ def _empty_for_no_one(response: TodayResponse, request: Request, caller: int | N
     return True
 
 
+def _card_for_caller(
+    routed_to: int | None, decision_instance_id: int | None, caller: int | None,
+    instances: dict[int, Any],
+) -> bool:
+    """Whether a card belongs on a non-principal's Home: a card backed by a
+    decision only when it is for them (`decisions.card_is_for`: its approver,
+    the person it was routed to, or the owner of the conversation it came
+    from), the rule GET /decisions/{id} applies; any other card when it is
+    routed to them or to no one (the shared board). Fails closed."""
+    if decision_instance_id is not None:
+        from openexecutive.api.routes.decisions import card_is_for
+
+        instance = instances.get(decision_instance_id)
+        return instance is not None and card_is_for(instance, caller)
+    return routed_to is None or (caller is not None and routed_to == caller)
+
+
+def _decision_instances(ids: list[int]) -> dict[int, Any]:
+    from openexecutive.memory.decision_ledger import get_decision_instances
+
+    if not ids:
+        return {}
+    try:
+        return dict(get_decision_instances(ids))
+    except Exception:
+        logger.warning("today: reading the cards' decisions failed — they stay hidden", exc_info=True)
+        return {}
+
+
+def _runs_as_principal(request: Request) -> bool:
+    """Whether the request runs as the principal with no roster read (local
+    login, an open-mode call that names no one), as principal_only decides."""
+    from openexecutive.api.principal_gate import caller_is_the_principal
+
+    return caller_is_the_principal(request)
+
+
+def _cards_for_caller(response: TodayResponse, caller: int | None, *, principal: bool) -> None:
+    """Keep on a non-principal's Home only the cards that are theirs
+    (`_card_for_caller`); the principal sees every card."""
+    proposals = getattr(response, "proposals", None)
+    if principal or proposals is None:
+        return
+    ids = [p.decision_instance_id for p in proposals if p.decision_instance_id is not None]
+    instances = _decision_instances(ids)
+    response.proposals = [
+        p for p in proposals
+        if _card_for_caller(p.routed_to_person_id, p.decision_instance_id, caller, instances)
+    ]
+
+
 def home_for_person(caller: int | None, *, principal: bool) -> TodayResponse:
     """GET /today's Home for an already resolved caller, with no request in
     hand (the MCP ``oe://today/briefing`` resource): the same snapshot,
@@ -2907,6 +2961,7 @@ def home_for_person(caller: int | None, *, principal: bool) -> TodayResponse:
         include_private=principal, viewer=viewer_for_person(caller), in_flight_for=audience,
     )
     response.caller_person_id = caller
+    _cards_for_caller(response, caller, principal=principal)
     if not principal and (audience is None or audience.demo):
         response.departments = []
     if caller is None and not principal:
@@ -2944,7 +2999,7 @@ def _waiting_cards(caller: int | None) -> int:
     return waiting_card_count(person)
 
 
-def needs_you_count(caller: int | None, *, principal: bool, now: datetime) -> int:
+def needs_you_count(caller: int | None, *, principal: bool, now: datetime, all_cards: bool = False) -> int:
     """Home's "Needs you" count for ``caller`` without building the page
     (GET /badges): the same cards, lanes and waiting cards as
     ``_attach_home_rules`` counts, read from the board alone."""
@@ -2957,6 +3012,14 @@ def needs_you_count(caller: int | None, *, principal: bool, now: datetime) -> in
     solo = _workspace_solo()
     demo = _demo_caller(caller, principal=principal)
     alerts = _board_alerts(now, include_private=principal, viewer=viewer_for_person(caller))
+    if not (principal or all_cards):
+        # The same cards their Home keeps (`_cards_for_caller`).
+        tagged = {a.id: _parse_decision_instance_id(a.topic_tags or []) for a in alerts}
+        instances = _decision_instances([i for i in tagged.values() if i is not None])
+        alerts = [
+            a for a in alerts
+            if _card_for_caller(a.routed_to_person_id, tagged[a.id], caller, instances)
+        ]
     trust_by_slug = _watch_trust_by_slug(alerts)
     mine = 0
     for alert in alerts:
@@ -3986,6 +4049,7 @@ def get_morning_brief(request: Request, response: Response) -> TodayResponse:
         include_private=principal, viewer=viewer_for_person(caller), in_flight_for=_audience_for(caller),
     )
     payload.caller_person_id = caller
+    _cards_for_caller(payload, caller, principal=principal or _runs_as_principal(request))
     _departments_for_members(payload, request, principal=principal)
     _empty_for_no_one(payload, request, caller, principal=principal)
     # Serve the viewer's cached narrative (cache-only — this deprecated alias

@@ -88,6 +88,7 @@ def test_the_briefing_equals_the_callers_own_today(
     assert _shape(mcp) == _shape(http.json())
     if who != "principal":
         assert "Principal follow-up" not in {i["intent"] for i in mcp["in_flight"]}
+        assert "Sign the lease" not in {p["headline"] for p in mcp["proposals"]}
 
 
 def test_a_demo_person_gets_no_departments_and_only_their_own_follow_ups(

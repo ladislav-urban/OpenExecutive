@@ -29,17 +29,18 @@ class BadgeCounts(BaseModel):
 
 
 def _home(request: Request) -> int:
+    from openexecutive.api.principal_gate import caller_is_the_principal
     from openexecutive.api.routes.chat import _resolve_caller_person_id
     from openexecutive.api.routes.today import _is_principal, needs_you_count
-
-    from openexecutive.api.principal_gate import caller_is_the_principal
 
     caller = _resolve_caller_person_id(request)
     principal = _is_principal(caller)
     # A caller who resolves to no one gets an empty Home (today._empty_for_no_one).
     if caller is None and not principal and not caller_is_the_principal(request):
         return 0
-    return needs_you_count(caller, principal=principal, now=datetime.now(UTC))
+    return needs_you_count(
+        caller, principal=principal, now=datetime.now(UTC), all_cards=caller_is_the_principal(request),
+    )
 
 
 def _knowledge() -> int:
