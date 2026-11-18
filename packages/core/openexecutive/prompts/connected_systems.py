@@ -596,6 +596,16 @@ _OE_WORD = re.compile(r"(?<![\w.@/\-=#?&])Open ?Executive(?![\w]|[.@/\-_=#?&][\w
 # from a short window before each match, not the whole reply.
 _SENTENCE_END = re.compile(r"(?:[.!?]\s+|\n\s*)$")
 _SENTENCE_WINDOW = 12
+# A word that already says which one, right before the name: "this ERPNext
+# user" is "this ERP user", never "this the ERP user" (Nov 17, 2026, a
+# refusal's "this ERPNext user has no permission"). Read from the same window.
+# Never "that", "which" or "her", which may not be one ("so that ERPNext
+# shows it" is "so that the ERP shows it").
+_DETERMINER_BEFORE = re.compile(
+    r"(?<![\w'’])(?:a|an|this|these|those|my|your|our|their|his|its|each|every|any|no|whose"
+    r"|another)[ \t]{1,3}$",
+    re.I,
+)
 # The longest a match and the two characters its lookahead reads can be
 # ("the   ERPNext" plus two), so a stream holds back no more than this.
 _STREAM_HOLD = 18
@@ -615,6 +625,9 @@ def _rewrite(text: str, product: str, start: int, end: int) -> str:
             break
         at = match.start()
         window = text[max(0, at - _SENTENCE_WINDOW):at]
+        if not match.group().lower().startswith("the") and _DETERMINER_BEFORE.search(window):
+            spans.append((at, match.end(), "ERP"))
+            continue
         starts = at == 0 or _SENTENCE_END.search(window) is not None
         spans.append((at, match.end(), "The ERP" if starts else "the ERP"))
     for match in _OE_WORD.finditer(text, start):

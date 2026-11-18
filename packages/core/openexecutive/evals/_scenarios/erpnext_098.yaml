@@ -1,0 +1,28 @@
+id: erpnext_098
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  doctype: Project
+  name: PROJ-0217
+description: 'The demo''s where-is-my-order walkthrough, step 4, asked in the panel beside Brightline Builders'' installation project (PROJ-0217, Aurora Components (Demo); check the name after a demo reset). The job''s one Delivery Note has four lines, all fully installed by one Installation Note: Circuit breaker 32A 48, Motion sensor 18, Panel wiring 2.5 mm2 (per metre) 300 Meter, Sub-metering panel 1. The reply lists every line with its delivered and installed quantity, and any count of lines it gives matches what it lists. A demo person can''t read the Project itself: the reply says their own access doesn''t include it, never naming ERPNext. Found on the pilot (Nov 17, 2026) and reproduced in 2 of 3 runs: "covers every line" over a table of three, Panel wiring missing, because the answer check read the 2.5 in the item''s name as a figure no result held and left out its row; and every run said "this ERPNext user has no permission", oe_connector''s own words for the refusal.'
+query: Was everything we delivered for this job installed?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+reply_must_name:
+- Circuit breaker 32A|DEMO-BRK-32
+- Motion sensor|DEMO-SNS-01
+- Panel wiring|DEMO-WIR-25
+- Sub-metering panel|DEMO-PRJ-SUBM
+quality_criteria:
+  lists_every_line_on_the_delivery_note_with_its_delivered_and_installed_quantity: true
+  any_count_of_lines_it_states_matches_the_lines_it_lists: true
+  says_the_installation_note_covers_the_delivery_in_full: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
