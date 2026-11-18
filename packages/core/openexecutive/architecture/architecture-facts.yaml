@@ -13151,6 +13151,59 @@ watch:
     private watch_run row per run (status, reason code, counts, as_job_user
     list; never figures or text).
 
+route_gates:
+  principal_only: |
+    api.principal_gate.principal_only(detail) is a route dependency that
+    answers 403 before the route does any work unless the caller is the
+    principal: the rule for starting a principal-only workflow
+    (api.routes.workflows._caller_is_the_principal, read through
+    api.caller): the principal's own email on a non-archived principal
+    entry, or a request that names no one and runs as the principal (open
+    mode with no x-caller-email: local login, the CLI, a direct call; the
+    signed operator). Refused: a teammate, a demo person, a signed-in email
+    on nobody's entry, a verified service call, a roster that can't be read,
+    and any call from a host origin's page. Open mode stays the single-user
+    operator, as on the other principal-gated routes. It guards every
+    /fixtures route; PATCH /agents/{id}, DELETE /agents/{id}/override, POST
+    /agents/{id}/rollback/{history_id}, POST /agents/presets/{id}; POST
+    /clients, /clients/generate, /clients/save, /clients/{slug}/activate,
+    PATCH and DELETE /clients/{slug}; PATCH /company-profile. Every /evals
+    route has its own copy of the rule (evals.principal_only). A demo
+    person's write is usually refused one step earlier by demo_write_gate.
+  fixtures_flag: |
+    The /fixtures router is mounted only when OE_FIXTURES_ENABLED is on and
+    OE_PUBLIC_DEPLOYMENT is not (utils.deployment.fixtures_enabled). Off by
+    default; `make dev` exports OE_FIXTURES_ENABLED=1 unless already set.
+    Documented in .env.example and docs/deployment.md. The demo-reset CLI
+    (cli/demo_reset.py) works on the files directly and does not need it.
+  scheduled_scope: |
+    GET /scheduled, GET /scheduled/{id} and DELETE /scheduled/{id} are
+    scoped to the caller (api.routes.scheduled._scope): the principal sees
+    and cancels every action; anyone else only those whose
+    created_by_person_id is their People id (list_scheduled_actions filters
+    in SQL, so the limit is theirs); someone else's reads as missing, 404
+    on GET and DELETE alike, as workflows' _visible_run does. A caller with
+    no People entry sees none. Ownership is created_by_person_id only:
+    assigned_to_person_id names the approver of a gated action and
+    channel_ref is an address, neither an owner. SCHEDULED_ADMIN_TOKEN
+    still cancels any action.
+  onboarding_owner: |
+    POST /onboard/interview/start and /onboard/interview/commit apply the
+    rule /onboard/answer applies on save
+    (chat._caller_is_principal_or_unclaimed): once there is an owner only
+    they may start or save setup; before one, anyone signed in; never a
+    service. So no one else can rewrite the profile, People, departments
+    and goals, or put an address on an owner entry that has none: that
+    entry gets its email from local login or the CLI.
+  demo_reads: |
+    api.demo_gate.refuse_demo_reader refuses (403, before any work; 503
+    when the roster can't be read) a caller demo_write_gate classes as a
+    demo person (a signed-in email on a demo entry that is not the
+    principal's) on GET /goals, GET /clients/cockpit, GET /memories/advice,
+    GET /workflows/custom and GET /workflows/custom/{name}. An email on
+    nobody's entry is not a demo person to that helper and reads on, as do
+    teammates and the principal.
+
 evals:
   module: openexecutive.evals
   runner: openexecutive.evals.runner — parallel scenario execution with cancellable runs.
