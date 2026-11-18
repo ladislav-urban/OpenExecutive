@@ -102,3 +102,18 @@ def test_curly_apostrophes_and_plurals() -> None:
     assert drop_stale_screen(warning, LIST_PAGE, []) == (warning, 0)
     plural = "Twelve are unpaid. The Sales Invoices list you have open shows them by customer."
     assert drop_stale_screen(plural, LIST_PAGE, []) == (plural, 0)
+
+
+def test_a_view_said_to_be_next_to_the_chat_is_held_too() -> None:
+    # SHOW_RULE now says a view opens "next to the chat" (security review of
+    # the panel brevity branch): a stale one said that way is dropped too.
+    reply = (
+        "Metro owes $14,905.86, all of it overdue. "
+        "The Sales Invoice list is open next to the chat: filter it by customer." + chr(10) + chr(10) +
+        "Chase the oldest invoice first."
+    )
+    out, n = drop_stale_screen(reply, LIST_PAGE, [AR_VIEW])
+    assert n == 1 and "Sales Invoice list" not in out
+    reply = "The Accounts Receivable report next to the chat ages them by due date."
+    assert drop_stale_screen(reply, LIST_PAGE, [AR_VIEW]) == (reply, 0)
+

@@ -22,7 +22,7 @@ from openexecutive.orchestrator import answer_correct
 # Words that say something is on the person's screen now.
 _ON_SCREEN = re.compile(
     r"\b(?:you(?:'ve| have)(?: got)? (?:\w+ )?open|you have up|currently open|now open|open beside|"
-    r"beside (?:the|this|your) panel|next to (?:the|this|your) panel|on your screen|in front of you)\b",
+    r"beside (?:the|this|your) panel|next to (?:the|this|your) (?:panel|chat)|on your screen|in front of you)\b",
     re.I,
 )
 # "the Sales Invoice list", "your Accounts Receivable report": a named view.
