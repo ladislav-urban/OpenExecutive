@@ -283,6 +283,44 @@ def test_both_panel_blocks_keep_a_table_to_four_columns() -> None:
         assert "four at most" in block and "wider detail goes in the place you open" in block
 
 
+def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
+    # Eval erpnext_094 under ADVICE_POLICY=explain: a follow-up came back as a
+    # 13-row week table with 8 rows unchanged, the starting cash by account
+    # again and every step of the arithmetic.
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
+        assert erpnext_panel.BRIEF_RULE in block
+        assert "also when you explain figures" in block
+        assert "Lead with the answer in a sentence or two" in block
+        assert "never the rows that stay the same" in block
+        assert "don't list again what an earlier answer in the panel already showed" in block
+        assert "arithmetic for each result in one short line, not every step" in block
+        assert "the assumptions in one short line" in block
+        assert "that is how you show the arithmetic and every assumption" in block
+        assert "rather than print it" in block
+    # Still the turn's own context, not a rule against explaining: nothing
+    # tells it to drop the arithmetic or the assumptions.
+    assert "no arithmetic" not in erpnext_panel.BRIEF_RULE
+    assert "without the assumptions" not in erpnext_panel.BRIEF_RULE
+
+
+def test_the_product_name_does_not_touch_the_brief_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "openexecutive.utils.product_name.configured_product_name", lambda: "Dynocortex"
+    )
+    named = erpnext_panel._in_product_words(erpnext_panel.PANEL_CONTEXT_BLOCK)
+    assert erpnext_panel.BRIEF_RULE in named
+
+
+@pytest.mark.parametrize("channel", ["slack", "discord", "telegram", "google_chat", "email"])
+def test_no_other_channel_block_carries_the_panel_brief_rule(channel: str) -> None:
+    from openexecutive.integrations.channel_context import build_channel_context_block
+
+    block = build_channel_context_block(channel, ui_base_url="https://oe.test")
+    assert block
+    assert erpnext_panel.BRIEF_RULE.strip() not in block
+    assert "On the panel" not in block
+
+
 # ── the route ───────────────────────────────────────────────────────────────
 
 

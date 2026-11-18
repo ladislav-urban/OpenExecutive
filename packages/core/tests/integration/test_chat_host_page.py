@@ -190,6 +190,8 @@ def test_a_host_page_turn_gets_the_page_wrapped_and_stays_a_host_turn(
     # reshoot (Nov 4, 2026) had five-column tables and retold mistakes here.
     assert erpnext_panel.FOLLOW_UP_RULE.strip() in block
     assert erpnext_panel.TABLE_RULE.strip() in block
+    # The panel's brevity rule too (eval erpnext_094, under explain).
+    assert erpnext_panel.BRIEF_RULE.strip() in block
     assert block.endswith(erpnext_panel.SHOW_RULE)
     # The person's words alone, as sent, saved and shown.
     assert turn["message"] == "Which are late?"

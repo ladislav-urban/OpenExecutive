@@ -522,6 +522,24 @@ TABLE_RULE = (
     "Keep a table to the columns the question needs, four at most, so it fits "
     "the panel; wider detail goes in the place you open beside it. "
 )
+# Both panel blocks carry it, and so does the host page block (api.routes.chat):
+# with ADVICE_POLICY=explain on, the advice policy asks for the arithmetic and
+# every assumption, and a follow-up on the panel came back as 2,300-2,700
+# characters (a 13-row week table with 8 rows unchanged, the starting cash by
+# account again, every step of the arithmetic; eval erpnext_094). On the panel
+# a short line naming them is how the arithmetic and assumptions are shown.
+BRIEF_RULE = (
+    "On the panel an answer stays brief, also when you explain figures. Lead "
+    "with the answer in a sentence or two. Show only the rows that change or "
+    "answer the question, never the rows that stay the same, and don't list "
+    "again what an earlier answer in the panel already showed (the starting "
+    "cash by account, say) unless they ask for it. Give the arithmetic for "
+    "each result in one short line, not every step on the way, and the "
+    "assumptions in one short line, a few words each: on the panel that is "
+    "how you show the arithmetic and every assumption. Leave the full table "
+    "to the place you open beside the panel, or offer it, rather than print "
+    "it. "
+)
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
     "a chat docked on every ERPNext page; people there call you Dynocortex, "
@@ -535,6 +553,7 @@ PANEL_CONTEXT_BLOCK = (
     "here, say so and suggest the OpenExecutive app. "
     + FOLLOW_UP_RULE
     + TABLE_RULE
+    + BRIEF_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )
@@ -556,6 +575,7 @@ PANEL_DRAFTS_CONTEXT_BLOCK = (
     "OpenExecutive app. "
     + FOLLOW_UP_RULE
     + TABLE_RULE
+    + BRIEF_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )

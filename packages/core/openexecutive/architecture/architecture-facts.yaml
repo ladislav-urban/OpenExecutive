@@ -8800,9 +8800,10 @@ auth:
     (from_host and Session.host_page) admits erpnext__show_in_erpnext in
     host_allows_erpnext_read and in mcp_gateway._show_outside_panel (both
     the search filter and call_tool); it is still not a pinned read. The
-    host page block carries erpnext_panel.FOLLOW_UP_RULE and TABLE_RULE (the
-    reshoot of Nov 4, 2026: five-column tables and retold mistakes on F1),
-    then erpnext_panel.SHOW_RULE. chat binds a fresh
+    host page block carries erpnext_panel.FOLLOW_UP_RULE, TABLE_RULE (the
+    reshoot of Nov 4, 2026: five-column tables and retold mistakes on F1)
+    and BRIEF_RULE (eval erpnext_094 under explain), then
+    erpnext_panel.SHOW_RULE. chat binds a fresh
     erpnext_panel.TurnViews per host page turn with collect_views (saved and
     put back, as set_session is) around the stream, never on the session;
     note_erpnext_call fills it from accepted calls only, with ASSERTION_ARG
@@ -11524,7 +11525,20 @@ integrations:
     claimed) (evals erpnext_056
     to erpnext_065; evals.scenarios prior_turns seeds the session history
     and shows it to the judge); TABLE_RULE keeps a table to four columns, wider
-    detail in the place it opens (eval erpnext_066); SCREEN_RULE adds that beside
+    detail in the place it opens (eval erpnext_066); BRIEF_RULE keeps an
+    answer brief there, also when it explains figures: the answer first in a
+    sentence or two, only the rows that change or answer the question, nothing
+    an earlier panel answer showed listed again unless asked, each result's
+    arithmetic in one short line and the assumptions in one short line, the
+    full table left to the place it opens. With ADVICE_POLICY=explain the
+    policy (prompts/advice_policy.py, in cached blocks) asks for the
+    arithmetic and every assumption, and a panel follow-up ran to 2,300-2,700
+    characters (a 13-row week table with 8 rows unchanged, the starting cash
+    by account again, every step; eval erpnext_094, which passed earlier
+    only because the top-level eval runner did not apply the policy then). The
+    precedence sits in the panel rule, in the user turn ("on the panel that
+    is how you show the arithmetic and every assumption"), so the cached
+    policy text is unchanged (evals erpnext_094, erpnext_099); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
     people, memory, settings), so it says so and suggests Conversations rather than
     guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the
