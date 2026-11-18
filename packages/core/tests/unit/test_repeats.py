@@ -163,3 +163,13 @@ def test_new_line_still_compares_words_only() -> None:
     again = "I've removed the $4,650 Harbor item from your brief for today."
     assert new_line(earlier, again) == ""
 
+
+def test_a_numbered_list_said_again_is_still_found() -> None:
+    # The items' own numbers are not their figures (security review of de181ff8).
+    lines = [
+        "1) Chase Harbor about the overdue invoice today.",
+        "2) Call Metro about the delivery today.",
+        "3) Chase Harbor about the overdue invoice today.",
+        "4) Call Metro about the delivery today.",
+    ]
+    assert repeated_sentences(chr(10).join(lines)) == lines[2:]

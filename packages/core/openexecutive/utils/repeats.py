@@ -82,9 +82,12 @@ def _figures(sentence: str) -> tuple[str, ...]:
     """The figures a table row or list item names, as a sorted multiset
     ("$5,382.50" and "$5382.50" alike), from as much of it as is compared and
     as much again; () for prose, or a row with no figure."""
-    if not _ROW.match(sentence):
+    row = _ROW.match(sentence)
+    if not row:
         return ()
-    return tuple(sorted(f.replace(",", "") for f in _FIGURE.findall(sentence[: COMPARE_CHARS * 2])))
+    # The item's own marker ("1) ") is not one of its figures.
+    body = sentence[row.end():][: COMPARE_CHARS * 2]
+    return tuple(sorted(f.replace(",", "") for f in _FIGURE.findall(body)))
 
 
 def _negative(sentence: str) -> bool:
