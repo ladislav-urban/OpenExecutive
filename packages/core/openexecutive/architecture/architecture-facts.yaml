@@ -13263,17 +13263,23 @@ evals:
     joins parts with . _ or - ("o.owner"; a bare one such as "principal" or
     "ceo" is an ordinary word); and "Surname, Given", "Given Surname" and
     the given name when both are known (after and before the comma of an
-    inverted name, else the first and last name words). Capitalised only:
-    every other word of the stored name, split on spaces, commas, hyphens
-    and parentheses, of three or more characters and not a suffix or
-    credential (Jr Sr II III IV V PhD MD MBA CPA Esq JD DDS RN CEO CFO COO
-    CTO), so "Owner approves" names Olivia Owner and "the account owner"
-    doesn't, and a surname of several words or an inverted name gives
-    every name word without guessing which is the given name. Known limits,
+    inverted name, else the first and last name words), or the one name
+    word left after titles and suffixes ("Dr. Olivia"). Capitalised and
+    in capitals only: every other word of the stored name, split on
+    spaces, commas, hyphens and parentheses, of two or more characters
+    ("Li", "Wu") and not a suffix or credential (Jr Sr II III IV V PhD MD
+    MBA CPA Esq JD DDS RN CEO CFO COO CTO), so "Owner approves" and "OWNER
+    approves" name Olivia Owner and "the account owner" doesn't, and a
+    surname of several words or an inverted name gives every name word
+    without guessing which is the given name. No variant is a single
+    character, from any source, so an initial ("A. Owner") never matches
+    every "a"; the guard's own words are matched but honorifics and
+    initials. Known limits,
     accepted since over-scrubbing is safe: an inverted roster name's
     surname is the guard's first word and so matches in any case ("the
-    account owner" for "Owner, Olivia"), and a name that is a common word
-    ("van", "Mark", "Will") matches that word), recorded only
+    account owner" for "Owner, Olivia"), a name that is a common word
+    ("van", "Mark", "Will") matches that word, and a name word matches in
+    text set in capitals ("ACCOUNT OWNER")), recorded only
     as "the principal's name appeared in the reply", never the name, and
     kept apart so a fixture name such as erpnext_064's "Rachel" never reads
     as a principal leak), forbid_repeated_text

@@ -1048,7 +1048,7 @@ _SUFFIXES = frozenset(
 )
 # A shorter name token alone (an initial, "Al") would match ordinary words;
 # the demo guard's own words are kept whatever their length.
-_MIN_NAME_PART = 3
+_MIN_NAME_PART = 2
 # An email local part is a name only when it joins parts ("o.owner"); a bare
 # word ("principal", "ceo", "info") is an ordinary word in a reply.
 _LOCAL_PART_SEPARATORS = (".", "_", "-")
@@ -1070,8 +1070,8 @@ def _is_name_word(word: str) -> bool:
 def _capitalised(token: str) -> list[str]:
     """``token`` with its first letter capitalised, and, when it is stored in
     capitals ("ANNA"), as a name is written ("Anna") too."""
-    forms = [token[:1].upper() + token[1:]]
-    if token.isupper() and len(token) > 1:
+    forms = [token[:1].upper() + token[1:], token.upper()]
+    if token.isupper():
         forms.append(token.capitalize())
     return forms
 
@@ -1109,8 +1109,11 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
 
     Capitalised only: every other word of the stored name, split on spaces,
     commas, hyphens and parentheses, of ``_MIN_NAME_PART`` characters or
-    more and not a suffix or credential (``_SUFFIXES``), so "Owner approves"
-    names Olivia Owner and "the account owner" doesn't. A surname of
+    more and not a suffix or credential (``_SUFFIXES``), as written and in
+    capitals, so "Owner approves" and "OWNER approves" name Olivia Owner and
+    "the account owner" doesn't. A title and a single name ("Dr. Olivia")
+    give that name in any case. No variant is a single character, so an
+    initial ("A. Owner") never matches every "a". A surname of
     several words or an inverted name gives every one of its name words,
     with no guess at which is the given name."""
     from openexecutive.people.demo import principal_name_words
@@ -1118,7 +1121,8 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
     found: dict[str, bool] = {}
 
     def add(text: str, any_case: bool) -> None:
-        if text:
+        # A single character (an initial, "A." or "I.") is never a name.
+        if len(text) > 1:
             found[text] = found.get(text, False) or any_case
 
     stored = " ".join((full_name or "").split())
@@ -1138,12 +1142,27 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
             add(f"{surname}, {given}", True)
             add(f"{given} {surname}", True)
             add(given, True)
+        # A title and one name ("Dr. Olivia", "Mrs. olivia"): that name in
+        # any case, as the given name would be.
+        words = [_bare(w) for w in re.split(r"[\s,]+", re.sub(r"\([^)]*\)", " ", stored)) if _is_name_word(w)]
+        if len(words) == 1:
+            add(words[0], True)
         for token in re.split(r"[\s,()\-]+", stored):
             bare = _bare(token)
             if len(bare) >= _MIN_NAME_PART and _is_name_word(bare):
                 for form in _capitalised(bare):
                     add(form, False)
-    return sorted((NameVariant(t, a) for t, a in found.items()), key=lambda v: (-len(v.text), v.text))
+    return _sorted_variants(found)
+
+
+def _sorted_variants(found: dict[str, bool]) -> list[NameVariant]:
+    """``found`` (text: any_case) as variants, longest first, without a
+    case-sensitive form that an any-case variant already covers."""
+    any_case = {text.casefold() for text, anywhere in found.items() if anywhere}
+    return sorted(
+        (NameVariant(t, a) for t, a in found.items() if a or t.casefold() not in any_case),
+        key=lambda v: (-len(v.text), v.text),
+    )
 
 
 def name_pattern(variants: list[NameVariant]) -> re.Pattern[str] | None:
@@ -1176,7 +1195,7 @@ def principal_name_variants() -> list[NameVariant]:
     found: dict[str, bool] = {}
     for v in [v for name in names for v in name_variants(name)] + name_variants(None, *addresses):
         found[v.text] = found.get(v.text, False) or v.any_case
-    return sorted((NameVariant(t, a) for t, a in found.items()), key=lambda v: (-len(v.text), v.text))
+    return _sorted_variants(found)
 
 
 # What a stored eval result says in place of the principal's name.

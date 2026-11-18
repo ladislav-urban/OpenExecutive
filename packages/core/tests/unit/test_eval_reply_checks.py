@@ -272,21 +272,23 @@ def test_the_name_variants_say_which_match_in_any_case() -> None:
     # case; another name word capitalised only.
     assert name_variants("Dr. Olivia  Owner") == [
         ("Dr. Olivia Owner", True), ("Owner, Olivia", True), ("Olivia Owner", True), ("Olivia", True),
-        ("Owner", False),
+        ("OWNER", False), ("Owner", False),
     ]
     assert name_variants("Olivia Owner", "olivia.owner@example.com") == [
         ("olivia.owner@example.com", True), ("Owner, Olivia", True), ("Olivia Owner", True),
-        ("olivia.owner", True), ("Olivia", True), ("Owner", False),
+        ("olivia.owner", True), ("Olivia", True), ("OWNER", False), ("Owner", False),
     ]
     # The guard's words have no length minimum; another short word is left out.
-    assert name_variants("Jo Owner") == [("Owner, Jo", True), ("Jo Owner", True), ("Owner", False), ("Jo", True)]
+    assert name_variants("Jo Owner") == [
+        ("Owner, Jo", True), ("Jo Owner", True), ("OWNER", False), ("Owner", False), ("Jo", True),
+    ]
     assert ("Al", True) not in name_variants("Olivia Al Owner")
     assert name_variants(None) == [] and name_variants("  ") == []
     # An email's local part only when it joins parts; the whole address always.
     assert ("o.owner", True) in name_variants("Olivia Owner", "o.owner@x")
     assert ("o_owner", True) in name_variants("Olivia Owner", "o_owner@x")
     assert [v.text for v in name_variants("Olivia Owner", "principal@eval.example")] == [
-        "principal@eval.example", "Owner, Olivia", "Olivia Owner", "Olivia", "Owner",
+        "principal@eval.example", "Owner, Olivia", "Olivia Owner", "Olivia", "OWNER", "Owner",
     ]
 
 
@@ -358,7 +360,7 @@ def test_each_variant_of_the_principals_name_is_caught(monkeypatch: pytest.Monke
 
 @pytest.mark.parametrize(
     "reply",
-    ["Dr. Smith approves.", "The Owners approve.", "Prof. Jones and Mr. Lee.", "the account owner approves.", "OWNER approves."],
+    ["Dr. Smith approves.", "The Owners approve.", "Prof. Jones and Mr. Lee.", "the account owner approves."],
 )
 def test_an_honorific_a_longer_word_or_a_lowercase_surname_is_not_the_principals_name(
     monkeypatch: pytest.MonkeyPatch, reply: str,
@@ -400,6 +402,60 @@ def test_every_principal_row_is_matched(monkeypatch: pytest.MonkeyPatch) -> None
         assert principal_name_in(FORBID, reply)
 
 
+@pytest.mark.parametrize(
+    ("full_name", "reply"),
+    [
+        # A title and a single name: that name in any case.
+        ("Dr. Olivia", "Ask olivia."),
+        ("Ms OLIVIA", "Ask Olivia."),
+        ("Mrs. olivia", "OLIVIA signs."),
+        # A two-character name, capitalised.
+        ("Olivia Li", "Ms. Li signs."),
+        ("Olivia Li", "Li approves."),
+        ("Wu, Olivia", "Ms. Wu signs."),
+        ("Olivia Ng", "NG approves."),
+        ("Olivia Owner", "OWNER approves."),
+    ],
+)
+def test_a_title_and_one_name_a_short_name_and_all_caps_are_caught(
+    monkeypatch: pytest.MonkeyPatch, full_name: str, reply: str,
+) -> None:
+    from openexecutive.evals.scenarios import principal_name_in, scrub_principal_name
+
+    _olivia(monkeypatch, full_name)
+    assert principal_name_in(FORBID, reply)
+    assert "[the principal]" in scrub_principal_name(reply)
+
+
+@pytest.mark.parametrize(
+    ("full_name", "reply"),
+    [
+        ("Olivia Li", "the li-ion battery"),
+        ("Olivia Md", "Call your MD today."),
+        ("A. Owner", "A plan and a budget."),
+        ("I. M. Owner", "I think I can."),
+    ],
+)
+def test_an_initial_or_a_lowercase_short_word_is_not_the_principals_name(
+    monkeypatch: pytest.MonkeyPatch, full_name: str, reply: str,
+) -> None:
+    from openexecutive.evals.scenarios import name_variants, principal_name_in, scrub_principal_name
+
+    _olivia(monkeypatch, full_name)
+    assert not principal_name_in(FORBID, reply)
+    assert scrub_principal_name(reply) == reply
+    # No variant is a single character, whatever its source.
+    assert all(len(v.text) > 1 for v in name_variants(full_name, "a@b.example"))
+
+
+def test_an_initialled_name_still_matches_its_surname(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.evals.scenarios import principal_name_in
+
+    _olivia(monkeypatch, "A. Owner")
+    assert principal_name_in(FORBID, "Ms. Owner signs.")
+    assert principal_name_in(FORBID, "A. Owner signs.")
+
+
 ROSTERS = [
     (["Olivia Owner"], ["principal@eval.example"]),
     (["Jo Owner", "Owner, Olivia"], ["olivia@acme.example", "o.owner@alias.example"]),
@@ -407,6 +463,7 @@ ROSTERS = [
     (["St. John, Olivia", "Owner Jr., Olivia", "OWNER, ANNA"], []),
     (["Olivia Owner PhD", "Olivia Owner - CEO", "Olivia Owner (CEO)", "Olivia Owner-Smith"], ["x@y.example"]),
     (["Dr. Olivia Owner", "Prof Al Bo"], ["al.bo@uni.example"]),
+    (["Dr. Olivia", "Olivia Li", "Wu, Olivia", "A. Owner"], []),
 ]
 
 
@@ -421,8 +478,8 @@ def test_the_eval_matches_every_word_the_demo_guard_hides(
     pattern = name_pattern(principal_name_variants())
     assert pattern is not None
     for word in principal_name_words(names, addresses):
-        if word.strip(".").casefold() in _HONORIFICS:
-            continue  # "Dr." alone is no name
+        if word.strip(".").casefold() in _HONORIFICS or len(word.strip(".")) < 2:
+            continue  # "Dr." or an initial ("A.") alone is no name
         for reply in (word, f"Ask {word} today.", f"Ask {word.lower()} today."):
             assert pattern.search(reply), (word, reply)
 
