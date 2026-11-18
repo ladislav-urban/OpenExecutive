@@ -100,9 +100,6 @@ class AnswerCheckTurn:
     brief: bool = False
     # Set by the check: the reply was replaced whole (answer_correct.WHOLE_REPLY).
     whole_replaced: bool = False
-    # The person's own words in the question before this one (note_messages):
-    # a follow-up to an outlook ("which week is tightest?") is read as one.
-    asked_before: str = ""
     _context: dict[str, Any] | None = None
     _sources: tuple[NumberFormat, figure_check.Sources, name_check.NameSources] | None = None
     # Check 3's report runs this turn: the quick total asked about -> the report's total.
@@ -131,27 +128,7 @@ class AnswerCheckTurn:
     def note_messages(self, messages: Iterable[dict[str, Any]], system_blocks: Iterable[Any] = ()) -> None:
         """The conversation the turn starts from, and its system blocks."""
         self.note_texts(m.get("content") for m in messages if isinstance(m, dict))
-        # History keeps a user turn as the person's words alone, a string; the
-        # turn being answered is last, with its context blocks in a list.
-        asked = [
-            m["content"] for m in messages
-            if isinstance(m, dict) and m.get("role") == "user"
-        ][:-1]
-        earlier = [content for content in asked if isinstance(content, str) and content.strip()]
-        if earlier:
-            self.asked_before = earlier[-1]
         self.note_texts(b.get("text") if isinstance(b, dict) else b for b in system_blocks)
-
-
-def _projection(question: str, turn: AnswerCheckTurn) -> bool:
-    """Whether the reply works figures out that no result holds: the question
-    asks what will or would happen, or follows straight on from one that did.
-    Asked after a 13-week outlook, "which week is the tightest, and what does
-    cash end at that week?" is about the outlook's own worked-out balances,
-    and holding them to ERPNext's results left its table blank (eval
-    erpnext_099, Nov 18, 2026). Only the question just before: a lookup
-    asked later in the conversation is held to its results."""
-    return bool(_PROJECTION_Q.search(question or "") or _PROJECTION_Q.search(turn.asked_before))
 
 
 def _texts(content: Any) -> Iterator[str]:
@@ -505,7 +482,7 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         if _passes(substituted, checked, checked_names, fmt):
             counts.substituted += len(corrections)
             return substituted
-    if _projection(question, turn) and any(
+    if _PROJECTION_Q.search(question or "") and any(
         isinstance(c.figure, Figure) and c.right is None for c in corrections
     ):
         # Worked-out figures no result holds: never cut from a projection,
@@ -557,7 +534,7 @@ def _whole(
       can't place is not a figure ERPNext contradicts, and blanking a reply
       whose every figure passed hid the answer (the pilot's Nov 5, 2026
       retake, "what's our cash position").
-    - A projection (``_projection``): every known value is written in, and
+    - A projection (``_PROJECTION_Q``): every known value is written in, and
       the figures nothing contradicts stand, under ``PROJECTION_NOTE``.
     - With ``correct_keep``: every known value written in, the rest kept.
     - Otherwise ``WHOLE_REPLY``, as before.
@@ -567,7 +544,7 @@ def _whole(
         counts.kept = 1
         counts.left_out = 0
         return text
-    if _projection(question, turn):
+    if _PROJECTION_Q.search(question or ""):
         known = [c for c in figure_fixes if c.right is not None]
         out = answer_correct.substitute(text, known) if known else text
         counts.kept = 1

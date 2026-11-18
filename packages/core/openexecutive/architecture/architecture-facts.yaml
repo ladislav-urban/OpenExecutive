@@ -5740,14 +5740,8 @@ chat:
     else removes the sentence / list item / table row, or the whole reply
     becomes WHOLE_REPLY (erpnext_views / the panel reply get open_call).
     Never WHOLE_REPLY when only names failed (the reply stands) or the
-    question is a projection (answer_check._projection: _PROJECTION_Q on
-    the question, or on the person's question just before it, which
-    note_messages keeps as AnswerCheckTurn.asked_before from the history's
-    last earlier user row, so "which week is the tightest?" after a 13-week
-    outlook is one (eval erpnext_099, Nov 18, 2026: its "Ends at" cells
-    were left out as dashes); a lookup two questions on is held to its
-    results again. Known values written in, the rest under
-    PROJECTION_NOTE); audit `kept`.
+    question is a projection (answer_check._PROJECTION_Q: known values
+    written in, the rest under PROJECTION_NOTE); audit `kept`.
     Counts of records (figure_check._counts_records, Figure.count) match only
     Sources.counts of that record (count_words); unknown ones become
     "several" and unknown table cells "—" (answer_correct.vague), never a

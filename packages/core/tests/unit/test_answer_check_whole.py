@@ -86,63 +86,6 @@ def test_figures_that_fail_outside_a_projection_show_a_dash_in_their_cells(monke
     assert "$41,130" not in out and "| Week 1 | — |" in out and "$48,200" in out
 
 
-OUTLOOK_Q = (
-    "How much cash do we have across all our accounts, and what will it look like "
-    "week by week for the next 13 weeks?"
-)
-
-
-def _conversation(*questions: str) -> list[dict[str, Any]]:
-    """History as the Executive builds it (the person's words as strings,
-    each answered), then the turn being answered with its context blocks."""
-    messages: list[dict[str, Any]] = []
-    for q in questions[:-1]:
-        messages += [{"role": "user", "content": q}, {"role": "assistant", "content": "An answer."}]
-    messages.append({"role": "user", "content": [
-        {"type": "text", "text": "<channel>\nThe panel.\n</channel>"},
-        {"type": "text", "text": questions[-1]},
-    ]})
-    return messages
-
-
-def test_the_turn_notes_the_question_asked_just_before() -> None:
-    turn = _turn()
-    turn.note_messages(_conversation("Who owes us the most?", OUTLOOK_Q, "Which week is the tightest?"))
-    assert turn.asked_before == OUTLOOK_Q
-    first = _turn()
-    first.note_messages(_conversation("Which week is the tightest?"))
-    assert first.asked_before == ""
-
-
-def test_a_follow_up_to_an_outlook_stands_under_the_note(
-    monkeypatch: pytest.MonkeyPatch, audit_rows: list[Any],
-) -> None:
-    # Eval erpnext_099 (Nov 18, 2026): asked after a 13-week outlook, the
-    # tightest week's balance is the outlook's own; held to ERPNext's results
-    # it was left out and the table's "Ends at" cells went blank.
-    question = "Which week is the tightest, and what does cash end at that week?"
-    assert not answer_check._PROJECTION_Q.search(question)
-    _reviews(monkeypatch, *[CANNOT_TELL] * 10)
-    _rewrites(monkeypatch, None)
-    turn = _turn()
-    turn.note_messages(_conversation(OUTLOOK_Q, question))
-    out = _ask(OUTLOOK, question, turn)
-    assert not turn.whole_replaced
-    assert "$41,130" in out and "| Week 1 | — |" not in out
-    assert out.endswith(answer_check.PROJECTION_NOTE)
-
-
-def test_a_lookup_after_the_follow_up_is_held_to_the_results(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Only the question just before counts: two turns on, a lookup's figures
-    # are held to ERPNext's results again.
-    _reviews(monkeypatch, *[CANNOT_TELL] * 10)
-    _rewrites(monkeypatch, None)
-    turn = _turn()
-    turn.note_messages(_conversation(OUTLOOK_Q, "Who owes us the most?", "How much cash do we have?"))
-    out = _ask(OUTLOOK, "How much cash do we have?", turn)
-    assert answer_check.PROJECTION_NOTE not in out and "| Week 1 | — |" in out
-
-
 def test_the_projection_test_reads_the_question_not_the_reply() -> None:
     projection = answer_check._PROJECTION_Q
     assert projection.search("what will it look like week by week for the next 13 weeks")
