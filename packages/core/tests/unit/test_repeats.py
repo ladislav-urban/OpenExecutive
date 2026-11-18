@@ -113,33 +113,3 @@ def test_an_uncontracted_retraction_is_kept() -> None:
         "I have not removed it, so it will still show in the brief.",
     ):
         assert new_line(earlier, retraction) == retraction
-
-
-def test_rows_and_items_with_different_figures_are_not_repeats() -> None:
-    # Eval erpnext_094 (Nov 18, 2026): a 13-week outlook's table rows and its
-    # list of late invoices were flagged in 12 of 15 runs; none was said twice.
-    reply = (
-        "When Metro's invoices land:\n"
-        "- **Invoice for $8,650.46 (due Oct 1):** lands Nov 21.\n"
-        "- **Invoice for $332.50 (due Oct 2):** lands Nov 22.\n"
-        "- **Invoice for $567.00 (due Oct 21):** lands Dec 11.\n\n"
-        "| Week | Baseline | Metro late |\n"
-        "|---|---|---|\n"
-        "| Jan 13 | 203,526.52 | 203,526.52 |\n"
-        "| Jan 20 | 203,526.52 | 203,526.52 |\n"
-        "| 10 Jan 20–26 | 203,526.52 | 198,816.52 | 4,710.00 |\n"
-        "| 12 Feb 3–9 | 195,644.02 | 190,934.02 | 4,710.00 |\n"
-    )
-    assert repeated_sentences(reply) == []
-
-
-def test_a_row_or_figure_sentence_said_twice_is_still_found() -> None:
-    row = "| Jan 20 | 203,526.52 | 198,816.52 | -4,710.00 |"
-    assert repeated_sentences(f"{row}\n| Jan 27 | 1.00 | 2.00 |\n{row}\n") == [row]
-    reply = (
-        "Payroll of $5,382.50 falls at the end of each month, with rent on the 2nd. "
-        "Payroll of $5382.50 lands at the end of every month, with rent on the 2nd."
-    )
-    assert repeated_sentences(reply) == [
-        "Payroll of $5382.50 lands at the end of every month, with rent on the 2nd."
-    ]

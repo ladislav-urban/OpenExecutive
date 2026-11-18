@@ -14,12 +14,6 @@ isn't done, or failed, is never taken for a repeat of one that says it was:
 the line the extra round exists for. ``repeated_sentences`` finds a sentence a
 reply says twice, for the evals' deterministic check.
 
-Two sentences with different figures say different things, however alike
-their words: a forecast's table rows ("| Jan 13 | 203,526.52 |" and "| Jan 20 |
-203,526.52 |") and a list of invoices ("$332.50 lands Nov 25", "$645.90 lands
-Dec 28") are not repeats (eval erpnext_094, Nov 18, 2026: 12 of 15 runs
-flagged such rows). A reworded sentence keeps its figures, so it still is.
-
 Cost is bounded: each sentence is compared on its first ``COMPARE_CHARS``
 characters, against at most ``MAX_EARLIER`` earlier sentences, and difflib's
 cheap upper bounds rule most pairs out before its quadratic ratio runs.
@@ -46,8 +40,6 @@ MAX_RATIOS = 2000
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])[\"'”’)\]]*\s+|\n+")
 _WORD = re.compile(r"[a-z0-9$%.,]+")
-# A figure: digits, with the separators a number is written with.
-_FIGURE = re.compile(r"\d(?:[\d,.]*\d)?")
 # Words that say something isn't so or didn't happen.
 _NOT = re.compile(
     r"\b(?:not|no|never|cannot|can't|couldn't|didn't|isn't|wasn't|won't|"
@@ -73,12 +65,6 @@ def _norm(sentence: str) -> str:
     return " ".join(_WORD.findall(text.replace("'", ""))).strip(" .,")[:COMPARE_CHARS]
 
 
-def _figures(sentence: str) -> tuple[str, ...]:
-    """The figures ``sentence`` names, as a sorted multiset ("$5,382.50" and
-    "$5382.50" alike), from as much of it as is compared and as much again."""
-    return tuple(sorted(f.replace(",", "") for f in _FIGURE.findall(sentence[: COMPARE_CHARS * 2])))
-
-
 def _negative(sentence: str) -> bool:
     return _NOT.search(sentence.replace("’", "'").lower()) is not None
 
@@ -91,11 +77,11 @@ class _Said:
     """Sentences said so far, normalized, with whether each says "not"."""
 
     def __init__(self) -> None:
-        self._items: list[tuple[str, bool, tuple[str, ...]]] = []
+        self._items: list[tuple[str, bool]] = []
         self._ratios = 0
 
     def add(self, sentence: str) -> None:
-        self._items.append((_norm(sentence), _negative(sentence), _figures(sentence)))
+        self._items.append((_norm(sentence), _negative(sentence)))
         del self._items[:-MAX_EARLIER]
 
     def _alike(self, a: str, b: str) -> bool:
@@ -117,11 +103,10 @@ class _Said:
         # the line that retracts a claim: a repeat only word for word. A
         # doubled negative sentence is the lesser harm.
         if _failed(sentence) or _negative(sentence):
-            return any(norm == e for e, _, _ in self._items)
-        figures = _figures(sentence)
+            return any(norm == e for e, _ in self._items)
         return any(
-            not neg and len(e) >= MIN_SENTENCE_CHARS and figs == figures and self._alike(norm, e)
-            for e, neg, figs in self._items
+            not neg and len(e) >= MIN_SENTENCE_CHARS and self._alike(norm, e)
+            for e, neg in self._items
         )
 
 
