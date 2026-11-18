@@ -530,6 +530,19 @@ def test_a_draft_the_question_is_about_is_read(channel_env: Any) -> None:
     assert "call them drafts" in text
 
 
+def test_a_cash_outlook_reads_receivables_and_payables_grouped(channel_env: Any) -> None:
+    # The AR/AP detail report runs out of rows on a 13-week outlook and came
+    # back cut short; the grouped read is complete and stays per currency.
+    text = _render(("erpnext", "fetch"))
+    assert "reads receivables and payables with `list_records` grouped" in text
+    assert "outstanding_amount != 0 (never > 0: a return carries a negative outstanding)" in text
+    assert 'group_by ["due_date", "currency"]' in text
+    assert 'SUM of outstanding_amount as "outstanding" and COUNT of "*" as "invoices"' in text
+    assert 'ordered by "outstanding_amount desc" with limit 10' in text
+    assert "never add amounts across currencies" in text
+    assert "compare their total with the Accounts Receivable Summary's" in text
+
+
 def test_the_erpnext_guide_is_constant() -> None:
     # It sits in block 0 (cache_control): nothing in it may vary per turn.
     from openexecutive.prompts import connected_systems

@@ -10734,6 +10734,22 @@ integrations:
     company / currency / period, results are data). Constant text keeps
     block 0 cacheable.
 
+    Outlook reads (_ERPNEXT_GUIDE): a cash outlook or anything bucketed by
+    due week reads receivables and payables with list_records grouped, not
+    from the Accounts Receivable / Payable detail report, whose rows run out
+    on a 13-week outlook and came back truncated. Sales Invoice and Purchase
+    Invoice each: company, docstatus 1, outstanding_amount != 0 (not > 0: a
+    return carries a negative outstanding), due_date up to the outlook's
+    end; group_by [due_date, currency]; SUM(outstanding_amount) as
+    outstanding, COUNT(*) as invoices. Then each ordered by
+    outstanding_amount desc, limit 10, for the largest items. list_records
+    buckets only by year / quarter / month, so the model puts due dates in
+    weeks itself. Outstanding is in the party's currency: never summed
+    across currencies (quote each, or convert at a stated rate). The read
+    covers invoices only (no opening balances or manual journal entries), so
+    its total is compared with the AR / AP Summary's when that matters.
+    Eval: erpnext_101.
+
     Discovery: not primed at startup (prime_pinned_tools stays Google-only,
     so /health and the Setup page are unchanged). The first call to each
     pinned ERPNext tool is refused by extensible-mcp's DiscoveredToolsFilter
