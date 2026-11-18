@@ -1,4 +1,13 @@
-"""Endpoints for inspecting and cancelling proactive scheduled actions."""
+"""Endpoints for inspecting and cancelling proactive scheduled actions.
+
+Who sees what (``_scope``, read through ``api.caller``): the principal sees
+and cancels every action; anyone else only the actions their own turns queued
+(``ScheduledAction.created_by_person_id`` is their People id). Someone else's
+action reads as missing (404), on GET and on DELETE alike, so its existence is
+not revealed. A caller with no People entry (an email on nobody's entry, a
+verified service call) sees none. Open mode with no caller email is the
+operator, who counts as the principal, as on the other principal-gated routes.
+"""
 from __future__ import annotations
 
 import hmac
@@ -59,8 +68,8 @@ def require_cancel_permission(
     - a loopback caller when no admin token is configured (`make dev`, curl).
 
     Anything else fails closed: 401 when an admin token is configured, 503
-    otherwise. GETs stay unauthenticated to match the /memories/* routes the
-    Pulse page already reads.
+    otherwise. Past this gate, a caller other than the admin token cancels
+    only what they may see (``_visible_action``).
     """
     expected = get_settings().scheduled_admin_token
     if (
@@ -90,11 +99,39 @@ def require_cancel_permission(
     )
 
 
+def _scope(request: Request) -> tuple[bool, int | None]:
+    """``(sees every action, own People id)`` for this caller.
+
+    The principal (``workflows._caller_is_the_principal``: their own email on
+    a non-archived principal entry, or a request that names no one and runs
+    as the principal) sees everything. Anyone else is held to the rows their
+    own turns queued; with no People entry (or a roster that can't be read)
+    the id is None and they see nothing."""
+    from openexecutive.api.routes.workflows import _caller_is_the_principal
+
+    if _caller_is_the_principal(request):
+        return True, None
+    return False, api_caller.person_id_for(api_caller.caller(request))
+
+
+def _visible_action(action_id: int, request: Request) -> ScheduledAction:
+    """The action, or 404: also for one this caller may not see, so its
+    existence is not revealed."""
+    everything, own = _scope(request)
+    row = get_scheduled_action(action_id)
+    if row is None or not (
+        everything or (own is not None and row.created_by_person_id == own)
+    ):
+        raise HTTPException(status_code=404, detail="scheduled action not found")
+    return row
+
+
 @router.get(
     "/scheduled",
     response_model=list[ScheduledAction],
 )
 def list_scheduled(
+    request: Request,
     status: str = "pending",
     limit: int = 100,
     order: str = "asc",
@@ -108,10 +145,14 @@ def list_scheduled(
         raise HTTPException(status_code=400, detail="limit must be between 1 and 1000")
     if order not in {"asc", "desc"}:
         raise HTTPException(status_code=400, detail="order must be 'asc' or 'desc'")
+    everything, own = _scope(request)
+    if not everything and own is None:
+        return []
     return list_scheduled_actions(
         status=None if status == "all" else status,
         limit=limit,
         order=order,
+        created_by_person_id=None if everything else own,
     )
 
 
@@ -119,11 +160,8 @@ def list_scheduled(
     "/scheduled/{action_id}",
     response_model=ScheduledAction,
 )
-def get_scheduled(action_id: int) -> ScheduledAction:
-    row = get_scheduled_action(action_id)
-    if row is None:
-        raise HTTPException(status_code=404, detail="scheduled action not found")
-    return row
+def get_scheduled(action_id: int, request: Request) -> ScheduledAction:
+    return _visible_action(action_id, request)
 
 
 @router.delete(
@@ -131,8 +169,12 @@ def get_scheduled(action_id: int) -> ScheduledAction:
     response_model=ScheduledAction,
 )
 def cancel_scheduled(
-    action_id: int, actor: str = Depends(require_cancel_permission)
+    action_id: int, request: Request, actor: str = Depends(require_cancel_permission)
 ) -> ScheduledAction:
+    # A script holding SCHEDULED_ADMIN_TOKEN may cancel any action; anyone
+    # else only one they may see.
+    if actor != "admin-token":
+        _visible_action(action_id, request)
     result = cancel_scheduled_action(action_id)
     if result == "not_found":
         raise HTTPException(status_code=404, detail="scheduled action not found")
