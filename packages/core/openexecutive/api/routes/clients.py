@@ -13,6 +13,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
+from openexecutive.api.demo_gate import refuse_demo_reader
 from openexecutive.api.intake_uploads import (
     _INTAKE_GEN_CHARS_PER_FILE,
     _INTAKE_MAX_DOC_CHARS,
@@ -207,7 +208,8 @@ async def activate_client(slug: str, request: Request) -> dict:
         raise
 
 
-@router.get("/clients/cockpit")
+# The practice's clients are not a demo person's to read.
+@router.get("/clients/cockpit", dependencies=[Depends(refuse_demo_reader)])
 async def clients_cockpit() -> dict:
     """Practice-wide board: one rollup card per client (active first).
 
