@@ -47,7 +47,7 @@ name: Publish images
 # workflow_dispatch publishes the images of one exact commit, for a release
 # cut from a commit that never lands on main as such (a fix on an older
 # base). Give `ref` as the full 40-character commit SHA. The run checks out
-# exactly that commit and pushes only its immutable `sha-<short>` tag: never
+# exactly that commit and pushes only its `sha-<full SHA>` tag: never
 # `latest`, `main`, a branch name or a semver tag, so it moves nothing a
 # server follows. Re-run a failed run from the Actions UI.
 on:
@@ -82,8 +82,10 @@ permissions:
 # (`git push origin main v0.2.0` starts a branch run and a tag run for the
 # same commit in different groups; both write `sha-<short>` from the same
 # source, which is harmless.) Never cancel a half-pushed release.
+# A dispatch gets a group of its own, keyed on the commit it builds, so it
+# never cancels a pending main build or is cancelled by one.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_dispatch' && format('dispatch-{0}', inputs.ref) || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -107,7 +109,7 @@ jobs:
         env:
           REF: ${{ inputs.ref }}
         run: |
-          if ! printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
+          if [[ ! "$REF" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::ref must be a full 40-character lowercase commit SHA"
             exit 1
           fi
@@ -127,6 +129,10 @@ jobs:
             echo "::error::checked out $head, not $REF"
             exit 1
           fi
+          # A bare SHA checks out with no ref at all, and metadata-action's
+          # git context cannot infer one from such a HEAD. A local branch
+          # gives it one; the branch tag rule is off on a dispatch.
+          git switch -q -c dispatched
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -146,7 +152,7 @@ jobs:
       # Tag set:
       #   v1.2.3 tag  -> 1.2.3, 1.2, latest, sha-<short>
       #   main push   -> main, sha-<short>
-      #   dispatch    -> sha-<short> of the dispatched commit only
+      #   dispatch    -> sha-<full 40-char SHA> of the dispatched commit only
       # `latest` follows semver tags only (metadata-action's default
       # latest=auto), never a branch push. No bare `{{major}}` tag while the
       # project is pre-1.0 — a `0` tag would be misleading.
@@ -164,7 +170,8 @@ jobs:
             type=semver,pattern={{version}},enable=${{ github.event_name != 'workflow_dispatch' }}
             type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name != 'workflow_dispatch' }}
             type=ref,event=branch,enable=${{ github.event_name != 'workflow_dispatch' }}
-            type=sha
+            type=sha,enable=${{ github.event_name != 'workflow_dispatch' }}
+            type=sha,format=long,enable=${{ github.event_name == 'workflow_dispatch' }}
 
       # Layer cache lives in the registry under a `buildcache` tag, not the
       # Actions cache: the API image's dependency layers (torch, two baked
@@ -187,7 +194,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=registry,ref=${{ steps.image.outputs.name }}:buildcache
-          cache-to: ${{ github.event_name != 'pull_request' && format('type=registry,ref={0}:buildcache,mode=max', steps.image.outputs.name) || '' }}
+          cache-to: ${{ github.event_name == 'push' && format('type=registry,ref={0}:buildcache,mode=max', steps.image.outputs.name) || '' }}
 
       # The digest a server pins, with every tag that now points at it.
       - name: Digest to pin
@@ -211,7 +218,7 @@ jobs:
   release:
     name: GitHub Release
     needs: publish
-    if: (github.repository == 'SenteLabsAI/OpenExecutive' || vars.PUBLISH_IMAGES == 'true') && startsWith(github.ref, 'refs/tags/v')
+    if: (github.repository == 'SenteLabsAI/OpenExecutive' || vars.PUBLISH_IMAGES == 'true') && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
