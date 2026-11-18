@@ -909,7 +909,10 @@ async def _execute_action(
                 digest = result.get("digest") or ""
                 if digest:
                     try:
-                        await _deliver_to_principal(digest, label="Across your clients")
+                        from openexecutive.prompts.connected_systems import in_product_reply
+
+                        # The model's digest, in the product's words on a named install.
+                        await _deliver_to_principal(in_product_reply(digest), label="Across your clients")
                     except Exception:
                         logger.exception(
                             "scheduler: client_rotation digest delivery failed"
@@ -2506,12 +2509,10 @@ async def _send_on_plan(
     principal: Person, plan: list[str], text: str, *, label: str
 ) -> PrincipalDelivery:
     """Try ``plan``'s channels for ``principal`` (any Person) in order until
-    one sends. ``text`` goes out in the product's words on an install with a
-    name (``connected_systems.in_product_reply``), as a chat reply does: a
-    brief, a scheduled ERP metric, a digest."""
-    from openexecutive.prompts.connected_systems import in_product_reply
-
-    text = in_product_reply(text)
+    one sends. ``text`` goes as given: a sender whose text is all our own
+    words or the model's (a brief, a digest, a scheduled ERP metric) puts it
+    in the product's words itself; an alert, a held message or a reminder
+    carries record values, which stay as read."""
     if not plan:
         # Email set up but its gateway down is the Executive's fault, not a
         # missing setting: say so, with the start failure, instead of
@@ -2835,7 +2836,11 @@ async def _run_principal_brief(action: ScheduledAction, now: datetime) -> None:
             sending = True
             # Messages the principal asked to get in their brief ride along
             # as one "While you were away" block (people.held_messages).
-            delivered_text, held_ids = _with_held_messages(kind, artifact)
+            from openexecutive.prompts.connected_systems import in_product_reply
+
+            # The brief or report is the model's, in the product's words on a
+            # named install; the held messages riding along stay as sent.
+            delivered_text, held_ids = _with_held_messages(kind, in_product_reply(artifact))
             from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT
 
             erp_token = DELIVERING_ERPNEXT.set(read_erpnext)

@@ -8739,8 +8739,12 @@ auth:
     already says which one, "this ERP user", never "this the ERP user".
     What code adds is worded where it is added, so the evals see it as the
     person does (eval erpnext_094, Nov 18, 2026): answer_check.
-    in_product_words for PROJECTION_NOTE and WHOLE_REPLY, scheduler
-    _send_on_plan (briefs, metrics, digests), the morning brief's text,
+    in_product_words for PROJECTION_NOTE and WHOLE_REPLY, a scheduled
+    brief or report's own text and the clients digest (scheduler runner,
+    before held messages join it; scheduler _send_on_plan itself sends text
+    as given, so an alert, held message, reminder or mail-watch line keeps
+    its record values as read), erp_metrics' own "from ... own reports"
+    (the company's name as read), the morning brief's text,
     channel_cards.outcome_text (a chat card itself stays as stored: it is
     what a tap sends or saves), watch runner.notice_body's preamble and
     notes and _fail_notice (summaries and values carry ERPNext's records

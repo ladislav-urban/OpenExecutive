@@ -161,10 +161,10 @@ def test_only_the_evals_take_the_models_own_words() -> None:
     assert takers == ["evals/runner.py"]
 
 
-# -- what the scheduler sends the principal ---------------------------------------
+# -- what the scheduler sends a person -------------------------------------------
 
 
-def _send(monkeypatch: pytest.MonkeyPatch, text: str) -> str:
+def _telegram(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     sent: list[str] = []
 
     async def fake_send(payload: dict[str, Any]) -> str:
@@ -173,20 +173,73 @@ def _send(monkeypatch: pytest.MonkeyPatch, text: str) -> str:
 
     monkeypatch.setattr(schedule_tools, "handle_send_telegram_message", fake_send)
     monkeypatch.setattr("openexecutive.integrations.conversations.record_delivery", lambda *a, **k: None)
-    principal = Person(id=7, full_name="Dana", is_principal=True, telegram_chat_id="4242")
-    delivery = asyncio.run(runner._send_on_plan(principal, ["telegram"], text, label="DSO"))
-    assert delivery.ok
-    return sent[0]
+    return sent
 
 
-def test_a_scheduled_message_is_in_the_products_words(monkeypatch: pytest.MonkeyPatch, named: None) -> None:
-    line = "Days sales outstanding (Acme, from ERPNext's own reports): 41 days."
-    assert _send(monkeypatch, line) == "Days sales outstanding (Acme, from the ERP's own reports): 41 days."
+def test_an_alert_push_carries_its_record_values_as_read(monkeypatch: pytest.MonkeyPatch, named: None) -> None:
+    # Security re-review of this branch: the send path reworded every text,
+    # record values in an alert included.
+    from openexecutive.alerts.dispatcher import _format_broadcast_body
+    from openexecutive.alerts.models import Alert
+
+    sent = _telegram(monkeypatch)
+    alert = Alert(
+        id=7, source="web_form", external_id="f-1", severity="high", headline="New enquiry from Open Executive Support",
+        body="Customer: ERPNext Foundation\nAsks about OpenExecutive pricing.", suggested_action="",
+        created_at="2026-11-18T00:00:00+00:00",
+    )
+    text = _format_broadcast_body(alert)
+    person = Person(id=7, full_name="Dana", is_principal=True, telegram_chat_id="4242")
+    delivery = asyncio.run(runner.deliver_to_person(person, text, label="Alert", chat_only=True))
+    assert delivery.ok and sent == [text]
+    assert "Open Executive Support" in sent[0] and "Customer: ERPNext Foundation" in sent[0]
 
 
-def test_a_scheduled_message_is_unchanged_without_a_name(monkeypatch: pytest.MonkeyPatch, unnamed: None) -> None:
-    line = "Days sales outstanding (Acme, from ERPNext's own reports): 41 days."
-    assert _send(monkeypatch, line) == line
+def test_a_brief_is_in_the_products_words_and_a_held_message_as_sent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, named: None,
+) -> None:
+    from . import test_principal_briefs as briefs
+
+    delivered: list[str] = []
+
+    async def deliver(text: str, **_kw: object) -> runner.PrincipalDelivery:
+        delivered.append(text)
+        return runner.PrincipalDelivery(True, "telegram → 1", "delivered", "telegram")
+
+    monkeypatch.setattr(
+        runner, "_with_held_messages",
+        lambda kind, artifact: (f"{artifact}\n\nWhile you were away\n- From ERPNext Foundation: call me.", []),
+    )
+    workflow = briefs._fake_brief_workflow("fp-1", "Receivables are up, as ERPNext's reports show.")
+    briefs._run_brief(tmp_path, monkeypatch, workflow=workflow, deliver=deliver)
+    assert delivered == [
+        "Receivables are up, as the ERP's reports show.\n\n"
+        "While you were away\n- From ERPNext Foundation: call me."
+    ]
+
+
+def _metric_line(monkeypatch: pytest.MonkeyPatch) -> str | None:
+    from datetime import date
+
+    from openexecutive.briefing import erp_metrics, erp_numbers
+
+    async def compute(report: Any, company: str, today: Any) -> str:
+        return "41 days."
+
+    monkeypatch.setitem(erp_metrics.METRICS, "dso", erp_metrics.Metric("Days sales outstanding", "", compute))
+    monkeypatch.setattr(erp_numbers, "brief_company", lambda: "ERPNext Foundation")
+    monkeypatch.setattr(erp_metrics, "_connected", lambda: object())
+    return asyncio.run(erp_metrics.compute("dso", date(2026, 11, 18)))
+
+
+def test_a_metric_line_is_in_the_products_words_and_the_company_as_read(
+    monkeypatch: pytest.MonkeyPatch, named: None,
+) -> None:
+    assert _metric_line(monkeypatch) == "Days sales outstanding (ERPNext Foundation, from the ERP's own reports): 41 days."
+
+
+def test_a_metric_line_is_unchanged_without_a_name(monkeypatch: pytest.MonkeyPatch, unnamed: None) -> None:
+    assert _metric_line(monkeypatch) == "Days sales outstanding (ERPNext Foundation, from ERPNext's own reports): 41 days."
 
 
 # -- a card in a chat app ---------------------------------------------------------
