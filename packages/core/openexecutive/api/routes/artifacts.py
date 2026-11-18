@@ -210,10 +210,16 @@ async def delete_artifact(composite_id: str, request: Request) -> dict[str, str]
 
 
 def _viewer(request: Request) -> Viewer:
-    """The caller, as the artifact read model sees them."""
-    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    """The caller, as the artifact read model sees them. A workflow output
+    follows the rule GET /workflows/runs applies (``workflows._run_reader``):
+    the team's runs only for the principal and an active, non-demo teammate,
+    otherwise only the runs they started."""
+    from dataclasses import replace
 
-    return viewer_for_person(_resolve_caller_person_id(request))
+    from openexecutive.api.routes.workflows import _run_reader
+
+    caller, team = _run_reader(request)
+    return replace(viewer_for_person(caller), team_runs=team)
 
 
 def _load(composite_id: str, request: Request) -> ArtifactRecord:

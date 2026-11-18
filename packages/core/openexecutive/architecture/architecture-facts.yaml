@@ -1357,7 +1357,10 @@ routing:
       today._audience_for): a demo person, a suspended or archived entry, a
       signed-in email on no entry, a service call or an unreadable roster
       lists and opens only the runs they started (and answers one waiting
-      on them). Every read and change — the HTTP routes, the tools, the
+      on them). /artifacts applies the same rule to workflow outputs
+      (artifact_records.Viewer.team_runs, set by the route's _viewer from
+      _run_reader) for list, detail, download, archive, restore and delete.
+      Every read and change — the HTTP routes, the tools, the
       `/workflows/runs` history, `/today` cards (`lifecycle.list_live_alerts`
       keeps an artifact only for its owner `viewer`; every viewer-less build
       drops them), the chat digest, `find_alerts`, alert ack/reopen, the

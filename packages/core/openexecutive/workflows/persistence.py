@@ -294,9 +294,11 @@ def list_artifact_runs(
     archived: bool = False,
     *,
     visible_to: int | None,
+    started_by: int | None = None,
 ) -> list[dict[str, Any]]:
     """Completed runs that produced an artifact, newest first, that
-    `visible_to` may see (`run_visible_to`).
+    `visible_to` may see (`run_visible_to`). `started_by` keeps only the runs
+    that person started (`owner_person_id`).
 
     Powers the Executive Artifacts section. Mirrors `list_runs` — the heavy
     `artifact` body is intentionally excluded from the list query (fetch it
@@ -315,6 +317,9 @@ def list_artifact_runs(
         "AND archived_at IS NOT NULL" if archived else "AND archived_at IS NULL"
     )
     visible, params = _visible_clause(visible_to)
+    if started_by is not None:
+        visible = f"{visible} AND owner_person_id = ?"
+        params = [*params, started_by]
     with _get_conn(_resolve(db_path)) as conn:
         rows = conn.execute(
             "SELECT run_id, workflow_name, title, status, created_at, updated_at, "

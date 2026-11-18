@@ -67,10 +67,14 @@ class ArtifactNotFound(LookupError):
 @dataclass(frozen=True)
 class Viewer:
     """Who an artifact read or change is for. ``person_id`` None is nobody on
-    the roster: they see team workflow outputs and nothing else."""
+    the roster: they see team workflow outputs and nothing else.
+    ``team_runs`` False keeps a workflow output to the runs ``person_id``
+    started: the HTTP routes set it for anyone but the principal and an
+    active, non-demo teammate (``api.routes.workflows._run_reader``)."""
 
     person_id: int | None
     is_principal: bool = False
+    team_runs: bool = True
 
 
 NOBODY = Viewer(person_id=None)
@@ -335,6 +339,10 @@ def _require_run(native_id: str, composite_id: str, viewer: Viewer) -> dict[str,
     # An empty body counts as no artifact.
     if run is None or not run.get("artifact") or not run_visible_to(run, viewer.person_id):
         raise ArtifactNotFound(f"Artifact {composite_id!r} not found")
+    if not viewer.team_runs and (
+        viewer.person_id is None or run.get("owner_person_id") != viewer.person_id
+    ):
+        raise ArtifactNotFound(f"Artifact {composite_id!r} not found")
     return run
 
 
@@ -361,12 +369,15 @@ def list_artifacts(
             include_unowned=viewer.is_principal,
         )
     ]
-    items.extend(
-        _record_from_run(r, with_body=False)
-        for r in list_artifact_runs(
-            limit=limit, archived=archived, visible_to=viewer.person_id
+    if viewer.team_runs:
+        runs = list_artifact_runs(limit=limit, archived=archived, visible_to=viewer.person_id)
+    elif viewer.person_id is None:
+        runs = []
+    else:
+        runs = list_artifact_runs(
+            limit=limit, archived=archived, visible_to=viewer.person_id, started_by=viewer.person_id
         )
-    )
+    items.extend(_record_from_run(r, with_body=False) for r in runs)
     items.sort(key=lambda a: a.created_at, reverse=True)
     return items[:limit]
 
