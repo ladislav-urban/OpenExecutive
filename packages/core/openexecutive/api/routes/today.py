@@ -3262,6 +3262,8 @@ async def get_alert_card(alert_id: int, request: Request, tz: TzQuery = None) ->
     # Unfolded: a shared card Home leaves out for a live twin still opens on
     # its own page (a link or a host frame may hold its id).
     response = _build_today(include_private=principal, viewer=viewer_for_person(caller), fold_twins=False)
+    # Only the cards their own Home keeps (`_cards_for_caller`).
+    _cards_for_caller(response, caller, principal=principal or _runs_as_principal(request))
     proposal = next((p for p in response.proposals if p.alert_id == alert_id), None)
     # A demo person's Needs you holds the cards nobody owns (to look at only).
     if proposal is None or not (
