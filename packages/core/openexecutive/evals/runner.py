@@ -697,6 +697,10 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
         with views_ctx:
             response = await executive.chat(
                 user_message=query,
+                # The question as the person typed it, without the page block
+                # scenario_query puts in front: what the panel passes as the
+                # answer check's typed_question.
+                typed_question=scenario["query"],
                 session=session,
                 channel_context_block=channel_block,
                 # chat() sets the turn's speaker from this, as the chat route

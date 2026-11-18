@@ -798,6 +798,10 @@ async def _answer(person: Any, email: str, conversation_id: str, message: str, p
                     retrieved_context=retrieved_context,
                     channel_context_block=context_block(session),
                     memory_text=message,
+                    # What the ERPNext user sent from the panel's box, as
+                    # oe_connector signed it, without the page block: the
+                    # only text the projection test may read.
+                    typed_question=message,
                     # No standing facts: they include teammates' own, "(per
                     # <name>)", and ERPNext's word is all that names this person.
                     standing_facts="",

@@ -293,6 +293,7 @@ async def _process_and_reply(
     token: str,
     attachment_file_ids: list[TelegramFile] | None = None,
     reply_context: str = "",
+    typed_question: str | None = None,
 ) -> None:
     """Handle one inbound Telegram message.
 
@@ -500,6 +501,9 @@ async def _process_and_reply(
                 cards=cards if cards_here else None,
                 # The quote is not the person's words: memory keeps their own.
                 memory_text=own_text if reply_context else None,
+                # What the sender typed, from the webhook (_typed_text); None
+                # for a held message replayed later.
+                typed_question=typed_question,
             )
             from openexecutive.orchestrator.disclosure import with_chat_line
 
@@ -620,6 +624,32 @@ def _message_content(message: dict[str, Any]) -> tuple[str, list[TelegramFile]]:
                 content_type = "audio/mp4"
             attachment_file_ids.append((media["file_id"], filename, content_type, voice_note))
     return text, attachment_file_ids
+
+
+# A message Telegram marks as not typed by its sender here: a forward (the
+# Bot API's current field and its older ones), a channel post Telegram copied
+# into a linked group, or one an inline bot wrote.
+_NOT_TYPED_FIELDS = (
+    "forward_origin", "forward_from", "forward_from_chat", "forward_sender_name", "forward_date",
+    "is_automatic_forward", "via_bot",
+)
+_START_RE = re.compile(r"^/start(?:@\w+)?(?:\s|$)", re.IGNORECASE)
+
+
+def _typed_text(message: dict[str, Any]) -> str | None:
+    """What the sender typed in this message, for the answer check's
+    projection test (``answer_check._projection``), or None.
+
+    The message's own text or caption, known bot commands stripped, before
+    any file's text or a voice note's words are added and without the
+    message it replies to. None for a forward, an automatic forward, an
+    inline bot's message and ``/start`` (its payload comes from a link)."""
+    if any(message.get(key) for key in _NOT_TYPED_FIELDS):
+        return None
+    raw = str(message.get("text", "") or message.get("caption", "") or "").strip()
+    if _START_RE.match(raw):
+        return None
+    return _COMMAND_RE.sub("", raw).strip() or None
 
 
 def _reply_context(message: dict[str, Any], token: str = "") -> str:
@@ -861,5 +891,6 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks) 
         token=settings.telegram_bot_token,
         attachment_file_ids=attachment_file_ids or None,
         reply_context=_reply_context(message, settings.telegram_bot_token or ""),
+        typed_question=_typed_text(message),
     )
     return {}

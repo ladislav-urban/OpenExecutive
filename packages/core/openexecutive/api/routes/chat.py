@@ -1171,6 +1171,7 @@ async def _chat_turn(
     card_id: int | None = None,
     host_slot: host_limit.HostSlot | None = None,
     background: bool = False,
+    typed_question: str | None = None,
 ) -> StreamingResponse:
     """Shared streaming-chat handler for both the JSON and multipart routes.
 
@@ -1181,6 +1182,9 @@ async def _chat_turn(
     records as the caller's words instead of `message` (see
     `Executive.stream_chat`). `turn_files` are the uploads as sent, which a
     Python job may take by name for this turn (workflows/turn_files.py).
+    `typed_question` is what the person typed in the composer, from
+    `_typed_question`, or None: only it lets the answer check keep a
+    projection's worked-out figures, here and on a stopped turn.
     """
     from openexecutive.config import get_settings
     from openexecutive.knowledge.retriever import follow_up_query, retrieve
@@ -1193,6 +1197,9 @@ async def _chat_turn(
     )
 
     t0 = time.monotonic()
+    if background:
+        # A background turn is a card's hand-off, never typed in a composer.
+        typed_question = None
     # Same shape every other entry point mints (Executive.stream_chat), so
     # an audit query filtering on the `t-` prefix sees SSE turns too.
     turn_id = f"t-{uuid.uuid4().hex[:12]}"
@@ -1804,6 +1811,7 @@ async def _chat_turn(
                     channel_context_block=shared_block,
                     turn_sources=turn_sources,
                     inbox=inbox,
+                    typed_question=typed_question,
                 ).__aiter__()
             else:
                 stream = executive.stream_chat(
@@ -1822,6 +1830,7 @@ async def _chat_turn(
                     channel_context_block=shared_block,
                     turn_sources=turn_sources,
                     inbox=inbox,
+                    typed_question=typed_question,
                 ).__aiter__()
 
             # Whole-turn deadline, not per-chunk: a stream that drips bytes
@@ -2109,6 +2118,9 @@ async def _chat_turn(
                 try:
                     checked = await answer_check.check_reply(
                         full_response, check_turn, question=message, budget_s=answer_check.STOPPED_BUDGET_S,
+                        # The same typed text the Executive's own check reads,
+                        # never `message` (an upload's is the files' text).
+                        typed_question=typed_question,
                     )
                 except cost_caps.CostCapReached as cap:
                     # Held, never passed: everything here was already shown,
@@ -2351,6 +2363,22 @@ async def _chat_turn(
     )
 
 
+def _typed_question(message: str, *, typed: bool, memory_text: str | None, card_id: int | None) -> str | None:
+    """What the person typed for this turn, for the answer check's projection
+    test (``answer_check._projection``), or None.
+
+    ``typed`` is the client's word that the composer held only what the
+    person typed (Chat.tsx sends it from its own Send alone). It is not a
+    boundary against the signed-in person, who may type "forecast" anyway;
+    it keeps text code put there (a card's seed, a link's draft, a
+    suggestion, a stored message resent) from relaxing the check. So it is
+    dropped whenever the turn carries a hand-off's marks: a memory line
+    (a briefing or card hand-off) or a host page's card."""
+    if not typed or memory_text is not None or card_id is not None:
+        return None
+    return message.strip() or None
+
+
 @router.post("/chat", response_class=EventStreamResponse, responses=STREAM_RESPONSES)
 async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
     # The page beside ERPNext's panel comes only from a host origin's page,
@@ -2374,6 +2402,9 @@ async def chat_stream(body: ChatRequest, request: Request) -> StreamingResponse:
         memory_text=body.memory_text,
         erpnext_page=body.erpnext_page,
         card_id=body.card_id,
+        typed_question=_typed_question(
+            body.message, typed=body.typed, memory_text=body.memory_text, card_id=body.card_id,
+        ),
     )
 
 
@@ -2596,6 +2627,8 @@ async def chat_upload(
     # format is checked by `_clean_client_turn_id` instead of rejected here.
     client_turn_id: str | None = Form(None, max_length=64),
     files: list[UploadFile] = File(...),  # noqa: B008 — FastAPI multipart marker, mirrors the pattern for File parameters
+    # As on ChatRequest.typed: set by the composer's own Send alone.
+    typed: bool = Form(False),
 ) -> StreamingResponse:
     """Streaming chat turn with file/photo attachments.
 
@@ -2618,7 +2651,8 @@ async def chat_upload(
     host_slot = await _take_host_slot(request) if api_caller.from_host(request) else None
     try:
         return await _upload_turn(
-            request, message, session_id, committee_review, client_turn_id, files, host_slot
+            request, message, session_id, committee_review, client_turn_id, files, host_slot,
+            typed_question=_typed_question(message, typed=typed, memory_text=None, card_id=None),
         )
     except BaseException:
         if host_slot is not None:
@@ -2634,6 +2668,8 @@ async def _upload_turn(
     client_turn_id: str | None,
     files: list[UploadFile],
     host_slot: host_limit.HostSlot | None,
+    *,
+    typed_question: str | None = None,
 ) -> StreamingResponse:
     text_parts: list[str] = []
     image_blocks: list[dict[str, Any]] = []
@@ -2697,6 +2733,8 @@ async def _upload_turn(
         memory_text=f"{message}\n\n(Attached files: {', '.join(filenames)})",
         turn_files=turn_files.collect(uploads),
         host_slot=host_slot,
+        # The words typed with the files, never their names or their text.
+        typed_question=typed_question,
     )
 
 
