@@ -93,6 +93,40 @@ def _clean_message(text: str) -> str:
     return _MENTION_RE.sub("", text).strip()
 
 
+def _is_forward(reference: object) -> bool:
+    """Whether a message's ``reference`` marks it as a forward.
+
+    Tested against the forward member, never the reply's name: in
+    discord.py 2.7 ``MessageReferenceType.reply`` is an alias of ``default``,
+    so a real reply's type is named "default"."""
+    kind = getattr(reference, "type", None)
+    if kind is None:
+        return False
+    try:
+        import discord
+
+        if kind is discord.MessageReferenceType.forward:
+            return True
+    except (ImportError, AttributeError):
+        pass
+    return getattr(kind, "value", None) == 1
+
+
+def _typed_text(message: object) -> str | None:
+    """What the sender typed in ``message``, for the answer check's projection
+    test (``answer_check._projection``), or None.
+
+    The message's own content, mentions stripped, before any file's text or
+    a voice message's words are put in front of it and without the message
+    it replies to. None for a forward: Discord keeps a forwarded message in
+    its snapshots and marks its reference as a forward."""
+    if getattr(message, "message_snapshots", None):
+        return None
+    if _is_forward(getattr(message, "reference", None)):
+        return None
+    return _clean_message(str(getattr(message, "content", "") or "")) or None
+
+
 def _session_title_for_message(message: object, mode: str) -> str:
     """Human-readable title shown in the session list. Falls back gracefully
     when the message stub doesn't have the attribute (mocked tests, slash
@@ -772,7 +806,7 @@ async def _reply_context(message: Any, bot_user: Any) -> str:
     reference = getattr(message, "reference", None)
     if reference is None or getattr(reference, "message_id", None) is None:
         return ""
-    if str(getattr(getattr(reference, "type", None), "name", "reply")) != "reply":
+    if _is_forward(reference):
         return ""
     replied = getattr(reference, "resolved", None) or getattr(reference, "cached_message", None)
     if not isinstance(replied, discord.Message):
@@ -823,6 +857,7 @@ async def _handle_message(
     response_router: Callable[[str], Awaitable[MentionRouteResult]] | None = None,
     send_card: Callable[[int, str], Awaitable[None]] | None = None,
     reply_context: str = "",
+    typed_question: str | None = None,
 ) -> None:
     """Core handler shared by on_message and slash commands.
 
@@ -1140,6 +1175,9 @@ async def _handle_message(
                 co_present_person_ids=co_present_person_ids or None,
                 # The quote is not the person's words: memory keeps their own.
                 memory_text=own_text if reply_context else None,
+                # What the sender typed (_typed_text, or /ask's prompt); None
+                # for a held message replayed later.
+                typed_question=typed_question,
             )
 
             # Late routing: for the @mention auto-thread path, the router
@@ -1404,6 +1442,8 @@ def create_discord_bot():
 
         await _handle_message(
             text=cleaned,
+            # The /ask prompt the person typed into the command's option.
+            typed_question=cleaned,
             discord_user_id=user_id,
             discord_channel=str(interaction.channel_id),
             message_id=str(interaction.id),
@@ -1751,6 +1791,7 @@ def create_discord_bot():
                 await _reply_context(message, bot.user) if _is_rostered(discord_user_id) else ""
             ),
             text=cleaned,
+            typed_question=_typed_text(message),
             attachment_count=len(message.attachments or []),
             discord_user_id=discord_user_id,
             discord_channel=discord_channel,

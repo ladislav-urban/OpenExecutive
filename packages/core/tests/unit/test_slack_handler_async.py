@@ -953,6 +953,44 @@ async def test_a_shared_pdf_is_read_into_the_turn() -> None:
 
 
 @pytest.mark.asyncio
+async def test_only_the_senders_typed_words_are_the_typed_question() -> None:
+    """A file-only message's note ("(Attached files: Q1 forecast.pdf)") and
+    the file's text never reach the answer check's projection test; words
+    typed with a file do, alone."""
+    forecast = dict(_PDF_FILE, name="Q1 forecast.pdf")
+    async with _listeners() as listeners, _scanned_pdf_download():
+        with _Harness() as h:
+            await listeners["handle_message"](
+                event=dict(FILE_DM_EVENT, files=[forecast]), say=h.say, client=h.client
+            )
+            assert h.chat.await_args.kwargs["memory_text"] == "(Attached files: Q1 forecast.pdf)"
+            assert h.chat.await_args.kwargs["typed_question"] is None
+            await listeners["handle_message"](
+                event=dict(FILE_DM_EVENT, files=[forecast], text="totals?", ts="1700000101.0"),
+                say=h.say, client=h.client,
+            )
+            assert h.chat.await_args.kwargs["typed_question"] == "totals?"
+
+
+@pytest.mark.asyncio
+async def test_a_replayed_held_message_has_no_typed_question() -> None:
+    from openexecutive.integrations import roster_intake
+    from openexecutive.people.roster_requests import HeldMessage
+
+    async with _listeners():
+        replay = roster_intake._REPLAYERS["slack"]
+        with _Harness() as h, patch(
+            "slack_sdk.web.async_client.AsyncWebClient.chat_postMessage", new=AsyncMock()
+        ):
+            message = HeldMessage(
+                id=1, request_id=1, external_id="1700000100.0",
+                payload={"event": dict(DM_EVENT, text="what if Metro pays late?"), "mode": "dm"},
+            )
+            assert await replay(message, None) is True
+            assert h.chat.await_args.kwargs["typed_question"] is None
+
+
+@pytest.mark.asyncio
 async def test_an_unrostered_senders_file_is_never_downloaded() -> None:
     async with _listeners() as listeners, _scanned_pdf_download() as download:
         with _Harness() as h:

@@ -5774,6 +5774,44 @@ chat:
     question is a projection (answer_check._PROJECTION_Q: known values
     written in, the rest under PROJECTION_NOTE, in the product's words on
     a named install); audit `kept`.
+    The projection test (answer_check._projection) reads only
+    `typed_question`: the raw text the person typed on that surface, or
+    None, which never relaxes. Never memory_text, a card's headline, a
+    file's name or text, a transcript, a forward or an email, which an
+    outsider can word ("Updated forecast for Q1") to keep figures no
+    result holds. `question` (memory_text or user_message) stays the
+    correction and review calls' context, wrapped as untrusted; review
+    verdicts are bounded by read_verdict (operands are ERPNext values
+    code recomputes). Per surface: web /chat and /chat/upload pass the
+    raw message only when the client sent `typed: true` (default false)
+    and no memory_text or card_id came with it (chat._typed_question);
+    the web chat sends it only from the composer's own Send while the
+    composer holds nothing code put there (an Edit, a stopped turn's
+    text given back, a ?draft= link, a follow-up suggestion; the
+    browser's undo counts as code), and from leftovers every part of
+    which was typed (ui lib/composerOrigin.ts); the stopped/timed-out
+    check uses the same value; background turns (card hand-offs) None.
+    The ERPNext panel passes its signed message without the page block.
+    Telegram, Discord, Slack and Google Chat each have one _typed_text
+    helper: the event's own text before any file text, file note,
+    transcript or quote; None for a forward (Telegram also /start,
+    via_bot and automatic forwards; Google Chat a non-REPLY quote) and
+    for held-message replays; Discord's /ask passes its typed prompt.
+    Email, MCP, scheduler, CLI and replay pass None. Evals pass the raw
+    scenario query. Cost: projections asked through an Edit, Try again,
+    a follow-up chip, a ?draft= link, the Home Ask box or a hand-off
+    lose the relaxation until the question is typed. Why: an inbound
+    email's subject or a file's name could relax the check.
+    Known residuals (security review, Nov 18, 2026; no code change):
+    a Telegram t.me/<bot>?text= link's prefill and a web cut-then-paste of
+    code-filled text go out as typed; both need the person's own Send, and
+    the figures still stand only under PROJECTION_NOTE. One Ctrl+Z while
+    typing marks the turn untyped until the box is emptied (fails closed;
+    a cost, not a hole). A host-origin turn with card_id never relaxes,
+    since oe_connector's typed rule can't be checked server-side. Hand-offs
+    with no memory line (Right now, a briefing card's own prompt) rely on
+    the client's call-site false. Evals can't yet express a not-typed turn
+    (out of scope).
     Counts of records (figure_check._counts_records, Figure.count) match only
     Sources.counts of that record (count_words); unknown ones become
     "several" and unknown table cells "—" (answer_correct.vague), never a

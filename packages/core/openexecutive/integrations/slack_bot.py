@@ -453,6 +453,17 @@ def _shared_files(event: dict) -> list[dict]:
     return [f for f in files if isinstance(f, dict)][:_MAX_SHARED_FILES]
 
 
+def _typed_text(event: dict) -> str | None:
+    """What the sender typed in this Slack message, for the answer check's
+    projection test (``answer_check._projection``), or None.
+
+    The event's own ``text``, mentions stripped: never the "(Attached files:
+    …)" note that stands in for a file-only message, a file's text or a voice
+    note's words, and not a shared message's original (Slack sends that in
+    ``attachments``, not ``text``). None when the sender typed nothing."""
+    return re.sub(r"<@\w+>", "", str(event.get("text") or "")).strip() or None
+
+
 def _file_name(file: dict) -> str:
     return str(file.get("name") or file.get("title") or "file")
 
@@ -783,9 +794,12 @@ async def create_slack_app():
     )
     @cost_caps.as_turn  # one inbound message, one turn for the cost cap
     async def _handle_message(
-        event: dict, say, client=None, mode: str = "mention"
+        event: dict, say, client=None, mode: str = "mention", replayed: bool = False
     ) -> None:
         """Process one inbound Slack message.
+
+        ``replayed``: a message held while its sender was off the roster and
+        replayed now; its turn has no typed question (``_typed_text``).
 
         ``mode`` is set by the caller:
           - ``"mention"`` — fired from ``app_mention``. Unconditional reply.
@@ -800,6 +814,9 @@ async def create_slack_app():
         files = _shared_files(event)
         if not cleaned and not files:
             return
+        # Taken before the file note stands in for missing words and before
+        # a voice note's words join them.
+        typed_question = None if replayed else _typed_text(event)
         # What the sender sent, in their own words plus the files' names —
         # the "(Attached files: …)" note the web upload route uses. A
         # file-only message has no words, so the note stands in for them.
@@ -1289,6 +1306,9 @@ async def create_slack_app():
                     # Peer memory records what the sender wrote and the files'
                     # names, never a document's text as their words.
                     memory_text=own_words if (files or reply_quote) else None,
+                    # The sender's typed words alone (_typed_text): never the
+                    # file note, a file's text or a voice note's words.
+                    typed_question=typed_question,
                 )
 
                 # No unfurls: Slack would fetch a link in the reply on its own,
@@ -1481,7 +1501,7 @@ async def create_slack_app():
             return await app.client.chat_postMessage(channel=channel, text=text, **kwargs)
 
         async with inflight:
-            await _handle_message(event, _say, client=app.client, mode=mode)
+            await _handle_message(event, _say, client=app.client, mode=mode, replayed=True)
         return True
 
     from openexecutive.integrations.roster_intake import register_replayer

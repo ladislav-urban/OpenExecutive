@@ -235,6 +235,20 @@ async def _read_attachments(
     return "\n\n".join(parts), blocks
 
 
+def _typed_text(message: dict[str, Any]) -> str | None:
+    """What the sender typed in this Chat message, for the answer check's
+    projection test (``answer_check._projection``), or None.
+
+    The message's own text, mention tokens stripped: taken before a
+    file-only message's "(Attached files: …)" stands in for it and before
+    any file's text, and without the message it quotes. None for a forward
+    (a quote whose ``quoteType`` isn't REPLY) and when nothing was typed."""
+    meta = message.get("quotedMessageMetadata")
+    if isinstance(meta, dict) and str(meta.get("quoteType") or "REPLY") != "REPLY":
+        return None
+    return re.sub(r"<users/\d+>", "", str(message.get("text") or "")).strip() or None
+
+
 @cost_caps.as_turn  # one inbound message, one turn for the cost cap
 async def _process_and_reply(
     message_text: str,
@@ -247,9 +261,11 @@ async def _process_and_reply(
     attachments: list[dict] | None = None,
     sender_email: str = "",
     reply_context: str = "",
+    typed_question: str | None = None,
 ) -> None:
     """One Chat message's turn. ``reply_context`` is the message it quotes
-    (``integrations.reply_context``), put in front of the words."""
+    (``integrations.reply_context``), put in front of the words.
+    ``typed_question`` is what the sender typed (``_typed_text``)."""
     if not space_name:
         logger.error("Google Chat: missing space_name for message %s, cannot reply", message_name)
         return
@@ -366,6 +382,7 @@ async def _process_and_reply(
             attachment_blocks=image_blocks or None,
             # The quote is not the person's words: memory keeps their own.
             memory_text=own_text if reply_context else None,
+            typed_question=typed_question,
         )
         from openexecutive.orchestrator.disclosure import with_chat_line
 
@@ -457,5 +474,6 @@ async def google_chat_webhook(request: Request, background_tasks: BackgroundTask
         service_account_email=settings.google_chat_service_account_email,
         attachments=attachments,
         sender_email=str(body.get("user", {}).get("email") or ""),
+        typed_question=_typed_text(message),
     )
     return {}

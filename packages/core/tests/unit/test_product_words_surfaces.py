@@ -59,7 +59,11 @@ def unnamed() -> Iterator[None]:
 
 
 def _ask(text: str, question: str) -> str:
-    return asyncio.run(answer_check.check_reply(text, _turn(), question=question, model="m"))
+    # The person typed it: only typed text lets a projection's figures stand
+    # under the note (answer_check._projection).
+    return asyncio.run(
+        answer_check.check_reply(text, _turn(), question=question, model="m", typed_question=question)
+    )
 
 
 # -- the answer check's own sentences ---------------------------------------------

@@ -37,8 +37,15 @@ OUTLOOK = (
 )
 
 
-def _ask(text: str, question: str, turn: answer_check.AnswerCheckTurn | None = None) -> str:
-    return asyncio.run(answer_check.check_reply(text, turn or _turn(), question=question, model="m"))
+def _ask(
+    text: str, question: str, turn: answer_check.AnswerCheckTurn | None = None, *, typed: bool = True,
+) -> str:
+    """Checks ``text`` as a reply to ``question``; ``typed``: the person typed
+    it on that surface (``typed_question``), else it came from a card, a file
+    or an email (``None``)."""
+    return asyncio.run(answer_check.check_reply(
+        text, turn or _turn(), question=question, model="m", typed_question=question if typed else None,
+    ))
 
 
 def test_a_reply_whose_only_failures_are_names_stands(
@@ -117,3 +124,46 @@ def test_correct_keep_never_replaces_a_reply_whole(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv("ERPNEXT_ANSWER_CHECK", "correct")
     _reviews(monkeypatch, *[CANNOT_TELL] * 10)
     assert _ask(text, "Who owes us?", _turn()) == answer_correct.WHOLE_REPLY
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # A card's headline: an inbound email's subject.
+        "Updated forecast for Q1",
+        # A web upload's memory line.
+        "totals?\n\n(Attached files: Q1 forecast.pdf)",
+        # A file's extracted text in a chat app's message.
+        "[Attached: Q1 forecast.pdf]\nWhat if Metro pays late?\n\ntotals?",
+    ],
+)
+def test_a_projection_word_not_typed_by_the_person_never_keeps_figures(
+    monkeypatch: pytest.MonkeyPatch, audit_rows: list[Any], question: str,
+) -> None:
+    # The same outlook as above, asked by text the person did not type: its
+    # figures no result holds go, as for any lookup.
+    _reviews(monkeypatch, *[CANNOT_TELL] * 10)
+    _rewrites(monkeypatch, None)
+    out = _ask(OUTLOOK, question, _turn(), typed=False)
+    assert answer_check.PROJECTION_NOTE not in out
+    assert "$41,130" not in out and "| Week 1 | — |" in out
+
+
+def test_only_typed_question_relaxes_and_question_stays_the_models_context(
+    monkeypatch: pytest.MonkeyPatch, audit_rows: list[Any],
+) -> None:
+    seen: list[str] = []
+
+    async def review(*, question: str, flagged: list[Any], **_: Any) -> list[Any]:
+        seen.append(question)
+        return [CANNOT_TELL] * len(flagged)
+
+    monkeypatch.setattr("openexecutive.orchestrator.answer_review.review", review)
+    _rewrites(monkeypatch, None)
+    out = asyncio.run(answer_check.check_reply(
+        OUTLOOK, _turn(), question="Updated forecast for Q1", model="m", typed_question="totals?",
+    ))
+    assert answer_check.PROJECTION_NOTE not in out
+    assert seen == ["Updated forecast for Q1"]
+    assert not answer_check._projection(None) and not answer_check._projection("")
+    assert answer_check._projection("What if Metro pays late?")

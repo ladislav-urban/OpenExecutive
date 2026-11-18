@@ -1519,6 +1519,7 @@ class Executive:
         turn_sources: TurnSources | None = None,
         standing_facts: str | None = None,
         inbox: TurnInbox | None = None,
+        typed_question: str | None = None,
     ) -> AsyncIterator[str | dict[str, Any]]:
         """Stream a response from the Executive, routing to specialists as needed.
 
@@ -1556,6 +1557,14 @@ class Executive:
         from everything recorded under their peer, and a quote gate satisfied
         by the Executive's own words stores its recommendation as the
         person's decision or open loop.
+
+        ``typed_question`` is the text the person typed on that surface,
+        before any file text, file note, transcript, quote or page block, or
+        ``None`` where the surface has none (a card hand-off, an email, a
+        forward, the scheduler). Only it decides whether the answer check
+        lets figures no ERPNext result holds stand as a projection
+        (``answer_check._projection``); ``memory_text or user_message`` stays
+        the check's context for its model calls.
         """
         logger.info(
             "chat turn: %s",
@@ -1783,6 +1792,7 @@ class Executive:
             try:
                 checked = await answer_check.check_reply(
                     body, check_turn, question=memory_text or user_message, model=effective_model,
+                    typed_question=typed_question,
                 )
             except cost_caps.CostCapReached as cap:
                 full_response, event = self._capped_check(full_response, cap, session.session_id)
@@ -1998,6 +2008,7 @@ class Executive:
         turn_sources: TurnSources | None = None,
         standing_facts: str | None = None,
         inbox: TurnInbox | None = None,
+        typed_question: str | None = None,
     ) -> AsyncIterator[str | dict[str, Any]]:
         """Committee-reviewed variant of stream_chat.
 
@@ -2253,6 +2264,7 @@ class Executive:
                 yield {"type": "phase", "phase": phase, "session_id": session.session_id}
             final_draft = await self._checked_stopped_draft(
                 draft, check_turn, question=memory_text or user_message, model=effective_model,
+                typed_question=typed_question,
             )
             yield final_draft
             session.add_user_message(user_message)
@@ -2453,6 +2465,7 @@ class Executive:
             cost_caps.mark_stopped(sentence)
             final_response = await self._checked_stopped_draft(
                 _with_stop(draft, sentence), check_turn, question=memory_text or user_message, model=effective_model,
+                typed_question=typed_question,
             )
             revision_capped = True
             yield final_response
@@ -2473,6 +2486,7 @@ class Executive:
         try:
             checked = body if revision_capped else await answer_check.check_reply(
                 body, check_turn, question=memory_text or user_message, model=effective_model,
+                typed_question=typed_question,
             )
         except cost_caps.CostCapReached as cap:
             final_response, event = self._capped_check(final_response, cap, session.session_id)
@@ -4437,7 +4451,7 @@ class Executive:
 
     @staticmethod
     async def _checked_stopped_draft(
-        draft: str, check_turn: Any, *, question: str, model: str,
+        draft: str, check_turn: Any, *, question: str, model: str, typed_question: str | None = None,
     ) -> str:
         """A committee draft a cost cap stopped, as the reply: held to the
         answer check like any reply, its stop sentence kept last. Nothing of
@@ -4447,7 +4461,9 @@ class Executive:
         body = _without_stop(draft, stop)
         try:
             checked = (
-                await answer_check.check_reply(body, check_turn, question=question, model=model)
+                await answer_check.check_reply(
+                    body, check_turn, question=question, model=model, typed_question=typed_question,
+                )
                 if body.strip()
                 else body
             )
@@ -4498,6 +4514,7 @@ class Executive:
         memory_text: str | None = None,
         standing_facts: str | None = None,
         cards: list[int] | None = None,
+        typed_question: str | None = None,
         product_words: bool = True,
     ) -> str:
         """Non-streaming chat — collects and returns the full response.
@@ -4530,7 +4547,8 @@ class Executive:
         keeps each underlying entry point's own default (``"minimal"``
         for the streaming path, ``"medium"`` for the committee path).
         ``memory_text`` is the person's own words for the post-turn passes
-        (see ``stream_chat``).
+        (see ``stream_chat``). ``typed_question`` is the text the person typed
+        on that surface, or ``None`` (see ``stream_chat``).
         """
         # Build the kwargs dict so we can conditionally include the
         # reasoning_level only when caller specified one — otherwise
@@ -4548,6 +4566,7 @@ class Executive:
             "briefing_context": briefing_context,
             "channel_context_block": channel_context_block,
             "memory_text": memory_text,
+            "typed_question": typed_question,
         }
         if peer_memory_reasoning_level is not None:
             common_kwargs["peer_memory_reasoning_level"] = peer_memory_reasoning_level

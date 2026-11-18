@@ -85,6 +85,7 @@ def turns(monkeypatch: pytest.MonkeyPatch, temp_db: Path) -> list[dict[str, Any]
                 "from_host": session.from_host,
                 "panel_turn": erpnext_panel_turn(session),
                 "trusted_alert_ids": set(session.trusted_alert_ids),
+                "typed_question": _kwargs.get("typed_question"),
             })
             yield "ok"
 
@@ -395,3 +396,29 @@ def test_a_dropped_connection_frees_the_slot(
         assert response.status_code == 200
         next(response.iter_lines())
     assert host_limit._in_flight == {}
+
+
+# --- The answer check's typed question ----------------------------------------
+
+FORECAST = "What if Metro pays as late as it usually does?"
+
+
+def test_typed_with_a_memory_line_is_no_typed_question(turns: list[dict[str, Any]]) -> None:
+    assert _client().post("/chat", json={"message": FORECAST, "typed": True, "memory_text": "x"}).status_code == 200
+    assert turns[-1]["typed_question"] is None
+    assert _client().post("/chat", json={"message": FORECAST, "typed": True}).status_code == 200
+    assert turns[-1]["typed_question"] == FORECAST
+
+
+def test_a_host_turn_with_a_card_never_relaxes(turns: list[dict[str, Any]]) -> None:
+    # The switch is off, so the card is dropped before it is read; the turn
+    # still never relaxes: the host's rule for "typed" can't be checked here.
+    response = _client().post(
+        "/chat", json={"message": FORECAST, "typed": True, "card_id": 3, "erpnext_page": HOME}, headers=HOST,
+    )
+    assert response.status_code == 200
+    assert turns[-1]["typed_question"] is None
+    # The same host turn with no card is typed.
+    response = _client().post("/chat", json={"message": FORECAST, "typed": True}, headers=HOST)
+    assert response.status_code == 200
+    assert turns[-1]["typed_question"] == FORECAST

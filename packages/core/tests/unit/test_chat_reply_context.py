@@ -157,6 +157,33 @@ async def test_discord_reply_quotes_the_answered_message() -> None:
     assert await _reply_context(message, bot) == ""
 
 
+@pytest.mark.asyncio
+async def test_discord_a_real_reply_is_quoted_and_a_real_forward_is_not() -> None:
+    """discord.py's own MessageReference: a reply's type is named "default"
+    (``reply`` is its alias), so only the forward member may end the quote."""
+    import discord
+
+    from openexecutive.integrations.discord_bot import _reply_context
+
+    bot = SimpleNamespace(id=9)
+    answered = SimpleNamespace(content="Maya wants to send the lease.", attachments=[], author=bot)
+
+    async def fetch_message(message_id: int) -> Any:
+        return answered
+
+    reply = discord.MessageReference(message_id=6, channel_id=1, type=discord.MessageReferenceType.reply)
+    forward = discord.MessageReference(message_id=6, channel_id=1, type=discord.MessageReferenceType.forward)
+    message = SimpleNamespace(
+        id=7, author=SimpleNamespace(id=42), reference=reply,
+        channel=SimpleNamespace(fetch_message=fetch_message),
+    )
+    assert await _reply_context(message, bot) == (
+        "(Replying to your earlier message:)\n> Maya wants to send the lease."
+    )
+    message.reference = forward
+    assert await _reply_context(message, bot) == ""
+
+
 # ------------------------------------------------------------ what memory keeps
 
 QUOTE = "(Replying to your earlier message:)\n> I recommend we drop the vendor."

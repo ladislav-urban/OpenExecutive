@@ -116,6 +116,12 @@ class ChatRequest(BaseModel):
     # any other call.
     erpnext_page: ErpnextPage | None = None
     card_id: int | None = Field(None, ge=1, le=2**62)
+    # True only when the person typed `message` in the composer themselves:
+    # the web chat sends it from its own Send alone, never for a hand-off, a
+    # resent or edited message, a link's draft or a suggestion. Only then may
+    # the answer check let a projection's worked-out figures stand. Ignored
+    # with `memory_text` or `card_id` (api/routes/chat.py `_typed_question`).
+    typed: bool = False
 
 
 class BackgroundChatRequest(BaseModel):

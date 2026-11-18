@@ -74,6 +74,10 @@ _FIGURE_TOOLS = frozenset({"erpnext__list_records", "erpnext__get_record", "erpn
 # Phrases only, each closed by a word boundary: "project" (a DocType),
 # "what would be our total …" and "Outlook" (the mail app) are lookups, and a
 # lookup's figures stay held to its results (security review of #163).
+# Matched only against what the person typed on that surface
+# (``typed_question``, _projection): never against a card's headline, a
+# file's name or text, a transcript, a forward or an email, which an outsider
+# can word ("Updated forecast for Q1") to keep figures no result holds.
 _PROJECTION_Q = re.compile(
     r"\b(?:what if|what happens if|forecasts?|forecasting|projections?|projected"
     r"|cash outlook|outlook for|\d+[- ]week (?:outlook|forecast|view|cash)"
@@ -82,6 +86,14 @@ _PROJECTION_Q = re.compile(
     r"|if \w+ (?:pays?|paid) (?:late|later|as late|on time))\b",
     re.I,
 )
+
+
+def _projection(typed_question: str | None) -> bool:
+    """Whether the person's own typed words ask for a projection. ``None``
+    (no typed text on that path) never relaxes the check."""
+    return bool(typed_question) and _PROJECTION_Q.search(typed_question or "") is not None
+
+
 PROJECTION_NOTE = (
     "_The projected figures above are estimates; "
     "they couldn't be checked against ERPNext's records._"
@@ -407,7 +419,16 @@ def _passes(text: str, sources: figure_check.Sources, names: name_check.NameSour
     return not any(n.flagged for n in name_check.check_names(text, names, figures=[(f.start, f.end) for f in figures]))
 
 
-async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str, models: bool, counts: _Counts) -> str:
+async def _check(
+    text: str,
+    turn: AnswerCheckTurn,
+    *,
+    question: str,
+    model: str,
+    models: bool,
+    counts: _Counts,
+    typed_question: str | None = None,
+) -> str:
     from openexecutive.orchestrator.answer_review import CANNOT_TELL, review
 
     fmt, sources, names = await _sources(turn)
@@ -487,19 +508,19 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
             counts.substituted = 0
             turn.whole_replaced = True
             return answer_correct.WHOLE_REPLY
-        return _whole(text, [], turn, question=question, counts=counts)
+        return _whole(text, [], turn, typed_question=typed_question, counts=counts)
     failed = [c.figure for c in corrections]
     if not answer_correct.needs_rewrite(text, corrections):
         substituted = answer_correct.substitute(text, corrections)
         if _passes(substituted, checked, checked_names, fmt):
             counts.substituted += len(corrections)
             return substituted
-    if _PROJECTION_Q.search(question or "") and any(
+    if _projection(typed_question) and any(
         isinstance(c.figure, Figure) and c.right is None for c in corrections
     ):
         # Worked-out figures no result holds: never cut from a projection,
         # whose weeks or cases would go missing (_whole).
-        return _whole(text, corrections, turn, question=question, counts=counts)
+        return _whole(text, corrections, turn, typed_question=typed_question, counts=counts)
     if models:
         try:
             rewrite = await _rewrite(question, text, corrections, model)
@@ -523,7 +544,7 @@ async def _check(text: str, turn: AnswerCheckTurn, *, question: str, model: str,
         # What code wrote must pass as a rewrite must; else the decided sentence.
         fixed = answer_correct.WHOLE_REPLY
     if fixed == answer_correct.WHOLE_REPLY:
-        return _whole(text, corrections, turn, question=question, counts=counts)
+        return _whole(text, corrections, turn, typed_question=typed_question, counts=counts)
     else:
         written = sum(1 for c in corrections if c.right is not None and answer_correct.written(c) in fixed)
         counts.substituted += written
@@ -536,7 +557,7 @@ def _whole(
     corrections: list[answer_correct.Correction],
     turn: AnswerCheckTurn,
     *,
-    question: str,
+    typed_question: str | None,
     counts: _Counts,
 ) -> str:
     """What a reply the check would replace whole becomes, and a projection
@@ -546,8 +567,9 @@ def _whole(
       can't place is not a figure ERPNext contradicts, and blanking a reply
       whose every figure passed hid the answer (the pilot's Nov 5, 2026
       retake, "what's our cash position").
-    - A projection (``_PROJECTION_Q``): every known value is written in, and
-      the figures nothing contradicts stand, under ``PROJECTION_NOTE``.
+    - A projection (``_PROJECTION_Q`` on ``typed_question``): every known
+      value is written in, and the figures nothing contradicts stand, under
+      ``PROJECTION_NOTE``.
     - With ``correct_keep``: every known value written in, the rest kept.
     - Otherwise ``WHOLE_REPLY``, as before.
     """
@@ -556,7 +578,7 @@ def _whole(
         counts.kept = 1
         counts.left_out = 0
         return text
-    if _PROJECTION_Q.search(question or ""):
+    if _projection(typed_question):
         known = [c for c in figure_fixes if c.right is not None]
         out = answer_correct.substitute(text, known) if known else text
         counts.kept = 1
@@ -715,6 +737,7 @@ async def check_reply(
     question: str = "",
     model: str = "",
     budget_s: float = CHECK_BUDGET_S,
+    typed_question: str | None = None,
 ) -> str:
     """``text`` with its figures held to the turn's ERPNext results: the same
     string when nothing changed. Checks a turn's reply once (a second call
@@ -723,7 +746,13 @@ async def check_reply(
     Its calls are kept off the turn's cost cap (never the others): a cap
     must never switch the check off. When a cap refuses one, it raises
     ``CostCapReached``: the reply is held, never passed unchecked (the
-    caller withholds what it hasn't shown yet). Nothing else raises."""
+    caller withholds what it hasn't shown yet). Nothing else raises.
+
+    ``question`` is what the turn was asked (the person's words, or a card's
+    or an email's text): context for the correction and review calls only,
+    wrapped as untrusted there. ``typed_question`` is the text the person
+    typed on that surface, or ``None`` where there is none; it alone decides
+    whether figures no result holds stand as a projection (_projection)."""
     if turn is None or not turn.results or not text.strip() or not enabled():
         return text
     if turn._done is not None and turn._done[0] == text:
@@ -739,13 +768,20 @@ async def check_reply(
         with cost_caps._check_exempt():
             try:
                 fixed = await asyncio.wait_for(
-                    _check(text, turn, question=question, model=model, models=True, counts=counts), budget_s,
+                    _check(
+                        text, turn, question=question, model=model, models=True, counts=counts,
+                        typed_question=typed_question,
+                    ),
+                    budget_s,
                 )
             except TimeoutError:
                 logger.warning("answer_check: out of time; checking with code alone")
                 counts = _Counts(code_only=True)
                 fixed = await asyncio.wait_for(
-                    _check(text, turn, question=question, model=model, models=False, counts=counts),
+                    _check(
+                        text, turn, question=question, model=model, models=False, counts=counts,
+                        typed_question=typed_question,
+                    ),
                     CODE_ONLY_BUDGET_S,
                 )
     except Exception as exc:
