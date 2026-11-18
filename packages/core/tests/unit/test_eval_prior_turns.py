@@ -282,3 +282,13 @@ def test_the_cash_outlook_follow_ups_run_their_first_turn_live() -> None:
         (turn,) = parse_prior_turns(shipped[sid])
         assert turn.reply is None, sid
         assert turn.typed == shipped["erpnext_094"]["prior_turns"][0]["user"], sid
+
+
+def test_the_unbilled_work_follow_up_runs_both_turns_live_and_names_no_project_id() -> None:
+    # A project id is renumbered at every demo refresh and differs per site:
+    # the scripted turns named one the follow-up's read then couldn't find.
+    import re
+
+    s = {x["id"]: x for x in load_scenarios()}["erpnext_064"]
+    assert [t.reply for t in parse_prior_turns(s)] == [None, None]
+    assert not re.search(r"PROJ-\d", str(s["prior_turns"]) + s["query"])
