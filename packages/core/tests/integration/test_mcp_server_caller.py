@@ -132,8 +132,9 @@ def test_signed_callers_reach_the_mcp_handlers(
     roster: dict[str, int], monkeypatch: pytest.MonkeyPatch, headers: Any, allowed: bool
 ) -> None:
     app, endpoint = _app(monkeypatch, signed=True)
-    with patch("openexecutive.memory.episodic.list_decisions", return_value=[]):
-        out = _read(app, endpoint, "oe://memory/decisions", headers())
+    # Past advice is the owner's alone (decisions and initiatives are the team's).
+    with patch("openexecutive.memory.episodic.list_advice", return_value=[]):
+        out = _read(app, endpoint, "oe://memory/advice", headers())
     if allowed:
         assert json.loads(out["result"]["contents"][0]["text"]) == []
     else:

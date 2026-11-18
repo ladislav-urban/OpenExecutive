@@ -11954,7 +11954,13 @@ integrations:
     principal; a service is no one. With no request (a direct in-process
     call) it is Caller("open"), or Caller("service") once signed callers are
     on. Rules per caller, mirroring the web app:
-      - oe://memory/{decisions,initiatives,advice}, oe://today/activity: the
+      - oe://memory/decisions, oe://memory/initiatives,
+        oe://departments/state: the principal and an active, non-demo People
+        entry (_require_member, today._audience_for), as GET
+        /memories/decisions, /memories/initiatives and /departments; a demo
+        person, a service and an unrostered or suspended caller get "Only
+        someone on the team can read this."
+      - oe://memory/advice, oe://today/activity: the
         principal alone (resolves to the principal, or defaults_to_principal);
         anyone else gets "Only the owner can read this." (CallerRefused,
         returned by FastMCP as the JSON-RPC error message).

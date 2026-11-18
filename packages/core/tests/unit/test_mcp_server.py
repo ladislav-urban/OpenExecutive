@@ -281,7 +281,9 @@ def test_with_no_request_the_caller_is_who_a_request_naming_no_one_would_be(
 # ---------------------------------------------------------------------------
 # Who may read what.
 # ---------------------------------------------------------------------------
-_OWNER_ONLY = ["memory_decisions", "memory_initiatives", "memory_advice", "today_activity"]
+_OWNER_ONLY = ["memory_advice", "today_activity"]
+# The owner and the active team, as their HTTP twins (test_mcp_matches_http).
+_MEMBER_ONLY = ["memory_decisions", "memory_initiatives", "departments_state"]
 _ROSTER_ONLY = ["today_briefing", "people_roster"]
 
 
@@ -345,8 +347,15 @@ def test_a_teammate_reads_the_briefing_and_roster_but_a_service_does_not(
             _read(name, nobody)
 
 
-def test_anyone_reads_the_departments(roster: dict[str, int]) -> None:
-    assert json.loads(_read("departments_state", Caller("service"))) == []
+@pytest.mark.parametrize("name", _MEMBER_ONLY)
+def test_the_owner_and_a_teammate_read_what_the_team_reads(
+    roster: dict[str, int], name: str
+) -> None:
+    for who in (Caller("operator"), Caller("user", OWNER), Caller("user", TEAMMATE)):
+        json.loads(_read(name, who))
+    for nobody in (Caller("service"), Caller("user", "stranger@else.example")):
+        with pytest.raises(mcp_server.CallerRefused):
+            _read(name, nobody)
 
 
 def test_the_briefing_is_narrowed_as_get_today_narrows_it(roster: dict[str, int]) -> None:

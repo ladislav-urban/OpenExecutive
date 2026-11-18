@@ -267,6 +267,24 @@ async def _require_principal() -> McpCaller:
     return resolved
 
 
+async def _require_member() -> McpCaller:
+    """The principal, or someone on an active, non-demo People entry: the
+    rule the HTTP twins apply (api.principal_gate.caller_is_member, through
+    today._audience_for). A demo person, a service, an unrostered or
+    suspended caller and a roster that can't be read are refused."""
+    from openexecutive.api.routes.today import _audience_for
+
+    resolved = await current_caller()
+    if resolved.is_principal:
+        return resolved
+    if resolved.person_id is None:
+        raise CallerRefused(ROSTER_ONLY)
+    audience = await asyncio.to_thread(_audience_for, resolved.person_id)
+    if audience is not None and audience.demo:
+        raise CallerRefused(ROSTER_ONLY)
+    return resolved
+
+
 async def _require_person() -> McpCaller:
     """The principal, or someone on the roster; a service or an unrostered
     caller names no one, so reads nothing about the people here."""
@@ -352,12 +370,16 @@ async def people_roster() -> str:
 @mcp.resource(
     "oe://departments/state",
     name="Department state",
-    description="Departments with goals, cadences, and current state.",
+    description=(
+        "Departments with goals, cadences, and current state. For the owner and "
+        "the active team, as GET /departments."
+    ),
     mime_type="application/json",
 )
 async def departments_state() -> str:
     from openexecutive.departments.store import list_departments
 
+    await _require_member()
     depts = await asyncio.to_thread(list_departments)
     return _json([d.model_dump(mode="json") for d in depts])
 
@@ -365,13 +387,16 @@ async def departments_state() -> str:
 @mcp.resource(
     "oe://memory/decisions",
     name="Episodic memory: decisions",
-    description="Past decisions recorded in episodic memory. The owner's alone.",
+    description=(
+        "Past decisions recorded in episodic memory. For the owner and the active "
+        "team, as GET /memories/decisions."
+    ),
     mime_type="application/json",
 )
 async def memory_decisions() -> str:
     from openexecutive.memory.episodic import list_decisions
 
-    await _require_principal()
+    await _require_member()
     rows = await asyncio.to_thread(list_decisions)
     return _json([r.model_dump(mode="json") for r in rows])
 
@@ -379,13 +404,16 @@ async def memory_decisions() -> str:
 @mcp.resource(
     "oe://memory/initiatives",
     name="Episodic memory: initiatives",
-    description="Tracked initiatives recorded in episodic memory. The owner's alone.",
+    description=(
+        "Tracked initiatives recorded in episodic memory. For the owner and the "
+        "active team, as GET /memories/initiatives."
+    ),
     mime_type="application/json",
 )
 async def memory_initiatives() -> str:
     from openexecutive.memory.episodic import list_initiatives
 
-    await _require_principal()
+    await _require_member()
     rows = await asyncio.to_thread(list_initiatives)
     return _json([r.model_dump(mode="json") for r in rows])
 
