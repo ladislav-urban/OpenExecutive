@@ -1908,6 +1908,7 @@ _INTERNAL_ACTION_KINDS = frozenset({"nudge_scan", "alert_review_scan"})
 def list_pending_scheduled_actions(
     *,
     limit: int = 50,
+    created_by_person_id: int | None = None,
     db_path: Path | None = None,
 ) -> list[ScheduledAction]:
     """User-facing pending scheduled actions, soonest first.
@@ -1918,19 +1919,28 @@ def list_pending_scheduled_actions(
     Excludes internal plumbing (the ``__internal__`` channel used by cadences /
     research scans / brief generators, and the ``nudge_scan`` heartbeat), the
     same set the activity feed hides.
+
+    ``created_by_person_id`` keeps only the rows that person's turns queued,
+    and never a proactive nudge (the principal's alone).
     """
     resolved = _resolve_db_path(db_path)
     if not resolved.exists():
         return []
     placeholders = ",".join("?" * len(_INTERNAL_ACTION_KINDS))
+    own = ""
+    params: list[Any] = [_INTERNAL_ACTION_CHANNEL, *_INTERNAL_ACTION_KINDS]
+    if created_by_person_id is not None:
+        own = "  AND created_by_person_id = ? AND kind != 'proactive_nudge' "
+        params.append(created_by_person_id)
     with _get_conn(resolved) as conn:
         rows = conn.execute(
             "SELECT * FROM scheduled_actions "
             "WHERE status = 'pending' "
             "  AND channel != ? "
             f"  AND kind NOT IN ({placeholders}) "
+            f"{own}"
             "ORDER BY run_at LIMIT ?",
-            (_INTERNAL_ACTION_CHANNEL, *_INTERNAL_ACTION_KINDS, limit),
+            (*params, limit),
         ).fetchall()
     return [ScheduledAction(**dict(row)) for row in rows]
 

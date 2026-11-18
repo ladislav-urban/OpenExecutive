@@ -1307,6 +1307,10 @@ def test_in_flight_lists_user_facing_pending_actions(
         intent_text="heartbeat", kind="nudge_scan", db_path=db,
     )
 
+    # The principal sees every pending action; a caller who resolves to no
+    # one sees none (test_today_in_flight_scope).
+    people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    people_registry.invalidate()
     data = _make_client().get("/today").json()
     in_flight = data["in_flight"]
     assert len(in_flight) == 1
@@ -1327,6 +1331,10 @@ def test_in_flight_overdue_when_run_at_past(
         run_at=past, channel="slack_dm", channel_ref="U123",
         intent_text="overdue follow-up", kind="ad_hoc", db_path=db,
     )
+    # The principal sees every pending action; a caller who resolves to no
+    # one sees none (test_today_in_flight_scope).
+    people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    people_registry.invalidate()
     in_flight = _make_client().get("/today").json()["in_flight"]
     assert len(in_flight) == 1
     assert in_flight[0]["overdue"] is True
@@ -1377,6 +1385,10 @@ def test_in_flight_target_falls_back_when_assigned_person_missing(
         assigned_to_person_id=99999,  # no such person
         db_path=db,
     )
+    # The principal sees every pending action; a caller who resolves to no
+    # one sees none (test_today_in_flight_scope).
+    people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    people_registry.invalidate()
     in_flight = _make_client().get("/today").json()["in_flight"]
     assert len(in_flight) == 1
     # pid_to_name miss → channel lookup miss → raw channel ref.

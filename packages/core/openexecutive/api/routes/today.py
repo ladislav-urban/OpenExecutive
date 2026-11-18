@@ -995,8 +995,13 @@ def _build_today(
     include_private: bool = False,
     viewer: Any = None,
     fold_twins: bool = True,
+    in_flight_for: ActivityAudience | None = None,
 ) -> TodayResponse:
     """Assemble the live dashboard snapshot.
+
+    ``in_flight_for`` None lists every pending action in ``in_flight`` (the
+    principal's Home and the server's own briefs); for anyone else
+    (``_audience_for``) only the ones their own turns queued.
 
     Stays synchronous so the deprecated /morning-brief alias and the
     morning_brief workflow (which call this directly) need no changes; the LLM
@@ -1275,8 +1280,17 @@ def _build_today(
     pid_to_name = {p.id: p.full_name for p in people if p.id}
     channel_lookup = _build_channel_lookup()
     in_flight_items: list[InFlightItem] = []
+    # In flight for anyone but the principal: only what their own turns
+    # queued, never a nudge or a cadence; nothing for a caller who resolved
+    # to no one.
     try:
-        for action in list_pending_scheduled_actions():
+        if in_flight_for is None:
+            pending = list_pending_scheduled_actions()
+        elif in_flight_for.person_id is None:
+            pending = []
+        else:
+            pending = list_pending_scheduled_actions(created_by_person_id=in_flight_for.person_id)
+        for action in pending:
             target: str | None = None
             if action.assigned_to_person_id is not None:
                 target = pid_to_name.get(action.assigned_to_person_id)
@@ -2585,7 +2599,13 @@ async def _regen_briefing_narrative_locked(
         # The SQLite reads behind the context: seconds on a slow disk, so run
         # in a thread rather than on the event loop (GET /today, above).
         mode = get_workspace().mode
-        snapshot = _build_today(include_private=expected_scope == narrative_cache.DEFAULT_SCOPE)
+        own = expected_scope == narrative_cache.DEFAULT_SCOPE
+        snapshot = _build_today(
+            include_private=own,
+            in_flight_for=None if own else (
+                _audience_for(caller_person_id) or ActivityAudience(person_id=None, demo=True)
+            ),
+        )
         scope, today_data, viewer_desc, viewer = _narrative_inputs(
             snapshot, caller_person_id
         )
@@ -2787,6 +2807,7 @@ def _today_for(
         stale_out=stale,
         include_private=principal,
         viewer=viewer_for_person(caller),
+        in_flight_for=_audience_for(caller),
     )
     response.caller_person_id = caller
     if stale:
@@ -3505,9 +3526,15 @@ def _activity_audience(request: Request) -> ActivityAudience | None:
     can't be told apart from one: a signed-in email on no People entry, a
     service call, an inactive entry, or a roster that can't be read."""
     from openexecutive.api.routes.chat import _resolve_caller_person_id
+
+    return _audience_for(_resolve_caller_person_id(request))
+
+
+def _audience_for(caller: int | None) -> ActivityAudience | None:
+    """`_activity_audience` for an already resolved caller (People id or
+    None). Fails closed: anything unreadable is their own rows only."""
     from openexecutive.people.store import get_person
 
-    caller = _resolve_caller_person_id(request)
     if caller is None:
         return ActivityAudience(person_id=None, demo=True)
     if _is_principal(caller):
@@ -3863,7 +3890,9 @@ def get_morning_brief(request: Request, response: Response) -> TodayResponse:
 
     caller = _resolve_caller_person_id(request)
     principal = _is_principal(caller)
-    payload = _build_today(include_private=principal, viewer=viewer_for_person(caller))
+    payload = _build_today(
+        include_private=principal, viewer=viewer_for_person(caller), in_flight_for=_audience_for(caller),
+    )
     payload.caller_person_id = caller
     # Serve the viewer's cached narrative (cache-only — this deprecated alias
     # has no BackgroundTasks to schedule a regen). Before the home rules, as
