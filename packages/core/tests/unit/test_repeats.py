@@ -143,3 +143,23 @@ def test_a_row_or_figure_sentence_said_twice_is_still_found() -> None:
     assert repeated_sentences(reply) == [
         "Payroll of $5382.50 lands at the end of every month, with rent on the 2nd."
     ]
+
+
+def test_prose_restated_with_its_figures_written_another_way_is_still_found() -> None:
+    # Only table rows and list items are told apart by their figures.
+    reply = (
+        "Payroll of $5,382.50 falls at the end of each month, with rent on the 2nd. "
+        "Payroll of about $5,400 falls at the end of each month, with rent on the 2nd."
+    )
+    assert repeated_sentences(reply) == [
+        "Payroll of about $5,400 falls at the end of each month, with rent on the 2nd."
+    ]
+
+
+def test_new_line_still_compares_words_only() -> None:
+    # The claim check's extra round: a re-asserted claim with a changed figure
+    # is still a repeat there, as before (security review of the change).
+    earlier = "I've removed the $4,656 Harbor item from your brief for today."
+    again = "I've removed the $4,650 Harbor item from your brief for today."
+    assert new_line(earlier, again) == ""
+
