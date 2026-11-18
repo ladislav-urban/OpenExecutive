@@ -152,15 +152,12 @@ def test_only_the_askers_own_words_count_never_the_page_block(monkeypatch: pytes
 def test_an_upload_names_no_projection() -> None:
     # The upload turn's own words carry the files' names; the files' text is
     # only in the message. Neither makes the turn a projection.
-    assert not _asked("Summarise this.
-
-(Attached files: next 30 days plan.pdf)")
+    assert not _asked("Summarise this.\n\n(Attached files: next 30 days plan.pdf)")
     assert not _asked("How much cash do we have?", now=60.0)
 
 
 def test_another_persons_projection_in_a_shared_chat_does_not_count() -> None:
-    _asked("[Dana]: what if Metro pays late?", asker="person:9")
-    assert _asked(OUTLOOK_Q, asker="person:9") is False
+    assert _asked("[Dana]: what if Metro pays late?", asker="person:9") is False
     assert not _asked(TIGHTEST_Q, asker="person:7", now=60.0)
     # Dana's own follow-up does.
     assert _asked(TIGHTEST_Q, asker="person:9", now=60.0)
