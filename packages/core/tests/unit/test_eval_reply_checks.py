@@ -450,7 +450,10 @@ def test_an_initial_or_a_lowercase_short_word_is_not_the_principals_name(
 
 @pytest.mark.parametrize(
     ("full_name", "reply"),
-    [("김 민준", "Ask 김."), ("王 伟", "Ask 王 today."), ("Weiß, Olivia", "WEISS signs."), ("Weiß, Olivia", "Ask weiß.")],
+    [
+        ("김 민준", "Ask 김."), ("王 伟", "Ask 王 today."), ("王 伟", "Ask 伟."), ("Olivia 王", "Ms. 王 signs."),
+        ("민준 김", "Ms. 김 signs."), ("Weiß, Olivia", "WEISS signs."), ("Weiß, Olivia", "Ask weiß."),
+    ],
 )
 def test_an_uncased_one_character_name_and_a_sharp_s_are_caught(
     monkeypatch: pytest.MonkeyPatch, full_name: str, reply: str,

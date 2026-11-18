@@ -13272,7 +13272,7 @@ evals:
     approves" name Olivia Owner and "the account owner" doesn't, and a
     surname of several words or an inverted name gives every name word
     without guessing which is the given name. No variant is a single
-    cased letter or punctuation mark, from any source, so an initial ("A.
+    cased letter, digit or symbol, from any source, so an initial ("A.
     Owner") never matches every "a", while a one-character name in an
     uncased script ("김") is kept; and a capitals form the any-case
     variants don't match ("WEISS" for "Weiß") is kept too. The guard's own

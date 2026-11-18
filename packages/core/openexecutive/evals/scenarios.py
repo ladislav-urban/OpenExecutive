@@ -1112,8 +1112,8 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
     more and not a suffix or credential (``_SUFFIXES``), as written and in
     capitals, so "Owner approves" and "OWNER approves" name Olivia Owner and
     "the account owner" doesn't. A title and a single name ("Dr. Olivia")
-    give that name in any case. No variant is a single cased letter or
-    punctuation mark (``_is_initial``), so an initial ("A. Owner") never
+    give that name in any case. No variant is a single cased letter,
+    digit or symbol (``_is_initial``), so an initial ("A. Owner") never
     matches every "a"; a one-character name in an uncased script ("김")
     is kept. A surname of
     several words or an inverted name gives every one of its name words,
@@ -1151,14 +1151,14 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
             add(words[0], True)
         for token in re.split(r"[\s,()\-]+", stored):
             bare = _bare(token)
-            if len(bare) >= _MIN_NAME_PART and _is_name_word(bare):
+            if (len(bare) >= _MIN_NAME_PART or not _is_initial(bare)) and _is_name_word(bare):
                 for form in _capitalised(bare):
                     add(form, False)
     return _sorted_variants(found)
 
 
 def _is_initial(text: str) -> bool:
-    """Whether ``text`` is empty or a single cased letter or punctuation mark
+    """Whether ``text`` is empty or a single cased letter, digit or symbol
     (an initial): a single character of an uncased script ("김", "王") is a
     whole name."""
     if len(text) > 1:
