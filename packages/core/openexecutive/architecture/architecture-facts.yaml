@@ -716,11 +716,15 @@ providers:
     binds when the run has no owner, and a second held-writes pause carries
     it on to the next payload. run_workflow's crash text and a resume's
     invalid inputs reach no record either (a test checks every fail_run's
-    message through locals and one hop of parameters). inbox._consider
+    message through locals and up to two hops of parameters). inbox._consider
     returns the message it claimed itself to RETRY on any raise after that
     claim, never a claim someone else holds: a real error spends an attempt,
     a Gmail failure none, a cancellation none the first time and one each
-    time it repeats (a step that times out on it); the scan counts it once.
+    time it repeats (a step that times out on it), remembered on the row as
+    the internal flag cancelled_once (never shown on a card, cleared when the
+    row settles); the outcome rides on the re-raised exception
+    (inbox_outcome), so the scan counts it once. Home's Reply leaves a
+    cancelled row for later, uncounted.
     Home's Reply has its own turn-cap sentence. A reply already shown whose
     answer check a cap refused gets UNCHECKED_FIGURES ("I couldn't check the
     figures above, so don't rely on them yet.") before the cap's sentence,

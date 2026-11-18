@@ -78,6 +78,7 @@ stays in Gmail). It flags a card whose thread moved on.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hashlib
 import json
 import logging
@@ -425,7 +426,11 @@ def _retry_later(
         ).fetchone()
     finally:
         conn.close()
-    return str(row["outcome"]) if row else RETRY
+    outcome = str(row["outcome"]) if row else RETRY
+    if outcome == FAILED:
+        # Given up on: settled.
+        _remove_flag(person_id, message_id, CANCELLED_ONCE, db_path=db_path)
+    return outcome
 
 
 def _set_outcome(
@@ -444,6 +449,36 @@ def _set_outcome(
         conn.commit()
     finally:
         conn.close()
+    if outcome not in (PROCESSING, RETRY):
+        # Settled: a cancellation it once had no longer matters.
+        _remove_flag(person_id, message_id, CANCELLED_ONCE, db_path=db_path)
+
+
+# The watcher's own mark that a message's handling was cancelled once (a
+# step stopped): the next cancellation spends an attempt. Never shown on a
+# card (ledger_flags leaves it out), and cleared when the row settles.
+CANCELLED_ONCE = "cancelled_once"
+_INTERNAL_FLAGS = frozenset({CANCELLED_ONCE})
+# The attribute _consider sets on an exception it re-raises after leaving its
+# own claim for later: the outcome it recorded.
+INBOX_OUTCOME_ATTR = "inbox_outcome"
+
+
+def _row_flags(person_id: int, message_id: str, *, db_path: Path | None = None) -> list[str]:
+    """Every flag on the row, internal ones included."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            f"SELECT flags FROM {INBOX_MESSAGES_TABLE} WHERE person_id = ? AND message_id = ?",  # noqa: S608
+            (person_id, message_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    try:
+        flags = json.loads(row["flags"] or "[]") if row else []
+    except ValueError:
+        flags = []
+    return [str(f) for f in flags if isinstance(f, str)]
 
 
 def _add_flag(person_id: int, message_id: str, flag: str, *, db_path: Path | None = None) -> None:
@@ -512,7 +547,7 @@ def ledger_flags(person_id: int, message_ids: list[str], *, db_path: Path | None
             flags = json.loads(row["flags"] or "[]")
         except ValueError:
             flags = []
-        out[str(row["message_id"])] = [str(f) for f in flags if isinstance(f, str)]
+        out[str(row["message_id"])] = [str(f) for f in flags if isinstance(f, str) and f not in _INTERNAL_FLAGS]
     return out
 
 
@@ -695,10 +730,6 @@ def _cap_reason(person_id: int, message: Any, relation: str, now: datetime, db_p
 
 
 # Limits that hold for the rest of the scan, not just this sender.
-# Outcomes _consider recorded for an exception it re-raised (by its id), so
-# the scan that catches it counts it without recording it twice.
-_RESTORED: dict[int, str] = {}
-
 _SCAN_STOPPING_LIMITS = frozenset({"classify_limit", "inbox_limit", "daily_limit", "uncountable"})
 
 
@@ -1201,7 +1232,9 @@ async def _scan(person: Any, client: Any, watch: InboxWatch, now: datetime) -> S
             # on later scans, and given up on after MAX_ATTEMPTS (counted once:
             # _consider already left a claimed message for later).
             logger.warning("delegation.inbox: a message failed (%s)", type(exc).__name__)
-            restored = _RESTORED.pop(id(exc), None)
+            # The outcome _consider already recorded for its own claim, if it
+            # did (carried on the exception, never kept anywhere else).
+            restored = getattr(exc, INBOX_OUTCOME_ATTR, None)
             _count_retry(
                 result,
                 restored if restored is not None
@@ -1318,10 +1351,6 @@ async def _consider(
             result.status = "daily_limit"
             return True
         return False
-    # Why it was last left for later (a claim overwrites it): a cancellation
-    # that repeats counts (below).
-    before = _row_for(person.id, message.id)
-    left_for = before.get("reason") if before is not None and before["outcome"] == RETRY else None
     if not _claim(person.id, message, relation=relation, outcome=PROCESSING, now=now):
         return False
     # Claimed: whatever stops it now must leave it for a later scan, never
@@ -1350,14 +1379,21 @@ async def _consider(
         left = _row_for(person.id, message.id)
         if left is not None and left["outcome"] == PROCESSING:
             if isinstance(exc, asyncio.CancelledError):
-                reason, count = "cancelled", left_for == "cancelled"
+                # Remembered on the row (CANCELLED_ONCE), so a second one
+                # counts whatever other leave came between.
+                seen = CANCELLED_ONCE in _row_flags(person.id, message.id)
+                reason, count = "cancelled", seen
+                if not seen:
+                    _add_flag(person.id, message.id, CANCELLED_ONCE)
             elif isinstance(exc, GmailError):
                 reason, count = "gmail_error", False
             else:
                 reason, count = "error", True
             outcome = _retry_later(person.id, message.id, reason, count=count, thread_id=thread.id)
             if isinstance(exc, Exception):
-                _RESTORED[id(exc)] = outcome
+                # For the scan that catches it: counted once, not twice.
+                with contextlib.suppress(Exception):
+                    setattr(exc, INBOX_OUTCOME_ATTR, outcome)
         raise
 
 
@@ -1602,16 +1638,21 @@ async def draft_on_request(
             person, client, message, thread, relation=relation, known_as=known_as, verdict=verdict,
             own=own, exec_address=exec_address, now=now, result=result, asked=True,
         )
-    except Exception as exc:
+    except BaseException as exc:
         # Never left PROCESSING (every later Reply would say "busy"): it
         # goes back to the watcher for a later scan, as a scan's failure does
-        # (a spend limit's without spending an attempt).
+        # (a spend limit's, or a cancellation's, without spending an attempt).
         from openexecutive.audit import cost_caps
 
-        capped = cost_caps.capped(exc) is not None
+        if isinstance(exc, asyncio.CancelledError):
+            reason, count = "cancelled", False
+        elif isinstance(exc, Exception) and cost_caps.capped(exc) is not None:
+            reason, count = "cost_cap", False
+        else:
+            reason, count = "error", True
         left = _row_for(person_id, message_id)
         if left is not None and left["outcome"] == PROCESSING:
-            _retry_later(person_id, message_id, "cost_cap" if capped else "error", count=not capped)
+            _retry_later(person_id, message_id, reason, count=count)
         raise
     if result.drafted:
         done = _row_for(person_id, message_id)
