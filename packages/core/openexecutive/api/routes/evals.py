@@ -11,6 +11,12 @@ Endpoints:
 - GET    /evals/runs/{run_id}        Get one run (with full results)
 - POST   /evals/runs/{run_id}/cancel Signal a running eval to stop
 - DELETE /evals/runs/{run_id}        Delete a past run
+
+Every route is the principal's alone (``_principal_only``, on the router): a
+run plays turns as the install's principal (a ``speaker: principal``
+scenario), on live data (a workflow scenario), and stores and streams back
+the replies; scenarios are what those turns say. Anyone else gets a 403
+before any work: nothing is read, written or run.
 """
 from __future__ import annotations
 
@@ -22,9 +28,10 @@ import uuid
 from typing import Any
 
 import yaml
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from openexecutive.api import caller as api_caller
 from openexecutive.evals.persistence import (
     append_scenario_result,
     cancel_eval_run,
@@ -50,8 +57,40 @@ from openexecutive.evals.scenarios import (
     validate_scenario_yaml,
 )
 
-router = APIRouter()
 logger = logging.getLogger(__name__)
+
+PRINCIPAL_ONLY_DETAIL = "Only the principal can use evals."
+
+
+def _principal_only(request: Request) -> None:
+    """403 unless the caller is the principal, before the route does anything.
+
+    The same rule as starting a principal-only workflow
+    (``workflows._caller_is_the_principal``, read through ``api.caller``):
+    the principal's own email on a non-archived principal entry, or a request
+    that names no one and runs as the principal (open mode with no
+    ``x-caller-email``: the CLI, local login, a direct call; or the signed
+    operator). A teammate, a demo person, an email on nobody's entry, a
+    verified service call, an unreadable roster, and any call from a host
+    origin's page are refused.
+
+    Why every route, reads included: a ``speaker: principal`` chat or mcp
+    scenario runs its turn as the principal (``scenarios.scenario_turn_surface``)
+    and a workflow scenario runs ``workflow.run`` on live data; the reply or
+    artifact streams back and is stored on the run, so ``GET /evals/runs``
+    would hand those turns to anyone; and a scenario's YAML is the turn."""
+    from openexecutive.api.routes.workflows import _caller_is_the_principal
+
+    if not api_caller.from_host(request) and _caller_is_the_principal(request):
+        return
+    logger.warning(
+        "evals refused: not the principal method=%s path=%s",
+        request.method, request.url.path[:200],
+    )
+    raise HTTPException(status_code=403, detail=PRINCIPAL_ONLY_DETAIL)
+
+
+router = APIRouter(dependencies=[Depends(_principal_only)])
 
 _KINDS = frozenset({"chat", "workflow", "triage", "mcp", "inbox", "supplier"})
 
@@ -237,8 +276,8 @@ async def start_eval_run(request: Request) -> StreamingResponse:
     Request body: {"kind": "chat"} or {"scenario_id": "finance_001"}
     (kind is inferred from scenario_id when omitted)
 
-    403 when a workflow scenario runs a workflow that is the principal's
-    alone (``_refuse_principal_only_scenarios``) and the caller is not.
+    403 unless the caller is the principal (``_principal_only``), for every
+    kind: before the body is read, so nothing is loaded, stored or run.
 
     SSE event types:
       run_created   — run_id, kind, total, scenario_ids
@@ -269,8 +308,6 @@ async def start_eval_run(request: Request) -> StreamingResponse:
                 + (f", scenario_id={scenario_id!r}" if scenario_id else "")
             ),
         )
-    if kind == "workflow":
-        _refuse_principal_only_scenarios(request, scenarios)
 
     run_id = uuid.uuid4().hex
     scenario_ids = [s["id"] for s in scenarios]
@@ -363,43 +400,3 @@ async def start_eval_run(request: Request) -> StreamingResponse:
 def _sse(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload)}\n\n"
 
-
-def _refuse_principal_only_scenarios(
-    request: Request, scenarios: list[dict[str, Any]]
-) -> None:
-    """403 when a workflow scenario runs a workflow that is the principal's
-    alone in the mode it would run in, and the caller is not the principal.
-
-    The workflow runner calls ``workflow.run`` directly on the install's live
-    data, so an eval run is another way to trigger one: only the principal
-    may, as on ``POST /workflows/{name}/runs`` (``refuse_principal_only_run``).
-    This controls who may trigger the run; stored eval results are read
-    under the existing ``/evals/runs`` rules. The mode is the scenario's
-    ``workspace_mode``, else the workspace's; one that cannot be read counts
-    as principal-only.
-    """
-    from openexecutive.api.routes.workflows import refuse_principal_only_run
-    from openexecutive.evals.runner import scenario_workspace_mode
-    from openexecutive.memory.workspace_settings import read_stored_mode
-    from openexecutive.workflows import WORKFLOW_REGISTRY
-
-    for scenario in scenarios:
-        name = scenario.get("workflow")
-        # The runner resolves the same way and fails any other name.
-        workflow = WORKFLOW_REGISTRY.get(name) if isinstance(name, str) else None
-        if workflow is None:
-            continue
-        mode: str | None
-        try:
-            mode = scenario_workspace_mode(scenario) or read_stored_mode()
-        except ValueError:
-            mode = None
-        sid = str(scenario.get("id", ""))
-        refuse_principal_only_run(
-            request,
-            workflow,
-            mode,
-            surface="evals",
-            detail=f"Only the principal can run the {sid} eval.",
-            extra={"scenario_id": sid},
-        )
