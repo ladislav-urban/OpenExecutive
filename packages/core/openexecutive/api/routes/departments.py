@@ -189,7 +189,7 @@ def _translate_legacy_body(body: dict) -> dict:
 # Read routes
 # --------------------------------------------------------------------------- #
 
-@router.get("/departments", response_model=list[DepartmentState])
+@router.get("/departments", response_model=list[DepartmentState], dependencies=[Depends(refuse_demo_reader)])
 def list_departments() -> list[DepartmentState]:
     """List all departments with their Goals."""
     # Read straight through the store (not the cache) so the API view is always
@@ -197,7 +197,7 @@ def list_departments() -> list[DepartmentState]:
     return store.list_departments()
 
 
-@router.get("/departments/{slug}", response_model=DepartmentDetail)
+@router.get("/departments/{slug}", response_model=DepartmentDetail, dependencies=[Depends(refuse_demo_reader)])
 def get_department(slug: str) -> DepartmentDetail:
     state = store.get_department(slug)
     if state is None:
