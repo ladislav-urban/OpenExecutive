@@ -122,12 +122,6 @@ def _awaiting_hint(delivery: str, *, resumable: bool) -> str:
     return base + (_RESUMABLE_CLAUSE if resumable else _PAUSE_ONLY_CLAUSE)
 
 
-# The exception snippet surfaced back to the model when a workflow crashes
-# mid-run. Shorter than ERROR_DETAIL_LEN because it is quoted inside a longer
-# sentence; audit-detail truncation uses the shared cap.
-_EXC_SNIPPET_MAXLEN = 200
-
-
 # --------------------------------------------------------------------------- #
 # Tool definitions
 # --------------------------------------------------------------------------- #
@@ -448,12 +442,12 @@ async def handle_run_workflow(tool_input: dict[str, Any]) -> str:
     try:
         store = ChromaDBStore(persist_directory=get_settings().vector_store_path)
     except Exception as exc:
-        logger.exception("run_workflow: knowledge store init failed")
+        logger.exception("run_workflow: knowledge store init failed (%s)", type(exc).__name__)
         with contextlib.suppress(Exception):
-            fail_run(run_id, f"knowledge store unavailable: {exc}")
+            fail_run(run_id, "The knowledge store is unavailable.")
         return _err(
             "run_workflow",
-            f"knowledge store unavailable: {exc}",
+            "knowledge store unavailable",
             kind="write",
         )
 
@@ -499,7 +493,11 @@ async def handle_run_workflow(tool_input: dict[str, Any]) -> str:
                     last_error = event.message
         except Exception as exc:
             logger.exception("run_workflow: workflow.run crashed")
-            last_error = str(exc)[:_EXC_SNIPPET_MAXLEN]
+            from openexecutive.workflows.persistence import run_failure_text
+
+            # The record, the audit row and the tool result say fixed text;
+            # the detail is in the log above.
+            last_error = run_failure_text(exc)
 
     if awaiting is not None:
         _audit(

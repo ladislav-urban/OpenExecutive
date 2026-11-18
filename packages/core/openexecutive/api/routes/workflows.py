@@ -778,13 +778,13 @@ async def start_workflow_run(name: str, request: Request) -> StreamingResponse:
             # 'error' and destroy the resume payload — for something as
             # ordinary as the client disconnecting while we yield the frame.
             # The run is safely parked; only the stream broke.
-            if not paused:
-                fail_run(run_id=run_id, error=str(exc))
-            # Never the exception's own text: a cap's sentence, else a fixed one.
-            from openexecutive.audit import cost_caps
+            # Never the exception's own text, on the record or the stream: a
+            # cap's sentence, else a fixed one (the detail is logged above).
+            from openexecutive.workflows.persistence import run_failure_text
 
-            cap = cost_caps.capped(exc)
-            message = cap.reply() if cap is not None else "The run failed. Try again later."
+            message = run_failure_text(exc)
+            if not paused:
+                fail_run(run_id=run_id, error=message)
             yield _sse({"type": "error", "run_id": run_id, "message": message})
         finally:
             logger.info(

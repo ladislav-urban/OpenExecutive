@@ -65,6 +65,9 @@ EVENT = "cost_cap_reached"
 Scope = Literal["person", "job", "total"]
 RefusedScope = Literal["turn", "person", "job", "total", "unreadable"]
 
+# What follows a reply already on screen whose answer check a cap refused.
+UNCHECKED_FIGURES = "I couldn't check the figures above, so don't rely on them yet."
+
 # What a turn stopped by its own cap says, to someone on People.
 TURN_STOP_REPLY = (
     "I stopped here: this answer reached its spend limit. Ask me to continue and "
@@ -377,6 +380,15 @@ class CostCapReached(Exception):
         if self.scope == "total":
             return "This month's usage limit is reached. The principal can raise it."
         return "Usage can't be checked right now, so nothing was sent. The team has been told."
+
+    def unchecked_reply(self) -> str:
+        """What follows a reply already shown whose answer check this cap
+        refused: its figures weren't checked. Anyone off People hears only
+        that, never the budget."""
+        note = UNCHECKED_FIGURES
+        if self.outside or (self.scope != "person" and _asker_is_outside()):
+            return note
+        return f"{note} {self.reply()}"
 
 
 def capped(exc: BaseException) -> CostCapReached | None:

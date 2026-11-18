@@ -181,6 +181,22 @@ def complete_run(
         )
 
 
+# What a failed run's record says when it failed on an exception: never the
+# exception's own text (it may carry a path, a name or a provider's
+# message), which stays in the server log.
+RUN_FAILED_TEXT = "The run failed. Try again later."
+
+
+def run_failure_text(exc: BaseException) -> str:
+    """The text a failed run's record (``fail_run``) and its stream show for
+    ``exc``: a cost cap's own sentence, else ``RUN_FAILED_TEXT``. Log the
+    exception itself at the call site."""
+    from openexecutive.audit import cost_caps
+
+    cap = cost_caps.capped(exc)
+    return cap.reply() if cap is not None else RUN_FAILED_TEXT
+
+
 def fail_run(
     run_id: str,
     error: str,

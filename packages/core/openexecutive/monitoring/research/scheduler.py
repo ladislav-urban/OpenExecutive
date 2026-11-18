@@ -588,8 +588,11 @@ async def run_watchlist_research_scan(
     except Exception as exc:
         logger.exception("research.scheduler: workflow.run crashed")
         import contextlib
+
+        from openexecutive.workflows.persistence import run_failure_text
+
         with contextlib.suppress(Exception):
-            fail_run(run_id, str(exc)[:200])
+            fail_run(run_id, run_failure_text(exc))
         audit_log(
             EVENT_FAILED,
             f"Watchlist research crashed: {exc}",

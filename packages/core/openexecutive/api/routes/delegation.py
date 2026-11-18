@@ -1205,6 +1205,11 @@ async def get_delegation_mail(request: Request, thread_id: str, message_id: str)
     )
 
 
+# Home's Reply at the turn's spend limit: the chat's own sentence offers to
+# continue, which a button can't.
+_REPLY_SPEND_LIMIT = "Writing this reply reached its spend limit. Try again later."
+
+
 @router.post("/delegation/mail/reply", response_model=MailReplyOut)
 async def reply_to_delegation_mail(request: Request, body: MailReplyIn) -> MailReplyOut:
     """Write a reply to one email in the caller's own inbox, because they
@@ -1232,8 +1237,10 @@ async def reply_to_delegation_mail(request: Request, body: MailReplyIn) -> MailR
         raise _refuse(502, "gmail_error", STATUS_MESSAGES["error"]) from exc
     except cost_caps.CostCapReached as cap:
         # Not now, as any limit: the email waits (draft_on_request left it
-        # for a later scan), and the cap's own sentence says why.
-        raise _refuse(409, "spend_limit", cap.reply()) from cap
+        # for a later scan), and the cap's own sentence says why; a turn's
+        # is the chat's ("Ask me to continue"), so the button has its own.
+        message = _REPLY_SPEND_LIMIT if cap.reply() == cost_caps.TURN_STOP_REPLY else cap.reply()
+        raise _refuse(409, "spend_limit", message) from cap
     if isinstance(got, str):
         raise _refuse(409, got, ASK_REFUSALS.get(got, ASK_REFUSALS["not_now"]))
     return MailReplyOut(decision_id=got)

@@ -345,3 +345,23 @@ def test_reply_from_home_at_a_spend_limit_is_a_clean_refusal(
     assert resp.json()["detail"]["message"] == "This month's usage limit is reached. The principal can raise it."
     # Spent for the person who asked, as a turn of its own.
     assert seen[0][0] == str(ids["principal"]) and seen[0][1] is not None
+
+
+def test_reply_from_home_at_the_turns_limit_has_its_own_sentence(
+    client: TestClient, ids: dict[str, int], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.audit import cost_caps
+    from openexecutive.delegation import inbox as inbox_mod
+
+    mailbox, _ = _card(ids["principal"], monkeypatch)
+    monkeypatch.setattr(route, "gmail_for", lambda email: mailbox)
+
+    async def capped(*_a: Any, **_k: Any) -> Any:
+        raise cost_caps.CostCapReached("turn", "t", 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(inbox_mod, "draft_on_request", capped)
+    resp = client.post("/delegation/mail/reply", json={"thread_id": "t5", "message_id": "m5"}, headers=OWNER)
+    assert resp.status_code == 409
+    message = resp.json()["detail"]["message"]
+    # Not the chat's "Ask me to continue": a button can't continue.
+    assert message == route._REPLY_SPEND_LIMIT and "continue" not in message

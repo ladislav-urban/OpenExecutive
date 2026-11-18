@@ -118,7 +118,9 @@ async def handle_run_executive_research(
                 last_error = event.message
     except Exception as exc:
         logger.exception("run_executive_research: workflow.run crashed")
-        last_error = str(exc)[:200]
+        from openexecutive.workflows.persistence import run_failure_text
+
+        last_error = run_failure_text(exc)
 
     if last_error:
         import contextlib
