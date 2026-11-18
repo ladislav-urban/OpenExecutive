@@ -73,7 +73,7 @@ class AdviceUpdate(BaseModel):
 # --- Decisions ---
 
 
-@router.get("/memories/decisions", response_model=list[Decision])
+@router.get("/memories/decisions", response_model=list[Decision], dependencies=[Depends(refuse_demo_reader)])
 def get_decisions() -> list[Decision]:
     return list_decisions()
 

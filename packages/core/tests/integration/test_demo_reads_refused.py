@@ -13,6 +13,9 @@ from .principal_gate_support import app_client, call, make_roster
 
 READS = [
     "/goals",
+    "/departments",
+    "/departments/sales",
+    "/memories/decisions",
     "/clients/cockpit",
     "/memories/advice",
     "/workflows/custom",
@@ -28,6 +31,7 @@ def reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
     from openexecutive.api.routes import workflows as wf_route
     from openexecutive.clients import cockpit
     from openexecutive.departments import goals
+    from openexecutive.departments import store as dept_store
 
     ran: list[str] = []
 
@@ -39,6 +43,9 @@ def reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> list[str]:
         return _f
 
     monkeypatch.setattr(goals, "list_goal_views", _rec("goals", []))
+    monkeypatch.setattr(dept_store, "list_departments", _rec("departments", []))
+    monkeypatch.setattr(dept_store, "get_department", _rec("department", None))
+    monkeypatch.setattr(episodic_route, "list_decisions", _rec("decisions", []))
     monkeypatch.setattr(cockpit, "practice_overview", _rec("cockpit", []))
     monkeypatch.setattr(episodic_route, "list_advice", _rec("advice", []))
     monkeypatch.setattr(wf_route, "list_definitions", _rec("custom", []))
@@ -69,9 +76,11 @@ def test_the_principal_and_a_teammate_read_on(
     for path in READS:
         r = call(client, signed, who, "GET", path)
         # The item is unknown here: 404, past the gate.
-        expected = 404 if path.endswith("some_flow") else 200
+        expected = 404 if path.endswith(("some_flow", "/sales")) else 200
         assert r.status_code == expected, (path, r.text)
-    assert reads == ["goals", "cockpit", "advice", "custom", "custom_item"]
+    assert reads == [
+        "goals", "departments", "department", "decisions", "cockpit", "advice", "custom", "custom_item"
+    ]
 
 
 def test_a_roster_that_cannot_be_read_refuses(
