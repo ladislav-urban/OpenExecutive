@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
+from openexecutive.api.principal_gate import principal_only
 from openexecutive.personas.loader import (
     Persona,
     PersonaMeta,
@@ -29,6 +30,12 @@ from openexecutive.personas.loader import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# A persona's body is the Executive's voice in its system prompt, which every
+# turn of the principal's runs on: only the principal writes one
+# (api.principal_gate), refused before any work. Reads stay open.
+PRINCIPAL_ONLY_DETAIL = "Only the principal can change the personas."
+_principal_only = principal_only(PRINCIPAL_ONLY_DETAIL)
 
 
 class PersonaUpsertRequest(BaseModel):
@@ -54,7 +61,7 @@ def get_one_persona(slug: str) -> Persona:
     return p
 
 
-@router.put("/personas/{slug}", response_model=Persona)
+@router.put("/personas/{slug}", response_model=Persona, dependencies=[Depends(_principal_only)])
 def upsert_one_persona(slug: str, req: PersonaUpsertRequest) -> Persona:
     if not req.display_name.strip():
         raise HTTPException(status_code=400, detail="display_name must not be empty")
@@ -63,7 +70,10 @@ def upsert_one_persona(slug: str, req: PersonaUpsertRequest) -> Persona:
     return upsert_persona(slug, req.display_name, req.body)
 
 
-@router.post("/personas", response_model=Persona, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/personas", response_model=Persona, status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(_principal_only)],
+)
 def create_new_persona(req: PersonaCreateRequest) -> Persona:
     if not req.display_name.strip():
         raise HTTPException(status_code=400, detail="display_name must not be empty")
@@ -72,7 +82,7 @@ def create_new_persona(req: PersonaCreateRequest) -> Persona:
     return create_persona(req.display_name, req.body)
 
 
-@router.post("/personas/{slug}/reset", response_model=Persona)
+@router.post("/personas/{slug}/reset", response_model=Persona, dependencies=[Depends(_principal_only)])
 def reset_one_persona(slug: str) -> Persona:
     p = reset_persona(slug)
     if p is None:
@@ -83,7 +93,9 @@ def reset_one_persona(slug: str) -> Persona:
     return p
 
 
-@router.delete("/personas/{slug}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/personas/{slug}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(_principal_only)],
+)
 def delete_one_persona(slug: str) -> Response:
     if not persona_exists(slug):
         raise HTTPException(status_code=404, detail=f"Persona {slug!r} not found")

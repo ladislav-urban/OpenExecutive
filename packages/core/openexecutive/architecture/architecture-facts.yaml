@@ -14040,7 +14040,7 @@ delegation:
     inbox watchers stop at the next check (act_as_me_off), and their own
     switches, drafts and cards are kept. The ghostwriter's prompt is a
     constant outside the Council, so the /agents and /personas edit routes
-    (no principal check) can't change how anyone's draft is written. A
+    (principal only, api.principal_gate) can't change how anyone's draft is written. A
     person turns it on for themselves (PUT /delegation); nobody turns it on
     for anyone else. delegation_settings holds one row per
     person; missing, unreadable or 0 is off (is_enabled never raises).
@@ -14440,7 +14440,7 @@ delegation:
     spelling of a tag — look-alike letters included — opens or closes one.
     The classifier's <email> block does the same. NO tools but the forced
     compose_reply; no company profile, memory or roster. Not a Council
-    agent: PATCH /agents and /personas have no principal check. Model
+    agent: PATCH /agents and the /personas writes (principal only) never reach it. Model
     DELEGATION_COMPOSER_MODEL, else the default model;
     log_model_usage(actor="ghostwriter"). lint() runs in code after it — a
     URL or email address survives only if it appears in the intent, the
