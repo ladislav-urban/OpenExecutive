@@ -34,8 +34,9 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     ``turn`` is the ``ChatTurn`` for ``chat_checks`` (``evaluate_chat``
     takes it out before the result is written). ``live_turns`` holds each
     ``live: true`` prior turn as it ran (``ChatTurn.live_turns``: its place
-    in ``prior_turns``, response and response_length), only for a scenario
-    that has one."""
+    in ``prior_turns``, response and response_length; a long reply is cut
+    and one that named the principal withheld, ``stored_live_turn``), only
+    for a scenario that has one."""
     from openexecutive.evals.runner import run_chat_turn
 
     turn = await run_chat_turn(executive, scenario)

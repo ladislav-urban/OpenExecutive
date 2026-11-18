@@ -362,6 +362,27 @@ def test_run_evals_records_only_the_live_turns(monkeypatch: pytest.MonkeyPatch) 
     assert "live_turns" not in asyncio.run(run_evals.evaluate_chat(fixed, _Turns("answer")))
 
 
+def test_a_long_live_reply_is_stored_cut_and_judged_whole(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_evals = _run_evals()
+    seen: dict[str, Any] = {}
+    cap = runner_module.LIVE_REPLY_STORED_CHARS
+    long_reply = "w" * cap + "TAIL"
+
+    async def judge(scenario: dict[str, Any], response: str, drafts: Any = None) -> dict[str, Any]:
+        seen["section"] = prior_turns_section(scenario)
+        return {"overall": 5}
+
+    monkeypatch.setattr(run_evals, "judge_response", judge)
+    result = asyncio.run(run_evals.evaluate_chat(LIVE, _Turns(long_reply, "answer")))
+    (live,) = result["live_turns"]
+    assert live == {"turn": 1, "response": "w" * cap, "response_length": cap + 4, "response_truncated": True}
+    # The judge still reads the whole reply.
+    assert f"ASSISTANT: {long_reply}" in seen["section"]
+    # A reply of exactly the cap is kept whole, with no truncated flag.
+    exact = asyncio.run(run_evals.evaluate_chat(LIVE, _Turns("w" * cap, "answer")))
+    assert exact["live_turns"] == [{"turn": 1, "response": "w" * cap, "response_length": cap}]
+
+
 def test_the_cash_outlook_follow_ups_run_their_first_turn_live() -> None:
     shipped = {s["id"]: s for s in load_scenarios()}
     for sid in ("erpnext_099", "erpnext_100"):

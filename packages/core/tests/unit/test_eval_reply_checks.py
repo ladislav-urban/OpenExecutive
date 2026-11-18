@@ -383,6 +383,31 @@ def test_run_evals_fails_a_live_turn_that_names_the_principal(monkeypatch: pytes
     assert "Rhoda" not in repr(leak["scores"])
 
 
+@pytest.mark.usefixtures("principal")
+def test_a_live_reply_that_named_the_principal_is_stored_withheld(monkeypatch: pytest.MonkeyPatch) -> None:
+    said = "Rhoda Principal signs."
+    withheld = {"turn": 2, "response": runner_module.LIVE_REPLY_WITHHELD, "response_length": len(said)}
+    done = _chat_turns(monkeypatch, LIVE_NAMED, said, "On time.", "On time.")
+    assert done["live_turns"][0] == withheld and done["scores"]["principal_name"]
+    leak = _evaluate(monkeypatch, LIVE_NAMED, _InTurn(said, "On time.", "On time."))
+    assert leak["live_turns"][0] == withheld and leak["scores"]["principal_name"]
+    # The name is in neither result, stored replies included.
+    assert "rhoda" not in repr(done).lower() and "rhoda" not in repr(leak).lower()
+    # A live reply that didn't name them is kept as it was.
+    assert leak["live_turns"][1] == {"turn": 3, "response": "On time.", "response_length": 8}
+    # Without forbid_principal_name the reply is kept whole.
+    unforbidden = {k: v for k, v in LIVE_NAMED.items() if k != "forbid_principal_name"}
+    assert _chat_turns(monkeypatch, unforbidden, said, "On time.", "On time.")["live_turns"][0]["response"] == said
+
+
+@pytest.mark.usefixtures("principal")
+def test_a_name_past_the_stored_cut_still_fails_the_live_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    said = "x" * runner_module.LIVE_REPLY_STORED_CHARS + " Rhoda Principal signs."
+    done = _chat_turns(monkeypatch, LIVE_NAMED, said, "On time.", "On time.")
+    assert done["scores"]["principal_name"] == ["the principal's name appeared in live prior turn 2's reply"]
+    assert done["live_turns"][0]["response"] == runner_module.LIVE_REPLY_WITHHELD
+
+
 # ── where evals/run_evals.py writes its results ────────────────────────────
 
 
