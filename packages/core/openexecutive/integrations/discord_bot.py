@@ -511,6 +511,45 @@ async def _should_respond_in_thread(
     return decision.allow
 
 
+def today_summary(person_id: int | None) -> str:
+    """Discord /today's text for the People entry ``person_id``, scoped like
+    GET /today (``today._audience_for``, which fails closed). The principal
+    gets every department's at-risk, off-track and waiting counts and the
+    pending proposal count. Anyone else gets only counts from what their own
+    Home shows: what their own turns have in flight and the cards routed to
+    them. Nobody resolved: no counts at all."""
+    from openexecutive.api.routes.today import _audience_for, _build_today
+    from openexecutive.orchestrator.artifact_records import viewer_for_person
+
+    lines: list[str] = ["**Today's Dashboard**"]
+    if person_id is None:
+        lines.append("Nothing to show.")
+        return "\n".join(lines)
+    audience = _audience_for(person_id)
+    if audience is None:
+        today = _build_today()
+        if today.departments:
+            lines.append("\n**Departments**")
+            for d in today.departments:
+                flags = []
+                if d.at_risk_count:
+                    flags.append(f"{d.at_risk_count} at-risk")
+                if d.off_track_count:
+                    flags.append(f"{d.off_track_count} off-track")
+                if d.awaiting_count:
+                    flags.append(f"{d.awaiting_count} waiting")
+                status = ", ".join(flags) if flags else "all clear"
+                lines.append(f"• **{d.title}** — {status}")
+        if today.proposals:
+            lines.append(f"\n**Pending Proposals**: {len(today.proposals)}")
+        return "\n".join(lines)
+    today = _build_today(viewer=viewer_for_person(person_id), in_flight_for=audience)
+    mine = [p for p in today.proposals if p.routed_to_person_id == person_id]
+    lines.append(f"\n**In flight for you**: {len(today.in_flight)}")
+    lines.append(f"**Cards for you**: {len(mine)}")
+    return "\n".join(lines)
+
+
 def _split_message(text: str, limit: int = _DISCORD_MAX_LEN) -> list[str]:
     """Split a long response into chunks that fit Discord's per-message limit.
 
@@ -1460,7 +1499,8 @@ def create_discord_bot():
         # Roster gate BEFORE defer so a rejected user gets an immediate
         # ephemeral message instead of a hung "thinking…" spinner.
         from openexecutive.people.store import find_person_by_discord_id
-        if find_person_by_discord_id(str(interaction.user.id)) is None:
+        person = find_person_by_discord_id(str(interaction.user.id))
+        if person is None or person.id is None:
             from openexecutive.audit import log_event as audit_log
             audit_log(
                 "integration_inbound",
@@ -1481,25 +1521,7 @@ def create_discord_bot():
 
         await interaction.response.defer(thinking=True)
         try:
-            from openexecutive.api.routes.today import _build_today
-
-            today = _build_today()
-            lines: list[str] = ["**Today's Dashboard**"]
-            if today.departments:
-                lines.append("\n**Departments**")
-                for d in today.departments:
-                    flags = []
-                    if d.at_risk_count:
-                        flags.append(f"{d.at_risk_count} at-risk")
-                    if d.off_track_count:
-                        flags.append(f"{d.off_track_count} off-track")
-                    if d.awaiting_count:
-                        flags.append(f"{d.awaiting_count} waiting")
-                    status = ", ".join(flags) if flags else "all clear"
-                    lines.append(f"• **{d.title}** — {status}")
-            if today.proposals:
-                lines.append(f"\n**Pending Proposals**: {len(today.proposals)}")
-            summary = "\n".join(lines)
+            summary = await asyncio.to_thread(today_summary, person.id)
         except Exception:
             logger.exception("Discord /today failed")
             summary = "Unable to load Today dashboard right now."

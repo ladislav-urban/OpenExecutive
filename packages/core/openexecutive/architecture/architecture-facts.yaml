@@ -4749,7 +4749,10 @@ people:
     create_goal refuse every private turn already (principal on a verified
     surface only). A private alert shows on the principal's
     own `/today` and chat digest only: `_build_today` excludes it by
-    default (digest, reflection, Discord /today; the morning brief reads it
+    default (digest, reflection, Discord /today, which discord_bot.today_summary
+    scopes like GET /today through today._audience_for: department and proposal
+    counts for the principal only, anyone else only their own in-flight count and
+    the cards routed to them, an unknown Discord id nothing; the morning brief reads it
     only on a run for the principal — morning_brief.PRINCIPAL_DELIVERY or
     their verified chat turn — and then keeps its text out of run history),
     the narrative includes it only in the principal's own `principal` scope
