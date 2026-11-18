@@ -839,3 +839,82 @@ def test_a_reply_they_asked_for_that_didnt_finish_waits_on_a_card(
     assert _only_card(owner).status == "proposed"
     # Settled: the mark goes.
     assert inbox.ASKED not in inbox._row_flags(owner.id, "m1")
+
+
+def _exit_daily_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.delegation import caps
+
+    monkeypatch.setattr(caps, "reserve", lambda person_id, daily_cap: "reached")
+
+
+def _exit_compose_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.delegation import ghostwriter as gw
+
+    async def nothing(model: str, system: str, turn: str) -> dict[str, Any]:
+        return {}
+
+    monkeypatch.setattr(gw, "_call_model", nothing)
+
+
+def _exit_draft_save_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.delegation import card_drafts
+
+    async def refused(*_a: Any, **_k: Any) -> Any:
+        raise GmailError("the mailbox refused the draft")
+
+    monkeypatch.setattr(card_drafts, "save", refused)
+
+
+def _exit_card_failed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken(*_a: Any, **_k: Any) -> int:
+        raise RuntimeError("the card couldn't be made")
+
+    monkeypatch.setattr(inbox, "_create_card", broken)
+
+
+@pytest.mark.parametrize("exit_", [
+    _exit_daily_limit, _exit_compose_failed, _exit_draft_save_failed, _exit_card_failed,
+])
+def test_every_way_a_reply_they_asked_for_stops_short_still_ends_on_a_card(
+    owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch, exit_: Any,
+) -> None:
+    # _draft_card leaves the message for later by itself (a limit, a failed
+    # compose, draft or card): the next scan still writes it as asked for.
+    _on(owner)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with monkeypatch.context() as patched:
+        exit_(patched)
+        try:
+            got = asyncio.run(inbox.draft_on_request(owner, "t1", "m1", gmail=mailbox, now=NOW))
+        except GmailError:
+            got = "raised"
+    assert not isinstance(got, int)
+    assert _ledger_row(owner, "m1") == "retry"
+    assert inbox.ASKED in inbox._row_flags(owner.id, "m1")
+    result = _scan(owner, mailbox, now=NOW + timedelta(minutes=5))
+    assert result.drafted == 1 and result.handled == 0 and mailbox.sent == []
+    assert _only_card(owner).status == "proposed"
+    assert inbox.ASKED not in inbox._row_flags(owner.id, "m1")
+
+
+def test_a_reply_they_asked_for_that_is_given_up_on_keeps_no_mark(
+    owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise RuntimeError("it keeps failing")
+
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    for i in range(inbox.MAX_ATTEMPTS):
+        with pytest.raises(RuntimeError):
+            asyncio.run(inbox.draft_on_request(owner, "t1", "m1", gmail=mailbox, now=NOW + timedelta(minutes=i)))
+    assert _ledger_row(owner, "m1") == "failed"
+    assert inbox.ASKED not in inbox._row_flags(owner.id, "m1")
+
+
+def _ledger_row(owner: Any, message_id: str) -> str:
+    row = inbox._row_for(owner.id, message_id)
+    assert row is not None
+    return str(row["outcome"])

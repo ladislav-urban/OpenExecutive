@@ -1691,19 +1691,3 @@ def test_one_exception_raised_for_two_messages_is_counted_for_each(
     assert ledger_rows["m1"] == ("retry", "error") and ledger_rows["m2"] == ("retry", "error")
     assert _attempts(db, "m1") == 1 and _attempts(db, "m2") == 1
     assert "restored" not in result.counts()
-
-
-def test_a_mark_for_another_message_or_a_faked_one_is_ignored() -> None:
-    class _Anything(Exception):
-        def __getattr__(self, name: str) -> Any:
-            return (1, "m1", inbox.RETRY)
-
-    result = inbox.ScanResult("ok")
-    assert inbox._restored_outcome(_Anything(), result, 1, "m1") is None
-    other = RuntimeError("x")
-    other.inbox_outcome = (1, "m2", inbox.RETRY)  # type: ignore[attr-defined]
-    assert inbox._restored_outcome(other, result, 1, "m1") is None
-    other.inbox_outcome = (1, "m1", inbox.PROCESSING)  # type: ignore[attr-defined]
-    assert inbox._restored_outcome(other, result, 1, "m1") is None
-    other.inbox_outcome = (1, "m1", inbox.RETRY)  # type: ignore[attr-defined]
-    assert inbox._restored_outcome(other, result, 1, "m1") == inbox.RETRY

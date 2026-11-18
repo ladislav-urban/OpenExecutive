@@ -78,7 +78,6 @@ stays in Gmail). It flags a card whose thread moved on.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import hashlib
 import json
 import logging
@@ -476,29 +475,6 @@ _INTERNAL_FLAGS = frozenset({CANCELLED_ONCE, ASKED})
 def _clear_internal_flags(person_id: int, message_id: str, *, db_path: Path | None = None) -> None:
     for flag in _INTERNAL_FLAGS:
         _remove_flag(person_id, message_id, flag, db_path=db_path)
-# The attribute _consider sets on an exception it re-raises after leaving its
-# own claim for later: the outcome it recorded.
-INBOX_OUTCOME_ATTR = "inbox_outcome"
-
-
-def _restored_outcome(exc: BaseException, result: ScanResult, person_id: int, message_id: str) -> str | None:
-    """The outcome _consider recorded for ``message_id`` before it re-raised
-    ``exc``: from this scan's own result, else the exception's mark when it
-    names this very message (read from its own attributes, so a catch-all
-    ``__getattr__`` can't fake it). None when it recorded nothing."""
-    local = result.restored.pop(message_id, None)
-    if local is not None:
-        return local
-    try:
-        mark = vars(exc).get(INBOX_OUTCOME_ATTR)
-    except TypeError:
-        return None
-    if (
-        isinstance(mark, tuple) and len(mark) == 3
-        and mark[0] == person_id and mark[1] == message_id and mark[2] in (RETRY, FAILED)
-    ):
-        return str(mark[2])
-    return None
 
 
 def _row_flags(person_id: int, message_id: str, *, db_path: Path | None = None) -> list[str]:
@@ -1271,7 +1247,7 @@ async def _scan(person: Any, client: Any, watch: InboxWatch, now: datetime) -> S
             logger.warning("delegation.inbox: a message failed (%s)", type(exc).__name__)
             # The outcome _consider already recorded for its own claim of
             # this message, if it did.
-            restored = _restored_outcome(exc, result, person.id, message_id)
+            restored = result.restored.pop(message_id, None)
             _count_retry(
                 result,
                 restored if restored is not None
@@ -1427,13 +1403,9 @@ async def _consider(
             else:
                 reason, count = "error", True
             outcome = _retry_later(person.id, message.id, reason, count=count, thread_id=thread.id)
-            # For the scan that catches it: counted once, not twice. Kept on
-            # this scan's result, and marked on the exception with the
-            # message it belongs to.
+            # For the scan that catches it: counted once, not twice (kept on
+            # this scan's own result, by message id).
             result.restored[message.id] = outcome
-            if isinstance(exc, Exception):
-                with contextlib.suppress(Exception):
-                    setattr(exc, INBOX_OUTCOME_ATTR, (person.id, message.id, outcome))
         raise
 
 
@@ -1682,6 +1654,11 @@ async def draft_on_request(
         _set_outcome(person_id, message_id, PROCESSING, reason="asked")
         # Reopened: a cancellation it had before no longer counts.
         _remove_flag(person_id, message_id, CANCELLED_ONCE)
+    # Theirs from here: however this ends short of a card (a limit, a failed
+    # draft or card, an error, a cancellation), the scan that picks it up
+    # writes it as asked for, on a card, never sent on its own. Any settle
+    # clears it, so a Reply that makes its card leaves nothing behind.
+    _add_flag(person_id, message_id, ASKED)
     # They asked: the reply is theirs to write, so no verdict is needed.
     verdict = Verdict(needs_reply=True, kind="request", confidence=1.0, asked_of_them=True)
     result = ScanResult("ok")
@@ -1705,9 +1682,6 @@ async def draft_on_request(
         left = _row_for(person_id, message_id)
         if left is not None and left["outcome"] == PROCESSING:
             _retry_later(person_id, message_id, reason, count=count)
-            # Still theirs: the scan that picks it up writes it as asked for
-            # (a card, never sent on its own), whatever Handle it for me says.
-            _add_flag(person_id, message_id, ASKED)
         raise
     if result.drafted:
         done = _row_for(person_id, message_id)

@@ -723,13 +723,14 @@ providers:
     time it repeats (a step that times out on it), remembered on the row as
     the internal flag cancelled_once (never shown on a card, cleared when the
     row settles, a skip included, and when Home's Reply reopens it); the
-    outcome is kept on the scan's own result by message id (and marked on
-    the re-raised exception as (person, message, outcome), read only from
-    its own attributes and only for that message), so the scan counts it
-    once. A Home Reply that doesn't finish leaves the row for later with the
-    internal flag asked (cancellation and cap uncounted, an error counted):
-    the next scan writes it as asked for, on a card, never sent on its own
-    under Handle it for me.
+    outcome is kept on the scan's own result by message id
+    (ScanResult.restored), so the scan counts it once. Home's Reply marks
+    the row with the internal flag asked as it claims or reopens it, so
+    whatever leaves it for later short of a card (a limit, a failed draft
+    or card, an error, a cancellation or a cap: the last two uncounted) is
+    written by the next scan as asked for, on a card, never sent on its own
+    under Handle it for me; any settle (the card made, a FAILED give-up)
+    clears the flag.
     Home's Reply has its own turn-cap sentence. A reply already shown whose
     answer check a cap refused gets UNCHECKED_FIGURES ("I couldn't check the
     figures above, so don't rely on them yet.") before the cap's sentence,
