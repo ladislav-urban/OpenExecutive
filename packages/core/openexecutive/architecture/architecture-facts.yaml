@@ -5740,8 +5740,14 @@ chat:
     else removes the sentence / list item / table row, or the whole reply
     becomes WHOLE_REPLY (erpnext_views / the panel reply get open_call).
     Never WHOLE_REPLY when only names failed (the reply stands) or the
-    question is a projection (answer_check._PROJECTION_Q: known values
-    written in, the rest under PROJECTION_NOTE); audit `kept`.
+    question is a projection (answer_check._projection: _PROJECTION_Q on
+    the question, or on the person's question just before it, which
+    note_messages keeps as AnswerCheckTurn.asked_before from the history's
+    last earlier user row, so "which week is the tightest?" after a 13-week
+    outlook is one (eval erpnext_099, Nov 18, 2026: its "Ends at" cells
+    were left out as dashes); a lookup two questions on is held to its
+    results again. Known values written in, the rest under
+    PROJECTION_NOTE); audit `kept`.
     Counts of records (figure_check._counts_records, Figure.count) match only
     Sources.counts of that record (count_words); unknown ones become
     "several" and unknown table cells "—" (answer_correct.vague), never a
@@ -11534,7 +11540,13 @@ integrations:
     terms, so the answer check's own arithmetic holds) and the assumptions in
     one short line, the full table left to a place it may open (what
     SHOW_RULE keeps to words, such as bank accounts or payroll, stays in
-    words). With ADVICE_POLICY=explain the
+    words). Revised after the Nov 18, 2026 gate: assumptions always named;
+    a starting figure (today's cash, a customer's total) one figure unless
+    the question is about its parts; the view opened holds more detail (a
+    chart for amounts over weeks, a list or report for rows) and is offered
+    only when no view may be opened (erpnext_054 opened a report, not its
+    chart, under "or offer it"); no "beside the panel" in the rule, a
+    phrase replies must not say. With ADVICE_POLICY=explain the
     policy (prompts/advice_policy.py, in cached blocks) asks for the
     arithmetic and every assumption, and a panel follow-up ran to 2,300-2,700
     characters (a 13-row week table with 8 rows unchanged, the starting cash

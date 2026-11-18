@@ -292,9 +292,13 @@ def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
         assert "also when you explain figures" in block
         assert "Lead with the answer in a sentence or two" in block
         assert "never the rows that stay the same" in block
-        assert "don't list again what an earlier answer in the panel already showed" in block
+        assert "Don't list again what an earlier answer in the panel already showed" in block
+        # A starting figure is one figure (eval erpnext_099: today's cash by
+        # account listed under a question about one week).
+        assert "is one figure, not broken down by account or invoice" in block
         assert "arithmetic for each result in one short line, not every step" in block
-        assert "the assumptions in one short line" in block
+        # Never optional (eval erpnext_094, Nov 18, 2026: one reply had none).
+        assert "Always name the assumptions, in one short line" in block
         assert "that is how you show the arithmetic and every assumption" in block
         assert "rather than print it" in block
         # Not repeating is not skipping the read (FOLLOW_UP_RULE).
@@ -303,11 +307,17 @@ def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
         # A short line is fewer steps, never fewer terms (the answer check).
         assert "leave out steps, never a term" in block
         assert "still adds up to the result it gives" in block
-        # Only to a place SHOW_RULE allows: no bank or payroll view.
-        assert "a place you may open beside the panel" in block
+        # The view holds the detail, and a view is opened, not offered, where
+        # one may be (eval erpnext_054 lost its chart under "or offer it").
+        assert "let the view you open hold it (a chart for amounts over weeks" in block
+        assert "offer it only when no view may be opened" in block
+        # Only a view SHOW_RULE allows: no bank or payroll view.
         assert "bank accounts, bank transactions, payroll, employees" in block
         assert "stays in words, kept short" in block
     assert "cash by account" not in erpnext_panel.BRIEF_RULE
+    # Nothing a reply might echo: "beside the panel" is a phrase the panel's
+    # replies must not say (SHOW_RULE; evals erpnext_094, erpnext_099).
+    assert "beside the panel" not in erpnext_panel.BRIEF_RULE
     # Still the turn's own context, not a rule against explaining: nothing
     # tells it to drop the arithmetic or the assumptions.
     assert "no arithmetic" not in erpnext_panel.BRIEF_RULE
