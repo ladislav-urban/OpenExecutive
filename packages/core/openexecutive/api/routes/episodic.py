@@ -73,8 +73,12 @@ class AdviceUpdate(BaseModel):
 # --- Decisions ---
 
 
+# Decisions and initiatives are read by the principal and the active team:
+# not by a demo person, a signed-in email on no People entry, a service call
+# or a suspended or archived teammate (`_require_member`).
 @router.get("/memories/decisions", response_model=list[Decision], dependencies=[Depends(refuse_demo_reader)])
-def get_decisions() -> list[Decision]:
+def get_decisions(request: Request) -> list[Decision]:
+    _require_member(request, "read the decisions")
     return list_decisions()
 
 
@@ -103,13 +107,16 @@ def remove_decision(decision_id: int, request: Request) -> Response:
 # --- Initiatives ---
 
 
-@router.get("/memories/initiatives", response_model=list[Initiative])
-def get_initiatives() -> list[Initiative]:
+@router.get("/memories/initiatives", response_model=list[Initiative], dependencies=[Depends(refuse_demo_reader)])
+def get_initiatives(request: Request) -> list[Initiative]:
+    _require_member(request, "read the initiatives")
     return list_initiatives()
 
 
+# Initiatives and advice, like decisions, change only on the principal's word.
 @router.patch("/memories/initiatives/{initiative_id}", response_model=Initiative)
-def patch_initiative(initiative_id: int, body: InitiativeUpdate) -> Initiative:
+def patch_initiative(initiative_id: int, body: InitiativeUpdate, request: Request) -> Initiative:
+    _require_principal(request, "change an initiative")
     if not update_initiative(initiative_id, **body.model_dump(exclude_unset=True)):
         raise HTTPException(status_code=404, detail="Initiative not found")
     updated = get_initiative(initiative_id)
@@ -119,7 +126,8 @@ def patch_initiative(initiative_id: int, body: InitiativeUpdate) -> Initiative:
 
 
 @router.delete("/memories/initiatives/{initiative_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_initiative(initiative_id: int) -> Response:
+def remove_initiative(initiative_id: int, request: Request) -> Response:
+    _require_principal(request, "remove an initiative")
     if not delete_initiative(initiative_id):
         raise HTTPException(status_code=404, detail="Initiative not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -128,14 +136,16 @@ def remove_initiative(initiative_id: int) -> Response:
 # --- Advice ---
 
 
-# Past advice is the principal's and the team's, not a demo person's to read.
+# Past advice comes from the principal's own conversations: theirs alone.
 @router.get("/memories/advice", response_model=list[Advice], dependencies=[Depends(refuse_demo_reader)])
-def get_advice_list() -> list[Advice]:
+def get_advice_list(request: Request) -> list[Advice]:
+    _require_principal(request, "read past advice")
     return list_advice()
 
 
 @router.patch("/memories/advice/{advice_id}", response_model=Advice)
-def patch_advice(advice_id: int, body: AdviceUpdate) -> Advice:
+def patch_advice(advice_id: int, body: AdviceUpdate, request: Request) -> Advice:
+    _require_principal(request, "change advice")
     if not update_advice(advice_id, **body.model_dump(exclude_unset=True)):
         raise HTTPException(status_code=404, detail="Advice not found")
     updated = get_advice(advice_id)
@@ -145,7 +155,8 @@ def patch_advice(advice_id: int, body: AdviceUpdate) -> Advice:
 
 
 @router.delete("/memories/advice/{advice_id}", status_code=status.HTTP_204_NO_CONTENT)
-def remove_advice(advice_id: int) -> Response:
+def remove_advice(advice_id: int, request: Request) -> Response:
+    _require_principal(request, "remove advice")
     if not delete_advice(advice_id):
         raise HTTPException(status_code=404, detail="Advice not found")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
@@ -360,6 +371,25 @@ def edit_standing_fact(fact_id: int, body: FactEdit, request: Request) -> Fact:
 def _require_principal(request: Request, what: str) -> None:
     if not _caller_is_principal(request):
         raise HTTPException(status_code=403, detail=f"Only the principal can {what}")
+
+
+def _require_member(request: Request, what: str) -> None:
+    """403 unless the caller is the principal or on an active, non-demo
+    People entry. Fails closed: a caller nobody resolved (a signed-in email
+    on no entry, a service call) or a roster that can't be read is refused."""
+    if _caller_is_principal(request):
+        return
+    from openexecutive.people.store import get_person
+
+    caller = _caller_id(request)
+    person = None
+    if caller is not None:
+        try:
+            person = get_person(caller)
+        except Exception:
+            logger.warning("memories: reading the caller failed — refusing the read", exc_info=True)
+    if person is None or not person.active or person.demo:
+        raise HTTPException(status_code=403, detail=f"Only the principal and the team can {what}")
 
 
 @router.post("/memories/facts/{fact_id}/approve", response_model=Fact)

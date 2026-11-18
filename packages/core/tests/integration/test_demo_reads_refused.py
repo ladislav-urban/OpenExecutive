@@ -75,11 +75,15 @@ def test_the_principal_and_a_teammate_read_on(
     client = app_client(monkeypatch, signed=signed)
     for path in READS:
         r = call(client, signed, who, "GET", path)
-        # The item is unknown here: 404, past the gate.
+        # The item is unknown here: 404, past the gate. Past advice is the
+        # principal's alone (test_memories_scope).
         expected = 404 if path.endswith(("some_flow", "/sales")) else 200
+        if path == "/memories/advice" and who != "principal":
+            expected = 403
         assert r.status_code == expected, (path, r.text)
+    advice = ["advice"] if who == "principal" else []
     assert reads == [
-        "goals", "departments", "department", "decisions", "cockpit", "advice", "custom", "custom_item"
+        "goals", "departments", "department", "decisions", "cockpit", *advice, "custom", "custom_item"
     ]
 
 

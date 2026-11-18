@@ -4095,8 +4095,8 @@ attunement:
       store_initiative/update_initiative resolve nudge:initiative:<id> only on
       a real change (new status or summary) and only for
       `updated_by_person_id` — the extractor passes the principal (it runs on
-      principal turns only), PATCH /memories/initiatives/{id} passes nothing
-      (no caller identity, no auth) so it credits nobody; alert ack or resolved
+      principal turns only), PATCH /memories/initiatives/{id} (principal only)
+      passes nothing so it credits nobody; alert ack or resolved
       (`alerts.lifecycle.resolve_alert_outreach`, also called by alert review
       when it closes an alert) — scoped to routed_to_person_id + principal.
       void — alert dismissed / stale / expired (expiry sweep): excluded from
@@ -13219,6 +13219,17 @@ route_gates:
     GET /workflows/custom and GET /workflows/custom/{name}. An email on
     nobody's entry is not a demo person to that helper and reads on, as do
     teammates and the principal.
+  memories_records: |
+    api/routes/episodic.py: GET /memories/decisions and GET
+    /memories/initiatives answer the principal (and local login) and an
+    active, non-demo People entry (_require_member); anyone else gets 403:
+    a demo person, a signed-in email on no People entry, a service call, a
+    suspended or archived entry, or a caller the roster can't be read for.
+    GET /memories/advice is the principal's alone (_require_principal):
+    advice comes from their own conversations. Every PATCH and DELETE on
+    decisions, initiatives and advice is principal only (403 otherwise).
+    refuse_demo_reader still runs first on the reads (503 when it can't
+    read the roster).
 
 evals:
   module: openexecutive.evals

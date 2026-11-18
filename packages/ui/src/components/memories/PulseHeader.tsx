@@ -73,9 +73,11 @@ export function usePulseData(): PulseData {
 
     Promise.all([
       listScheduledActions("pending", 200, controller.signal),
-      listDecisions(),
-      listInitiatives(),
-      listAdvice(),
+      // Refused (403) to anyone the server doesn't let read them: past
+      // advice is the principal's alone. Count none rather than fail the header.
+      listDecisions().catch(() => []),
+      listInitiatives().catch(() => []),
+      listAdvice().catch(() => []),
       getActivityDaily(HEATMAP_DAYS, controller.signal),
     ])
       .then(([pending, decisions, initiatives, advice, daily]) => {
