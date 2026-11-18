@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { afterCodeFill, afterInput, afterRestore, sendTyped } from "../src/lib/composerOrigin.ts";
 import { settleQueue } from "../src/lib/queuedMessages.ts";
@@ -147,4 +148,29 @@ test("a restore with any part not typed comes back as code", () => {
   box.queueWhileWorking();
   box.restore("what if Metro pays late?", turnTyped);
   assert.equal(box.send(), false);
+});
+
+// Chat.tsx itself: these helpers only hold if every code fill and the one
+// send site use them.
+const CHAT = readFileSync(new URL("../src/components/Chat.tsx", import.meta.url), "utf8");
+const CODE = CHAT.split(/\r?\n/).filter((line) => !line.trim().startsWith("//")).join("\n");
+
+test("Chat.tsx fills the composer from code only through fillComposer", () => {
+  const calls = [...CODE.matchAll(/setInput\((.*)\);/g)].map((m) => m[1]);
+  assert.deepEqual(calls, [
+    // fillComposer itself.
+    "text",
+    // The person's own typing (handleTextareaChange).
+    "e.target.value",
+    // The person's own dictation.
+    "(prev) => joinDictation(prev, text)",
+  ]);
+  assert.equal([...CODE.matchAll(/setInput\(/g)].length, 3);
+});
+
+test("Chat.tsx sends typed from its one send site, computed by sendTyped", () => {
+  const sites = [...CODE.matchAll(/\btyped:\s*([^,\n]+)/g)].map((m) => m[1].trim());
+  assert.deepEqual(sites, ["turnTyped"]);
+  assert.match(CODE, /const turnTyped = sendTyped\(/);
+  assert.match(CODE, /<textarea[\s\S]*?autoComplete="off"/);
 });

@@ -93,6 +93,25 @@ def _clean_message(text: str) -> str:
     return _MENTION_RE.sub("", text).strip()
 
 
+def _is_forward(reference: object) -> bool:
+    """Whether a message's ``reference`` marks it as a forward.
+
+    Tested against the forward member, never the reply's name: in
+    discord.py 2.7 ``MessageReferenceType.reply`` is an alias of ``default``,
+    so a real reply's type is named "default"."""
+    kind = getattr(reference, "type", None)
+    if kind is None:
+        return False
+    try:
+        import discord
+
+        if kind is discord.MessageReferenceType.forward:
+            return True
+    except (ImportError, AttributeError):
+        pass
+    return getattr(kind, "value", None) == 1
+
+
 def _typed_text(message: object) -> str | None:
     """What the sender typed in ``message``, for the answer check's projection
     test (``answer_check._projection``), or None.
@@ -103,8 +122,7 @@ def _typed_text(message: object) -> str | None:
     its snapshots and marks its reference as a forward."""
     if getattr(message, "message_snapshots", None):
         return None
-    reference = getattr(message, "reference", None)
-    if reference is not None and str(getattr(getattr(reference, "type", None), "name", "reply")) != "reply":
+    if _is_forward(getattr(message, "reference", None)):
         return None
     return _clean_message(str(getattr(message, "content", "") or "")) or None
 
@@ -788,7 +806,7 @@ async def _reply_context(message: Any, bot_user: Any) -> str:
     reference = getattr(message, "reference", None)
     if reference is None or getattr(reference, "message_id", None) is None:
         return ""
-    if str(getattr(getattr(reference, "type", None), "name", "reply")) != "reply":
+    if _is_forward(reference):
         return ""
     replied = getattr(reference, "resolved", None) or getattr(reference, "cached_message", None)
     if not isinstance(replied, discord.Message):

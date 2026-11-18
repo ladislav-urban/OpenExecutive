@@ -5801,6 +5801,16 @@ chat:
     a follow-up chip, a ?draft= link, the Home Ask box or a hand-off
     lose the relaxation until the question is typed. Why: an inbound
     email's subject or a file's name could relax the check.
+    Known residuals (security review, Nov 18, 2026; no code change):
+    a Telegram t.me/<bot>?text= link's prefill and a web cut-then-paste of
+    code-filled text go out as typed; both need the person's own Send, and
+    the figures still stand only under PROJECTION_NOTE. One Ctrl+Z while
+    typing marks the turn untyped until the box is emptied (fails closed;
+    a cost, not a hole). A host-origin turn with card_id never relaxes,
+    since oe_connector's typed rule can't be checked server-side. Hand-offs
+    with no memory line (Right now, a briefing card's own prompt) rely on
+    the client's call-site false. Evals can't yet express a not-typed turn
+    (out of scope).
     Counts of records (figure_check._counts_records, Figure.count) match only
     Sources.counts of that record (count_words); unknown ones become
     "several" and unknown table cells "—" (answer_correct.vague), never a

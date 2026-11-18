@@ -2373,8 +2373,19 @@ def _typed_question(message: str, *, typed: bool, memory_text: str | None, card_
     it keeps text code put there (a card's seed, a link's draft, a
     suggestion, a stored message resent) from relaxing the check. So it is
     dropped whenever the turn carries a hand-off's marks: a memory line
-    (a briefing or card hand-off) or a host page's card."""
-    if not typed or memory_text is not None or card_id is not None:
+    (a briefing or card hand-off) or a host page's card.
+
+    Those are the only marks the server can see. A hand-off that sends no
+    memory line (Home's Right now, a briefing card's own prompt) looks like
+    any other message here: for those, the client's call-site ``false``
+    (Chat.tsx sends ``typed`` from its composer's own Send alone) is the
+    guard."""
+    if not typed or memory_text is not None:
+        return None
+    if card_id is not None:
+        # A host-origin turn beside a Home card never relaxes, whatever it
+        # says (fail closed): the host's own rule for when a message counts
+        # as typed (oe_connector's composer) can't be checked from here.
         return None
     return message.strip() or None
 

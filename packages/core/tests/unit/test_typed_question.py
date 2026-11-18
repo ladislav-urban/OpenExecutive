@@ -119,33 +119,70 @@ def test_every_check_reply_call_passes_typed_question(path: str) -> None:
         assert _kw(call, "typed_question") is not None, f"{path}:{call.lineno}"
 
 
+# Every call that takes a turn's typed question, at any layer.
+ENTRY = {
+    "chat", "stream_chat", "stream_chat_with_committee", "start_background_turn", "_run_chat_turn",
+    "_upload_turn", "check_reply", "_checked_stopped_draft", "_handle_message", "_process_and_reply",
+}
+# The only modules that may name typed_question at all: the check itself,
+# the Executive, and the surfaces with text the person typed.
+ALLOWED = [
+    "api/routes/chat.py",
+    "evals/runner.py",
+    "integrations/discord_bot.py",
+    "integrations/erpnext_panel.py",
+    "integrations/google_chat.py",
+    "integrations/slack_bot.py",
+    "integrations/telegram_bot.py",
+    "orchestrator/answer_check.py",
+    "orchestrator/executive.py",
+]
+
+
+def _names_typed_question(path: Path) -> bool:
+    """Whether a module passes typed_question by keyword, or names it as a
+    string (a kwargs dict's key or subscript, for a ``**`` splat)."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.keyword) and node.arg == "typed_question":
+            return True
+        if isinstance(node, ast.Constant) and node.value == "typed_question":
+            return True
+    return False
+
+
+def _module(path: Path) -> str:
+    return str(path.relative_to(PACKAGE)).replace("\\", "/")
+
+
 def test_only_the_surfaces_with_typed_text_pass_one() -> None:
     """Email, the MCP server, the scheduler, the CLI, replay and the card
     hand-offs (``start_background_turn``) have no text the person typed:
     they never pass ``typed_question``, so it is None and never relaxes."""
-    entry = {"chat", "stream_chat", "stream_chat_with_committee", "start_background_turn", "_run_chat_turn"}
     person_less = [
         "integrations/email_poller.py", "mcp_server/server.py", "scheduler/runner.py", "cli.py",
         "memory/replay.py", "api/routes/alerts.py",
     ]
     for path in person_less:
-        calls = _calls(PACKAGE / path, entry)
+        calls = _calls(PACKAGE / path, ENTRY)
         assert calls, path
         assert all(_kw(c, "typed_question") is None for c in calls), path
+        assert all(not any(k.arg is None for k in c.keywords) for c in calls), f"{path}: a ** splat"
+    # Anywhere in the package, by keyword or through a ** splat's key.
+    naming = sorted(_module(p) for p in PACKAGE.rglob("*.py") if _names_typed_question(p))
+    assert naming == ALLOWED
+
+
+def test_only_the_executive_and_the_chat_route_give_the_check_a_typed_question() -> None:
     passing = sorted(
-        str(p.relative_to(PACKAGE)).replace("\\", "/")
+        _module(p)
         for p in PACKAGE.rglob("*.py")
-        if any(_kw(c, "typed_question") is not None for c in _calls(p, entry))
+        if any(
+            _kw(c, "typed_question") is not None or any(k.arg is None for k in c.keywords)
+            for c in _calls(p, {"check_reply"})
+        )
     )
-    assert passing == [
-        "api/routes/chat.py",
-        "evals/runner.py",
-        "integrations/discord_bot.py",
-        "integrations/erpnext_panel.py",
-        "integrations/google_chat.py",
-        "integrations/slack_bot.py",
-        "integrations/telegram_bot.py",
-    ]
+    assert passing == ["api/routes/chat.py", "orchestrator/executive.py"]
 
 
 def test_the_panel_passes_the_signed_message_without_its_page_block() -> None:
@@ -334,10 +371,13 @@ def test_telegram_webhook_and_replay(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_discord_typed_text() -> None:
+    import discord
+
     from openexecutive.integrations.discord_bot import _typed_text
 
-    reply = SimpleNamespace(type=SimpleNamespace(name="reply"), message_id=6)
-    forward = SimpleNamespace(type=SimpleNamespace(name="forward"), message_id=6)
+    # discord.py's own references: a reply's type is named "default".
+    reply = discord.MessageReference(message_id=6, channel_id=1, type=discord.MessageReferenceType.reply)
+    forward = discord.MessageReference(message_id=6, channel_id=1, type=discord.MessageReferenceType.forward)
     assert _typed_text(SimpleNamespace(content=f"<@123> {TYPED}", reference=None)) == TYPED
     assert _typed_text(SimpleNamespace(content="totals?", reference=reply)) == "totals?"
     assert _typed_text(SimpleNamespace(content=HEADLINE, reference=forward)) is None
