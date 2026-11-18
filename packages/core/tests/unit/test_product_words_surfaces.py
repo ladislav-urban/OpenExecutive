@@ -336,16 +336,19 @@ def test_a_notice_is_unchanged_without_a_name(unnamed: None) -> None:
 
 
 @pytest.mark.parametrize("name", ["OpenExecutive Cloud", "Open Executive", "Acme ERPNext Suite", "ERPNext"])
-def test_a_name_that_holds_a_part_is_treated_as_unset(name: str, caplog: pytest.LogCaptureFixture) -> None:
+def test_a_name_that_holds_a_part_is_treated_as_unset(name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.prompts.connected_systems import in_product_reply
     from openexecutive.utils import product_name as product
 
+    # Read the warning off the logger call, not caplog: in a full run other
+    # tests may change logging's handlers or levels.
+    warned: list[str] = []
+    monkeypatch.setattr(product.logger, "warning", lambda msg, *args, **kw: warned.append(msg % args))
     product._WARNED.discard(name)
     token = product_name_override.set(name)
     try:
-        with caplog.at_level("WARNING", logger=product.__name__):
-            assert product.configured_product_name() is None
-        assert "treated as unset" in caplog.text
+        assert product.configured_product_name() is None
+        assert any("treated as unset" in w for w in warned)
         assert in_product_reply(REPLY) == REPLY
     finally:
         product_name_override.reset(token)
