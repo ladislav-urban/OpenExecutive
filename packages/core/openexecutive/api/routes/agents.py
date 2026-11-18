@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Literal
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
 
 from openexecutive.agents.base import AgentVisibility
@@ -29,12 +29,19 @@ from openexecutive.agents.presets import (
     preset_status,
     writes_for,
 )
+from openexecutive.api.principal_gate import principal_only
 from openexecutive.audit.usage import log_model_usage
 from openexecutive.orchestrator.pushback import PUSHBACK_OFF
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# What every agent's prompt, instructions, model and preset are, which the
+# principal's own turns run on: only the principal changes them
+# (api.principal_gate), refused before any work.
+PRINCIPAL_ONLY_DETAIL = "Only the principal can change the agents."
+_principal_only = principal_only(PRINCIPAL_ONLY_DETAIL)
 
 # Models the Agent Council UI is allowed to switch agents to. Sourced
 # from ``providers.allowed_models()`` so the dropdown always matches
@@ -500,7 +507,7 @@ def list_presets() -> QualityPresets:
     return _quality_presets()
 
 
-@router.post("/agents/presets/{preset_id}", response_model=QualityPresets)
+@router.post("/agents/presets/{preset_id}", response_model=QualityPresets, dependencies=[Depends(_principal_only)])
 def apply_preset(preset_id: str) -> QualityPresets:
     """Move every agent onto a preset by writing ordinary overrides.
 
@@ -564,7 +571,7 @@ def get_agent(agent_id: str) -> AgentDetail:
     return _build_detail(agent_id)
 
 
-@router.patch("/agents/{agent_id}", response_model=AgentDetail)
+@router.patch("/agents/{agent_id}", response_model=AgentDetail, dependencies=[Depends(_principal_only)])
 def patch_agent(agent_id: str, patch: AgentPatch) -> AgentDetail:
     if not _is_known_agent(agent_id):
         raise HTTPException(status_code=404, detail="Unknown agent")
@@ -628,7 +635,11 @@ def patch_agent(agent_id: str, patch: AgentPatch) -> AgentDetail:
     )
 
 
-@router.delete("/agents/{agent_id}/override", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/agents/{agent_id}/override",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(_principal_only)],
+)
 def reset_agent(agent_id: str) -> Response:
     if not _is_known_agent(agent_id):
         raise HTTPException(status_code=404, detail="Unknown agent")
@@ -649,6 +660,7 @@ def get_history(agent_id: str, limit: int = 50) -> list[AgentHistoryEntry]:
 @router.post(
     "/agents/{agent_id}/rollback/{history_id}",
     response_model=AgentDetail,
+    dependencies=[Depends(_principal_only)],
 )
 def rollback_agent(agent_id: str, history_id: int) -> AgentDetail:
     if not _is_known_agent(agent_id):
