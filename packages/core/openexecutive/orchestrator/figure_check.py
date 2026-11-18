@@ -653,6 +653,9 @@ def numbers_in(text: str, fmt: NumberFormat = PLAIN) -> list[float]:
 _SKIP_KEYS = frozenset({
     "filters", "limit", "docstatus", "idx", "indent", "is_group", "lft", "rgt", "period", "notes",
     "columns", "views", "history",
+    # run_report's answer to its `columns` argument (ladislav-urban/oe_connector#617):
+    # the columns kept and a count of those left out, never a business figure.
+    "columns_kept", "columns_dropped",
 })
 _NUMERIC_FIELDTYPES = frozenset({"Currency", "Float", "Int", "Percent"})
 

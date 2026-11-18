@@ -340,7 +340,15 @@ _ERPNEXT_GUIDE = (
     "Exchange record), naming it; never a rate from memory. These reads "
     "hold invoices only, not opening balances or manual journal entries: when "
     "those could matter, compare their total with the Accounts Receivable "
-    "Summary's or Accounts Payable Summary's.\n"
+    "Summary's or Accounts Payable Summary's. When a grouped read itself comes "
+    "back `truncated`, split it: what is already overdue first, then the "
+    "outlook's weeks, each read on its own; never work from part of it. "
+    "For a question about single "
+    "invoices, the Accounts Receivable or Accounts Payable report may be read "
+    "with `columns` for the slim set: posting_date, due_date, party, "
+    "voucher_type, voucher_no, currency, invoiced, outstanding. When a slim "
+    "read still comes back `truncated`, switch to the grouped read, and never "
+    "work an outlook out from partial rows.\n"
     "  Say what you read and what you didn't: never that you couldn't read "
     "something you didn't ask for or that came back cut short; only a call "
     "that was refused is something you couldn't read. Answer what was asked, "
@@ -408,7 +416,7 @@ _ERPNEXT_GUIDE = (
 # it searched; on the pilot it guessed shapes and names, Oct 29, 2026).
 # Written for the pin below: a test fails when the pin moves, so a changed
 # definition gets these lines checked too. Process-constant.
-ERPNEXT_ARGS_WRITTEN_FOR = "1e3c00b2728eb1cdbd99c7ac084179ab1207a6a54b4a7563cc9384e79b0631ef"
+ERPNEXT_ARGS_WRITTEN_FOR = "d0c3a6f00787e73867f45c28d90ade79c471540834714551874ad2a20bf5965d"
 _ERPNEXT_ARGS = (
     "  Their arguments, exactly these names, with objects and lists passed as JSON "
     "values, never as quoted strings: "
@@ -420,7 +428,8 @@ _ERPNEXT_ARGS = (
     "{\"field\": value or [\"operator\", value]} or [[\"field\", \"operator\", value], ...], "
     "group_by?, aggregates?: [{\"function\": \"SUM\", \"field\": ..., \"as\": ...}], "
     "order_by?, limit?}; "
-    "`run_report` {report_name, filters?: {fieldname from describe_report: value}, limit?}. "
+    "`run_report` {report_name, filters?: {fieldname from describe_report: value}, limit?, "
+    "columns?: [\"fieldname\", ...] of the report's own columns}. "
     "An empty result means nothing matched: change the filter or the approach, "
     "never the shape of the same call."
 )

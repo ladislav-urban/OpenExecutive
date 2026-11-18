@@ -552,6 +552,34 @@ def test_a_cash_outlook_reads_receivables_and_payables_grouped(channel_env: Any)
     assert "compare their total with the Accounts Receivable Summary's" in text
 
 
+def test_a_single_invoice_question_reads_the_slim_report(channel_env: Any) -> None:
+    # run_report's `columns` (ladislav-urban/oe_connector#617); a slim read
+    # still cut short goes to the grouped read, never an outlook from partial rows.
+    text = _render(("erpnext", "fetch"))
+    assert (
+        "with `columns` for the slim set: posting_date, due_date, party, "
+        "voucher_type, voucher_no, currency, invoiced, outstanding." in text
+    )
+    assert "When a slim read still comes back `truncated`, switch to the grouped read" in text
+    assert "never work an outlook out from partial rows" in text
+    assert "columns?: [\"fieldname\", ...] of the report's own columns}" in text
+
+
+def test_a_truncated_grouped_read_is_split_never_used_in_part(channel_env: Any) -> None:
+    # The grouped outlook read can itself be cut short on a large ledger:
+    # overdue first, then the outlook's weeks, and nothing worked from part of it.
+    text = _render(("erpnext", "fetch"))
+    assert (
+        "When a grouped read itself comes back `truncated`, split it: what is "
+        "already overdue first, then the outlook's weeks, each read on its own; "
+        "never work from part of it." in text
+    )
+    # It sits in the outlook passage, before the slim-columns sentences.
+    outlook = text.index("A cash outlook, or anything bucketed by due week")
+    split = text.index("When a grouped read itself comes back `truncated`")
+    assert outlook < split < text.index("with `columns` for the slim set")
+
+
 def test_the_erpnext_guide_is_constant() -> None:
     # It sits in block 0 (cache_control): nothing in it may vary per turn.
     from openexecutive.prompts import connected_systems
