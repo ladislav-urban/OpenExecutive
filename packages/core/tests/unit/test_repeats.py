@@ -241,7 +241,6 @@ def test_a_dropped_table_keeps_its_not_done_notice() -> None:
         "|---|---|---|",
         "| Acme Corporation | Release the credit hold | " + notice + " |",
         "| Borealis Trading | Send the overdue reminder | Drafted for your review in the inbox |",
-        "| Pinecrest Supply | Chase the payment | Waiting on their accounts team |",
     ])
     table += " " * (303 - len(table) - 1) + "|"
     assert len(table) == 303
