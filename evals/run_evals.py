@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "packages" / "core"))
 def failed_checks(scores: dict) -> list[str]:
     # The deterministic checks chat_checks recorded as failed, by key, for
     # the run's one-line summary (the scores keep the details).
-    failed = [k for k in ("forbidden_reply_words", "repeated_text", "reply_must_name_missing") if scores.get(k)]
+    failed = [k for k in ("forbidden_reply_words", "principal_name", "repeated_text", "reply_must_name_missing") if scores.get(k)]
     return failed + [k for k in ("routing", "views") if isinstance(scores.get(k), dict) and not scores[k].get("ok")]
 
 

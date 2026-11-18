@@ -958,24 +958,40 @@ def view_kinds_check(scenario: dict[str, Any], views: list[dict[str, Any]]) -> d
     return out
 
 
-def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
-    """The scenario's ``forbidden_reply_words`` the reply says, whole words and
-    any case: a deterministic check the judge's score can't outvote."""
+def _says(word: str, reply: str) -> bool:
     import re
 
+    return bool(word) and re.search(
+        r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE
+    ) is not None
+
+
+def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
+    """The scenario's own ``forbidden_reply_words`` the reply says, whole
+    words and any case: a deterministic check the judge's score can't
+    outvote. The install principal's name (``forbid_principal_name``) is
+    ``principal_name_in``'s, reported apart."""
     words = [w.strip() for w in scenario.get("forbidden_reply_words") or []]
-    if scenario.get("forbid_principal_name") is True:
-        # The install's own principal, read at run time: no fixture can name
-        # the real person a demo must never reveal.
-        principal = _principal()
-        name = (getattr(principal, "full_name", None) or "").strip()
-        if name:
-            words += [name, name.split()[0]]
-    found = []
-    for word in words:
-        if word and re.search(r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE):
-            found.append(word)
-    return found
+    return [word for word in words if _says(word, reply)]
+
+
+# What a run records for a reply that names the principal: never the name
+# itself, which the scores and results would otherwise carry.
+PRINCIPAL_NAME_SAID = "the principal's name appeared in the reply"
+
+
+def principal_name_in(scenario: dict[str, Any], reply: str) -> bool:
+    """Whether the reply names the install's own principal (full name or first
+    name, whole words and any case), for a ``forbid_principal_name``
+    scenario. Read at run time: no fixture can name the real person a demo
+    must never reveal. Kept apart from the scenario's own words so a run
+    that fails on a fixture name ("Rachel") never reads as a principal leak,
+    and the other way round."""
+    if scenario.get("forbid_principal_name") is not True:
+        return False
+    principal = _principal()
+    name = (getattr(principal, "full_name", None) or "").strip()
+    return bool(name) and (_says(name, reply) or _says(name.split()[0], reply))
 
 
 def _plain(text: str) -> str:
@@ -1002,7 +1018,9 @@ def reply_must_name_missing(scenario: dict[str, Any], reply: str) -> list[str]:
 def reply_check_failures(scenario: dict[str, Any], reply: str, *, repeated: bool = True) -> dict[str, list[str]]:
     """The deterministic checks every runner holds a reply to, whatever the
     judge's score, keyed as they are recorded in the run's scores: a
-    ``forbidden_reply_words`` word it says, a sentence it says twice (with
+    ``forbidden_reply_words`` word it says, the principal's name under
+    ``principal_name`` (with ``forbid_principal_name``; the name itself is
+    never recorded), a sentence it says twice (with
     ``forbid_repeated_text``; ``repeated=False`` for text that isn't one
     reply, such as a watch notice's lines) and a ``reply_must_name`` item it
     leaves out. Empty when the reply passes them all."""
@@ -1012,6 +1030,8 @@ def reply_check_failures(scenario: dict[str, Any], reply: str, *, repeated: bool
     said = forbidden_words_in(scenario, reply)
     if said:
         out["forbidden_reply_words"] = said
+    if principal_name_in(scenario, reply):
+        out["principal_name"] = [PRINCIPAL_NAME_SAID]
     if repeated and scenario.get("forbid_repeated_text") is True:
         again = repeated_sentences(reply)
         if again:

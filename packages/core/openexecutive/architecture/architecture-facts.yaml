@@ -13238,8 +13238,12 @@ evals:
   reply_checks: |
     Deterministic checks a reply fails whatever the judge's score
     (evals.scenarios.reply_check_failures), recorded in the run's scores
-    under their own keys: forbidden_reply_words (whole words, any case;
-    forbid_principal_name adds the install's principal), forbid_repeated_text
+    under their own keys: forbidden_reply_words (the scenario's own words,
+    whole words, any case), principal_name (forbid_principal_name: the
+    install principal's full or first name, read at run time, recorded only
+    as "the principal's name appeared in the reply", never the name, and
+    kept apart so a fixture name such as erpnext_064's "Rachel" never reads
+    as a principal leak), forbid_repeated_text
     (a sentence said twice) and reply_must_name (a list of strings, each
     present anywhere in the reply in any case and spacing, with |-separated
     alternatives such as "Panel wiring|DEMO-WIR-25"; a missing one is

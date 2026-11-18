@@ -240,3 +240,77 @@ def test_the_where_is_my_order_scenario_holds_every_line(monkeypatch: pytest.Mon
     assert scenario["forbidden_reply_words"] == ["ERPNext"]
     assert reply_must_name_missing(scenario, THREE_ROWS) == ["Panel wiring|DEMO-WIR-25"]
     assert reply_check_failures(scenario, FOUR_ROWS) == {}
+
+
+# ── the principal's name, apart from the scenario's own words ─────────────
+
+PRINCIPAL = "Rhoda Principal"
+
+
+@pytest.fixture
+def principal(monkeypatch: pytest.MonkeyPatch) -> None:
+    from types import SimpleNamespace
+
+    from openexecutive.evals import scenarios
+
+    monkeypatch.setattr(scenarios, "_principal", lambda: SimpleNamespace(full_name=PRINCIPAL))
+
+
+# A sweep reported "Rachel", a demo-fixture name in erpnext_064's own list,
+# under the same key as a principal leak: the two now have a key each.
+NAMED = {"forbidden_reply_words": ["Rachel"], "forbid_principal_name": True}
+
+
+@pytest.mark.usefixtures("principal")
+def test_a_fixture_name_and_the_principals_name_have_a_key_each() -> None:
+    assert reply_check_failures(NAMED, "Rachel raises them.") == {"forbidden_reply_words": ["Rachel"]}
+    leak = reply_check_failures(NAMED, "Rhoda raises them.")
+    assert leak == {"principal_name": ["the principal's name appeared in the reply"]}
+    both = reply_check_failures(NAMED, "Rachel drafts them and Rhoda Principal approves.")
+    assert both["forbidden_reply_words"] == ["Rachel"] and both["principal_name"]
+    # The name is never recorded, whatever path records it.
+    assert "Rhoda" not in repr(both)
+    assert "Rhoda" not in repr(reply_check_failures(NAMED, "Rhoda: on time.", repeated=False))  # a watch notice
+    # Without forbid_principal_name the principal may be named.
+    assert reply_check_failures({"forbidden_reply_words": ["Rachel"]}, "Rhoda raises them.") == {}
+
+
+@pytest.mark.usefixtures("principal")
+def test_the_package_runner_fails_a_principal_name_under_its_own_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    done = _chat(monkeypatch, {"id": "c", "query": "q", **NAMED}, "Rhoda Principal raises them.")
+    assert done["passed"] is False
+    assert done["scores"]["principal_name"] == ["the principal's name appeared in the reply"]
+    assert "forbidden_reply_words" not in done["scores"]
+    assert "Rhoda" not in repr(done["scores"])
+
+
+@pytest.mark.usefixtures("principal")
+def test_the_supplier_runner_keys_the_principals_name_apart(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.integrations import erpnext_a2a_agent
+
+    from .test_evals_supplier import SCENARIO
+
+    async def fake_answer(supplier: str, message: str, call: Any, **_k: Any) -> Any:
+        return erpnext_a2a_agent.SupplierAnswer("Rhoda will confirm your order.", [])
+
+    async def fake_judge(_scenario: dict[str, Any], outcome: dict[str, Any]) -> dict[str, Any]:
+        return {"overall": 5}
+
+    monkeypatch.setattr(erpnext_a2a_agent, "answer", fake_answer)
+    monkeypatch.setattr(runner_module, "judge_supplier", fake_judge)
+    result = asyncio.run(runner_module.run_supplier_scenario({**SCENARIO, **NAMED}))
+    assert result["passed"] is False
+    assert result["scores"]["principal_name"] and "forbidden_reply_words" not in result["scores"]
+    assert "Rhoda" not in repr(result["scores"])
+
+
+@pytest.mark.usefixtures("principal")
+def test_run_evals_reports_the_principals_name_apart(monkeypatch: pytest.MonkeyPatch) -> None:
+    scenario = {"id": "m", "domain": "mcp", "query": "q", **NAMED}
+    leak = _evaluate(monkeypatch, scenario, _Replying("Rhoda Principal raises them."))
+    assert leak["passed"] is False
+    assert _run_evals().failed_checks(leak["scores"]) == ["principal_name"]
+    assert "Rhoda" not in repr(leak["scores"])
+    fixture = _evaluate(monkeypatch, scenario, _Replying("Rachel raises them."))
+    assert fixture["passed"] is False
+    assert _run_evals().failed_checks(fixture["scores"]) == ["forbidden_reply_words"]
