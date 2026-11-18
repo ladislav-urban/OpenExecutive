@@ -455,8 +455,11 @@ def get_decisions(
     spec = DECISION_CLASSES.get(decision_class)
     if spec is not None and spec.principal_only:
         return []
-    instances = list_instances(decision_class, status=status, limit=limit)
-    return [_served(i) for i in instances if not _is_private(i)]
+    # Only the cards GET /decisions/{id} would open for them (`_may_see_card`).
+    instances = list_instances(decision_class, status=status, limit=500)
+    return [
+        _served(i) for i in instances if not _is_private(i) and _may_see_card(i, request)
+    ][:limit]
 
 
 @router.get("/decisions/{instance_id}", response_model=DecisionInstance)

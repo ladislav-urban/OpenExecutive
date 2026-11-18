@@ -1522,7 +1522,10 @@ def test_a_meeting_with_a_contact_is_the_principals_to_approve_and_see(
     app.include_router(decisions.router)
     client = TestClient(app)
     teammate = _as(TEAM_EMAIL)
-    assert [i["id"] for i in client.get("/decisions", headers=teammate).json()] == [public_id]
+    # Neither card is the teammate's (they are not its approver, nor was it
+    # routed to them): the list holds only the cards they could open.
+    assert client.get("/decisions", headers=teammate).json() == []
+    assert client.get(f"/decisions/{public_id}", headers=teammate).status_code == 404
     for response in (
         client.get(f"/decisions/{private_id}", headers=teammate),
         client.post(f"/decisions/{private_id}/approve", json={}, headers=teammate),

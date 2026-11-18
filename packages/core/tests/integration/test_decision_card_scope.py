@@ -138,3 +138,17 @@ def test_a_teammate_answers_the_card_they_approve(
     # Routed to them or from their chat: they may open it, not decide it.
     r = call(client, True, "teammate", "POST", f"/decisions/{cards['routed']}/approve", {})
     assert r.status_code == 403, r.text
+
+
+@pytest.mark.parametrize("who", EVERYONE)
+def test_the_list_holds_only_the_cards_the_caller_can_open(
+    cards: dict[str, Any], monkeypatch: pytest.MonkeyPatch, who: str
+) -> None:
+    client = app_client(monkeypatch, signed=True)
+    r = call(client, True, who, "GET", f"/decisions?decision_class={decisions_route._CALENDAR_CLASS}")
+    assert r.status_code == 200, r.text
+    listed = {i["id"] for i in r.json()}
+    calendar = {"principals", "bens", "routed", "from_ben"}
+    assert listed == {cards[name] for name in SEES[who] & calendar}
+    for card in listed:
+        assert call(client, True, who, "GET", f"/decisions/{card}").status_code == 200
