@@ -2625,12 +2625,13 @@ async def _regen_briefing_narrative_locked(
         # in a thread rather than on the event loop (GET /today, above).
         mode = get_workspace().mode
         own = expected_scope == narrative_cache.DEFAULT_SCOPE
-        snapshot = _build_today(
-            include_private=own,
-            in_flight_for=None if own else (
-                _audience_for(caller_person_id) or ActivityAudience(person_id=None, demo=True)
-            ),
+        audience = None if own else (
+            _audience_for(caller_person_id) or ActivityAudience(person_id=None, demo=True)
         )
+        snapshot = _build_today(include_private=own, in_flight_for=audience)
+        if audience is not None and audience.demo:
+            # Their Home carries no departments (`_departments_for_members`).
+            snapshot.departments = []
         scope, today_data, viewer_desc, viewer = _narrative_inputs(
             snapshot, caller_person_id
         )
@@ -2835,6 +2836,7 @@ def _today_for(
         in_flight_for=_audience_for(caller),
     )
     response.caller_person_id = caller
+    _departments_for_members(response, request, principal=principal)
     if stale:
         background_tasks.add_task(_regen_stale_insights, stale)
     _attach_narrative(
@@ -2853,6 +2855,17 @@ def _today_for(
     response.done_for_you = _done_for_you(request, caller, datetime.now(UTC))
     _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)
     return response
+
+
+def _departments_for_members(response: TodayResponse, request: Request, *, principal: bool) -> None:
+    """The departments (titles, goal counts, the off-track and at-risk goals
+    with their owners) are read by the principal and the active team, as on
+    GET /departments and /goals (api.principal_gate.caller_is_member); anyone
+    else's Home carries none, nor does the header written for them."""
+    from openexecutive.api.principal_gate import caller_is_member
+
+    if not principal and not caller_is_member(request):
+        response.departments = []
 
 
 def _workspace_solo() -> bool:
@@ -3923,6 +3936,7 @@ def get_morning_brief(request: Request, response: Response) -> TodayResponse:
         include_private=principal, viewer=viewer_for_person(caller), in_flight_for=_audience_for(caller),
     )
     payload.caller_person_id = caller
+    _departments_for_members(payload, request, principal=principal)
     # Serve the viewer's cached narrative (cache-only — this deprecated alias
     # has no BackgroundTasks to schedule a regen). Before the home rules, as
     # GET /today does, so a demo person's header names the principal by role.
