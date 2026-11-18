@@ -13251,15 +13251,20 @@ evals:
     Deterministic checks a reply fails whatever the judge's score
     (evals.scenarios.reply_check_failures), recorded in the run's scores
     under their own keys: forbidden_reply_words (the scenario's own words,
-    whole words, any case), principal_name (forbid_principal_name: any of
-    the install principal's name variants, read from the roster at run time
-    (scenarios.name_variants: the full name, "Surname, Given" and the
-    email's local part when it joins parts with . _ or - ("o.owner"; a
-    bare one such as "principal" or "ceo" is an ordinary word), each in any
-    case, and the given name and surname capitalised only, so "Owner
-    approves" names the principal and "the account owner" doesn't;
-    honorifics such as Ms. or Dr. dropped first and any part under three
-    characters left out), whole words (scenarios.name_pattern), recorded only
+    whole words, any case), principal_name (forbid_principal_name: any
+    variant of the name of every principal row, archived and suspended ones
+    too, read from the roster at run time, and at least what the demo guard
+    hides (people.demo.principal_names_and_addresses, principal_name_words);
+    scenarios.name_variants: in any case the full name, "Surname, Given",
+    the given name, every whole email address and alias, and a local part
+    that joins parts with . _ or - ("o.owner"; a bare one such as
+    "principal" or "ceo" is an ordinary word); capitalised only the surname
+    and each part of a hyphenated one, so "Owner approves" names the
+    principal and "the account owner" doesn't. The name is read with
+    honorifics (Ms., Dr.), trailing suffixes (Jr, Sr, II-IV), a comma-tail
+    of credentials (", CPA") and a parenthesised part ("(CEO)") dropped,
+    "Owner, Olivia" as surname, given, and any part under three characters
+    left out; whole words (scenarios.name_pattern)), recorded only
     as "the principal's name appeared in the reply", never the name, and
     kept apart so a fixture name such as erpnext_064's "Rachel" never reads
     as a principal leak), forbid_repeated_text
@@ -13287,7 +13292,11 @@ evals:
     a live prior reply already scrubbed (ChatTurn.judged_scenario), so its
     notes can't echo the name. The checks read the replies before they are
     scrubbed, so a forbid_principal_name hit still fails the scenario.
-    response_length is the whole reply's. Why: keep the principal's name
+    A failed chat or mcp scenario's error (a live turn's LIVE_TURN_FAILED
+    carries its exception's text) is scrubbed the same way
+    (runner.stored_error, in scenario_error and in evals/run_evals.py's
+    printed and stored error), or replaced by runner.ERROR_UNCHECKED when
+    the roster can't be read. response_length is the whole reply's. Why: keep the principal's name
     out of stored eval results (data minimisation). The Executive's own
     audit log keeps each eval turn's whole reply, as it does for every
     chat turn; the eval runners don't change that.

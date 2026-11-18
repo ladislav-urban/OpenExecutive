@@ -234,7 +234,7 @@ def test_both_judges_see_a_panel_scenarios_criteria() -> None:
 def test_the_where_is_my_order_scenario_holds_every_line(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.evals import scenarios
 
-    monkeypatch.setattr(scenarios, "_principal", lambda: None)  # forbid_principal_name reads the roster
+    monkeypatch.setattr(scenarios, "_principal_names_and_addresses", lambda: ([], []))  # the roster
     (scenario,) = [s for s in load_scenarios(kind="mcp") if s["id"] == "erpnext_098"]
     assert scenario["surface"] == "erpnext_panel" and scenario["demo_viewer"] is True
     assert scenario["forbidden_reply_words"] == ["ERPNext"]
@@ -249,21 +249,17 @@ PRINCIPAL = "Rhoda Prentiss"
 
 @pytest.fixture
 def principal(monkeypatch: pytest.MonkeyPatch) -> None:
-    from types import SimpleNamespace
-
     from openexecutive.evals import scenarios
 
-    monkeypatch.setattr(scenarios, "_principal", lambda: SimpleNamespace(full_name=PRINCIPAL))
+    monkeypatch.setattr(scenarios, "_principal_names_and_addresses", lambda: ([PRINCIPAL], []))
 
 
 # The ways a reply may name the principal (scenarios.name_variants): not
 # only the full or first name.
-def _olivia(monkeypatch: pytest.MonkeyPatch, full_name: str, email: str | None = None) -> None:
-    from types import SimpleNamespace
-
+def _olivia(monkeypatch: pytest.MonkeyPatch, *names: str, addresses: tuple[str, ...] = ()) -> None:
     from openexecutive.evals import scenarios
 
-    monkeypatch.setattr(scenarios, "_principal", lambda: SimpleNamespace(full_name=full_name, email=email))
+    monkeypatch.setattr(scenarios, "_principal_names_and_addresses", lambda: (list(names), list(addresses)))
 
 
 FORBID = {"forbid_principal_name": True}
@@ -272,51 +268,80 @@ FORBID = {"forbid_principal_name": True}
 def test_the_name_variants_are_the_full_given_surname_and_inverted_names() -> None:
     from openexecutive.evals.scenarios import name_variants
 
-    # (text, any_case): a single name is matched capitalised only.
+    # (text, any_case): the surname is matched capitalised only.
     assert name_variants("Dr. Olivia  Owner") == [
-        ("Owner, Olivia", True), ("Olivia Owner", True), ("Olivia", False), ("Owner", False),
+        ("Owner, Olivia", True), ("Olivia Owner", True), ("Olivia", True), ("Owner", False),
     ]
     assert name_variants("Prof Olivia Mae Owner", "olivia.owner@example.com") == [
-        ("Olivia Mae Owner", True), ("Owner, Olivia", True), ("olivia.owner", True), ("Olivia", False), ("Owner", False),
+        ("olivia.owner@example.com", True), ("Olivia Mae Owner", True), ("Owner, Olivia", True),
+        ("olivia.owner", True), ("Olivia", True), ("Owner", False),
     ]
     assert name_variants("olivia owner") == [
-        ("owner, olivia", True), ("olivia owner", True), ("Olivia", False), ("Owner", False),
+        ("owner, olivia", True), ("olivia owner", True), ("olivia", True), ("Owner", False),
     ]
     # A part shorter than three characters is left out, and so is an
     # inverted name built from one.
     assert name_variants("Al Owner") == [("Al Owner", True), ("Owner", False)]
     assert name_variants("Ms. Jo") == []
     assert name_variants(None) == [] and name_variants("  ") == []
-    # An email's local part only when it joins parts.
+    # An email's local part only when it joins parts; the whole address always.
     assert ("o.owner", True) in name_variants("Olivia Owner", "o.owner@x")
     assert ("o_owner", True) in name_variants("Olivia Owner", "o_owner@x")
     assert [v.text for v in name_variants("Olivia Owner", "principal@eval.example")] == [
-        "Owner, Olivia", "Olivia Owner", "Olivia", "Owner",
+        "principal@eval.example", "Owner, Olivia", "Olivia Owner", "Olivia", "Owner",
     ]
+
+
+@pytest.mark.parametrize(
+    ("full_name", "expected"),
+    [
+        ("Olivia Owner, CPA", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
+        ("Olivia Owner Jr", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
+        ("Olivia Owner III, PhD", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
+        ("Olivia Owner (CEO)", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
+        ("Owner, Olivia", ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]),
+        (
+            "Olivia Owner-Smith",
+            ["Owner-Smith, Olivia", "Olivia Owner-Smith", "Owner-Smith", "Olivia", "Owner", "Smith"],
+        ),
+    ],
+)
+def test_a_name_with_a_suffix_credential_hyphen_or_comma_is_read_as_given_and_surname(
+    monkeypatch: pytest.MonkeyPatch, full_name: str, expected: list[str],
+) -> None:
+    from openexecutive.evals.scenarios import name_variants, principal_name_in
+
+    assert [v.text for v in name_variants(full_name)] == expected
+    # No suffix or credential is ever a variant of its own.
+    assert not {"Jr", "III", "CPA", "PhD", "CEO"} & {v.text for v in name_variants(full_name)}
+    _olivia(monkeypatch, full_name)
+    assert principal_name_in(FORBID, "Ms. Owner approves.")
+    assert not principal_name_in(FORBID, "The account owner approves; ask the CPA or the CEO, Jr staff too.")
 
 
 @pytest.mark.parametrize(
     "reply",
     [
-        "Ms. Owner signs off.", "Owner approves.", "Ask Olivia.", "Owner, Olivia approves.",
-        "owner, olivia approves.", "OLIVIA OWNER approves.", "Mail Olivia.Owner today.",
+        "Ms. Owner signs off.", "Owner approves.", "Ask Olivia.", "Ask olivia.", "OLIVIA signs.",
+        "Owner, Olivia approves.", "owner, olivia approves.", "OLIVIA OWNER approves.",
+        "Mail Olivia.Owner today.", "Created by olivia@acme.example.", "Cc O.Owner@Alias.Example.",
     ],
 )
 def test_each_variant_of_the_principals_name_is_caught(monkeypatch: pytest.MonkeyPatch, reply: str) -> None:
     from openexecutive.evals.scenarios import principal_name_in
 
-    _olivia(monkeypatch, "Dr. Olivia Owner", "olivia.owner@example.com")
+    _olivia(
+        monkeypatch, "Dr. Olivia Owner",
+        addresses=("olivia.owner@example.com", "olivia@acme.example", "o.owner@alias.example"),
+    )
     assert principal_name_in(FORBID, reply)
 
 
 @pytest.mark.parametrize(
     "reply",
-    [
-        "Dr. Smith approves.", "The Owners approve.", "Prof. Jones and Mr. Lee.",
-        "the account owner approves.", "Ask olivia.", "OWNER approves.",
-    ],
+    ["Dr. Smith approves.", "The Owners approve.", "Prof. Jones and Mr. Lee.", "the account owner approves.", "OWNER approves."],
 )
-def test_an_honorific_a_longer_word_or_a_lowercase_one_is_not_the_principals_name(
+def test_an_honorific_a_longer_word_or_a_lowercase_surname_is_not_the_principals_name(
     monkeypatch: pytest.MonkeyPatch, reply: str,
 ) -> None:
     from openexecutive.evals.scenarios import principal_name_in
@@ -329,11 +354,11 @@ def test_a_bare_email_local_part_is_an_ordinary_word(monkeypatch: pytest.MonkeyP
     from openexecutive.evals.scenarios import principal_name_in, scrub_principal_name
 
     # The eval bench's principal.
-    _olivia(monkeypatch, "Olivia Owner", "principal@eval.example")
+    _olivia(monkeypatch, "Olivia Owner", addresses=("principal@eval.example",))
     for reply in ("It sits with the principal.", "the account owner approves."):
         assert not principal_name_in(FORBID, reply)
         assert scrub_principal_name(reply) == reply
-    for reply in ("Owner approves.", "Ask Olivia."):
+    for reply in ("Owner approves.", "Ask Olivia.", "Ask olivia.", "Mail principal@eval.example."):
         assert principal_name_in(FORBID, reply)
         assert "[the principal]" in scrub_principal_name(reply)
 
@@ -341,10 +366,34 @@ def test_a_bare_email_local_part_is_an_ordinary_word(monkeypatch: pytest.MonkeyP
 def test_an_email_local_part_with_a_separator_is_the_principals_name(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.evals.scenarios import principal_name_in, scrub_principal_name
 
-    _olivia(monkeypatch, "Olivia Owner", "o.owner@x")
+    _olivia(monkeypatch, "Olivia Owner", addresses=("o.owner@x",))
     assert principal_name_in(FORBID, "Write to o.owner about it.")
     assert principal_name_in(FORBID, "Write to O.Owner about it.")
-    assert scrub_principal_name("Write to o.owner@x today.") == "Write to [the principal]@x today."
+    assert scrub_principal_name("Write to o.owner@x today.") == "Write to [the principal] today."
+
+
+def test_every_principal_row_is_matched(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.evals.scenarios import principal_name_in
+
+    # An archived principal's row still names them in old texts.
+    _olivia(monkeypatch, "Olivia Owner", "Peter Parker", addresses=("pp.old@acme.example",))
+    for reply in ("Ask Peter.", "Parker signs.", "Mail pp.old today."):
+        assert principal_name_in(FORBID, reply)
+
+
+def test_the_eval_matches_everything_the_demo_guard_hides(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.evals.scenarios import principal_name_in
+    from openexecutive.people.demo import principal_name_pattern
+
+    names, addresses = ["Olivia Owner", "Owner, Peter"], ["olivia@acme.example", "ceo@acme.example"]
+    _olivia(monkeypatch, *names, addresses=tuple(addresses))
+    guard = principal_name_pattern(names, addresses)
+    assert guard is not None
+    for reply in (
+        "OLIVIA OWNER signs.", "ask olivia.", "Created by olivia@acme.example.", "Cc CEO@acme.example.",
+        "Owner, Peter approves.",
+    ):
+        assert guard.search(reply) and principal_name_in(FORBID, reply), reply
 
 
 def test_a_short_name_part_is_not_matched(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -358,13 +407,14 @@ def test_a_short_name_part_is_not_matched(monkeypatch: pytest.MonkeyPatch) -> No
 def test_the_scrub_replaces_every_variant(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.evals.scenarios import scrub_principal_name
 
-    _olivia(monkeypatch, "Dr. Olivia Owner", "olivia.owner@example.com")
+    _olivia(monkeypatch, "Dr. Olivia Owner", addresses=("olivia.owner@example.com",))
     text = (
-        "Dr. Olivia Owner, Ms. Owner, Owner, Olivia, olivia.owner@example.com;"
+        "Dr. Olivia Owner, Ms. Owner, Owner, Olivia, olivia.owner@example.com, olivia;"
         " Dr. Smith and the account owner."
     )
     assert scrub_principal_name(text) == (
-        "Dr. [the principal], Ms. [the principal], [the principal], [the principal]@example.com;"
+        # The roster's own spelling ("Dr. Olivia Owner") is a variant too.
+        "[the principal], Ms. [the principal], [the principal], [the principal], [the principal];"
         " Dr. Smith and the account owner."
     )
 
@@ -585,6 +635,43 @@ def test_run_evals_stores_no_principal_name_anywhere(monkeypatch: pytest.MonkeyP
     (judged,) = seen
     assert [t["assistant"] for t in judged["prior_turns"]] == ["fixed", "Ask [the principal].", "On time."]
     assert result["passed"] is not forbid
+
+
+# A failed scenario's error is stored too; a live turn's carries its
+# exception's text, which may name the principal.
+class _Failing:
+    async def chat(self, **kwargs: Any) -> str:
+        raise RuntimeError("Rhoda Prentiss's mailbox timed out")
+
+
+@pytest.mark.usefixtures("principal")
+def test_a_failed_scenarios_error_is_stored_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    executive = _Failing()
+
+    async def fake_chat(self: Any, **kwargs: Any) -> str:
+        return await executive.chat(**kwargs)
+
+    monkeypatch.setattr(Executive, "__init__", lambda self, mcp_gateway=None: None)
+    monkeypatch.setattr(Executive, "chat", fake_chat)
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    asyncio.run(runner_module._make_chat_runner(asyncio.Semaphore(1), queue, [0], 1, None)(0, LIVE_NAMED))
+    (error,) = [e for e in (queue.get_nowait() for _ in range(queue.qsize())) if e["type"] == "scenario_error"]
+    assert error["error"].startswith("live prior turn 2 failed")
+    assert "[the principal]'s mailbox timed out" in error["error"]
+    assert "rhoda" not in repr(error).lower()
+    result = asyncio.run(_run_evals().evaluate_chat_or_error(LIVE_NAMED, _Failing()))
+    assert result["passed"] is False and "[the principal]'s mailbox" in result["error"]
+    assert "rhoda" not in repr(result).lower()
+
+
+def test_an_error_that_cant_be_checked_is_not_stored(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.evals import scenarios
+
+    def unreadable() -> Any:
+        raise RuntimeError("roster unreadable")
+
+    monkeypatch.setattr(scenarios, "_principal_names_and_addresses", unreadable)
+    assert runner_module.stored_error(RuntimeError("Rhoda Prentiss failed")) == runner_module.ERROR_UNCHECKED
 
 
 # ── where evals/run_evals.py writes its results ────────────────────────────

@@ -78,6 +78,19 @@ async def evaluate_chat(scenario: dict, executive) -> dict:
     return result
 
 
+async def evaluate_chat_or_error(scenario: dict, executive) -> dict:
+    """``evaluate_chat``'s result, or the scenario's error result when it
+    raised: its ``error`` with the principal's name scrubbed
+    (``runner.stored_error``), as the package runner's scenario_error has it
+    and as it is printed."""
+    from openexecutive.evals.runner import stored_error
+
+    try:
+        return await evaluate_chat(scenario, executive)
+    except Exception as e:
+        return {"id": scenario["id"], "error": stored_error(e), "passed": False}
+
+
 async def judge_response(scenario: dict, response: str, drafts: list[dict] | None = None) -> dict:
     from openexecutive.evals.judges import chat_judge_context
     from openexecutive.evals.scenarios import prior_turns_section
@@ -436,19 +449,18 @@ async def main() -> None:
             executive = Executive(mcp_gateway=gateway)
             for scenario in scenarios:
                 print(f"  [{scenario['id']}] {scenario['description']}")
-                try:
-                    result = await evaluate_chat(scenario, executive)
-                    results.append(result)
-                    scores = result["scores"]
-                    status = "PASS" if result["passed"] else "FAIL"
-                    failed = failed_checks(scores)
-                    print(
-                        f"    → {status} (overall: {scores.get('overall', 0):.1f}/5)"
-                        + (f"; failed: {', '.join(failed)}" if failed else "")
-                    )
-                except Exception as e:
-                    print(f"    → ERROR: {e}")
-                    results.append({"id": scenario["id"], "error": str(e), "passed": False})
+                result = await evaluate_chat_or_error(scenario, executive)
+                results.append(result)
+                if "error" in result:
+                    print(f"    → ERROR: {result['error']}")
+                    continue
+                scores = result["scores"]
+                status = "PASS" if result["passed"] else "FAIL"
+                failed = failed_checks(scores)
+                print(
+                    f"    → {status} (overall: {scores.get('overall', 0):.1f}/5)"
+                    + (f"; failed: {', '.join(failed)}" if failed else "")
+                )
 
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     output_file = output_dir / f"eval_results_{target_kind}_{timestamp}.json"

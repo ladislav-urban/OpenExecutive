@@ -105,6 +105,30 @@ def by_role(person: Any) -> Any:
 DEMO_PRINCIPAL_WITHHELD = "That result isn't available just now. Answer from what you already have."
 
 
+def principal_names_and_addresses() -> tuple[list[str], list[str]]:
+    """Every principal row's full name, and every email address and alias,
+    archived and suspended rows too, since old texts still name them. Raises
+    when the roster can't be read."""
+    from openexecutive.people.store import list_people
+
+    principals = [p for p in list_people(include_archived=True, include_suspended=True) if p.is_principal]
+    names = [p.full_name for p in principals if p.full_name]
+    addresses = [a for p in principals for a in (p.email, *p.email_aliases) if a]
+    return names, addresses
+
+
+def principal_name_words(names: list[str], addresses: list[str] | None) -> set[str]:
+    """The words ``principal_name_pattern`` hides, each in any case: every
+    whole address, and each name's full form and first token."""
+    words: set[str] = {a.strip() for a in addresses or [] if a.strip()}
+    for name in names:
+        full = " ".join(name.split())
+        if full:
+            words.add(full)
+            words.add(full.split()[0])
+    return words
+
+
 def principal_name_pattern(
     names: list[str] | None = None, addresses: list[str] | None = None
 ) -> re.Pattern[str] | None:
@@ -114,19 +138,8 @@ def principal_name_pattern(
     them); None when there is nothing to hide. Fails closed: a roster that
     can't be read raises, so the caller shows nothing rather than the name."""
     if names is None:
-        from openexecutive.people.store import list_people
-
-        principals = [
-            p for p in list_people(include_archived=True, include_suspended=True) if p.is_principal
-        ]
-        names = [p.full_name for p in principals if p.full_name]
-        addresses = [a for p in principals for a in (p.email, *p.email_aliases) if a]
-    words: set[str] = {a.strip() for a in addresses or [] if a.strip()}
-    for name in names:
-        full = " ".join(name.split())
-        if full:
-            words.add(full)
-            words.add(full.split()[0])
+        names, addresses = principal_names_and_addresses()
+    words = principal_name_words(names, addresses)
     if not words:
         return None
     alternation = "|".join(re.escape(w) for w in sorted(words, key=len, reverse=True))

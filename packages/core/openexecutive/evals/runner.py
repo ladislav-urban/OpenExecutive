@@ -698,6 +698,23 @@ def stored_live_turn(n: int, reply: str) -> dict[str, Any]:
     return entry
 
 
+# A failed scenario's error when it can't be checked for the principal's
+# name (the roster unread): stored in place of the error, never unchecked.
+ERROR_UNCHECKED = "the scenario failed; its error isn't kept, as it couldn't be checked for the principal's name"
+
+
+def stored_error(exc: BaseException) -> str:
+    """A failed chat or mcp scenario's ``error`` as a run's result keeps it:
+    ``str(exc)`` with the principal's name scrubbed (``scrub_principal_name``;
+    a live turn's ``LIVE_TURN_FAILED`` carries its exception's text), or
+    ``ERROR_UNCHECKED`` when the roster can't be read."""
+    try:
+        return str(scrub_principal_name(str(exc)))
+    except Exception:
+        logger.warning("eval scenario error not checked for the principal's name", exc_info=True)
+        return ERROR_UNCHECKED
+
+
 # Why a scenario fails when a live prior turn errors or answers nothing:
 # the question would follow a conversation that never happened.
 LIVE_TURN_FAILED = "live prior turn {n} failed, so the question has no conversation to follow: {why}"
@@ -962,7 +979,7 @@ def _make_chat_runner(
                             "index": i,
                             "total": total,
                             "scenario_id": scenario["id"],
-                            "error": str(exc),
+                            "error": stored_error(exc),
                         }
                     )
         except asyncio.CancelledError:
