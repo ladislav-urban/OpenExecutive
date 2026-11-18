@@ -4753,7 +4753,10 @@ people:
     only on a run for the principal — morning_brief.PRINCIPAL_DELIVERY or
     their verified chat turn — and then keeps its text out of run history),
     the narrative includes it only in the principal's own `principal` scope
-    (an unresolved caller gets the `company` scope), the activity rail never
+    (an unresolved caller gets the `company` scope, a fixed line; on startup
+    narrative_cache.drop_non_principal_headers deletes once, bounded by
+    app_migrations, every cached `company` and `person:<id>` header written
+    before each reader's Home was narrowed), the activity rail never
     includes it, the alert review never selects
     it nor uses it as evidence, and a non-principal ack / reopen gets 404
     and their bulk sweep skips it. DMs to a contact are not written to

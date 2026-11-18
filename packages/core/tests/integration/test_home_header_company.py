@@ -1,9 +1,11 @@
-"""The Home header for the shared ``company`` scope.
+"""The Home header for the shared ``company`` scope, and the sweep of cached
+headers that aren't the principal's.
 
 A caller who resolves to no one on the roster (a signed-in email on no People
 entry, a call with no caller while signed callers are on) or to a suspended
 entry gets the fixed quiet line: no model call, and no ``company`` row is
-read or written.
+read or written. On startup every cached Home header but the principal's own
+is deleted once, so none written earlier is served again.
 """
 from __future__ import annotations
 
@@ -112,3 +114,31 @@ def test_a_teammate_still_gets_their_own_header(
     call(client, True, "teammate", "GET", "/today")
     assert narrative_cache.get(f"person:{ids['teammate']}") is not None
 
+
+def test_startup_drops_every_cached_header_but_the_principals_once(
+    ids: dict[str, int],
+) -> None:
+    def _put(scope: str) -> None:
+        narrative_cache.put(narrative_cache.BriefingNarrative(
+            scope=scope, input_hash="h", narrative_text=f"text for {scope}",
+            generated_at=narrative_cache.utc_now_iso(),
+        ))
+
+    for scope in (
+        narrative_cache.DEFAULT_SCOPE, f"person:{ids['teammate']}", f"person:{ids['demo']}",
+        "brief:principal_brief_morning", "brief_delivery:principal_brief_morning",
+    ):
+        _put(scope)
+
+    assert narrative_cache.drop_non_principal_headers() == 3
+    with narrative_cache._get_conn() as conn:
+        left = {r["scope"] for r in conn.execute("SELECT scope FROM briefing_narrative")}
+    assert left == {
+        narrative_cache.DEFAULT_SCOPE,
+        "brief:principal_brief_morning",
+        "brief_delivery:principal_brief_morning",
+    }
+    # Once only: a teammate's header written after the sweep stays.
+    _put(f"person:{ids['teammate']}")
+    assert narrative_cache.drop_non_principal_headers() == 0
+    assert narrative_cache.get(f"person:{ids['teammate']}") is not None

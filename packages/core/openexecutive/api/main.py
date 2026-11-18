@@ -451,6 +451,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "cancelled %d orphaned talent/onboarding reminder(s) on startup", _swept
             )
 
+    # One-shot: drop every cached Home header that isn't the principal's own,
+    # so none written before each reader's Home was narrowed is served again.
+    from openexecutive.briefing.narrative_cache import drop_non_principal_headers
+    try:
+        _dropped = drop_non_principal_headers()
+    except Exception:
+        logging.getLogger("openexecutive").exception("home header sweep failed")
+    else:
+        if _dropped:
+            logging.getLogger("openexecutive").info(
+                "dropped %d cached Home header(s) not the principal's on startup", _dropped
+            )
+
     # One-shot: cut each chat app's saved stream into conversations by the
     # same quiet-gap rule new messages follow (memory.conversations).
     from openexecutive.memory.conversations import split_existing_streams

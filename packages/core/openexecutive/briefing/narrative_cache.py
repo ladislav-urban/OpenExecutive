@@ -229,9 +229,46 @@ def utc_now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+# Home headers are cached per reader: the principal's own (DEFAULT_SCOPE),
+# the shared company one (COMPANY_SCOPE) and one per teammate ("person:<id>").
+# The briefs' rows ("brief:", "brief_delivery:") share the table and stay.
+PERSON_SCOPE_PREFIX = "person:"
+_OTHER_HEADERS_SWEEP = "2026-11-drop-non-principal-home-headers"
+
+
+def drop_non_principal_headers(db_path: Path | None = None) -> int:
+    """One-shot: delete every cached Home header that is not the principal's
+    own (the ``company`` row and every ``person:<id>`` row), so a header
+    written before each reader's Home was narrowed to what they may read is
+    never served again. A teammate's is rewritten on their next view; the
+    company scope is now a fixed line and never cached. Returns the number
+    of rows deleted.
+
+    Bounded by ``app_migrations`` like ``episodic.cancel_orphaned_talent_reminders``:
+    the marker is claimed first, in the same transaction as the delete, so
+    of two processes booting on one DB exactly one does the work."""
+    initialize_db(db_path)
+    with _get_conn(db_path) as conn:
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS app_migrations (name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)"
+        )
+        claimed = conn.execute(
+            "INSERT OR IGNORE INTO app_migrations (name, applied_at) VALUES (?, ?)",
+            (_OTHER_HEADERS_SWEEP, utc_now_iso()),
+        )
+        if claimed.rowcount == 0:
+            return 0
+        cur = conn.execute(
+            "DELETE FROM briefing_narrative WHERE scope = ? OR substr(scope, 1, ?) = ?",
+            (COMPANY_SCOPE, len(PERSON_SCOPE_PREFIX), PERSON_SCOPE_PREFIX),
+        )
+        return int(cur.rowcount)
+
+
 __all__ = [
     "COMPANY_SCOPE",
     "DEFAULT_SCOPE",
+    "PERSON_SCOPE_PREFIX",
     "NOTHING_MOVED_CONTEXT",
     "QUIET_CONTEXT",
     "BriefingNarrative",
