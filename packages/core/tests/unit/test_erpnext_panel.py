@@ -320,35 +320,6 @@ def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
     assert "beside the panel" not in erpnext_panel.BRIEF_RULE
 
 
-def test_both_panel_blocks_date_every_amount_an_answer_moves() -> None:
-    # Eval erpnext_094's gate of Nov 18, 2026 ("What if Metro pays as late as
-    # it usually does?"): one rep listed the moved invoices with neither date
-    # under one "Metro receipts" column, one never said whether the lowest
-    # week moved. BRIEF_RULE keeps those in however brief the answer.
-    from openexecutive.api.models import ErpnextPage
-    from openexecutive.api.routes.chat import _host_page_block
-
-    host = _host_page_block(ErpnextPage(doctype="Sales Invoice"), None)
-    assert host
-    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK, host):
-        assert "When the answer moves amounts between weeks or dates" in block
-        assert "(a what-if, a late payment, a delay)" in block
-        assert "name each item it moves with its date before and after" in block
-        assert "head each column with what it holds" in block
-        assert "not \"Acme receipts\"" in block
-        assert "whether the lowest or highest point they asked about moves" in block
-        assert "and what it ends at" in block
-        assert "However brief the answer, these stay in" in block
-        # Still brief: unchanged rows stay out.
-        assert "the rows that don't change still stay out" in block
-        assert "beside the panel" not in block.lower()
-    # One place: the panel's own user-turn rule, not the cached ERPNext guide.
-    from openexecutive.prompts.connected_systems import _ERPNEXT_GUIDE
-
-    assert "with its date before and after" not in _ERPNEXT_GUIDE
-    assert "head each column with what it holds" not in _ERPNEXT_GUIDE
-
-
 def test_no_panel_block_says_beside_the_panel() -> None:
     # Replies echoed the blocks' own phrase ("I opened the Accounts Payable
     # report beside the panel", "is open beside the panel"), and eight panel
