@@ -84,10 +84,12 @@ from openexecutive.evals.judges import (
     judge_workflow,
 )
 from openexecutive.evals.scenarios import (
+    LIVE_PRINCIPAL_NAME_SAID,
     WATCH_REASON,
     SupplierCase,
     load_scenarios,
     parse_prior_turns,
+    principal_name_in,
     reply_check_failures,
     routing_check,
     scenario_decided_cards,
@@ -637,6 +639,10 @@ class ChatTurn:
     # The reply each of the scenario's prior turns had, oldest first: a fixed
     # turn's as written, a live turn's as it ran (``with_prior_replies``).
     prior_replies: list[str] = field(default_factory=list)
+    # The live prior turns as they ran, oldest first: each one's place in
+    # ``prior_turns`` (``turn``, from 1) and its ``reply``. Fixed turns
+    # aren't in it.
+    live_turns: list[dict[str, Any]] = field(default_factory=list)
 
     def judged_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
         """``scenario`` with its prior turns' replies as they ran, for the
@@ -661,7 +667,10 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
     ``live: true`` one is run first, on the same session and with every
     override above, as the person would have asked it; the real reply is the
     history the question follows. Only the question's turn is returned and
-    checked: its specialists and views are its own. A live turn that errors
+    checked (but for the principal's name, which ``chat_checks`` holds every
+    live turn's reply to as well): its specialists and views are its own.
+    The live turns' replies are kept in ``ChatTurn.live_turns``. A live
+    turn that errors
     or answers nothing fails the scenario (``LIVE_TURN_FAILED``)."""
     from openexecutive.integrations.erpnext_drafts import decided_cards_override
     from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
@@ -748,6 +757,7 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
         # live one goes through chat() like the question, which keeps the
         # turn in the history as the route does.
         prior_replies: list[str] = []
+        live_turns: list[dict[str, Any]] = []
         for n, prior in enumerate(parse_prior_turns(scenario), start=1):
             if prior.reply is not None:
                 session.add_user_message(prior.message)
@@ -761,6 +771,7 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
             if not (reply or "").strip():
                 raise RuntimeError(LIVE_TURN_FAILED.format(n=n, why="it answered nothing"))
             prior_replies.append(reply)
+            live_turns.append({"turn": n, "reply": reply})
         query = scenario_query(scenario)
         # Records which specialists the turn consulted (routing_check).
         collector = DebugCollector()
@@ -778,6 +789,7 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
         views=list(shown.views),
         drafts=[asdict(d) for d in delegation.gmail.drafts] if delegation is not None else None,
         prior_replies=prior_replies,
+        live_turns=live_turns,
     )
 
 
@@ -787,8 +799,21 @@ def chat_checks(scenario: dict[str, Any], turn: ChatTurn, scores: dict[str, Any]
     word, a sentence said twice, a ``reply_must_name`` item left out), the
     specialists it had to consult (``routing_check``) and the views a panel
     turn had to open (``view_kinds_check``). Each result goes into
-    ``scores`` under its own key; True when every check holds."""
+    ``scores`` under its own key; True when every check holds.
+
+    A live prior turn's reply is held to one check too, the principal's
+    name (``forbid_principal_name``): a hit fails the scenario as one in the
+    final reply does, under the same ``principal_name`` key, naming the
+    turn (``LIVE_PRINCIPAL_NAME_SAID``) and never the name. Its other
+    checks stay the question's alone."""
     failures = reply_check_failures(scenario, turn.response)
+    named = [
+        LIVE_PRINCIPAL_NAME_SAID.format(n=live["turn"])
+        for live in turn.live_turns
+        if principal_name_in(scenario, live["reply"])
+    ]
+    if named:
+        failures["principal_name"] = failures.get("principal_name", []) + named
     scores.update(failures)
     ok = not failures
     routing = routing_check(scenario, turn.specialists)

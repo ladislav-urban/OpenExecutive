@@ -991,6 +991,9 @@ def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
 # What a run records for a reply that names the principal: never the name
 # itself, which the scores and results would otherwise carry.
 PRINCIPAL_NAME_SAID = "the principal's name appeared in the reply"
+# The same for a live prior turn's reply (runner.chat_checks), naming the
+# turn by its place in ``prior_turns`` and, again, never the name.
+LIVE_PRINCIPAL_NAME_SAID = "the principal's name appeared in live prior turn {n}'s reply"
 
 
 def principal_name_in(scenario: dict[str, Any], reply: str) -> bool:

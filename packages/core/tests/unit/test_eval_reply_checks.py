@@ -316,6 +316,73 @@ def test_run_evals_reports_the_principals_name_apart(monkeypatch: pytest.MonkeyP
     assert _run_evals().failed_checks(fixture["scores"]) == ["forbidden_reply_words"]
 
 
+# A live prior turn's reply is held to the principal's name too (runner.chat_checks).
+LIVE_NAMED = {
+    "id": "l",
+    "domain": "mcp",
+    "query": "q",
+    **NAMED,
+    "prior_turns": [{"user": "a", "assistant": "fixed"}, {"user": "b", "live": True}, {"user": "c", "live": True}],
+}
+
+
+class _InTurn:
+    """Executive.chat answering each call with the next reply."""
+
+    def __init__(self, *replies: str) -> None:
+        self.replies = list(replies)
+
+    async def chat(self, **kwargs: Any) -> str:
+        return self.replies.pop(0)
+
+
+def _chat_turns(monkeypatch: pytest.MonkeyPatch, scenario: dict[str, Any], *replies: str) -> dict[str, Any]:
+    executive = _InTurn(*replies)
+
+    async def fake_chat(self: Any, **kwargs: Any) -> str:
+        return await executive.chat(**kwargs)
+
+    async def fake_judge(_scenario: dict[str, Any], _response: str) -> dict[str, Any]:
+        return {"overall": 5}
+
+    monkeypatch.setattr(Executive, "__init__", lambda self, mcp_gateway=None: None)
+    monkeypatch.setattr(Executive, "chat", fake_chat)
+    monkeypatch.setattr(runner_module, "judge_chat", fake_judge)
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    asyncio.run(runner_module._make_chat_runner(asyncio.Semaphore(1), queue, [0], 1, None)(0, scenario))
+    (done,) = [e for e in (queue.get_nowait() for _ in range(queue.qsize())) if e["type"] == "scenario_done"]
+    return done
+
+
+@pytest.mark.usefixtures("principal")
+def test_the_package_runner_fails_a_live_turn_that_names_the_principal(monkeypatch: pytest.MonkeyPatch) -> None:
+    done = _chat_turns(monkeypatch, LIVE_NAMED, "Ask rhoda.", "On time.", "On time.")
+    assert done["passed"] is False
+    # Which turn, by its place in prior_turns; the final reply's own hit is apart.
+    assert done["scores"]["principal_name"] == ["the principal's name appeared in live prior turn 2's reply"]
+    assert "Rhoda" not in repr(done["scores"]) and "rhoda" not in repr(done["scores"])
+    both = _chat_turns(monkeypatch, LIVE_NAMED, "On time.", "Rhoda Principal signs.", "Rhoda approves.")
+    assert both["scores"]["principal_name"] == [
+        "the principal's name appeared in the reply",
+        "the principal's name appeared in live prior turn 3's reply",
+    ]
+    # Only the principal's name: a live turn's other words stay its own.
+    clean = _chat_turns(monkeypatch, LIVE_NAMED, "Rachel raises them.", "On time.", "On time.")
+    assert clean["passed"] is True and "principal_name" not in clean["scores"]
+    # Without forbid_principal_name a live turn may name the principal.
+    unforbidden = {k: v for k, v in LIVE_NAMED.items() if k != "forbid_principal_name"}
+    assert _chat_turns(monkeypatch, unforbidden, "Ask Rhoda.", "On time.", "On time.")["passed"] is True
+
+
+@pytest.mark.usefixtures("principal")
+def test_run_evals_fails_a_live_turn_that_names_the_principal(monkeypatch: pytest.MonkeyPatch) -> None:
+    leak = _evaluate(monkeypatch, LIVE_NAMED, _InTurn("Rhoda Principal signs.", "On time.", "On time."))
+    assert leak["passed"] is False
+    assert leak["scores"]["principal_name"] == ["the principal's name appeared in live prior turn 2's reply"]
+    assert _run_evals().failed_checks(leak["scores"]) == ["principal_name"]
+    assert "Rhoda" not in repr(leak["scores"])
+
+
 # ── where evals/run_evals.py writes its results ────────────────────────────
 
 
