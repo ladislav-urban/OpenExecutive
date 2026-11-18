@@ -1352,7 +1352,12 @@ routing:
       starter of a hand-started run (`turn_owner`: HTTP run, `run_workflow`,
       research in chat); scheduled/system runs keep NULL and are the team's
       (`persistence.run_visible_to`, which also admits the person a gate
-      waits on). Every read and change — the HTTP routes, the tools, the
+      waits on). The team's runs are read only by the principal and an
+      active, non-demo People entry (api/routes/workflows._run_reader, via
+      today._audience_for): a demo person, a suspended or archived entry, a
+      signed-in email on no entry, a service call or an unreadable roster
+      lists and opens only the runs they started (and answers one waiting
+      on them). Every read and change — the HTTP routes, the tools, the
       `/workflows/runs` history, `/today` cards (`lifecycle.list_live_alerts`
       keeps an artifact only for its owner `viewer`; every viewer-less build
       drops them), the chat digest, `find_alerts`, alert ack/reopen, the

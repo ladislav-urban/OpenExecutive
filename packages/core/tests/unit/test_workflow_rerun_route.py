@@ -42,6 +42,11 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 @pytest.fixture()
 def client(db: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(workflows_route, "_caller_person_id", lambda request: 1)
+    # No roster here: person 1 reads the team's runs, as an active teammate
+    # would (who reads them per caller is test_workflow_runs_scope).
+    monkeypatch.setattr(
+        workflows_route, "_run_reader", lambda request: (workflows_route._caller_person_id(request), True)
+    )
     monkeypatch.setattr(people_route, "caller_is_principal", lambda request: True)
     app = FastAPI()
     app.include_router(workflows_route.router)

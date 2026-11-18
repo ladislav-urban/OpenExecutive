@@ -76,14 +76,18 @@ async def list_workflow_runs(
     request: Request, workflow: str | None = None, limit: int = 100
 ) -> dict[str, Any]:
     """Recent runs across all workflows (or filtered by workflow name) that
-    the caller may see (``persistence.run_visible_to``): the team's, and
-    their own."""
+    the caller may see (``_run_reader``): for the principal and an active,
+    non-demo teammate the team's and their own (``persistence.run_visible_to``);
+    for anyone else only the runs they started."""
     initialize_runs_db()
-    return {
-        "runs": list_runs(
-            workflow_name=workflow, limit=limit, visible_to=_caller_person_id(request)
-        )
-    }
+    caller, team = _run_reader(request)
+    if team:
+        runs = list_runs(workflow_name=workflow, limit=limit, visible_to=caller)
+    elif caller is None:
+        runs = []
+    else:
+        runs = list_runs(workflow_name=workflow, limit=limit, visible_to=caller, started_by=caller)
+    return {"runs": runs}
 
 
 def _caller_person_id(request: Request) -> int | None:
@@ -92,12 +96,33 @@ def _caller_person_id(request: Request) -> int | None:
     return _resolve_caller_person_id(request)
 
 
-def _visible_run(run_id: str, request: Request) -> dict[str, Any]:
+def _run_reader(request: Request) -> tuple[int | None, bool]:
+    """``(caller, team)``: the caller's People id, and whether they read the
+    team's runs: the principal and an active, non-demo People entry do. A
+    demo person, a suspended or archived entry, a signed-in email on no
+    entry, a service call or a roster that can't be read does not
+    (``today._audience_for``, which fails closed)."""
+    from openexecutive.api.routes.today import _audience_for
+
+    caller = _caller_person_id(request)
+    audience = _audience_for(caller)
+    return caller, audience is None or not audience.demo
+
+
+def _visible_run(run_id: str, request: Request, *, awaited_may_see: bool = False) -> dict[str, Any]:
     """The run, or 404 — also for someone else's, so its existence is not
-    revealed either."""
+    revealed either. A caller who doesn't read the team's runs
+    (``_run_reader``) sees only the runs they started; ``awaited_may_see``
+    also lets them see the one waiting on them (to answer it)."""
     run = get_run(run_id)
-    if run is None or not run_visible_to(run, _caller_person_id(request)):
+    caller, team = _run_reader(request)
+    if run is None or not run_visible_to(run, caller):
         raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
+    if not team:
+        mine = caller is not None and run.get("owner_person_id") == caller
+        awaited = awaited_may_see and caller is not None and run.get("awaiting_person_id") == caller
+        if not (mine or awaited):
+            raise HTTPException(status_code=404, detail=f"Run {run_id} not found")
     return run
 
 
@@ -209,7 +234,7 @@ async def decide_workflow_run(run_id: str, request: Request) -> dict[str, Any]:
     decision = body.get("decision") if isinstance(body, dict) else None
     if decision not in _WEB_DECISIONS:
         raise HTTPException(status_code=422, detail="decision must be 'approve' or 'reject'")
-    run = _visible_run(run_id, request)
+    run = _visible_run(run_id, request, awaited_may_see=True)
     if run.get("status") != "awaiting_human":
         raise HTTPException(status_code=409, detail="This run isn't waiting for an answer.")
     try:

@@ -544,7 +544,8 @@ def test_decision_endpoint_authorisation_and_states(
     _caller(monkeypatch, other)
     assert client.post("/workflows/runs/run-a/decision", json={"decision": "approve"}).status_code == 403
     _caller(monkeypatch, None)
-    assert client.post("/workflows/runs/run-a/decision", json={"decision": "approve"}).status_code == 403
+    # A caller nobody resolved doesn't read the team's runs: not found.
+    assert client.post("/workflows/runs/run-a/decision", json={"decision": "approve"}).status_code == 404
     _caller(monkeypatch, asker)
     assert client.post("/workflows/runs/run-a/decision", json={"decision": "maybe"}).status_code == 422
     r = client.post("/workflows/runs/run-a/decision", json={"decision": "approve"})

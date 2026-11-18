@@ -133,10 +133,19 @@ def test_list_artifact_runs_excludes_empty_artifact(temp_db: Path) -> None:
 # -----------------------------------------------------------------------------
 
 
+def _team_reader(request: object) -> tuple[int | None, bool]:
+    """These tests have no roster: read the team's runs as a teammate would
+    (who reads them per caller is test_workflow_runs_scope)."""
+    from openexecutive.api.routes import workflows as workflows_route
+
+    return workflows_route._caller_person_id(request), True  # type: ignore[arg-type]
+
+
 @pytest.fixture
 def client(temp_db: Path) -> TestClient:
     # Point the persistence layer at a temp DB for every request in this test.
     with patch("openexecutive.workflows.persistence.DB_PATH", temp_db), \
+         patch("openexecutive.api.routes.workflows._run_reader", _team_reader), \
          patch("openexecutive.api.routes.workflows.list_runs",
                side_effect=lambda **kw: list_runs(db_path=temp_db, **kw)), \
          patch("openexecutive.api.routes.workflows.get_run",
@@ -369,6 +378,7 @@ def gate_client(temp_db: Path):  # noqa: ANN201
         return event.model_copy(update={"channel": "slack", "channel_ref": "U1"}), "sent"
 
     with patch("openexecutive.workflows.persistence.DB_PATH", temp_db), \
+         patch("openexecutive.api.routes.workflows._run_reader", _team_reader), \
          patch("openexecutive.api.routes.workflows.create_run",
                side_effect=lambda **kw: create_run(db_path=temp_db, **kw)), \
          patch("openexecutive.api.routes.workflows.get_run",
@@ -466,6 +476,7 @@ def test_run_detail_resume_progress_is_null_for_a_pause_only_run(
         return event.model_copy(), "sent"
 
     with patch("openexecutive.workflows.persistence.DB_PATH", temp_db), \
+         patch("openexecutive.api.routes.workflows._run_reader", _team_reader), \
          patch("openexecutive.api.routes.workflows.create_run",
                side_effect=lambda **kw: create_run(db_path=temp_db, **kw)), \
          patch("openexecutive.api.routes.workflows.get_run",
