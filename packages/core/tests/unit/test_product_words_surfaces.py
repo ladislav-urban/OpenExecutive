@@ -218,6 +218,37 @@ def test_a_brief_is_in_the_products_words_and_a_held_message_as_sent(
     ]
 
 
+def test_a_report_of_stored_titles_goes_as_written(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, named: None,
+) -> None:
+    # Security check of this branch: the weekly review is code's rows of stored
+    # area and project titles, so the runner sends it as written. Pinned here
+    # through the brief's kind, the one the shared helper runs.
+    from . import test_principal_briefs as briefs
+
+    assert "weekly_review" in runner._SENT_AS_WRITTEN
+    monkeypatch.setattr(runner, "_SENT_AS_WRITTEN", frozenset({"principal_brief_morning"}))
+    delivered: list[str] = []
+
+    async def deliver(text: str, **_kw: object) -> runner.PrincipalDelivery:
+        delivered.append(text)
+        return runner.PrincipalDelivery(True, "telegram → 1", "delivered", "telegram")
+
+    monkeypatch.setattr(runner, "_with_held_messages", lambda kind, artifact: (artifact, []))
+    workflow = briefs._fake_brief_workflow("fp-2", "### ERPNext rollout\n- **Migrate invoices to ERPNext**")
+    briefs._run_brief(tmp_path, monkeypatch, workflow=workflow, deliver=deliver)
+    assert delivered == ["### ERPNext rollout\n- **Migrate invoices to ERPNext**"]
+
+
+def test_the_clients_digest_is_sent_as_given() -> None:
+    # Code builds the digest from stored client names and roles: no rewording.
+    import inspect
+
+    source = inspect.getsource(runner)
+    start = source.index('label="Across your clients"')
+    assert "in_product_reply" not in source[start - 400 : start]
+
+
 def _metric_line(monkeypatch: pytest.MonkeyPatch) -> str | None:
     from datetime import date
 

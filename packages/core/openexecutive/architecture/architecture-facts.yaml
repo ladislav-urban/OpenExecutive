@@ -8771,8 +8771,9 @@ auth:
     What code adds is worded where it is added, so the evals see it as the
     person does (eval erpnext_094, Nov 18, 2026): answer_check.
     in_product_words for PROJECTION_NOTE and WHOLE_REPLY, a scheduled
-    brief or report's own text and the clients digest (scheduler runner,
-    before held messages join it; scheduler _send_on_plan itself sends text
+    brief's own text (scheduler runner, before held messages join it; the
+    weekly review and the clients digest, code's rows of stored titles and
+    names, go as written; scheduler _send_on_plan itself sends text
     as given, so an alert, held message, reminder or mail-watch line keeps
     its record values as read), erp_metrics' own "from ... own reports"
     (the company's name as read), the morning brief's text,

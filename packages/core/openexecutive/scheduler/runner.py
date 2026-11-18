@@ -38,6 +38,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# Scheduled reports sent as written on a named install: code's rows of
+# stored titles, not the model's prose (connected_systems.in_product_reply).
+_SENT_AS_WRITTEN = frozenset({"weekly_review"})
+
 
 # Strong refs so GC cannot cancel in-flight tasks mid-execution.
 _inflight: set[asyncio.Task[None]] = set()
@@ -909,10 +913,9 @@ async def _execute_action(
                 digest = result.get("digest") or ""
                 if digest:
                     try:
-                        from openexecutive.prompts.connected_systems import in_product_reply
-
-                        # The model's digest, in the product's words on a named install.
-                        await _deliver_to_principal(in_product_reply(digest), label="Across your clients")
+                        # Sent as given: code builds the digest from the
+                        # clients' stored names and roles, which stay as read.
+                        await _deliver_to_principal(digest, label="Across your clients")
                     except Exception:
                         logger.exception(
                             "scheduler: client_rotation digest delivery failed"
@@ -2842,9 +2845,12 @@ async def _run_principal_brief(action: ScheduledAction, now: datetime) -> None:
             # as one "While you were away" block (people.held_messages).
             from openexecutive.prompts.connected_systems import in_product_reply
 
-            # The brief or report is the model's, in the product's words on a
-            # named install; the held messages riding along stay as sent.
-            delivered_text, held_ids = _with_held_messages(kind, in_product_reply(artifact))
+            # A brief or report the model writes, in the product's words on a
+            # named install; the held messages riding along stay as sent. The
+            # weekly review is mostly code's rows of stored area and project
+            # titles, so it goes as written.
+            worded = artifact if kind in _SENT_AS_WRITTEN else in_product_reply(artifact)
+            delivered_text, held_ids = _with_held_messages(kind, worded)
             from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT
 
             erp_token = DELIVERING_ERPNEXT.set(read_erpnext)
