@@ -124,5 +124,5 @@ def refuse_demo_reader(request: Request) -> None:
         raise HTTPException(status_code=503, detail=_ROSTER_UNREADABLE) from None
     if person is None or not getattr(person, "demo", False) or getattr(person, "is_principal", False):
         return
-    logger.info("demo gate: refused %s %s for person %s", request.method, _route_path(request), person.id)
+    logger.info("demo gate: refused %s %r for person %s", request.method, _route_path(request), person.id)
     raise HTTPException(status_code=403, detail=DEMO_REFUSED)

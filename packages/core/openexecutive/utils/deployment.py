@@ -25,12 +25,17 @@ def is_public_deployment() -> bool:
     return os.environ.get("OE_PUBLIC_DEPLOYMENT", "").strip().lower() not in FALSEY_ENV
 
 
+# Values that explicitly turn a feature on (``fixtures_enabled``).
+_TRUTHY_ENV = frozenset({"1", "true", "yes", "on"})
+
+
 def fixtures_enabled() -> bool:
     """Whether the API serves the /fixtures routes (load, unload, snapshot,
     reset, generate): only when ``OE_FIXTURES_ENABLED`` is on, and never on a
     public deployment. Off by default: a reset wipes the whole install, the
-    principal included. ``make dev`` turns it on (the web app's Demo page)."""
-    on = os.environ.get("OE_FIXTURES_ENABLED", "").strip().lower() not in FALSEY_ENV
+    principal included. ``make dev`` turns it on (the web app's Demo page).
+    Only an explicit yes turns it on: an unknown value leaves it off."""
+    on = os.environ.get("OE_FIXTURES_ENABLED", "").strip().lower() in _TRUTHY_ENV
     return on and not is_public_deployment()
 
 

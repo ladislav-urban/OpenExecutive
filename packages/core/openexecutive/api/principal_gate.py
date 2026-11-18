@@ -41,7 +41,7 @@ def principal_only(detail: str) -> Callable[[Request], None]:
         if caller_is_the_principal(request):
             return
         logger.warning(
-            "principal-only route refused method=%s path=%s",
+            "principal-only route refused method=%s path=%r",
             request.method, request.url.path[:200],
         )
         raise HTTPException(status_code=403, detail=detail)
