@@ -932,9 +932,12 @@ def test_a_service_cannot_save_a_first_setup(
     client.app.middleware("http")(  # type: ignore[attr-defined]
         api_caller.caller_gate(api_caller.parse_public_keys(vectors["public_keys"]))
     )
-    seeded.append(_draft())
-    sid = _start(client)
-    resp = client.post("/onboard/interview/commit", json=_commit_body(sid))
+    # It can't start one either (the owner-or-unclaimed rule never admits a
+    # service); a session held for it is still refused on save.
+    resp = client.post("/onboard/interview/start", data={"description": "x"})
+    assert resp.status_code == 403
+    route._interview_sessions["sid-service"] = route.InterviewSession(owner_key="service")
+    resp = client.post("/onboard/interview/commit", json=_commit_body("sid-service"))
     assert resp.status_code == 403
     assert resp.json()["detail"] == "Sign in to save setup."
     assert not profile_path.exists()

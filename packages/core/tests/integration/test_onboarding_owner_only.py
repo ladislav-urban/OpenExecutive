@@ -12,7 +12,6 @@ import pytest
 
 from openexecutive.api.routes import onboarding as route
 from openexecutive.onboarding import interview_store
-from openexecutive.onboarding.interview import InterviewSession
 from openexecutive.people import registry as people_registry
 from openexecutive.people import store as people_store
 
@@ -48,7 +47,7 @@ def _session_of(who: str, signed: bool) -> str:
     unsigned_key = "service" if signed else "local"
     key = unsigned_key if who == "unsigned" else f"email:{EMAILS[who]}"
     sid = f"sid-{who}"
-    route._interview_sessions[sid] = InterviewSession(owner_key=key)
+    route._interview_sessions[sid] = route.InterviewSession(owner_key=key)
     return sid
 
 
