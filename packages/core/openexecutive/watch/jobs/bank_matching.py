@@ -645,6 +645,7 @@ def month_notices(settings: Settings, today: date) -> list[CardSpec]:
     from openexecutive.integrations import erpnext_drafts as drafts
     from openexecutive.memory.decision_ledger import STATUS_APPROVED_UNCHANGED
     from openexecutive.people.store import get_person
+    from openexecutive.prompts.connected_systems import in_product_reply
     from openexecutive.watch.runner import dedup_key, raised_ever
 
     month = _previous_month(today)
@@ -678,7 +679,7 @@ def month_notices(settings: Settings, today: date) -> list[CardSpec]:
                 ("Amount", _money(kept["total"], line["currency"])),
                 ("Vouchers", ", ".join(f"{v['doctype']} {v['name']}" for v in kept["vouchers"])),
                 ("Approved by", approver.full_name if approver is not None else "unknown"),
-                ("Approved on", (card.resolved_at or "")[:10]) if made else ("Outcome", UNKNOWN_OUTCOME),
+                ("Approved on", (card.resolved_at or "")[:10]) if made else ("Outcome", in_product_reply(UNKNOWN_OUTCOME)),
             ),
         ))
     if not items:

@@ -436,6 +436,8 @@ def gate(
     range has no start), over everyone and per person who decided cards,
     and the flags (``_gate_flags``; the unchanged one only for ``rows`` from
     ``with_erpnext_state``, ``erpnext``)."""
+    from openexecutive.prompts.connected_systems import in_product_reply
+
     everyone = {
         **_gate_numbers(rows),
         "expired": sum(1 for r in rows if r.get("outcome") == "expired"),
@@ -456,7 +458,8 @@ def gate(
             "min_decided": GATE_MIN_DECIDED, "high_approval_rate": GATE_HIGH_APPROVAL_RATE,
             "time_fall": GATE_TIME_FALL, "min_submitted": GATE_MIN_SUBMITTED, "fast_seconds": GATE_FAST_SECONDS,
         },
-        "note": GATE_NOTE,
+        # Read by the owner: in the product's words on an install with a name.
+        "note": in_product_reply(GATE_NOTE),
     }
 
 

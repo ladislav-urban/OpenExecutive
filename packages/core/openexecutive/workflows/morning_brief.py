@@ -496,6 +496,11 @@ class MorningBriefWorkflow(Workflow):
                 surface="morning brief",
             )
         held = len(grounding.held) if grounding and grounding.mode == "enforce" else 0
+        # Read on Home and sent on, in the product's words on an install with
+        # a name, as a chat reply is (connected_systems.in_product_reply).
+        from openexecutive.prompts.connected_systems import in_product_reply
+
+        artifact_text = in_product_reply(artifact_text)
 
         yield WorkflowEvent(
             type="step_done",

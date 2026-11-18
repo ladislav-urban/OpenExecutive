@@ -343,6 +343,15 @@ def test_the_cash_outlook_follow_up_opens_receivables_by_party() -> None:
     assert scenario_surface(found) == "erpnext_panel"
 
 
+def test_the_cash_outlook_brevity_scenario_runs_on_the_panel_under_explain() -> None:
+    # BRIEF_RULE's gate: erpnext_094, a what-if follow-up to the outlook.
+    found = next(s for s in load_scenarios() if s["id"] == "erpnext_094")
+    assert scenario_surface(found) == "erpnext_panel"
+    assert found["advice_policy"] == "explain"
+    assert found["quality_criteria"]["keeps_the_answer_short_enough_for_a_side_panel"]
+    assert found["quality_criteria"]["each_short_arithmetic_line_adds_up_to_the_result_it_gives"]
+
+
 def test_the_chart_scenarios_ship_with_their_view_kinds() -> None:
     found = {s["id"]: s for s in load_scenarios() if s["id"] in ("erpnext_054", "erpnext_055")}
     assert found["erpnext_054"]["expected_view_kinds"] == ["chart"]

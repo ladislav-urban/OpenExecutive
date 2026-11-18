@@ -65,6 +65,7 @@ def _executive(monkeypatch: pytest.MonkeyPatch, release: asyncio.Event | None = 
         async def stream_chat(self, *, user_message: str, **kwargs: Any) -> AsyncIterator[str]:
             seen["message"] = user_message
             seen["memory_text"] = kwargs.get("memory_text")
+            seen["typed_question"] = kwargs.get("typed_question", "absent")
             yield "Done: "
             if release is not None:
                 await release.wait()
@@ -106,6 +107,22 @@ def test_background_turn_answers_and_saves_without_a_reader(
     assert history[0]["content"] == "I've approved this proposal. Do the work."
     assert history[1]["content"] == "Done: sent the plan to Finance."
     assert seen["memory_text"] == "Approved: Q1 plan"
+
+
+def test_a_card_hand_off_sent_as_typed_never_relaxes_the_check(
+    temp_db: Path, patched_deps: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A card's hand-off (no memory line, a headline that reads like a
+    projection, and a client's `typed`) has no typed question: the answer
+    check's projection test never reads a card's words."""
+    seen = _executive(monkeypatch)
+    app = FastAPI()
+    app.include_router(chat_route.router)
+    with TestClient(app) as client:
+        resp = client.post("/chat/background", json={"message": "Updated forecast for Q1", "typed": True})
+        assert resp.status_code == 202
+        _wait_for_answer(resp.json()["session_id"], temp_db)
+    assert seen["typed_question"] is None
 
 
 def test_background_turn_keeps_going_when_the_request_reports_a_disconnect(

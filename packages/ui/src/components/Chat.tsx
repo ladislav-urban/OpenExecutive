@@ -72,6 +72,7 @@ import {
   settleQueue,
   type QueuedMessage,
 } from "@/lib/queuedMessages";
+import { afterCodeFill, afterInput, afterRestore, sendTyped } from "@/lib/composerOrigin";
 import { newClientTurnId } from "@/lib/turn-id";
 import { turnStatus } from "@/lib/turnStatus";
 import { isNearBottom, lastUserIndex, pinScrollTop, pinSpacerHeight } from "@/lib/chatPin";
@@ -148,6 +149,16 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
 
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages ?? []);
   const [input, setInput] = useState(initialInput ?? "");
+  // The composer holds words code put there (lib/composerOrigin.ts): an
+  // Edit, a stopped turn's text given back, a `?draft=` link, a follow-up
+  // suggestion. Set with them, cleared only when the composer is emptied.
+  // While it is set, nothing sent from the composer goes out as typed.
+  const composerFromCodeRef = useRef(afterCodeFill(initialInput ?? ""));
+  // Words code puts in the composer; every such fill goes through here.
+  function fillComposer(text: string) {
+    setInput(text);
+    composerFromCodeRef.current = afterCodeFill(text);
+  }
   const [isLoading, setIsLoading] = useState(false);
   const { isStopping, beginTurn, stop: handleStop, serverAcknowledgedStop, endTurn } =
     useStoppableTurn();
@@ -558,15 +569,27 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
     const turnId = turnIdRef.current;
     if (!text || !turnId) return;
     const id = newClientTurnId();
-    setInput("");
+    // Typed only if the composer held nothing code put there; the bit
+    // travels with the text through the queue and every restore.
+    const typed = sendTyped("composer", composerFromCodeRef.current);
+    fillComposer("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
-    setQueued([...queuedRef.current, { id, text, taken: false }]);
+    setQueued([...queuedRef.current, { id, text, taken: false, typed }]);
     void addChatMessage(turnId, id, text);
   }
 
   // `queuedFollowup`: the leftovers of a turn, sent on their own. They carry
   // no files and leave alone whatever is being typed in the composer now.
-  async function handleSend(text?: string, memoryText?: string, queuedFollowup = false) {
+  // `leftoversTyped`: every part of those leftovers was typed. Only the
+  // composer's own Send (no `text`) and all-typed leftovers go out as typed
+  // (lib/composerOrigin.ts); a hand-off, a starter prompt, Approve, Try
+  // again and an Edit never do.
+  async function handleSend(
+    text?: string,
+    memoryText?: string,
+    queuedFollowup = false,
+    leftoversTyped = false,
+  ) {
     // Carrying on in the chat ends the find, so the reply scrolls into view.
     closeFind();
     if (isLoading && text === undefined) {
@@ -581,6 +604,12 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
     const turnMemoryText =
       memoryText ??
       (text === undefined && restored?.seed === message ? restored.memoryText : undefined);
+    // Read before the composer is emptied below.
+    const turnTyped = sendTyped(
+      text === undefined ? "composer" : leftoversTyped ? "leftovers" : "code",
+      composerFromCodeRef.current,
+      leftoversTyped,
+    );
 
     const filesForTurn = queuedFollowup ? [] : pendingFiles;
     const userBubbleContent = filesForTurn.length
@@ -588,7 +617,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
       : message;
 
     if (!queuedFollowup) {
-      setInput("");
+      fillComposer("");
       setPendingFiles([]);
       setFileError(null);
     }
@@ -644,14 +673,17 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
     let replyId: number | undefined;
     // Session id from `done`, used to fetch the follow-up for this reply.
     let doneSessionId: string | undefined;
-    // What the queue left to send as the next turn, once this one settles.
+    // What the queue left to send as the next turn, once this one settles,
+    // and whether every part of it was typed.
     let nextTurn: string | null = null;
+    let nextTyped = false;
     // Messages the turn took, shown before its reply. Each settle path that
     // keeps the reply also keeps these.
     const settleWithReply = () => {
       const settled = settleQueue(queuedRef.current);
       setQueued([]);
       nextTurn = settled.next;
+      nextTyped = settled.nextTyped;
       return settled.taken.map((t): ChatMessage => ({ role: "user", content: t }));
     };
 
@@ -665,6 +697,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
         clientTurnId,
         signal,
         memoryText: turnMemoryText,
+        typed: turnTyped,
       })) {
         turnClock.markEvent();
         if (item.type === "debug_event") {
@@ -764,12 +797,14 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
               ? prev.slice(0, -1)
               : prev,
           );
-          setInput(composerText(message, extra));
+          fillComposer(composerText(message, extra));
+          composerFromCodeRef.current = afterRestore(turnTyped, extra);
           restoredHandoffRef.current = turnMemoryText && extra.length === 0
             ? { seed: message, memoryText: turnMemoryText }
             : undefined;
         } else if (extra.length > 0) {
-          setInput(composerText("", extra));
+          fillComposer(composerText("", extra));
+          composerFromCodeRef.current = afterRestore(turnTyped, extra);
         }
       } else if (accumulated || turnActions.length > 0) {
         const takenBubbles = settleWithReply();
@@ -816,7 +851,8 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
             },
           ]);
         } else if (queuedRef.current.length > 0) {
-          setInput(composerText("", queuedRef.current));
+          fillComposer(composerText("", queuedRef.current));
+          composerFromCodeRef.current = afterRestore(turnTyped, queuedRef.current);
           setQueued([]);
         }
         // `done` never arrived, so nothing else will clear the parent's
@@ -828,7 +864,8 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
         // A failed turn saved nothing: give back what was typed while it
         // worked rather than sending it into the same failure.
         if (queuedRef.current.length > 0) {
-          setInput(composerText("", queuedRef.current));
+          fillComposer(composerText("", queuedRef.current));
+          composerFromCodeRef.current = afterRestore(turnTyped, queuedRef.current);
           setQueued([]);
         }
         setMessages((prev) => [
@@ -861,7 +898,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
     }
     // What was typed while it worked and the turn never got to: its own turn
     // now, in the same conversation.
-    if (nextTurn) void handleSend(nextTurn, undefined, true);
+    if (nextTurn) void handleSend(nextTurn, undefined, true, nextTyped);
   }
 
   // 👍/👎 on a persisted reply, applied optimistically and rolled back if
@@ -931,7 +968,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
       .join("\n\n");
     setRedoError(null);
     setEditingReplyId(turn.replyId);
-    setInput(text);
+    fillComposer(text);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
@@ -944,7 +981,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
 
   function cancelEdit() {
     setEditingReplyId(null);
-    setInput("");
+    fillComposer("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
   }
 
@@ -954,7 +991,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
     const asked = await takeBackLastTurn();
     if (asked === null) return;
     setEditingReplyId(null);
-    setInput("");
+    fillComposer("");
     if (textareaRef.current) textareaRef.current.style.height = "auto";
     // Files picked before the edit stay for the next message.
     void handleSend(text, undefined, true);
@@ -997,7 +1034,7 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
   // can edit first. The suggestion is kept: clearing the box shows it again.
   function acceptFollowup() {
     if (!followup) return;
-    setInput(followup);
+    fillComposer(followup);
     requestAnimationFrame(() => {
       const el = textareaRef.current;
       if (!el) return;
@@ -1033,6 +1070,12 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
 
   function handleTextareaChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
     setInput(e.target.value);
+    // The browser's own undo can bring back what code put there.
+    composerFromCodeRef.current = afterInput(
+      composerFromCodeRef.current,
+      e.target.value,
+      (e.nativeEvent as InputEvent).inputType,
+    );
     // The others in a shared chat see who is writing.
     if (shared && sessionId && e.target.value.trim() && Date.now() - lastTypingRef.current > TYPING_EVERY_MS) {
       lastTypingRef.current = Date.now();
@@ -1551,6 +1594,9 @@ export default function Chat({ onDebugEvent, initialMessages, initialSessionId, 
                 ref={textareaRef}
                 value={input}
                 onChange={handleTextareaChange}
+                // No browser autofill: it would put words in the box that
+                // the person never typed (lib/composerOrigin.ts).
+                autoComplete="off"
                 onKeyDown={handleKeyDown}
                 placeholder={
                   isLoading

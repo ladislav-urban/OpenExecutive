@@ -243,7 +243,12 @@ def card_buttons(decision_id: int) -> tuple[str, str]:
 
 def outcome_text(approved: bool, error: str | None, decision_class: str = "") -> str:
     if error:
-        return f"Not done: {error}"
+        # Our own refusal, in the product's words on an install with a name.
+        # A card's own text (card_text) is shown as stored: it is what a tap
+        # sends or saves.
+        from openexecutive.prompts.connected_systems import in_product_reply
+
+        return in_product_reply(f"Not done: {error}")
     return _DONE_TEXT.get(decision_class, "Approved.") if approved else "Skipped."
 
 

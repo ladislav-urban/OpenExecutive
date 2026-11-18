@@ -436,7 +436,7 @@ SHOW_RULE = (
     "When your answer is about something in ERPNext (the list you ranked, the "
     "report you ran, the document you described), also call "
     "erpnext__show_in_erpnext with it, with the same filters and sort, once per "
-    "place and the main one first, so ERPNext opens it beside the panel. Pass "
+    "place and the main one first, so ERPNext opens it next to the chat. Pass "
     "{'view': {'kind': ..., ...}}, the view exactly one of: a list {'kind': "
     "'list', 'doctype', 'filters', 'sort'}; a report {'kind': 'report', "
     "'report_name', 'filters' with the report's own filter names}; one "
@@ -471,9 +471,8 @@ SHOW_RULE = (
     "view of bank transactions, bank accounts, payroll, employees or anyone's "
     "personal details: answer those in words. "
     "Never write "
-    "routes or links. Call it before you write your answer, and don't write "
-    "that you opened or showed anything: the person sees it open beside the "
-    "panel."
+    "routes or links. Call it before you write your answer. Never mention "
+    "opening or showing it, or where it appears: the person already sees it."
 )
 # Both panel blocks carry it too: beside one of Dynocortex's own screens the
 # panel names the screen, but its turn reads none of what the screen shows.
@@ -483,11 +482,11 @@ SCREEN_RULE = (
     "screen shows: not their briefing, watches, people, memory or settings. "
     "Say so in a sentence, answer what you can from ERPNext and your "
     "specialists, and suggest Conversations for the rest. They already have that "
-    "screen open beside you, so never send them to it, or to the "
-    "OpenExecutive app for it: say the screen beside the panel shows it. "
+    "screen open, so never send them to it, or to the "
+    "OpenExecutive app for it: say the screen they have open shows it. "
     "Never guess what the screen shows, and describe it only from this turn's "
-    "page block and what you open on this turn: once you open a report beside "
-    "the panel, the list that was there before is gone, so never point at it. "
+    "page block and what you open on this turn: once you open a report, the "
+    "list that was there before is gone, so never point at it. "
     "When the page block names the Home "
     "card in focus, its headline is all you have of it: answer about what it "
     "names from ERPNext and your specialists. "
@@ -520,7 +519,33 @@ FOLLOW_UP_RULE = (
 # table wraps into something unreadable (the website retake of Nov 3, 2026).
 TABLE_RULE = (
     "Keep a table to the columns the question needs, four at most, so it fits "
-    "the panel; wider detail goes in the place you open beside it. "
+    "the panel; wider detail goes in the view you open. "
+)
+# Both panel blocks carry it, and so does the host page block (api.routes.chat):
+# with ADVICE_POLICY=explain on, the advice policy asks for the arithmetic and
+# every assumption, and a follow-up on the panel came back as 2,300-2,700
+# characters (a 13-row week table with 8 rows unchanged, the starting cash by
+# account again, every step of the arithmetic; eval erpnext_094). On the panel
+# a short line naming them is how the arithmetic and assumptions are shown.
+BRIEF_RULE = (
+    "On the panel an answer stays brief, also when you explain figures. Lead "
+    "with the answer in a sentence or two. Show only the rows that change or "
+    "answer the question, never the rows that stay the same. A figure you "
+    "start from (today's cash, a customer's total) is one figure, not broken "
+    "down by account or invoice, unless the question is about its parts. "
+    "Don't list again what an earlier answer in the panel already showed (an "
+    "earlier table, say) unless they ask for it; still read from ERPNext on "
+    "this turn every figure the answer rests on, also the ones you don't "
+    "repeat. Give the arithmetic for each result in one short line, not every "
+    "step on the way: leave out steps, never a term, so the line still adds "
+    "up to the result it gives. Always name the assumptions, in one short "
+    "line, a few words each: on the panel that is how you show the "
+    "arithmetic and every assumption. When the question wants more detail "
+    "than that, let the view you open hold it (a chart for amounts over "
+    "weeks, a list or a report for rows) rather than print it, and offer it "
+    "only when no view may be opened; what you may only answer in words "
+    "(bank accounts, bank transactions, payroll, employees, anyone's personal "
+    "details) stays in words, kept short. "
 )
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
@@ -535,6 +560,7 @@ PANEL_CONTEXT_BLOCK = (
     "here, say so and suggest the OpenExecutive app. "
     + FOLLOW_UP_RULE
     + TABLE_RULE
+    + BRIEF_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )
@@ -556,6 +582,7 @@ PANEL_DRAFTS_CONTEXT_BLOCK = (
     "OpenExecutive app. "
     + FOLLOW_UP_RULE
     + TABLE_RULE
+    + BRIEF_RULE
     + SCREEN_RULE
     + SHOW_RULE
 )
@@ -798,6 +825,10 @@ async def _answer(person: Any, email: str, conversation_id: str, message: str, p
                     retrieved_context=retrieved_context,
                     channel_context_block=context_block(session),
                     memory_text=message,
+                    # What the ERPNext user sent from the panel's box, as
+                    # oe_connector signed it, without the page block: the
+                    # only text the projection test may read.
+                    typed_question=message,
                     # No standing facts: they include teammates' own, "(per
                     # <name>)", and ERPNext's word is all that names this person.
                     standing_facts="",

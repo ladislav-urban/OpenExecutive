@@ -250,6 +250,10 @@ export interface StreamChatOptions {
   // Executive's own card body). JSON route only; the multipart route derives
   // its own from the typed text and filenames.
   memoryText?: string;
+  // The person typed `message` in the composer themselves (Chat.tsx,
+  // lib/composerOrigin.ts). Only then may the answer check keep a
+  // projection's worked-out figures; absent means not typed.
+  typed?: boolean;
   // Safety net only. The normal stop path leaves the stream open and lets the
   // server wind down and send `stopped` + `done`; this aborts the fetch
   // outright if that never arrives.
@@ -271,6 +275,7 @@ export async function* streamChat(
     if (sessionId) form.append("session_id", sessionId);
     form.append("committee_review", String(committeeReview));
     if (opts?.clientTurnId) form.append("client_turn_id", opts.clientTurnId);
+    if (opts?.typed === true) form.append("typed", "true");
     for (const file of files) form.append("files", file, file.name);
     response = await fetch(`${API_BASE}/chat/upload`, {
       method: "POST",
@@ -288,6 +293,7 @@ export async function* streamChat(
         page_context: opts?.pageContext ?? undefined,
         client_turn_id: opts?.clientTurnId ?? undefined,
         memory_text: opts?.memoryText ?? undefined,
+        typed: opts?.typed === true,
       }),
       signal: opts?.signal,
     });

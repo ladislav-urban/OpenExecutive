@@ -697,6 +697,10 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
         with views_ctx:
             response = await executive.chat(
                 user_message=query,
+                # The question as the person typed it, without the page block
+                # scenario_query puts in front: what the panel passes as the
+                # answer check's typed_question.
+                typed_question=scenario["query"],
                 session=session,
                 channel_context_block=channel_block,
                 # chat() sets the turn's speaker from this, as the chat route
@@ -713,6 +717,11 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
                 # scenario's own lines under the shared header, or none: an
                 # eval never reads the install's facts.
                 standing_facts=scenario_standing_facts(scenario),
+                # The model's own words: the channels' backstop
+                # (connected_systems.in_product_reply) would hide one that
+                # names ERPNext on a named install (erpnext_027). What code
+                # adds to a reply is in the product's words where it's added.
+                product_words=False,
             )
     finally:
         decided_cards_override.reset(cards_token)

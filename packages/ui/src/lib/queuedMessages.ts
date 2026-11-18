@@ -9,6 +9,10 @@ export interface QueuedMessage {
   text: string;
   // The running turn took it into its answer.
   taken: boolean;
+  // The person typed it: the composer held nothing code put there when it
+  // was queued (lib/composerOrigin.ts). It travels with the text, so a
+  // leftover or a restore of it counts as typed only if every part was.
+  typed: boolean;
 }
 
 export function markTaken(queued: QueuedMessage[], ids: string[]): QueuedMessage[] {
@@ -23,14 +27,17 @@ export interface SettledQueue {
   taken: string[];
   // Sent together as the next turn; null when there is nothing left.
   next: string | null;
+  // Every part of `next` was typed (QueuedMessage.typed).
+  nextTyped: boolean;
 }
 
 // How a turn that produced a reply settles its queue.
 export function settleQueue(queued: QueuedMessage[]): SettledQueue {
-  const left = queued.filter((m) => !m.taken).map((m) => m.text);
+  const left = queued.filter((m) => !m.taken);
   return {
     taken: queued.filter((m) => m.taken).map((m) => m.text),
-    next: left.length ? left.join("\n\n") : null,
+    next: left.length ? left.map((m) => m.text).join("\n\n") : null,
+    nextTyped: left.length > 0 && allTyped(left),
   };
 }
 
@@ -39,4 +46,9 @@ export function settleQueue(queued: QueuedMessage[]): SettledQueue {
 // whatever is being returned there already.
 export function composerText(first: string, queued: QueuedMessage[]): string {
   return [first, ...queued.map((m) => m.text)].filter((t) => t.trim()).join("\n\n");
+}
+
+// Whether every queued message with words in it was typed by the person.
+export function allTyped(queued: QueuedMessage[]): boolean {
+  return queued.every((m) => m.typed || !m.text.trim());
 }

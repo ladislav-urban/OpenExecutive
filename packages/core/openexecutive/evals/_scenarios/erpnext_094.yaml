@@ -32,3 +32,4 @@ quality_criteria:
   says_whether_the_lowest_week_moves_and_what_it_ends_at: true
   says_the_outlook_is_an_estimate_from_the_books_today: true
   keeps_the_answer_short_enough_for_a_side_panel: true
+  each_short_arithmetic_line_adds_up_to_the_result_it_gives: true

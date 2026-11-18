@@ -5772,7 +5772,46 @@ chat:
     becomes WHOLE_REPLY (erpnext_views / the panel reply get open_call).
     Never WHOLE_REPLY when only names failed (the reply stands) or the
     question is a projection (answer_check._PROJECTION_Q: known values
-    written in, the rest under PROJECTION_NOTE); audit `kept`.
+    written in, the rest under PROJECTION_NOTE, in the product's words on
+    a named install); audit `kept`.
+    The projection test (answer_check._projection) reads only
+    `typed_question`: the raw text the person typed on that surface, or
+    None, which never relaxes. Never memory_text, a card's headline, a
+    file's name or text, a transcript, a forward or an email, which an
+    outsider can word ("Updated forecast for Q1") to keep figures no
+    result holds. `question` (memory_text or user_message) stays the
+    correction and review calls' context, wrapped as untrusted; review
+    verdicts are bounded by read_verdict (operands are ERPNext values
+    code recomputes). Per surface: web /chat and /chat/upload pass the
+    raw message only when the client sent `typed: true` (default false)
+    and no memory_text or card_id came with it (chat._typed_question);
+    the web chat sends it only from the composer's own Send while the
+    composer holds nothing code put there (an Edit, a stopped turn's
+    text given back, a ?draft= link, a follow-up suggestion; the
+    browser's undo counts as code), and from leftovers every part of
+    which was typed (ui lib/composerOrigin.ts); the stopped/timed-out
+    check uses the same value; background turns (card hand-offs) None.
+    The ERPNext panel passes its signed message without the page block.
+    Telegram, Discord, Slack and Google Chat each have one _typed_text
+    helper: the event's own text before any file text, file note,
+    transcript or quote; None for a forward (Telegram also /start,
+    via_bot and automatic forwards; Google Chat a non-REPLY quote) and
+    for held-message replays; Discord's /ask passes its typed prompt.
+    Email, MCP, scheduler, CLI and replay pass None. Evals pass the raw
+    scenario query. Cost: projections asked through an Edit, Try again,
+    a follow-up chip, a ?draft= link, the Home Ask box or a hand-off
+    lose the relaxation until the question is typed. Why: an inbound
+    email's subject or a file's name could relax the check.
+    Known residuals (security review, Nov 18, 2026; no code change):
+    a Telegram t.me/<bot>?text= link's prefill and a web cut-then-paste of
+    code-filled text go out as typed; both need the person's own Send, and
+    the figures still stand only under PROJECTION_NOTE. One Ctrl+Z while
+    typing marks the turn untyped until the box is emptied (fails closed;
+    a cost, not a hole). A host-origin turn with card_id never relaxes,
+    since oe_connector's typed rule can't be checked server-side. Hand-offs
+    with no memory line (Right now, a briefing card's own prompt) rely on
+    the client's call-site false. Evals can't yet express a not-typed turn
+    (out of scope).
     Counts of records (figure_check._counts_records, Figure.count) match only
     Sources.counts of that record (count_words); unknown ones become
     "several" and unknown table cells "—" (answer_correct.vague), never a
@@ -8761,8 +8800,29 @@ auth:
     OE_PRODUCT_NAME, utils.product_name; with it set, every /chat reply,
     host or own page, streams and saves through connected_systems.
     ProductReplyStream: ERPNext as "the ERP", Open Executive as the
-    product, the panel's through in_product_reply; after a word that
-    already says which one, "this ERP user", never "this the ERP user"),
+    product, the panel's through in_product_reply, and every other
+    channel's (Slack, Telegram, Discord, Google Chat, email, the
+    scheduler's runs) as Executive.chat returns it (never A2A: a supplier
+    isn't one of the product's people); only the evals pass
+    product_words=False, to judge the model's own words; after a word that
+    already says which one, "this ERP user", never "this the ERP user".
+    What code adds is worded where it is added, so the evals see it as the
+    person does (eval erpnext_094, Nov 18, 2026): answer_check.
+    in_product_words for PROJECTION_NOTE and WHOLE_REPLY, a scheduled
+    brief's own text (scheduler runner, before held messages join it; the
+    weekly review and the clients digest, code's rows of stored titles and
+    names, go as written; scheduler _send_on_plan itself sends text
+    as given, so an alert, held message, reminder or mail-watch line keeps
+    its record values as read), erp_metrics' own "from ... own reports"
+    (the company's name as read), the morning brief's text,
+    channel_cards.outcome_text (a chat card itself stays as stored: it is
+    what a tap sends or saves), watch runner.notice_body's preamble and
+    notes and _fail_notice (summaries and values carry ERPNext's records
+    and stay as read), the ERPNext alert's sentence, Settings' reviewer
+    note, the oversight gate note and the alert-raise message. A name that
+    holds a part's name ("Acme ERPNext Suite", "OpenExecutive Cloud") is
+    refused as unset with a warning (utils.product_name), so the rewrite is
+    idempotent and a second pass is a no-op),
     never noted as the person's own
     words (history_chat.verified_speaker), and _stop_owner_key adds
     "|host" so it stops/adds to its own turns only. Each user line saves
@@ -8831,9 +8891,10 @@ auth:
     (from_host and Session.host_page) admits erpnext__show_in_erpnext in
     host_allows_erpnext_read and in mcp_gateway._show_outside_panel (both
     the search filter and call_tool); it is still not a pinned read. The
-    host page block carries erpnext_panel.FOLLOW_UP_RULE and TABLE_RULE (the
-    reshoot of Nov 4, 2026: five-column tables and retold mistakes on F1),
-    then erpnext_panel.SHOW_RULE. chat binds a fresh
+    host page block carries erpnext_panel.FOLLOW_UP_RULE, TABLE_RULE (the
+    reshoot of Nov 4, 2026: five-column tables and retold mistakes on F1)
+    and BRIEF_RULE (eval erpnext_094 under explain), then
+    erpnext_panel.SHOW_RULE. chat binds a fresh
     erpnext_panel.TurnViews per host page turn with collect_views (saved and
     put back, as set_session is) around the stream, never on the session;
     note_erpnext_call fills it from accepted calls only, with ASSERTION_ARG
@@ -11579,7 +11640,38 @@ integrations:
     claimed) (evals erpnext_056
     to erpnext_065; evals.scenarios prior_turns seeds the session history
     and shows it to the judge); TABLE_RULE keeps a table to four columns, wider
-    detail in the place it opens (eval erpnext_066); SCREEN_RULE adds that beside
+    detail in the place it opens (eval erpnext_066); BRIEF_RULE keeps an
+    answer brief there, also when it explains figures: the answer first in a
+    sentence or two, only the rows that change or answer the question, nothing
+    an earlier panel answer showed listed again unless asked (every figure it
+    rests on still read on this turn, per FOLLOW_UP_RULE), each result's
+    arithmetic in one short line that still adds up (steps left out, never
+    terms, so the answer check's own arithmetic holds) and the assumptions in
+    one short line, the full table left to a place it may open (what
+    SHOW_RULE keeps to words, such as bank accounts or payroll, stays in
+    words). Revised after the Nov 18, 2026 gate: assumptions always named;
+    a starting figure (today's cash, a customer's total) one figure unless
+    the question is about its parts; the view opened holds more detail (a
+    chart for amounts over weeks, a list or report for rows) and is offered
+    only when no view may be opened (erpnext_054 opened a report, not its
+    chart, under "or offer it"); no "beside the panel" in the rule, a
+    phrase replies must not say. No panel block (both channel blocks and
+    the host page block) says "beside the panel" at all, since replies
+    echoed it ("I opened the Accounts Payable report beside the panel") and
+    eight panel evals forbid it: SHOW_RULE ends "Never mention opening or
+    showing it, or where it appears: the person already sees it.",
+    SCREEN_RULE says "say the screen they have open shows it" (no screen
+    eval, erpnext_020/021/032/033/080, asks for the old words), and
+    TABLE_RULE sends wider detail to "the view you open". With
+    ADVICE_POLICY=explain the
+    policy (prompts/advice_policy.py, in cached blocks) asks for the
+    arithmetic and every assumption, and a panel follow-up ran to 2,300-2,700
+    characters (a 13-row week table with 8 rows unchanged, the starting cash
+    by account again, every step; eval erpnext_094, which passed earlier
+    only because the top-level eval runner did not apply the policy then). The
+    precedence sits in the panel rule, in the user turn ("on the panel that
+    is how you show the arithmetic and every assumption"), so the cached
+    policy text is unchanged (eval erpnext_094); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
     people, memory, settings), so it says so and suggests Conversations rather than
     guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the
