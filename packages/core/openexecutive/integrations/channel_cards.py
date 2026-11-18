@@ -165,6 +165,9 @@ def card_text(decision_id: int) -> str | None:
     if not isinstance(payload, dict):
         payload = {}
     lines = [_CLASS_LABEL[instance.decision_class]]
+    # What will be sent or done, shown as it is: never reworded (a reply's
+    # draft, a held call's input).
+    as_is: list[str] = []
     if instance.decision_class == "meeting_scheduling":
         title = str(payload.get("title") or "Meeting").strip()[:200]
         lines.append(title)
@@ -186,8 +189,7 @@ def card_text(decision_id: int) -> str | None:
             lines.append(subject)
         body = str(payload.get("draft_body") or "").strip()
         if body:
-            lines.append("")
-            lines.append(body)
+            as_is.extend(["", body])
     elif instance.decision_class == "delegation_invite":
         lines.append(str(payload.get("title") or "Meeting").strip()[:200])
         when = _when(payload.get("start"), payload.get("end"))
@@ -211,9 +213,9 @@ def card_text(decision_id: int) -> str | None:
             return None
         from openexecutive.orchestrator import card_details
 
-        lines.append("")
+        as_is.append("")
         for detail in card_details.plain(str(payload.get("tool") or ""), tool_input):
-            lines.append(f"{detail['field']}: {detail['value']}")
+            as_is.append(f"{detail['field']}: {detail['value']}")
     elif instance.decision_class == "app_action":
         # Written by the server from the change itself (workflow_change.card_text).
         # Never cut: workflow_change stages only a card that fits.
@@ -225,7 +227,10 @@ def card_text(decision_id: int) -> str | None:
         for action in payload.get("actions") or []:
             if isinstance(action, dict) and action.get("summary"):
                 lines.append(f"- {str(action['summary'])[:400]}")
-    text = "\n".join(lines)
+    from openexecutive.prompts.connected_systems import in_product_reply
+
+    # In the product's words on an install with a name, as the reply is.
+    text = "\n".join([in_product_reply("\n".join(lines)), *as_is])
     if instance.decision_class in _WHOLE_CLASSES and len(text) > CARD_MAX:
         # Too long to show whole: it waits in the app instead.
         return None
@@ -243,7 +248,9 @@ def card_buttons(decision_id: int) -> tuple[str, str]:
 
 def outcome_text(approved: bool, error: str | None, decision_class: str = "") -> str:
     if error:
-        return f"Not done: {error}"
+        from openexecutive.prompts.connected_systems import in_product_reply
+
+        return in_product_reply(f"Not done: {error}")
     return _DONE_TEXT.get(decision_class, "Approved.") if approved else "Skipped."
 
 
