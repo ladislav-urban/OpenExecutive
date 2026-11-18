@@ -292,3 +292,12 @@ def test_the_unbilled_work_follow_up_runs_both_turns_live_and_names_no_project_i
     s = {x["id"]: x for x in load_scenarios()}["erpnext_064"]
     assert [t.reply for t in parse_prior_turns(s)] == [None, None]
     assert not re.search(r"PROJ-\d", str(s["prior_turns"]) + s["query"])
+
+
+def test_the_unbilled_hours_follow_up_runs_its_first_turn_live_and_names_no_project_id() -> None:
+    # erpnext_064's defect too: its scripted step 1 named PROJ-0154.
+    import re
+
+    s = {x["id"]: x for x in load_scenarios()}["erpnext_065"]
+    assert [t.reply for t in parse_prior_turns(s)] == [None]
+    assert not re.search(r"PROJ-\d", str(s["prior_turns"]) + s["query"] + s["description"])
