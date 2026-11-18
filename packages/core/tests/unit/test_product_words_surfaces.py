@@ -209,34 +209,32 @@ def _card(monkeypatch: pytest.MonkeyPatch, decision_class: str, payload: dict[st
     return text
 
 
-def test_a_cards_own_words_are_the_products_and_what_it_sends_is_as_is(
-    monkeypatch: pytest.MonkeyPatch, named: None,
-) -> None:
-    text = _card(monkeypatch, "department_action", {
-        "tool": "google_workspace__send_gmail_message",
-        "input": {"to": "dana@acme.example", "subject": "Close", "body": "Post it in ERPNext today."},
-        "summary": "Email Dana about the ERPNext close",
-        "reason": "it names ERPNext's figures",
-    })
-    head, _, details = text.partition("\n\n")
-    assert "ERPNext" not in head and "the ERP close" in head
-    # The email goes out as written: its card shows it as it will be sent.
-    assert "Post it in ERPNext today." in details
-
+def test_a_card_shows_what_a_tap_sends_or_saves_as_stored(monkeypatch: pytest.MonkeyPatch, named: None) -> None:
+    # Security review of this branch: a reworded subject would show one
+    # thing while the stored one goes out.
     reply = _card(monkeypatch, "delegation_reply", {
-        "from_name": "Sam", "draft_to": ["sam@acme.example"], "draft_subject": "ERPNext access",
-        "draft_body": "I've asked for your ERPNext login.",
+        "from_name": "ERPNext Support", "draft_to": ["erpnext@vendor.example"],
+        "draft_subject": "Re: ERPNext migration", "draft_body": "I've asked for your ERPNext login.",
     })
-    assert "\nThe ERP access\n" in reply and reply.endswith("\n\nI've asked for your ERPNext login.")
-
-
-def test_a_cards_words_are_unchanged_without_a_name(monkeypatch: pytest.MonkeyPatch, unnamed: None) -> None:
-    text = _card(monkeypatch, "department_action", {
+    for stored in ("To ERPNext Support", "erpnext@vendor.example", "\nRe: ERPNext migration\n",
+                   "I've asked for your ERPNext login."):
+        assert stored in reply
+    meeting = _card(monkeypatch, "meeting_scheduling", {
+        "title": "ERPNext rollout review", "start": "2026-11-20T10:00:00", "end": "2026-11-20T11:00:00",
+        "attendee_emails": ["erpnext-team@acme.example"],
+    })
+    assert "ERPNext rollout review" in meeting and "erpnext-team@acme.example" in meeting
+    invite = _card(monkeypatch, "delegation_invite", {"title": "ERPNext training", "from_name": "Sam"})
+    assert "ERPNext training" in invite
+    saved = _card(monkeypatch, "app_action", {"card": "Rename the workflow to ERPNext month end"})
+    assert "Rename the workflow to ERPNext month end" in saved
+    held = _card(monkeypatch, "department_action", {
         "tool": "google_workspace__send_gmail_message",
         "input": {"to": "dana@acme.example", "subject": "Close", "body": "Post it in ERPNext today."},
-        "summary": "Email Dana about the ERPNext close",
+        "summary": "Email Dana about the ERPNext close", "reason": "it names ERPNext's figures",
     })
-    assert "Email Dana about the ERPNext close" in text
+    assert "Email Dana about the ERPNext close" in held and "It waited because it names ERPNext's figures." in held
+    assert "Post it in ERPNext today." in held
 
 
 def test_a_taps_refusal_is_in_the_products_words(named: None) -> None:
@@ -244,28 +242,70 @@ def test_a_taps_refusal_is_in_the_products_words(named: None) -> None:
     assert said == "Not done: This draft changed in the ERP since the card was left."
 
 
+def test_a_taps_refusal_is_unchanged_without_a_name(unnamed: None) -> None:
+    said = channel_cards.outcome_text(True, "This draft changed in ERPNext since the card was left.")
+    assert said == "Not done: This draft changed in ERPNext since the card was left."
+
+
 # -- a watch job's notices --------------------------------------------------------
 
 
-def test_a_notice_is_in_the_products_words_and_erpnexts_values_as_read(named: None) -> None:
+def _debtor_notice() -> str:
     from openexecutive.watch import registry
-    from openexecutive.watch.jobs import bank_matching
+    from openexecutive.watch.jobs import collections
     from openexecutive.watch.runner import notice_body
 
     spec = registry.CardSpec(
-        key="person:2026-11-18", summary="Bank lines to match in ERPNext's Banking app",
-        values=(("Bank account", "ERPNext Holdings - Main"),), notes=(bank_matching.PERSON_LINE,),
+        key="overdue", summary="Customers to chase",
+        items=(registry.CardSpec(
+            key="customer:ERPNext Foundation", summary="ERPNext Foundation",
+            values=(("Overdue", "4,710.00 USD"),),
+        ),),
+        notes=("Chase them in ERPNext.",),
     )
-    body = notice_body(bank_matching.JOB, "2026-11-18", spec, "")
-    assert "found this in the ERP on 2026-11-18" in body and "Banking app" in body
-    # ERPNext's own value stays as the job read it.
-    assert body.count("ERPNext") == 1 and "ERPNext Holdings - Main" in body
+    return notice_body(collections.JOB, "2026-11-18", spec, "")
+
+
+def test_a_notice_keeps_erpnexts_record_values_and_words_its_own(named: None) -> None:
+    body = _debtor_notice()
+    # The debtor's name is ERPNext's record, shown as read.
+    assert "1. ERPNext Foundation" in body and "the ERP Foundation" not in body
+    # Code's own preamble and notes are the product's words.
+    assert "found this in the ERP on 2026-11-18" in body and "Chase them in the ERP." in body
 
 
 def test_a_notice_is_unchanged_without_a_name(unnamed: None) -> None:
-    from openexecutive.watch import registry
-    from openexecutive.watch.jobs import bank_matching
-    from openexecutive.watch.runner import notice_body
+    body = _debtor_notice()
+    assert "found this in ERPNext on 2026-11-18" in body and "Chase them in ERPNext." in body
 
-    spec = registry.CardSpec(key="k", summary="Bank lines to match in ERPNext's Banking app")
-    assert "found this in ERPNext on" in notice_body(bank_matching.JOB, "2026-11-18", spec, "")
+
+# -- the product name itself ------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["OpenExecutive Cloud", "Open Executive", "Acme ERPNext Suite", "ERPNext"])
+def test_a_name_that_holds_a_part_is_treated_as_unset(name: str, caplog: pytest.LogCaptureFixture) -> None:
+    from openexecutive.prompts.connected_systems import in_product_reply
+    from openexecutive.utils import product_name as product
+
+    product._WARNED.discard(name)
+    token = product_name_override.set(name)
+    try:
+        with caplog.at_level("WARNING", logger=product.__name__):
+            assert product.configured_product_name() is None
+        assert "treated as unset" in caplog.text
+        assert in_product_reply(REPLY) == REPLY
+    finally:
+        product_name_override.reset(token)
+
+
+@pytest.mark.parametrize("name", ["Dynocortex", "Acme Desk", "ERP Cloud"])
+def test_a_second_pass_changes_nothing(name: str) -> None:
+    from openexecutive.prompts.connected_systems import in_product_reply
+
+    token = product_name_override.set(name)
+    try:
+        text = "ERPNext's records, in Open Executive and OpenExecutive. The ERPNext list. This ERPNext user."
+        once = in_product_reply(text)
+        assert once != text and in_product_reply(once) == once
+    finally:
+        product_name_override.reset(token)

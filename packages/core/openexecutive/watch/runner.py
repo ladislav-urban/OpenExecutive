@@ -1864,21 +1864,23 @@ def notice_body(
 ) -> str:
     """The notice's body: a code preamble, the finding (and its rows, each
     with its reason) wrapped as untrusted, then code's own lines: the job's
-    notes and the run's (``notes``). Code's words (the preamble, summaries
-    and notes) are in the product's words on an install with a name
-    (``connected_systems.in_product_reply``); ERPNext's values are as read."""
+    notes and the run's (``notes``). Code's own words (the preamble and the
+    notes) are in the product's words on an install with a name
+    (``connected_systems.in_product_reply``). Summaries and values stay as
+    read: a job puts a record's own value in a summary (a customer "ERPNext
+    Foundation"), which is never reworded."""
     from openexecutive.orchestrator.content_trust import wrap_untrusted
     from openexecutive.prompts.connected_systems import in_product_reply as words
 
     # The job's own cap (a project's quoted update), else MAX_VALUE_CHARS.
     width = value_chars(job)
-    lines = [clean(words(spec.summary))]
+    lines = [clean(spec.summary)]
     for label, value in spec.values:
         lines.append(f"{clean(label, MAX_LABEL_CHARS)}: {clean(value, width)}")
     if reason:
         lines.append(f"Reason (a model's words, not a figure): {clean(reason, MAX_REASON_CHARS)}")
     for number, item in enumerate(spec.items, 1):
-        lines.append(f"{number}. {clean(words(item.summary))}")
+        lines.append(f"{number}. {clean(item.summary)}")
         for label, value in item.values:
             lines.append(f"   {clean(label, MAX_LABEL_CHARS)}: {clean(value, width)}")
         why = (reasons or {}).get(item.key, "")

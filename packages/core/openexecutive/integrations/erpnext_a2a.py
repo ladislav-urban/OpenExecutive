@@ -542,7 +542,6 @@ async def erpnext_a2a_rpc(request: Request) -> JSONResponse:
     finally:
         _in_flight.discard(supplier)
     from openexecutive.audit import log_event as audit_log
-    from openexecutive.prompts.connected_systems import in_product_reply
 
     audit_log(
         "erpnext_a2a_exchange",
@@ -565,8 +564,6 @@ async def erpnext_a2a_rpc(request: Request) -> JSONResponse:
             "role": "agent",
             "messageId": str(uuid.uuid4()),
             "contextId": context_id,
-            # In the product's words on an install with a name, as every
-            # channel's reply is (connected_systems.in_product_reply).
-            "parts": [{"kind": "text", "text": in_product_reply(result.reply)}],
+            "parts": [{"kind": "text", "text": result.reply}],
         },
     })
