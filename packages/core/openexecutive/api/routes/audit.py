@@ -880,7 +880,9 @@ def get_audit_usage(
     audit = _resolve_logger(request)
     include_private = _sees_private_rows(request)
     if erpnext and not include_private:
-        raise HTTPException(status_code=403, detail="Only the owner sees what ERPNext work cost")
+        from openexecutive.prompts.connected_systems import in_product_reply
+
+        raise HTTPException(status_code=403, detail=in_product_reply("Only the owner sees what ERPNext work cost"))
     data = audit.usage_summary(since=since, until=until, include_private=include_private)
     erp = (
         audit.erpnext_usage(since=since, until=until, include_private=include_private)

@@ -177,6 +177,7 @@ def _draft_cards(detail: object) -> int:
 
 
 def _job_out(job: Any) -> WatchJobOut:
+    from openexecutive.prompts.connected_systems import in_product_reply
     from openexecutive.watch.settings import effective_settings, get_row
 
     row = get_row(job.id)
@@ -194,6 +195,7 @@ def _job_out(job: Any) -> WatchJobOut:
         weekdays=sorted(job.weekdays),
         card_cap_day=job.card_cap_day,
         last_run=_last_run(job.id),
+        reviewer_note=in_product_reply(REVIEWER_NOTE),
     )
 
 

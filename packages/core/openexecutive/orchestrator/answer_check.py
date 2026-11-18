@@ -86,6 +86,18 @@ PROJECTION_NOTE = (
     "_The projected figures above are estimates; "
     "they couldn't be checked against ERPNext's records._"
 )
+
+
+def in_product_words(text: str) -> str:
+    """What the check itself writes into a reply (``PROJECTION_NOTE``,
+    ``answer_correct.WHOLE_REPLY``) in the product's words on an install with
+    a name, "the ERP" for ERPNext (``connected_systems.in_product_reply``):
+    added here, so every channel and the evals get the words the person sees
+    (eval erpnext_094, Nov 18, 2026: the footer named ERPNext in 14 of 15
+    runs). Unchanged on an install without one."""
+    from openexecutive.prompts.connected_systems import in_product_reply
+
+    return in_product_reply(text)
 _ERPNEXT_BLOCK = re.compile(r'<untrusted_content source="erpnext"[^>]*>.*?(?:</untrusted_content>|\Z)', re.S)
 
 
@@ -550,7 +562,7 @@ def _whole(
         counts.kept = 1
         counts.substituted += sum(1 for c in known if answer_correct.written(c) in out)
         counts.left_out = 0
-        return f"{out.rstrip()}\n\n{PROJECTION_NOTE}"
+        return f"{out.rstrip()}\n\n{in_product_words(PROJECTION_NOTE)}"
     if _keep_whole():
         known = [c for c in figure_fixes if c.right is not None]
         out = answer_correct.substitute(text, known) if known else text
@@ -773,4 +785,8 @@ async def check_reply(
             _audit_changes(text, fixed, counts)
         except Exception:
             logger.warning("answer_check: the record of its changes failed", exc_info=True)
+    if fixed == answer_correct.WHOLE_REPLY:
+        # Recorded as the decided sentence; shown in the product's words.
+        fixed = in_product_words(fixed)
+        turn._done = (text, fixed)
     return fixed

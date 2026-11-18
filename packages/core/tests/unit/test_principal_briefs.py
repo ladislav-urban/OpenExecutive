@@ -223,6 +223,7 @@ def _run_brief(
     deliver_ok: bool = True,
     workflow: object | None = None,
     deliver: object | None = None,
+    kind: str = "principal_brief_morning",
 ) -> None:
     import asyncio
 
@@ -234,7 +235,7 @@ def _run_brief(
     monkeypatch.setattr(narrative_cache, "DB_PATH", tmp_path / "cache.db")
     monkeypatch.setattr(wf_persistence, "DB_PATH", db)
     monkeypatch.setitem(
-        WORKFLOW_REGISTRY, "morning_brief", workflow or _fake_brief_workflow("fp-123")
+        WORKFLOW_REGISTRY, runner._PRINCIPAL_WORKFLOWS[kind], workflow or _fake_brief_workflow("fp-123")
     )
 
     async def _deliver(text: str, **_kw: object) -> runner.PrincipalDelivery:
@@ -254,7 +255,7 @@ def _run_brief(
 
     action_id = episodic.insert_scheduled_action(
         run_at=datetime.now(UTC).isoformat(), channel="__internal__", channel_ref="principal",
-        intent_text="brief", kind="principal_brief_morning",
+        intent_text="brief", kind=kind,
     )
     action = episodic.get_scheduled_action(action_id)
     assert action is not None

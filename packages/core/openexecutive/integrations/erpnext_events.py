@@ -230,6 +230,7 @@ def _schedule(event: dict[str, Any]) -> None:
     from openexecutive.alerts.pipeline import schedule_evaluation
     from openexecutive.audit.context import get_active_session_id, set_turn
     from openexecutive.orchestrator.content_trust import wrap_untrusted
+    from openexecutive.prompts.connected_systems import in_product_reply
 
     ref = f"erpnext:{event['kind']}:{event['key']}"
     # One a month per rule and document (oe_connector resends at most
@@ -248,9 +249,14 @@ def _schedule(event: dict[str, Any]) -> None:
                 source="erpnext",
                 external_id=external_id,
                 subject=event["title"],
+                # Code's sentence in the product's words on an install with
+                # a name, as the alert is shown; ERPNext's text as it sent it.
                 body=(
-                    f"ERPNext's rule for {KINDS[event['kind']]} matched. These are ERPNext's own "
-                    f"figures, checked by its read-only service user.\n\n{details}"
+                    in_product_reply(
+                        f"ERPNext's rule for {KINDS[event['kind']]} matched. These are ERPNext's own "
+                        "figures, checked by its read-only service user."
+                    )
+                    + f"\n\n{details}"
                 ),
                 user="ERPNext",
                 dedup_hint=ref,

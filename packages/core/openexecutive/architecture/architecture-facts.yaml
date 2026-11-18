@@ -5772,7 +5772,8 @@ chat:
     becomes WHOLE_REPLY (erpnext_views / the panel reply get open_call).
     Never WHOLE_REPLY when only names failed (the reply stands) or the
     question is a projection (answer_check._PROJECTION_Q: known values
-    written in, the rest under PROJECTION_NOTE); audit `kept`.
+    written in, the rest under PROJECTION_NOTE, in the product's words on
+    a named install); audit `kept`.
     Counts of records (figure_check._counts_records, Figure.count) match only
     Sources.counts of that record (count_words); unknown ones become
     "several" and unknown table cells "—" (answer_correct.vague), never a
@@ -8761,8 +8762,29 @@ auth:
     OE_PRODUCT_NAME, utils.product_name; with it set, every /chat reply,
     host or own page, streams and saves through connected_systems.
     ProductReplyStream: ERPNext as "the ERP", Open Executive as the
-    product, the panel's through in_product_reply; after a word that
-    already says which one, "this ERP user", never "this the ERP user"),
+    product, the panel's through in_product_reply, and every other
+    channel's (Slack, Telegram, Discord, Google Chat, email, the
+    scheduler's runs) as Executive.chat returns it (never A2A: a supplier
+    isn't one of the product's people); only the evals pass
+    product_words=False, to judge the model's own words; after a word that
+    already says which one, "this ERP user", never "this the ERP user".
+    What code adds is worded where it is added, so the evals see it as the
+    person does (eval erpnext_094, Nov 18, 2026): answer_check.
+    in_product_words for PROJECTION_NOTE and WHOLE_REPLY, a scheduled
+    brief's own text (scheduler runner, before held messages join it; the
+    weekly review and the clients digest, code's rows of stored titles and
+    names, go as written; scheduler _send_on_plan itself sends text
+    as given, so an alert, held message, reminder or mail-watch line keeps
+    its record values as read), erp_metrics' own "from ... own reports"
+    (the company's name as read), the morning brief's text,
+    channel_cards.outcome_text (a chat card itself stays as stored: it is
+    what a tap sends or saves), watch runner.notice_body's preamble and
+    notes and _fail_notice (summaries and values carry ERPNext's records
+    and stay as read), the ERPNext alert's sentence, Settings' reviewer
+    note, the oversight gate note and the alert-raise message. A name that
+    holds a part's name ("Acme ERPNext Suite", "OpenExecutive Cloud") is
+    refused as unset with a warning (utils.product_name), so the rewrite is
+    idempotent and a second pass is a no-op),
     never noted as the person's own
     words (history_chat.verified_speaker), and _stop_owner_key adds
     "|host" so it stops/adds to its own turns only. Each user line saves

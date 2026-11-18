@@ -4498,8 +4498,15 @@ class Executive:
         memory_text: str | None = None,
         standing_facts: str | None = None,
         cards: list[int] | None = None,
+        product_words: bool = True,
     ) -> str:
         """Non-streaming chat — collects and returns the full response.
+
+        The reply comes back in the product's words on an install with a name
+        (``connected_systems.in_product_reply``: "the ERP" for ERPNext), the
+        backstop the web chat's stream applies, for every chat app, email,
+        ERPNext's panel and the scheduler's runs. ``product_words=False``
+        returns the model's own words: the evals, which judge them.
 
         ``cards``, when given, collects the ids of the approval cards the
         reply left (the ``decision_id`` on its ``action_taken`` events, as the
@@ -4607,5 +4614,9 @@ class Executive:
             _COLLECTING.reset(collecting)
         if rewritten:
             # A retry that wrote nothing keeps the first reply.
-            return result.lstrip() or before
+            result = result.lstrip() or before
+        if product_words:
+            from openexecutive.prompts.connected_systems import in_product_reply
+
+            return in_product_reply(result)
         return result
