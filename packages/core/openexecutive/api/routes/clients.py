@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel, Field
 
 from openexecutive.api.intake_uploads import (
@@ -18,8 +18,15 @@ from openexecutive.api.intake_uploads import (
     _INTAKE_MAX_DOC_CHARS,
     _gather_intake_attachments,
 )
+from openexecutive.api.principal_gate import principal_only
 
 router = APIRouter()
+
+# Creating, drafting, saving, switching, editing and deleting a client slot
+# swaps or changes the live company context every turn reads: only the
+# principal does it (api.principal_gate), refused before any work.
+PRINCIPAL_ONLY_DETAIL = "Only the principal can manage client companies."
+_principal_only = principal_only(PRINCIPAL_ONLY_DETAIL)
 
 
 class CreateClientRequest(BaseModel):
@@ -80,7 +87,7 @@ async def list_clients() -> dict:
     }
 
 
-@router.post("/clients")
+@router.post("/clients", dependencies=[Depends(_principal_only)])
 async def create_client(req: CreateClientRequest) -> dict:
     from openexecutive.clients.slots import ClientSlotError, create_client_slot
     from openexecutive.config import get_settings
@@ -99,7 +106,7 @@ async def create_client(req: CreateClientRequest) -> dict:
         raise  # unreachable — _raise_for always raises
 
 
-@router.post("/clients/generate")
+@router.post("/clients/generate", dependencies=[Depends(_principal_only)])
 async def generate_client(
     description: str = Form(""),
     files: list[UploadFile] = File(  # noqa: B008 — FastAPI multipart marker, mirrors chat.py
@@ -172,7 +179,7 @@ async def generate_client(
     }
 
 
-@router.post("/clients/save")
+@router.post("/clients/save", dependencies=[Depends(_principal_only)])
 async def save_client() -> dict:
     """Checkpoint the active client's live state into its slot."""
     from openexecutive.clients.slots import ClientSlotError, save_active_client
@@ -185,7 +192,7 @@ async def save_client() -> dict:
         raise
 
 
-@router.post("/clients/{slug}/activate")
+@router.post("/clients/{slug}/activate", dependencies=[Depends(_principal_only)])
 async def activate_client(slug: str, request: Request) -> dict:
     """Switch the live company context to this client (saving the current one)."""
     from openexecutive.clients.slots import ClientSlotError, activate_client_slot
@@ -219,7 +226,7 @@ async def clients_cockpit() -> dict:
     }
 
 
-@router.patch("/clients/{slug}")
+@router.patch("/clients/{slug}", dependencies=[Depends(_principal_only)])
 async def patch_client_meta(slug: str, req: ClientMetaPatch) -> dict:
     """Update a slot's engagement metadata (role, status, renewal, …)."""
     from openexecutive.clients.slots import ClientSlotError, update_client_meta
@@ -235,7 +242,7 @@ async def patch_client_meta(slug: str, req: ClientMetaPatch) -> dict:
         raise
 
 
-@router.delete("/clients/{slug}")
+@router.delete("/clients/{slug}", dependencies=[Depends(_principal_only)])
 async def delete_client(slug: str) -> dict:
     from openexecutive.clients.slots import ClientSlotError, delete_client_slot
     from openexecutive.config import get_settings
