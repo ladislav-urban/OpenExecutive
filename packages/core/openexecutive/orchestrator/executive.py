@@ -1010,6 +1010,20 @@ def _log_pushback(
     )
 
 
+def _note_check_question(
+    check_turn: answer_check.AnswerCheckTurn, session: Session, person_id: int | None, memory_text: str | None,
+) -> None:
+    """The answer check's record of whether this asker's turn asks for a
+    projection (``answer_check.note_question``): from their own words only,
+    keyed by the session and the asker (the caller's person, else the panel's
+    signed-in email), so another person's turn in a shared chat never counts."""
+    panel_email = getattr(session, "erpnext_panel_email", None)
+    asker = f"person:{person_id}" if person_id is not None else f"panel:{panel_email or ''}"
+    answer_check.note_question(
+        check_turn, session_id=session.session_id, asker=asker, own_words=memory_text,
+    )
+
+
 def _speaker_text(memory_text: str | None, user_message: str) -> str:
     """The speaker's own words for this turn, which every post-turn pass reads
     instead of the prompt — episodic extraction, open loops and peer memory:
@@ -1751,6 +1765,7 @@ class Executive:
             if check_turn is not None:
                 check_turn.note_given(memory_text or user_message, page_context_block)
                 check_turn.note_messages(messages, system_blocks)
+                _note_check_question(check_turn, session, person_id, memory_text)
             consulted: list[str] = []
             turn_calls: list[tuple[str, str]] = []
             try:
@@ -2206,6 +2221,7 @@ class Executive:
         if check_turn is not None:
             check_turn.note_given(memory_text or user_message, page_context_block)
             check_turn.note_messages(messages, system_blocks)
+            _note_check_question(check_turn, session, person_id, memory_text)
         turn_calls: list[tuple[str, str]] = []
         try:
             async for item in self._stream_agent_loop(
