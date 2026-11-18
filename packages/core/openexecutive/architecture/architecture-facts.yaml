@@ -11679,7 +11679,7 @@ integrations:
     keep what brevity must not cut when an answer moves amounts between weeks
     or dates (a what-if, a late payment, a delay): each moved item named with
     its date before and after, each column headed with what it holds ("Acme
-    paid late", not "Acme receipts"), and whether the lowest or highest point
+    if it pays late", not "Acme receipts"), and whether the lowest or highest point
     asked about moves and what it ends at; unchanged rows still stay out. The
     Nov 18, 2026 gate of erpnext_094 passed 1 of 3: one rep listed the moved
     invoices with neither date under one "receipts" column, one never said

@@ -555,7 +555,7 @@ BRIEF_RULE = (
     "details) stays in words, kept short. When the answer moves amounts "
     "between weeks or dates (a what-if, a late payment, a delay), name each "
     "item it moves with its date before and after (\"due Oct 21, now Dec 14, "
-    "week 4\"), head each column with what it holds (\"Acme paid late\", not "
+    "week 4\"), head each column with what it holds (\"Acme if it pays late\", not "
     "\"Acme receipts\"), and say whether the lowest or highest point they "
     "asked about moves and what it ends at. However brief the answer, these "
     "stay in; the rows that don't change still stay out. "
