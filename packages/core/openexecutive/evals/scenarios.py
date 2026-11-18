@@ -12,9 +12,10 @@ the API. ID collisions between the two are blocked at insert time.
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NamedTuple
 
 import yaml
 
@@ -293,30 +294,109 @@ def scenario_query(scenario: dict[str, Any]) -> str:
     return f"{where}\n\n{scenario['query']}" if where else scenario["query"]
 
 
-def scenario_prior_turns(scenario: dict[str, Any]) -> list[tuple[str, str]]:
+# The most ``live: true`` prior turns a scenario may have: each is a billed
+# chat() turn, with its own tool calls, run before the question every time
+# the scenario runs. Two covers a follow-up that needs its first steps real
+# (erpnext_064); more would make one scenario cost several.
+MAX_LIVE_PRIOR_TURNS = 2
+
+
+@dataclass(frozen=True)
+class PriorTurn:
+    """One of a scenario's ``prior_turns``: ``message`` as the turn sent it
+    (its page block first), ``typed`` as the person typed it, and ``reply``
+    its fixed answer, or None for a ``live: true`` turn, which the runner
+    runs (``runner.run_chat_turn``)."""
+
+    message: str
+    typed: str
+    reply: str | None
+
+
+def parse_prior_turns(scenario: dict[str, Any]) -> list[PriorTurn]:
     """The conversation before the scenario's question (``prior_turns``):
-    ``[{user, assistant, page?}]``, oldest first, as (user message, reply).
-    A turn's ``page`` puts the page block before its message, as
-    ``scenario_query`` does for the question. Seeded into the session's
-    history, so a follow-up is judged as the person asked it."""
+    ``[{user, assistant, page?}]`` or ``[{user, live: true, page?}]``,
+    oldest first. A turn's ``page`` puts the page block before its message,
+    as ``scenario_query`` does for the question. A fixed turn is seeded into
+    the session's history as written; a live one has no ``assistant`` and
+    is run first, so the question follows the real reply (an ERPNext
+    follow-up whose fixed answer would hold no figures, or stale ones).
+    At most ``MAX_LIVE_PRIOR_TURNS`` turns may be live."""
     raw = scenario.get("prior_turns")
     if raw is None:
         return []
     if not isinstance(raw, list) or not raw:
-        raise ValueError("`prior_turns`: a list of {user, assistant, page?}")
-    turns: list[tuple[str, str]] = []
+        raise ValueError("`prior_turns`: a list of {user, assistant, page?} or {user, live: true, page?}")
+    turns: list[PriorTurn] = []
     for turn in raw:
-        if not isinstance(turn, dict) or set(turn) - {"user", "assistant", "page"}:
-            raise ValueError("`prior_turns`: each turn is {user, assistant, page?}")
+        if not isinstance(turn, dict) or set(turn) - {"user", "assistant", "page", "live"}:
+            raise ValueError("`prior_turns`: each turn is {user, assistant, page?} or {user, live: true, page?}")
+        live = turn.get("live", False)
+        if not isinstance(live, bool):
+            raise ValueError("`prior_turns`: `live` must be true or false")
         user, reply = turn.get("user"), turn.get("assistant")
-        if not (isinstance(user, str) and user.strip() and isinstance(reply, str) and reply.strip()):
-            raise ValueError("`prior_turns`: each turn needs a non-empty user and assistant")
-        turns.append((scenario_query({"query": user, "page": turn.get("page")}), reply))
+        if not (isinstance(user, str) and user.strip()):
+            raise ValueError("`prior_turns`: each turn needs a non-empty user")
+        if live and "assistant" in turn:
+            raise ValueError("`prior_turns`: a live turn has no assistant (its reply is the one it gets when run)")
+        if not live and not (isinstance(reply, str) and reply.strip()):
+            raise ValueError("`prior_turns`: each turn needs a non-empty user and assistant, unless it is live")
+        message = scenario_query({"query": user, "page": turn.get("page")})
+        turns.append(PriorTurn(message=message, typed=user, reply=None if live else reply))
+    live_count = sum(1 for t in turns if t.reply is None)
+    if live_count > MAX_LIVE_PRIOR_TURNS:
+        raise ValueError(
+            f"`prior_turns`: at most {MAX_LIVE_PRIOR_TURNS} live turns (each is a billed turn), not {live_count}"
+        )
     return turns
 
 
+def scenario_prior_turns(scenario: dict[str, Any]) -> list[tuple[str, str]]:
+    """The scenario's ``prior_turns`` as (user message, reply), for a
+    scenario whose turns all have their reply: fixed ones, or live ones the
+    runner has run (``with_prior_replies``). Raises for a live turn not run
+    yet, which has no reply to seed or show."""
+    turns = parse_prior_turns(scenario)
+    if any(t.reply is None for t in turns):
+        raise ValueError("`prior_turns`: a live turn has no reply until it is run")
+    return [(t.message, t.reply or "") for t in turns]
+
+
+# Set by ``with_prior_replies`` on a scenario some of whose prior turns ran
+# live, so ``prior_turns_section`` tells the judge those replies are unjudged.
+PRIOR_TURNS_RAN_LIVE = "_prior_turns_ran_live"
+
+# For the judge, after a conversation with a live turn: no live turn is
+# judged itself, so the final answer can't lean on one being right.
+LIVE_PRIOR_TURNS_NOTE = (
+    "The earlier assistant replies above were produced live on this run and "
+    "are not assumed correct. A final answer that agrees with an earlier reply "
+    "passes only if its figures are right from what this turn read; a final "
+    "answer that carries an earlier reply's error forward fails the criterion "
+    "that error touches."
+)
+
+
+def with_prior_replies(scenario: dict[str, Any], replies: list[str]) -> dict[str, Any]:
+    """``scenario`` as it ran: each prior turn with the reply it had, a live
+    turn's being the real one, so the judge sees the conversation the
+    question followed (``prior_turns_section``). When any turn ran live it
+    is marked (``PRIOR_TURNS_RAN_LIVE``), for ``LIVE_PRIOR_TURNS_NOTE``."""
+    raw = scenario.get("prior_turns")
+    if not raw:
+        return scenario
+    turns = [
+        {**{k: v for k, v in turn.items() if k != "live"}, "assistant": reply}
+        for turn, reply in zip(raw, replies, strict=True)
+    ]
+    ran = {**scenario, "prior_turns": turns}
+    if any(turn.get("live") is True for turn in raw):
+        ran[PRIOR_TURNS_RAN_LIVE] = True
+    return ran
+
+
 def seed_prior_turns(session: Any, scenario: dict[str, Any]) -> None:
-    """Put the scenario's ``prior_turns`` in ``session``'s history."""
+    """Put the scenario's fixed ``prior_turns`` in ``session``'s history."""
     for user, reply in scenario_prior_turns(scenario):
         session.add_user_message(user)
         session.add_assistant_message(reply)
@@ -324,16 +404,19 @@ def seed_prior_turns(session: Any, scenario: dict[str, Any]) -> None:
 
 def prior_turns_section(scenario: dict[str, Any]) -> str:
     """For a judge: the conversation the question follows, or "" when it
-    follows none (every other judge prompt stays byte-identical)."""
+    follows none (every other judge prompt stays byte-identical). After a
+    conversation with a live turn (``with_prior_replies``) it ends with
+    ``LIVE_PRIOR_TURNS_NOTE``: a live reply is never judged itself."""
     turns = scenario_prior_turns(scenario)
     if not turns:
         return ""
     lines = "\n\n".join(
         f"ASKER: {user}\nASSISTANT: {reply}" for user, reply in turns
     )
+    note = f"{LIVE_PRIOR_TURNS_NOTE}\n" if scenario.get(PRIOR_TURNS_RAN_LIVE) is True else ""
     return (
         "\nEARLIER IN THIS CONVERSATION (the asker sees these turns; the question "
-        f"below follows them):\n{lines}\n"
+        f"below follows them):\n{lines}\n{note}"
     )
 
 
@@ -761,7 +844,7 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         except ValueError as e:
             raise ValueError(f"`surface`: {e}") from e
     if s.get("prior_turns") is not None:
-        scenario_prior_turns(s)
+        parse_prior_turns(s)
     if s.get("decided_cards") is not None:
         scenario_decided_cards(s)
     for key in ("expected_view_kinds", "forbidden_view_kinds"):
@@ -911,24 +994,253 @@ def view_kinds_check(scenario: dict[str, Any], views: list[dict[str, Any]]) -> d
     return out
 
 
-def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
-    """The scenario's ``forbidden_reply_words`` the reply says, whole words and
-    any case: a deterministic check the judge's score can't outvote."""
+def _says(word: str, reply: str) -> bool:
     import re
 
+    return bool(word) and re.search(
+        r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE
+    ) is not None
+
+
+def forbidden_words_in(scenario: dict[str, Any], reply: str) -> list[str]:
+    """The scenario's own ``forbidden_reply_words`` the reply says, whole
+    words and any case: a deterministic check the judge's score can't
+    outvote. The install principal's name (``forbid_principal_name``) is
+    ``principal_name_in``'s, reported apart."""
     words = [w.strip() for w in scenario.get("forbidden_reply_words") or []]
-    if scenario.get("forbid_principal_name") is True:
-        # The install's own principal, read at run time: no fixture can name
-        # the real person a demo must never reveal.
-        principal = _principal()
-        name = (getattr(principal, "full_name", None) or "").strip()
-        if name:
-            words += [name, name.split()[0]]
-    found = []
-    for word in words:
-        if word and re.search(r"(?<![A-Za-z0-9])" + re.escape(word) + r"(?![A-Za-z0-9])", reply, re.IGNORECASE):
-            found.append(word)
-    return found
+    return [word for word in words if _says(word, reply)]
+
+
+# What a run records for a reply that names the principal: never the name
+# itself, which the scores and results would otherwise carry.
+PRINCIPAL_NAME_SAID = "the principal's name appeared in the reply"
+# The same for a live prior turn's reply (runner.chat_checks), naming the
+# turn by its place in ``prior_turns`` and, again, never the name.
+LIVE_PRINCIPAL_NAME_SAID = "the principal's name appeared in live prior turn {n}'s reply"
+
+
+def principal_name_in(scenario: dict[str, Any], reply: str) -> bool:
+    """Whether the reply names the install's own principal (any of
+    ``principal_name_variants``, as ``name_pattern`` matches them), for a
+    ``forbid_principal_name`` scenario. Read at run time: no fixture can name
+    the real person a demo must never reveal. Kept apart from the scenario's
+    own words so a run that fails on a fixture name ("Rachel") never reads as
+    a principal leak, and the other way round."""
+    if scenario.get("forbid_principal_name") is not True:
+        return False
+    pattern = name_pattern(principal_name_variants())
+    return pattern is not None and pattern.search(reply) is not None
+
+
+class NameVariant(NamedTuple):
+    """One way a reply may name a person: ``text``, matched as a whole word,
+    in any case when ``any_case``, else only as written."""
+
+    text: str
+    any_case: bool
+
+
+# Titles dropped from a name's words (with or without a dot).
+_HONORIFICS = frozenset({"mr", "mrs", "ms", "mx", "dr", "prof"})
+# Suffixes and credentials that sit beside a name and are never a variant.
+_SUFFIXES = frozenset(
+    {"jr", "sr", "ii", "iii", "iv", "v", "phd", "md", "mba", "cpa", "esq", "jd", "dds", "rn", "ceo", "cfo", "coo", "cto"}
+)
+# A shorter name token alone (an initial, "Al") would match ordinary words;
+# the demo guard's own words are kept whatever their length.
+_MIN_NAME_PART = 2
+# An email local part is a name only when it joins parts ("o.owner"); a bare
+# word ("principal", "ceo", "info") is an ordinary word in a reply.
+_LOCAL_PART_SEPARATORS = (".", "_", "-")
+# What a word of a stored name keeps (outer punctuation off).
+_WORD_PUNCTUATION = ".,;:!?'\"()[]-"
+
+
+def _bare(word: str) -> str:
+    return word.strip(_WORD_PUNCTUATION)
+
+
+def _is_name_word(word: str) -> bool:
+    """Whether ``word`` (outer punctuation off) is part of a name: not empty,
+    an honorific or a suffix or credential (``_SUFFIXES``)."""
+    bare = _bare(word).casefold()
+    return bool(bare) and bare not in _HONORIFICS and bare not in _SUFFIXES
+
+
+def _capitalised(token: str) -> list[str]:
+    """``token`` with its first letter capitalised, and, when it is stored in
+    capitals ("ANNA"), as a name is written ("Anna") too."""
+    forms = [token[:1].upper() + token[1:], token.upper()]
+    if token.isupper():
+        forms.append(token.capitalize())
+    return forms
+
+
+def _given_and_surname(full_name: str) -> tuple[str, str] | None:
+    """The stored name's given name and surname when both are known: after
+    and before the comma of an inverted name ("De La Cruz, Maria"), else its
+    first and last name words. Honorifics, suffixes and credentials and a
+    parenthesised part are left out; a comma followed only by suffixes or
+    credentials (", CPA") isn't an inverted name."""
+    name = re.sub(r"\([^)]*\)", " ", full_name)
+    before, comma, after = name.partition(",")
+    after_words = [w for w in re.split(r"[\s,]+", after) if _is_name_word(w)]
+    if comma and after_words:
+        surname_words = [w for w in before.split() if _is_name_word(w)]
+        if surname_words:
+            return _bare(after_words[0]), " ".join(surname_words)
+        return None
+    words = [w for w in re.split(r"[\s,]+", name) if _is_name_word(w) and _bare(w)]
+    if len(words) < 2:
+        return None
+    return _bare(words[0]), _bare(words[-1])
+
+
+def name_variants(full_name: str | None, *emails: str | None) -> list[NameVariant]:
+    """The ways a reply may name a person, longest first.
+
+    In any case: every word the demo guard hides for them
+    (``people.demo.principal_name_words``: the full name as stored, its
+    first word and each whole address), outer punctuation off and
+    honorifics dropped; each address's local part when it has a separator
+    (``_LOCAL_PART_SEPARATORS``); and "Surname, Given" and "Given Surname"
+    when both are known (``_given_and_surname``), and then the given name
+    on its own.
+
+    Capitalised only: every other word of the stored name, split on spaces,
+    commas, hyphens and parentheses, of ``_MIN_NAME_PART`` characters or
+    more and not a suffix or credential (``_SUFFIXES``), as written and in
+    capitals, so "Owner approves" and "OWNER approves" name Olivia Owner and
+    "the account owner" doesn't. A title and a single name ("Dr. Olivia")
+    give that name in any case. No variant is a single cased letter,
+    digit or symbol (``_is_initial``), so an initial ("A. Owner") never
+    matches every "a"; a one-character name in an uncased script ("김")
+    is kept. A surname of
+    several words or an inverted name gives every one of its name words,
+    with no guess at which is the given name."""
+    from openexecutive.people.demo import principal_name_words
+
+    found: dict[str, bool] = {}
+
+    def add(text: str, any_case: bool) -> None:
+        # An initial ("A." or "I.") is never a name on its own.
+        if not _is_initial(text):
+            found[text] = found.get(text, False) or any_case
+
+    stored = " ".join((full_name or "").split())
+    addresses = [a.strip() for a in emails if a and a.strip()]
+    for word in principal_name_words([stored] if stored else [], addresses):
+        word = word.strip(".,;:")
+        if word.casefold() not in _HONORIFICS:
+            add(word, True)
+    for address in addresses:
+        local = address.partition("@")[0]
+        if any(sep in local for sep in _LOCAL_PART_SEPARATORS):
+            add(local, True)
+    if stored:
+        pair = _given_and_surname(stored)
+        if pair:
+            given, surname = pair
+            add(f"{surname}, {given}", True)
+            add(f"{given} {surname}", True)
+            add(given, True)
+        # A title and one name ("Dr. Olivia", "Mrs. olivia"): that name in
+        # any case, as the given name would be.
+        words = [_bare(w) for w in re.split(r"[\s,]+", re.sub(r"\([^)]*\)", " ", stored)) if _is_name_word(w)]
+        if len(words) == 1:
+            add(words[0], True)
+        for token in re.split(r"[\s,()\-]+", stored):
+            bare = _bare(token)
+            if (len(bare) >= _MIN_NAME_PART or not _is_initial(bare)) and _is_name_word(bare):
+                for form in _capitalised(bare):
+                    add(form, False)
+    return _sorted_variants(found)
+
+
+def _is_initial(text: str) -> bool:
+    """Whether ``text`` is empty or a single cased letter, digit or symbol
+    (an initial): a single character of an uncased script ("김", "王") is a
+    whole name."""
+    if len(text) > 1:
+        return False
+    return not (text.isalpha() and text.lower() == text.upper())
+
+
+def _sorted_variants(found: dict[str, bool]) -> list[NameVariant]:
+    """``found`` (text: any_case) as variants, longest first, without a
+    case-sensitive form that an any-case variant already matches (by the
+    regex's own case folding: "(?i:Weiß)" doesn't match "WEISS", so that
+    form stays)."""
+    covering = [re.compile(f"(?i:{re.escape(t)})") for t, a in found.items() if a]
+    return sorted(
+        (
+            NameVariant(t, a)
+            for t, a in found.items()
+            if a or not any(c.fullmatch(t) for c in covering)
+        ),
+        key=lambda v: (-len(v.text), v.text),
+    )
+
+
+def name_pattern(variants: list[NameVariant]) -> re.Pattern[str] | None:
+    """One pattern for ``variants``, each a whole word, longest first, in any
+    case only where ``any_case``; None when there are none."""
+    if not variants:
+        return None
+    alternatives = [
+        f"(?i:{re.escape(v.text)})" if v.any_case else re.escape(v.text)
+        for v in sorted(variants, key=lambda v: -len(v.text))
+    ]
+    return re.compile(r"(?<![A-Za-z0-9])(?:" + "|".join(alternatives) + r")(?![A-Za-z0-9])")
+
+
+def _principal_names_and_addresses() -> tuple[list[str], list[str]]:
+    from openexecutive.people.demo import principal_names_and_addresses
+
+    return principal_names_and_addresses()
+
+
+def principal_name_variants() -> list[NameVariant]:
+    """Every principal row's ``name_variants`` (archived and suspended rows
+    too, with every address and alias), read from the roster at run time.
+    They hold every word the demo guard hides
+    (``people.demo.principal_name_words``) but honorifics, so the check is
+    at least that guard. ``principal_name_in`` checks for them and
+    ``scrub_principal_name`` replaces them. Empty without a principal;
+    raises when the roster can't be read."""
+    names, addresses = _principal_names_and_addresses()
+    found: dict[str, bool] = {}
+    for v in [v for name in names for v in name_variants(name)] + name_variants(None, *addresses):
+        found[v.text] = found.get(v.text, False) or v.any_case
+    return _sorted_variants(found)
+
+
+# What a stored eval result says in place of the principal's name.
+PRINCIPAL_SCRUBBED = "[the principal]"
+
+
+def scrub_principal_name(value: Any, names: list[NameVariant] | None = None) -> Any:
+    """``value`` with every mention of the principal's name (``names``, else
+    ``principal_name_variants()``, as ``name_pattern`` matches them) replaced
+    by ``PRINCIPAL_SCRUBBED``: a string, or a copy of a dict or list with
+    each string inside it scrubbed (a judge's scores, a result's live turns).
+    Anything else is returned as it is. Keeps the principal's name out of
+    what an eval run stores, whatever the scenario's flags; the checks read
+    the reply before it is scrubbed."""
+    pattern = name_pattern(principal_name_variants() if names is None else names)
+    if pattern is None:
+        return value
+
+    def scrub(item: Any) -> Any:
+        if isinstance(item, str):
+            return pattern.sub(PRINCIPAL_SCRUBBED, item)
+        if isinstance(item, dict):
+            return {key: scrub(v) for key, v in item.items()}
+        if isinstance(item, list):
+            return [scrub(v) for v in item]
+        return item
+
+    return scrub(value)
 
 
 def _plain(text: str) -> str:
@@ -955,7 +1267,9 @@ def reply_must_name_missing(scenario: dict[str, Any], reply: str) -> list[str]:
 def reply_check_failures(scenario: dict[str, Any], reply: str, *, repeated: bool = True) -> dict[str, list[str]]:
     """The deterministic checks every runner holds a reply to, whatever the
     judge's score, keyed as they are recorded in the run's scores: a
-    ``forbidden_reply_words`` word it says, a sentence it says twice (with
+    ``forbidden_reply_words`` word it says, the principal's name under
+    ``principal_name`` (with ``forbid_principal_name``; the name itself is
+    never recorded), a sentence it says twice (with
     ``forbid_repeated_text``; ``repeated=False`` for text that isn't one
     reply, such as a watch notice's lines) and a ``reply_must_name`` item it
     leaves out. Empty when the reply passes them all."""
@@ -965,6 +1279,8 @@ def reply_check_failures(scenario: dict[str, Any], reply: str, *, repeated: bool
     said = forbidden_words_in(scenario, reply)
     if said:
         out["forbidden_reply_words"] = said
+    if principal_name_in(scenario, reply):
+        out["principal_name"] = [PRINCIPAL_NAME_SAID]
     if repeated and scenario.get("forbid_repeated_text") is True:
         again = repeated_sentences(reply)
         if again:

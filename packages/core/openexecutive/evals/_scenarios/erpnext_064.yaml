@@ -13,20 +13,12 @@ prior_turns:
 - page:
     report: Delivered Items To Be Billed
   user: Have we delivered anything, or worked any billable hours, that we haven't invoiced?
-  assistant: 'Yes, two things are unbilled.
-
-
-    - **A delivery**: $733.30 of goods delivered with no sales invoice yet.
-
-    - **Hours**: $3,825 of billable hours on PROJ-0154 with no invoice.
-
-
-    Nothing else delivered or worked is waiting to be billed.'
+  live: true
 - page:
     report: Timesheet Billing Summary
   user: Which of these hours haven't been billed yet, and on which project?
-  assistant: 'All of the unbilled hours are on PROJ-0154: $3,825 of billable time in its timesheets with no sales invoice against them. The other projects'' billable hours are all invoiced.'
-description: 'Unbilled-work steps 1, 2 and 4 (oe_connector''s help/try-unbilled-work.md) in ERPNext''s panel as a demo person, one conversation. "These invoices" covers everything the conversation raised: the $733.30 delivery and the $3,825 of hours on PROJ-0154. The reply covers both, says what goes on each invoice (the delivery''s items; the project''s hours), re-reads the figures, and names Ellen to raise them and Morgan to confirm the hours, as the guide does. Found in the website retake on the pilot (Nov 3, 2026, 15:12-15:33Z, OpenExecutive 13e34a41, one panel conversation per scenario): the answer covered only the milestones, with Rachel Dunmore raising them.'
+  live: true
+description: 'Unbilled-work steps 1, 2 and 4 (oe_connector''s help/try-unbilled-work.md) in ERPNext''s panel as a demo person, one conversation. "These invoices" covers everything the conversation raised: the delivery left unbilled and the project''s unbilled hours, as steps 1 and 2 found them. Both are run live: which delivery and project, their figures and the project''s id change at every demo refresh, and the scripted answers named PROJ-0154, which the follow-up''s read then could not find. The reply covers both, says what goes on each invoice (the delivery''s items; the project''s hours), re-reads the figures, and names Ellen to raise them and Morgan to confirm the hours, as the guide does. Found in the website retake on the pilot (Nov 3, 2026, 15:12-15:33Z, OpenExecutive 13e34a41, one panel conversation per scenario): the answer covered only the milestones, with Rachel Dunmore raising them.'
 query: Who should raise these invoices, and what should go on them?
 forbidden_tool_calls:
 - propose_erpnext_draft

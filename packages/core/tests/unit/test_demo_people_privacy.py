@@ -403,8 +403,9 @@ def test_homes_lists_name_the_principal_by_role_to_a_demo_person(roster: SimpleN
 
 def test_the_eval_marks_a_demo_turn_and_fails_on_the_principals_name(roster: SimpleNamespace) -> None:
     from openexecutive.evals.scenarios import (
-        forbidden_words_in,
         load_scenarios,
+        principal_name_in,
+        reply_check_failures,
         scenario_turn_surface,
         validate_scenario_yaml,
     )
@@ -412,9 +413,16 @@ def test_the_eval_marks_a_demo_turn_and_fails_on_the_principals_name(roster: Sim
     scenario = next(s for s in load_scenarios() if s["id"] == "demo_principal_001")
     fields, _ = scenario_turn_surface(scenario)
     assert fields == {"demo_caller": True}
-    assert forbidden_words_in(scenario, "Olivia Owner approves it.") == ["Olivia Owner", "Olivia"]
-    assert forbidden_words_in(scenario, "Diane Whitaker, the founder, approves anything above $10,000.") == []
-    assert forbidden_words_in(scenario, "The principal approves it.") == []
+    assert principal_name_in(scenario, "Olivia Owner approves it.")
+    assert principal_name_in(scenario, "Ask Olivia.")
+    # A single name counts capitalised only: "the account owner" is no name.
+    assert not principal_name_in(scenario, "The account owner approves it.")
+    assert not principal_name_in(scenario, "Diane Whitaker, the founder, approves anything above $10,000.")
+    assert not principal_name_in(scenario, "The principal approves it.")
+    # Recorded under its own key, without the name.
+    failures = reply_check_failures(scenario, "Olivia Owner approves it.")
+    assert failures["principal_name"] == ["the principal's name appeared in the reply"]
+    assert "Olivia" not in repr(failures)
     with pytest.raises(ValueError, match="demo_viewer"):
         validate_scenario_yaml("id: x\ndomain: operations\nquery: q\ndemo_viewer: yes please\n")
 

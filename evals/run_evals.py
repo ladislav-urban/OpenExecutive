@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "packages" / "core"))
 def failed_checks(scores: dict) -> list[str]:
     # The deterministic checks chat_checks recorded as failed, by key, for
     # the run's one-line summary (the scores keep the details).
-    failed = [k for k in ("forbidden_reply_words", "repeated_text", "reply_must_name_missing") if scores.get(k)]
+    failed = [k for k in ("forbidden_reply_words", "principal_name", "repeated_text", "reply_must_name_missing") if scores.get(k)]
     return failed + [k for k in ("routing", "views") if isinstance(scores.get(k), dict) and not scores[k].get("ok")]
 
 
@@ -32,18 +32,27 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     ``run_chat_turn``: the same session, surface, product name, advice policy
     and overrides as ``openexecutive.evals.runner`` gives it. The result's
     ``turn`` is the ``ChatTurn`` for ``chat_checks`` (``evaluate_chat``
-    takes it out before the result is written)."""
+    takes it out before the result is written). ``response`` and
+    ``live_turns`` are as the result keeps them (``ChatTurn.stored``: the
+    principal's name scrubbed; ``live_turns`` holds each ``live: true``
+    prior turn as it ran, its place in ``prior_turns``, response and
+    response_length, a long reply cut, only for a scenario that has one);
+    ``response_length`` is the whole reply's."""
     from openexecutive.evals.runner import run_chat_turn
 
     turn = await run_chat_turn(executive, scenario)
-    return {
+    stored = turn.stored({})
+    result = {
         "id": scenario["id"],
         "domain": scenario["domain"],
         "query": scenario["query"],
-        "response": turn.response,
+        "response": stored["response"],
         "response_length": len(turn.response),
         "turn": turn,
     }
+    if "live_turns" in stored:
+        result["live_turns"] = stored["live_turns"]
+    return result
 
 
 async def evaluate_chat(scenario: dict, executive) -> dict:
@@ -58,12 +67,28 @@ async def evaluate_chat(scenario: dict, executive) -> dict:
     result = await run_eval(scenario, executive, None)
     turn = result.pop("turn")
     # Act as me: the drafts it saved, which the judge reads, as the package
-    # runner gives them to judge_chat.
-    scores = await judge_response(scenario, turn.response, drafts=turn.drafts)
+    # runner gives them to judge_chat; and the conversation as it ran (a
+    # live prior turn's real reply), as it gives judge_chat that too.
+    scores = await judge_response(turn.judged_scenario(scenario), turn.response, drafts=turn.drafts)
     held = chat_checks(scenario, turn, scores)
-    result["scores"] = scores
+    # The judge's notes with the principal's name scrubbed, as the package
+    # runner stores them (``ChatTurn.stored``).
+    result["scores"] = turn.stored(scores)["scores"]
     result["passed"] = float(scores.get("overall", 0) or 0) >= 3.5 and held
     return result
+
+
+async def evaluate_chat_or_error(scenario: dict, executive) -> dict:
+    """``evaluate_chat``'s result, or the scenario's error result when it
+    raised: its ``error`` with the principal's name scrubbed
+    (``runner.stored_error``), as the package runner's scenario_error has it
+    and as it is printed."""
+    from openexecutive.evals.runner import stored_error
+
+    try:
+        return await evaluate_chat(scenario, executive)
+    except Exception as e:
+        return {"id": scenario["id"], "error": stored_error(e), "passed": False}
 
 
 async def judge_response(scenario: dict, response: str, drafts: list[dict] | None = None) -> dict:
@@ -235,7 +260,14 @@ async def _eval_gateway(enabled: bool):
         await gateway.close()
 
 
-async def main() -> None:
+# Where results go without --output: this script's own evals/results/, the
+# one directory .gitignore keeps out of git, whatever the current directory
+# (a run from packages/core or the repo root wrote full replies into an
+# un-ignored results/ there).
+DEFAULT_OUTPUT = Path(__file__).resolve().parent / "results"
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenarios",
@@ -243,7 +275,11 @@ async def main() -> None:
         help="Path to scenario YAML files (moved into the package; pass an "
         "explicit path to use a custom set)",
     )
-    parser.add_argument("--output", default="results/", help="Output directory for results")
+    parser.add_argument(
+        "--output",
+        default=str(DEFAULT_OUTPUT),
+        help="Output directory for results (default: evals/results/ beside this script, git-ignored)",
+    )
     parser.add_argument("--scenario-id", help="Run only this scenario ID")
     parser.add_argument(
         "--triage",
@@ -278,6 +314,11 @@ async def main() -> None:
             "so they are skipped unless this flag is set."
         ),
     )
+    return parser
+
+
+async def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     mode_flags = [args.triage, args.workflow, args.mcp, args.inbox, args.supplier, args.watch_reason]
     if sum(mode_flags) > 1:
@@ -408,19 +449,18 @@ async def main() -> None:
             executive = Executive(mcp_gateway=gateway)
             for scenario in scenarios:
                 print(f"  [{scenario['id']}] {scenario['description']}")
-                try:
-                    result = await evaluate_chat(scenario, executive)
-                    results.append(result)
-                    scores = result["scores"]
-                    status = "PASS" if result["passed"] else "FAIL"
-                    failed = failed_checks(scores)
-                    print(
-                        f"    → {status} (overall: {scores.get('overall', 0):.1f}/5)"
-                        + (f"; failed: {', '.join(failed)}" if failed else "")
-                    )
-                except Exception as e:
-                    print(f"    → ERROR: {e}")
-                    results.append({"id": scenario["id"], "error": str(e), "passed": False})
+                result = await evaluate_chat_or_error(scenario, executive)
+                results.append(result)
+                if "error" in result:
+                    print(f"    → ERROR: {result['error']}")
+                    continue
+                scores = result["scores"]
+                status = "PASS" if result["passed"] else "FAIL"
+                failed = failed_checks(scores)
+                print(
+                    f"    → {status} (overall: {scores.get('overall', 0):.1f}/5)"
+                    + (f"; failed: {', '.join(failed)}" if failed else "")
+                )
 
     timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     output_file = output_dir / f"eval_results_{target_kind}_{timestamp}.json"

@@ -11642,8 +11642,8 @@ integrations:
     narrated or retold (a changed figure is given plainly, "corrected:" at
     most, worked out first; no earlier statement the turns don't show is
     claimed) (evals erpnext_056
-    to erpnext_065; evals.scenarios prior_turns seeds the session history
-    and shows it to the judge); TABLE_RULE keeps a table to four columns, wider
+    to erpnext_065; evals.scenarios prior_turns seeds the session history,
+    or runs a live: true turn first, and shows it to the judge); TABLE_RULE keeps a table to four columns, wider
     detail in the place it opens (eval erpnext_066); BRIEF_RULE keeps an
     answer brief there, also when it explains figures: the answer first in a
     sentence or two, only the rows that change or answer the question, nothing
@@ -13250,8 +13250,41 @@ evals:
   reply_checks: |
     Deterministic checks a reply fails whatever the judge's score
     (evals.scenarios.reply_check_failures), recorded in the run's scores
-    under their own keys: forbidden_reply_words (whole words, any case;
-    forbid_principal_name adds the install's principal), forbid_repeated_text
+    under their own keys: forbidden_reply_words (the scenario's own words,
+    whole words, any case), principal_name (forbid_principal_name: any
+    variant of the name of every principal row, archived and suspended ones
+    too, read from the roster at run time
+    (people.demo.principal_names_and_addresses; scenarios.name_variants,
+    matched as whole words by scenarios.name_pattern). In any case: every
+    word the demo guard hides (people.demo.principal_name_words: the full
+    name as stored, its first word, every whole address and alias), outer
+    punctuation off and honorifics (Mr Mrs Ms Mx Dr Prof) dropped, with no
+    length minimum, so the check is at least that guard; a local part that
+    joins parts with . _ or - ("o.owner"; a bare one such as "principal" or
+    "ceo" is an ordinary word); and "Surname, Given", "Given Surname" and
+    the given name when both are known (after and before the comma of an
+    inverted name, else the first and last name words), or the one name
+    word left after titles and suffixes ("Dr. Olivia"). Capitalised and
+    in capitals only: every other word of the stored name, split on
+    spaces, commas, hyphens and parentheses, of two or more characters
+    ("Li", "Wu") and not a suffix or credential (Jr Sr II III IV V PhD MD
+    MBA CPA Esq JD DDS RN CEO CFO COO CTO), so "Owner approves" and "OWNER
+    approves" name Olivia Owner and "the account owner" doesn't, and a
+    surname of several words or an inverted name gives every name word
+    without guessing which is the given name. No variant is a single
+    cased letter, digit or symbol, from any source, so an initial ("A.
+    Owner") never matches every "a", while a one-character name in an
+    uncased script ("김") is kept; and a capitals form the any-case
+    variants don't match ("WEISS" for "Weiß") is kept too. The guard's own
+    words are all matched but honorifics and initials. Known limits,
+    accepted since over-scrubbing is safe: an inverted roster name's
+    surname is the guard's first word and so matches in any case ("the
+    account owner" for "Owner, Olivia"), a name that is a common word
+    ("van", "Mark", "Will") matches that word, and a name word matches in
+    text set in capitals ("ACCOUNT OWNER")), recorded only
+    as "the principal's name appeared in the reply", never the name, and
+    kept apart so a fixture name such as erpnext_064's "Rachel" never reads
+    as a principal leak), forbid_repeated_text
     (a sentence said twice) and reply_must_name (a list of strings, each
     present anywhere in the reply in any case and spacing, with |-separated
     alternatives such as "Panel wiring|DEMO-WIR-25"; a missing one is
@@ -13266,6 +13299,80 @@ evals:
     and one tabling three of four delivered lines, passed at 4). A panel
     scenario's quality_criteria reach both judges (judges._panel_section,
     judges.chat_judge_context); other chat judge prompts are unchanged.
+    The principal's name is never stored in an eval result, whatever the
+    scenario's flags: both runners replace every mention the check would
+    catch (scenarios.principal_name_variants, name_pattern) with "[the
+    principal]" (scenarios.scrub_principal_name, PRINCIPAL_SCRUBBED) in a
+    chat or mcp scenario's stored response, in every string of the judge's
+    scores (its notes and reasons) and in each stored live turn's response
+    (runner.ChatTurn.stored, runner.stored_live_turn), and the judge reads
+    a live prior reply already scrubbed (ChatTurn.judged_scenario), so its
+    notes can't echo the name. The checks read the replies before they are
+    scrubbed, so a forbid_principal_name hit still fails the scenario.
+    A failed chat or mcp scenario's error (a live turn's LIVE_TURN_FAILED
+    carries its exception's text) is scrubbed the same way
+    (runner.stored_error, in scenario_error and in evals/run_evals.py's
+    printed and stored error), or replaced by runner.ERROR_UNCHECKED when
+    the roster can't be read. response_length is the whole reply's. Why: keep the principal's name
+    out of stored eval results (data minimisation). The Executive's own
+    audit log keeps each eval turn's whole reply, as it does for every
+    chat turn; the eval runners don't change that.
+  prior_turns: |
+    A chat or mcp scenario's prior_turns is the conversation its query
+    follows, oldest first: {user, assistant, page?} is a fixed turn,
+    seeded into the session's history as written; {user, live: true,
+    page?} (no assistant) is a live one, which runner.run_chat_turn runs
+    first through executive.chat on the same session, with the same
+    surface and channel block, product name, advice policy, decided cards,
+    peer memory and standing facts, its own page block before its text and
+    that text as the answer check's typed_question. chat() keeps the turn
+    in the history as the route does, so the query follows the real reply.
+    Why: an ERPNext follow-up's fixed answer either held no figures (so
+    there was nothing to restate and the answer check rightly held back
+    figures it couldn't find) or exact ones that went stale after the
+    demo's nightly reset, when the follow-up's live reads disagreed
+    (erpnext_099, erpnext_100 run erpnext_094's 13-week cash outlook live).
+    Only the final turn is judged and checked: forbidden_reply_words,
+    forbid_repeated_text, reply_must_name, routing and the panel's views
+    hold the query's reply alone (the live turn gets no debug collector
+    and its views are dropped). The one exception is the principal's name
+    (forbid_principal_name): runner.chat_checks holds every live turn's
+    reply to it too, and a hit fails the scenario as one in the final
+    reply does, under the same principal_name score key, as "the
+    principal's name appeared in live prior turn N's reply"
+    (scenarios.LIVE_PRINCIPAL_NAME_SAID; N is the turn's place in
+    prior_turns). The name is never in the score, and never in a stored
+    live reply: the check reads the whole reply (ChatTurn.prior_replies),
+    and the stored one has it scrubbed to "[the principal]"
+    (runner.stored_live_turn; see reply_checks). Both judges see the
+    conversation as it ran (ChatTurn.prior_replies,
+    scenarios.with_prior_replies), in both runners, a live reply with the
+    principal's name scrubbed (ChatTurn.judged_scenario). A live turn is not judged itself, so after one the
+    judge's conversation ends with scenarios.LIVE_PRIOR_TURNS_NOTE (set by
+    with_prior_replies' PRIOR_TURNS_RAN_LIVE mark; a conversation of fixed
+    turns gets no note): the earlier replies ran live and are not assumed
+    correct, a final answer that agrees with one passes only if its figures
+    are right from what that turn read, and one that carries an earlier
+    error forward fails the criterion it touches (erpnext_099's agreement
+    with the earlier outlook, erpnext_065's project). Each live turn as it
+    ran (ChatTurn.live_turns, runner.stored_live_turn: turn, response,
+    response_length) goes into the scenario's result under
+    live_turns, in the package runner's scenario_done event (kept in the
+    run's results) and in evals/run_evals.py's results JSON; fixed turns
+    aren't in it, and a scenario with no live turn has no live_turns key.
+    Its response is the reply with the principal's name scrubbed, then at
+    most runner.LIVE_REPLY_STORED_CHARS (4000) characters of it, with
+    "response_truncated": true when cut; response_length is always the
+    full reply's. The judge (name scrubbed) and the checks still read the
+    reply whole. Neither runner measures the characters of a turn's tool results.
+    A live turn that raises or answers nothing fails the scenario with
+    "live prior turn N failed..." (a scenario_error in the package
+    runner, an error result in evals/run_evals.py). validate_scenario_yaml
+    (scenarios.parse_prior_turns) requires live to be a bool, refuses an
+    assistant on a live turn and requires a non-empty one on any other,
+    and allows at most scenarios.MAX_LIVE_PRIOR_TURNS (2) live turns: each
+    is a billed chat() turn with its own tool calls, run on every run of
+    the scenario; two covers erpnext_064's.
 
 company_onboarding:
   module: openexecutive.onboarding (interview.py, commit.py, wizard.py) + api.routes.onboarding

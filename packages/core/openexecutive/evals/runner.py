@@ -84,9 +84,13 @@ from openexecutive.evals.judges import (
     judge_workflow,
 )
 from openexecutive.evals.scenarios import (
+    LIVE_PRINCIPAL_NAME_SAID,
     WATCH_REASON,
     SupplierCase,
     load_scenarios,
+    parse_prior_turns,
+    principal_name_in,
+    principal_name_variants,
     reply_check_failures,
     routing_check,
     scenario_decided_cards,
@@ -98,8 +102,9 @@ from openexecutive.evals.scenarios import (
     scenario_turn_surface,
     scenario_voice_persona,
     scenario_watch_reason,
-    seed_prior_turns,
+    scrub_principal_name,
     view_kinds_check,
+    with_prior_replies,
 )
 from openexecutive.workflows.gate import ensure_workflow_event
 
@@ -633,6 +638,86 @@ class ChatTurn:
     views: list[dict[str, Any]] = field(default_factory=list)
     # Act as me: the drafts it saved for the asker; None without ``delegation``.
     drafts: list[dict[str, Any]] | None = None
+    # The reply each of the scenario's prior turns had, oldest first: a fixed
+    # turn's as written, a live turn's as it ran (``with_prior_replies``).
+    prior_replies: list[str] = field(default_factory=list)
+    # The live prior turns as they ran, oldest first: each one's place in
+    # ``prior_turns`` (``turn``, from 1), its ``response`` as stored
+    # (``stored_live_turn``: scrubbed and cut) and the full reply's length in
+    # characters (``response_length``), as a run's result records the
+    # question's. Fixed turns aren't in it.
+    live_turns: list[dict[str, Any]] = field(default_factory=list)
+
+    def judged_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
+        """``scenario`` with its prior turns' replies as they ran, for the
+        judge's view of the conversation (``prior_turns_section``). A live
+        reply goes to the judge with the principal's name scrubbed
+        (``scrub_principal_name``), so the judge's notes can't carry it into
+        the stored scores; a fixed one is the scenario's own text."""
+        live = {entry["turn"] for entry in self.live_turns}
+        names = principal_name_variants()
+        replies = [
+            scrub_principal_name(reply, names) if n in live else reply
+            for n, reply in enumerate(self.prior_replies, start=1)
+        ]
+        return with_prior_replies(scenario, replies)
+
+    def stored(self, scores: dict[str, Any]) -> dict[str, Any]:
+        """What a run's result keeps of this turn once it is judged and
+        checked: ``response`` and the judge's ``scores`` with the principal's
+        name scrubbed (``scrub_principal_name``), whatever the scenario's
+        flags, and ``live_turns`` (already scrubbed, ``stored_live_turn``)
+        when there are any. Keeps the principal's name out of stored eval
+        results; the checks have read the whole replies by then."""
+        names = principal_name_variants()
+        out: dict[str, Any] = {
+            "response": scrub_principal_name(self.response, names),
+            "scores": scrub_principal_name(scores, names),
+        }
+        if self.live_turns:
+            out["live_turns"] = self.live_turns
+        return out
+
+
+# The most of a live prior turn's reply a result stores; the checks still
+# read it whole (``ChatTurn.prior_replies``).
+LIVE_REPLY_STORED_CHARS = 4000
+
+
+def stored_live_turn(n: int, reply: str) -> dict[str, Any]:
+    """Live prior turn ``n``'s entry in ``ChatTurn.live_turns``, as a run's
+    results keep it: ``response`` is the reply with the principal's name
+    scrubbed (``scrub_principal_name``, whatever the scenario's flags), then
+    cut to at most ``LIVE_REPLY_STORED_CHARS`` (with ``response_truncated``
+    when cut); ``response_length`` is always the full reply's."""
+    stored = scrub_principal_name(reply)
+    entry: dict[str, Any] = {"turn": n, "response": stored, "response_length": len(reply)}
+    if len(stored) > LIVE_REPLY_STORED_CHARS:
+        entry["response"] = stored[:LIVE_REPLY_STORED_CHARS]
+        entry["response_truncated"] = True
+    return entry
+
+
+# A failed scenario's error when it can't be checked for the principal's
+# name (the roster unread): stored in place of the error, never unchecked.
+ERROR_UNCHECKED = "the scenario failed; its error isn't kept, as it couldn't be checked for the principal's name"
+
+
+def stored_error(exc: BaseException) -> str:
+    """A failed chat or mcp scenario's ``error`` as a run's result keeps it:
+    ``str(exc)`` with the principal's name scrubbed (``scrub_principal_name``;
+    a live turn's ``LIVE_TURN_FAILED`` carries its exception's text), or
+    ``ERROR_UNCHECKED`` when the roster can't be read."""
+    try:
+        return str(scrub_principal_name(str(exc)))
+    except Exception:
+        logger.warning("eval scenario error not checked for the principal's name", exc_info=True)
+        return ERROR_UNCHECKED
+
+
+# Why a scenario fails when a live prior turn errors or answers nothing:
+# the question would follow a conversation that never happened.
+LIVE_TURN_FAILED = "live prior turn {n} failed, so the question has no conversation to follow: {why}"
 
 
 async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
@@ -641,7 +726,17 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
     mode, role, voice, Act as me mailbox, surface (the panel's marks and
     channel block), prior turns and decided cards. Both runners use it, this
     module's and the repo's ``evals/run_evals.py``, so a scenario runs (and
-    is held to ``chat_checks``) the same way in each."""
+    is held to ``chat_checks``) the same way in each.
+
+    A fixed prior turn is seeded into the session's history as written. A
+    ``live: true`` one is run first, on the same session and with every
+    override above, as the person would have asked it; the real reply is the
+    history the question follows. Only the question's turn is returned and
+    checked (but for the principal's name, which ``chat_checks`` holds every
+    live turn's reply to as well): its specialists and views are its own.
+    The live turns' replies are kept in ``ChatTurn.live_turns``. A live
+    turn that errors
+    or answers nothing fails the scenario (``LIVE_TURN_FAILED``)."""
     from openexecutive.integrations.erpnext_drafts import decided_cards_override
     from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
     from openexecutive.memory.company_profile import CompanyProfile
@@ -685,44 +780,67 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
             delegation_override=delegation,
             **surface,
         )
-        # A follow-up: the turns it follows, in the session's history.
-        seed_prior_turns(session, scenario)
+
+        async def one_turn(message: str, typed: str, collector: DebugCollector | None) -> tuple[str, TurnViews]:
+            # A panel turn keeps the views its show calls opened, as the
+            # panel's route collects them (view_kinds_check).
+            shown = TurnViews()
+            views_ctx = collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
+            with views_ctx:
+                response = await executive.chat(
+                    user_message=message,
+                    # The question as the person typed it, without the page
+                    # block scenario_query puts in front: what the panel
+                    # passes as the answer check's typed_question.
+                    typed_question=typed,
+                    session=session,
+                    channel_context_block=channel_block,
+                    # chat() sets the turn's speaker from this, as the chat
+                    # route passes the signed-in person: a `speaker`
+                    # scenario's caller, else None.
+                    person_id=surface.get("caller_person_id"),
+                    debug_collector=collector,
+                    # A scenario may supply the <peer_memory> body itself.
+                    # Evals run with no person_id, so the Honcho prefetch
+                    # never fires; this is the only way to exercise how the
+                    # Executive USES peer memory. None keeps chat()'s default.
+                    peer_memory_context=scenario.get("peer_memory_context"),
+                    # Likewise the <standing_facts> body (memory/facts.py):
+                    # the scenario's own lines under the shared header, or
+                    # none: an eval never reads the install's facts.
+                    standing_facts=scenario_standing_facts(scenario),
+                    # The model's own words: the channels' backstop
+                    # (connected_systems.in_product_reply) would hide one
+                    # that names ERPNext on a named install (erpnext_027).
+                    # What code adds to a reply is in the product's words
+                    # where it's added.
+                    product_words=False,
+                )
+            return response, shown
+
+        # A follow-up: the turns it follows, in the session's history. A
+        # live one goes through chat() like the question, which keeps the
+        # turn in the history as the route does.
+        prior_replies: list[str] = []
+        live_turns: list[dict[str, Any]] = []
+        for n, prior in enumerate(parse_prior_turns(scenario), start=1):
+            if prior.reply is not None:
+                session.add_user_message(prior.message)
+                session.add_assistant_message(prior.reply)
+                prior_replies.append(prior.reply)
+                continue
+            try:
+                reply, _ = await one_turn(prior.message, prior.typed, None)
+            except Exception as exc:
+                raise RuntimeError(LIVE_TURN_FAILED.format(n=n, why=f"{type(exc).__name__}: {exc}")) from exc
+            if not (reply or "").strip():
+                raise RuntimeError(LIVE_TURN_FAILED.format(n=n, why="it answered nothing"))
+            prior_replies.append(reply)
+            live_turns.append(stored_live_turn(n, reply))
         query = scenario_query(scenario)
         # Records which specialists the turn consulted (routing_check).
         collector = DebugCollector()
-        # A panel turn keeps the views its show calls opened, as the panel's
-        # route collects them (view_kinds_check).
-        shown = TurnViews()
-        views_ctx = collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
-        with views_ctx:
-            response = await executive.chat(
-                user_message=query,
-                # The question as the person typed it, without the page block
-                # scenario_query puts in front: what the panel passes as the
-                # answer check's typed_question.
-                typed_question=scenario["query"],
-                session=session,
-                channel_context_block=channel_block,
-                # chat() sets the turn's speaker from this, as the chat route
-                # passes the signed-in person: a `speaker` scenario's caller,
-                # else None.
-                person_id=surface.get("caller_person_id"),
-                debug_collector=collector,
-                # A scenario may supply the <peer_memory> body itself. Evals
-                # run with no person_id, so the Honcho prefetch never fires;
-                # this is the only way to exercise how the Executive USES
-                # peer memory. None keeps chat()'s default.
-                peer_memory_context=scenario.get("peer_memory_context"),
-                # Likewise the <standing_facts> body (memory/facts.py): the
-                # scenario's own lines under the shared header, or none: an
-                # eval never reads the install's facts.
-                standing_facts=scenario_standing_facts(scenario),
-                # The model's own words: the channels' backstop
-                # (connected_systems.in_product_reply) would hide one that
-                # names ERPNext on a named install (erpnext_027). What code
-                # adds to a reply is in the product's words where it's added.
-                product_words=False,
-            )
+        response, shown = await one_turn(query, scenario["query"], collector)
     finally:
         decided_cards_override.reset(cards_token)
         advice_policy_override.reset(policy_token)
@@ -735,6 +853,8 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
         ],
         views=list(shown.views),
         drafts=[asdict(d) for d in delegation.gmail.drafts] if delegation is not None else None,
+        prior_replies=prior_replies,
+        live_turns=live_turns,
     )
 
 
@@ -744,8 +864,23 @@ def chat_checks(scenario: dict[str, Any], turn: ChatTurn, scores: dict[str, Any]
     word, a sentence said twice, a ``reply_must_name`` item left out), the
     specialists it had to consult (``routing_check``) and the views a panel
     turn had to open (``view_kinds_check``). Each result goes into
-    ``scores`` under its own key; True when every check holds."""
+    ``scores`` under its own key; True when every check holds.
+
+    A live prior turn's reply is held to one check too, the principal's
+    name (``forbid_principal_name``): a hit fails the scenario as one in the
+    final reply does, under the same ``principal_name`` key, naming the
+    turn (``LIVE_PRINCIPAL_NAME_SAID``) and never the name. It reads the
+    whole reply (``ChatTurn.prior_replies``), not the stored one, which is
+    scrubbed and cut (``stored_live_turn``). Its other checks stay the
+    question's alone."""
     failures = reply_check_failures(scenario, turn.response)
+    named = [
+        LIVE_PRINCIPAL_NAME_SAID.format(n=live["turn"])
+        for live in turn.live_turns
+        if principal_name_in(scenario, turn.prior_replies[live["turn"] - 1])
+    ]
+    if named:
+        failures["principal_name"] = failures.get("principal_name", []) + named
     scores.update(failures)
     ok = not failures
     routing = routing_check(scenario, turn.specialists)
@@ -811,14 +946,20 @@ def _make_chat_runner(
                 try:
                     turn = await run_chat_turn(executive_for_scenario(), scenario)
                     query, response = turn.query, turn.response
+                    # The judge sees the conversation as it ran: a live prior
+                    # turn's real reply, not the scenario's empty slot.
+                    judged = turn.judged_scenario(scenario)
                     if turn.drafts is not None:
-                        scores = await judge_chat(scenario, response, drafts=turn.drafts)
+                        scores = await judge_chat(judged, response, drafts=turn.drafts)
                     else:
-                        scores = await judge_chat(scenario, response)
+                        scores = await judge_chat(judged, response)
                     held = chat_checks(scenario, turn, scores)
                     ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD and held
                     if ok:
                         passed[0] += 1
+                    # The response, scores and each live prior turn as the
+                    # run's result keeps them, the principal's name scrubbed
+                    # (fixed turns are in the scenario as written).
                     await queue.put(
                         {
                             "type": "scenario_done",
@@ -826,9 +967,8 @@ def _make_chat_runner(
                             "total": total,
                             "scenario_id": scenario["id"],
                             "passed": ok,
-                            "scores": scores,
                             "query": query,
-                            "response": response,
+                            **turn.stored(scores),
                         }
                     )
                 except Exception as exc:
@@ -839,7 +979,7 @@ def _make_chat_runner(
                             "index": i,
                             "total": total,
                             "scenario_id": scenario["id"],
-                            "error": str(exc),
+                            "error": stored_error(exc),
                         }
                     )
         except asyncio.CancelledError:
