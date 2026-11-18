@@ -224,6 +224,19 @@ def test_count_by_day_respects_window(tmp_path: Path) -> None:
 # --------------------------------------------------------------------------- #
 
 
+def _as_principal(db: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Put the principal on the roster, so a header-less request runs as them
+    and counts the whole feed. Anyone else counts only their own feed
+    (test_today_activity_scope); a caller who resolves to no one, nothing."""
+    from openexecutive.people import registry as people_registry
+    from openexecutive.people import store as people_store
+
+    monkeypatch.setattr(people_store, "DB_PATH", db)
+    people_store.initialize_db(db)
+    people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    people_registry.invalidate()
+
+
 def _make_client() -> TestClient:
     app = FastAPI()
     app.include_router(today_route.router)
@@ -259,6 +272,7 @@ def test_daily_route_reflects_counts(
     episodic.initialize_db(db)
     episodic.store_decision("finance", "Cut burn", db_path=db)
     episodic.store_advice("hr", "Hire?", "Slowly", db_path=db)
+    _as_principal(db, monkeypatch)
 
     days = _make_client().get("/today/activity/daily?days=14").json()["days"]
     today = datetime.now(UTC).date().isoformat()
@@ -279,6 +293,7 @@ def test_daily_route_fills_gaps_with_zero(
             "INSERT INTO decisions (timestamp, domain, summary) VALUES (?, ?, ?)",
             (_iso(5), "finance", "Five days ago"),
         )
+    _as_principal(db, monkeypatch)
 
     days = _make_client().get("/today/activity/daily?days=10").json()["days"]
     assert len(days) == 10

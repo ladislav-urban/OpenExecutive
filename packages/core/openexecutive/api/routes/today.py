@@ -3539,9 +3539,11 @@ def _caller_activity(
     return _activity_for_demo(request, built)
 
 
-# Rows a non-principal's heatmap counts at most: their own feed is small, and
-# the whole-company count never runs for them.
-_CALLER_DAILY_LIMIT = 500
+# A non-principal's heatmap counts their own GET /today/activity at its
+# largest page (the route's `limit` cap): one bounded read per source, and
+# exactly the rows their feed can show. The whole-company count never runs
+# for them.
+_CALLER_DAILY_LIMIT = 100
 
 
 def _activity_audience(request: Request) -> ActivityAudience | None:
@@ -3700,9 +3702,11 @@ def get_today_activity_daily(
     start = datetime.now(UTC).date() - timedelta(days=days - 1)
     since = datetime(start.year, start.month, start.day, tzinfo=UTC)
     counts: dict[str, int] = {}
-    for item in _caller_activity(request, _CALLER_DAILY_LIMIT, audience, since).items:
+    # The same call GET /today/activity?limit=100 makes (no `since`: a
+    # windowed read widens every source's pull fivefold), then the window.
+    for item in _caller_activity(request, _CALLER_DAILY_LIMIT, audience).items:
         at = _parse_aware(item.at)
-        if at is not None:
+        if at is not None and at >= since:
             day = at.astimezone(UTC).date().isoformat()
             counts[day] = counts.get(day, 0) + 1
     return _build_daily_activity(days, counts)

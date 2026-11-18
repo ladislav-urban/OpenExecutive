@@ -181,6 +181,30 @@ def test_the_heatmap_counts_only_what_the_callers_feed_shows(
         assert total == expected[who]
 
 
+
+def test_a_busy_teammates_heatmap_reads_one_bounded_page(
+    ids: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from openexecutive.api.routes import today
+
+    for n in range(120):
+        _action(f"Teammate follow-up {n}", ids["teammate"])
+    reads: list[tuple[int, object]] = []
+    real = today._build_activity
+
+    def _spy(limit: int, since: datetime | None = None, **kw: object) -> object:
+        reads.append((limit, since))
+        return real(limit, since=since, **kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(today, "_build_activity", _spy)
+    client = app_client(monkeypatch, signed=True)
+    feed = call(client, True, "teammate", "GET", PATH).json()["items"]
+    r = call(client, True, "teammate", "GET", "/today/activity/daily?days=30")
+    assert r.status_code == 200, r.text
+    assert sum(d["count"] for d in r.json()["days"]) == len(feed) == 100
+    # The heatmap made the feed's own bounded read, not a widened one.
+    assert reads == [(100, None), (100, None)]
+
 def _header_input(caller: int | None) -> tuple[str, str, list[dict[str, object]]]:
     """(scope, context, activity) of the header ``caller``'s Home would ask
     for, as `_today_for` and `_attach_narrative` build it."""
