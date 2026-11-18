@@ -11961,7 +11961,10 @@ integrations:
       - oe://today/briefing: someone on the roster (or the principal by
         default), built as GET /today builds it: include_private for the
         principal only, viewer = viewer_for_person(caller), so a drafted
-        artifact's card only for its owner. oe://people/roster: someone on
+        artifact's card only for its owner; through
+        today.home_for_person, so in_flight, departments and the demo
+        filtering follow the caller's own scope exactly as on GET /today.
+        oe://people/roster: someone on
         the roster, the team only (never contacts), as GET /people gives it.
         A service or an unrostered caller gets "Only someone on the team can
         read this."

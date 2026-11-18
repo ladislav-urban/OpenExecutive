@@ -2892,6 +2892,32 @@ def _empty_for_no_one(response: TodayResponse, request: Request, caller: int | N
     return True
 
 
+def home_for_person(caller: int | None, *, principal: bool) -> TodayResponse:
+    """GET /today's Home for an already resolved caller, with no request in
+    hand (the MCP ``oe://today/briefing`` resource): the same snapshot,
+    in-flight scope (`_audience_for`), departments rule
+    (`_departments_for_members`), empty Home for no one (`_empty_for_no_one`)
+    and home rules (`_attach_home_rules`, which hides other demo people).
+    ``principal`` is the caller already decided to be the principal; nobody
+    else resolved (``caller`` None) gets the empty Home."""
+    from openexecutive.orchestrator.artifact_records import viewer_for_person
+
+    audience = None if principal else _audience_for(caller)
+    response = _build_today(
+        include_private=principal, viewer=viewer_for_person(caller), in_flight_for=audience,
+    )
+    response.caller_person_id = caller
+    if not principal and (audience is None or audience.demo):
+        response.departments = []
+    if caller is None and not principal:
+        for field in ("proposals", "people", "departments", "in_flight", "awaiting", "handled_overnight",
+                      "practice_clients", "done_for_you"):
+            setattr(response, field, [])
+        return response
+    _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC))
+    return response
+
+
 def _workspace_solo() -> bool:
     from openexecutive.memory.workspace_settings import get_workspace
 

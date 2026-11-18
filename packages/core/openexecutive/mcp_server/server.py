@@ -305,21 +305,14 @@ async def company_profile() -> str:
     mime_type="application/json",
 )
 async def today_briefing() -> str:
-    """As ``GET /today`` gives it: the principal's private rows for the
-    principal alone, a drafted artifact's card for its owner, and to a demo
-    person no other demo person (people.demo)."""
-    from openexecutive.api.routes.today import _build_today, _hide_other_demo_people
-    from openexecutive.orchestrator.artifact_records import viewer_for_person
+    """As ``GET /today`` gives it (``today.home_for_person``): the principal's
+    private rows for the principal alone, a drafted artifact's card for its
+    owner, what is in flight and the departments by the caller's own scope,
+    and to a demo person no other demo person (people.demo)."""
+    from openexecutive.api.routes.today import home_for_person
 
     who = await _require_person()
-    viewer = await asyncio.to_thread(viewer_for_person, who.person_id)
-    today = await asyncio.to_thread(
-        _build_today, include_private=who.is_principal, viewer=viewer
-    )
-    await asyncio.to_thread(
-        _hide_other_demo_people, today, caller=who.person_id, principal=who.is_principal
-    )
-    today.caller_person_id = who.person_id
+    today = await asyncio.to_thread(home_for_person, who.person_id, principal=who.is_principal)
     return _json(today.model_dump(mode="json"))
 
 

@@ -144,7 +144,7 @@ async def test_today_briefing_resource_serializes_model() -> None:
     with patch(
         "openexecutive.api.routes.today._build_today",
         return_value=_Dumpable({"departments": [], "people": []}),
-    ):
+    ), patch("openexecutive.api.routes.today._attach_home_rules"):
         out = await mcp_server.today_briefing()
     assert json.loads(out) == {"departments": [], "people": []}
 
@@ -302,6 +302,7 @@ def _read(name: str, who: Caller) -> str:
                 "openexecutive.api.routes.today._build_today",
                 return_value=_Dumpable({"people": []}),
             ),
+            patch("openexecutive.api.routes.today._attach_home_rules"),
             patch("openexecutive.departments.store.list_departments", return_value=[]),
         ):
             return str(await getattr(mcp_server, name)())
@@ -358,7 +359,7 @@ def test_the_briefing_is_narrowed_as_get_today_narrows_it(roster: dict[str, int]
         )
 
         async def _go() -> Any:
-            with _as(who), build as built:
+            with _as(who), build as built, patch("openexecutive.api.routes.today._attach_home_rules"):
                 await mcp_server.today_briefing()
                 return built
 
