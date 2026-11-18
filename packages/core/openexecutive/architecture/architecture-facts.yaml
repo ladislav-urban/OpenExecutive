@@ -11675,19 +11675,7 @@ integrations:
     only because the top-level eval runner did not apply the policy then). The
     precedence sits in the panel rule, in the user turn ("on the panel that
     is how you show the arithmetic and every assumption"), so the cached
-    policy text is unchanged (eval erpnext_094). BRIEF_RULE's last sentences
-    keep what brevity must not cut when an answer moves amounts between weeks
-    or dates (a what-if, a late payment, a delay): each moved item named with
-    its date before and after, each column headed with what it holds ("Acme
-    if it pays late", not "Acme receipts"), and whether the lowest or highest point
-    asked about moves and what it ends at; unchanged rows still stay out. The
-    Nov 18, 2026 gates of erpnext_094 on main showed why: one rep listed the
-    moved invoices with neither date under one "receipts" column, one never
-    said whether the lowest week moved. On the same demo data it passed 0 of 3
-    on main and 2 of 3 with this sentence. It sits in BRIEF_RULE (user turn, so the
-    host page block carries it too), not in the cached ERPNext guide, whose
-    what-if sentence already asks every surface for the lowest week: the
-    panel's brevity is what cut these. SCREEN_RULE adds that beside
+    policy text is unchanged (eval erpnext_094); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
     people, memory, settings), so it says so and suggests Conversations rather than
     guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the
