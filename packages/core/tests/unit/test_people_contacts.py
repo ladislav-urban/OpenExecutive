@@ -1422,7 +1422,9 @@ def test_a_team_member_clears_only_alerts_assigned_to_them(
 
     for other in (unassigned, owners):
         refused = client.post(f"/alerts/{other}/ack", json={"status": "dismissed"}, headers=teammate)
-        assert refused.status_code == 403
+        # The shared card is on their Home but not theirs to clear (403); the
+        # principal's isn't on their Home at all (404, as a missing id).
+        assert refused.status_code == (403 if other == unassigned else 404)
         row = alert_store.get_alert(other)
         assert row is not None and row.status == "unread"
     # Nor marking one read: the live board shows unread cards only, so that

@@ -26,16 +26,47 @@ logger = logging.getLogger(__name__)
 
 def _visible_alert(alert_id: int, request: Request) -> Alert:
     """The alert, or 404 — also for one private to the principal when the
-    caller is someone else, and for a drafted artifact that isn't the
-    caller's, so its existence is not revealed either."""
+    caller is someone else, for a drafted artifact that isn't the caller's,
+    and, for anyone but the principal, for a card their own Home doesn't
+    keep (``today._card_for_caller``), so its existence is not revealed
+    either."""
     existing = store.get_alert(alert_id)
     if (
         existing is None
         or (is_private_alert(existing) and not _caller_is_principal(request))
         or not visible_alert(existing, _caller_viewer(request))
+        or not _on_callers_home(existing, request)
     ):
         raise HTTPException(status_code=404, detail="Alert not found")
     return existing
+
+
+def _on_callers_home(alert: Alert, request: Request) -> bool:
+    """Whether ``alert`` is a card the caller's own Home keeps: any for the
+    principal (or anyone on an install with no principal yet, or local
+    login); otherwise one routed to them or to no one, or a decision-backed
+    one that is theirs (``today._card_for_caller``). Fails closed."""
+    from openexecutive.api.principal_gate import caller_is_the_principal
+
+    if _caller_clears_anything(request) or caller_is_the_principal(request):
+        return True
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.api.routes.today import (
+        _card_for_caller,
+        _decision_instances,
+        _parse_decision_instance_id,
+    )
+
+    try:
+        caller = _resolve_caller_person_id(request)
+    except Exception:
+        logger.warning("alerts: caller lookup failed — the card stays hidden", exc_info=True)
+        return False
+    if caller is None:
+        return False
+    instance_id = _parse_decision_instance_id(alert.topic_tags or [])
+    instances = _decision_instances([instance_id] if instance_id is not None else [])
+    return _card_for_caller(alert.routed_to_person_id, instance_id, caller, instances)
 
 
 def _caller_viewer(request: Request) -> object:
@@ -102,6 +133,13 @@ class AckBody(BaseModel):
 @router.post("/alerts/{alert_id}/ack", response_model=Alert)
 def ack_alert(alert_id: int, body: AckBody, request: Request) -> Alert:
     existing = _visible_alert(alert_id, request)
+    # A demo person first, so they hear why (people.demo).
+    _refuse_demo_caller(request, existing)
+    # "read" too: the live board shows unread cards only, so marking a card
+    # read takes it off everyone's Home, and reopen can't bring it back.
+    if not _caller_may_clear(existing, request):
+        raise HTTPException(status_code=403, detail=_NOT_YOURS)
+    # What kind of card it is, only once it is shown to be theirs.
     if existing.source == "roster_request":
         # Answered at /people/requests/{id}: acking the card alone would
         # leave the request (and its sender) waiting with nothing to show it.
@@ -109,12 +147,6 @@ def ack_alert(alert_id: int, body: AckBody, request: Request) -> Alert:
             status_code=409,
             detail="Answer this one from its card: add them, say who they are, or ignore them.",
         )
-    # A demo person first, so they hear why (people.demo).
-    _refuse_demo_caller(request, existing)
-    # "read" too: the live board shows unread cards only, so marking a card
-    # read takes it off everyone's Home, and reopen can't bring it back.
-    if not _caller_may_clear(existing, request):
-        raise HTTPException(status_code=403, detail=_NOT_YOURS)
     if not store.set_status(alert_id, body.status):
         raise HTTPException(status_code=404, detail="Alert not found")
     # Feedback loop: a dismiss on a watch-sourced alert lowers that watch's
@@ -336,6 +368,18 @@ async def approve_alert(
     from openexecutive.memory.decision_ledger import DECISION_ALERT_SOURCE
 
     alert = _visible_alert(alert_id, request)
+    approver = _caller_person_id(request)
+    if not _caller_is_principal(request) and (
+        approver is None or approver != alert.routed_to_person_id
+    ):
+        # A card nobody was routed to is the principal's, as on Today.
+        raise HTTPException(status_code=403, detail="This one is for someone else to approve.")
+    from openexecutive.people.demo import is_demo_person
+
+    if not _caller_is_principal(request) and is_demo_person(approver):
+        # A demo person approves nothing, whoever routed the card to them (people.demo).
+        raise HTTPException(status_code=403, detail="This one is for someone else to approve.")
+    # What kind of card it is, only once it is shown to be theirs.
     if alert.source == DECISION_ALERT_SOURCE:
         raise HTTPException(status_code=409, detail="Approve this one from its decision card.")
     if alert.source == "roster_request":
@@ -352,17 +396,6 @@ async def approve_alert(
         raise HTTPException(status_code=409, detail="Answer this one on its card.")
     if alert.needs == NEEDS_FYI:
         raise HTTPException(status_code=409, detail="Nothing to approve: it's for you to know.")
-    approver = _caller_person_id(request)
-    if not _caller_is_principal(request) and (
-        approver is None or approver != alert.routed_to_person_id
-    ):
-        # A card nobody was routed to is the principal's, as on Today.
-        raise HTTPException(status_code=403, detail="This one is for someone else to approve.")
-    from openexecutive.people.demo import is_demo_person
-
-    if not _caller_is_principal(request) and is_demo_person(approver):
-        # A demo person approves nothing, whoever routed the card to them (people.demo).
-        raise HTTPException(status_code=403, detail="This one is for someone else to approve.")
 
     approval = approvals.claim(
         alert_id, approved_by_person_id=approver, edited_body=body.edited_body,
@@ -466,6 +499,18 @@ async def answer_alert(
     from openexecutive.memory.decision_ledger import DECISION_ALERT_SOURCE
 
     alert = _visible_alert(alert_id, request)
+    answerer = _caller_person_id(request)
+    if not _caller_is_principal(request) and (
+        answerer is None or answerer != alert.routed_to_person_id
+    ):
+        raise HTTPException(status_code=403, detail="This one is for someone else to answer.")
+    from openexecutive.people.demo import is_demo_person
+
+    if not _caller_is_principal(request) and is_demo_person(answerer):
+        # A demo person reads and answers in chat only: answering a card closes
+        # it and starts work, as an approval does (people.demo).
+        raise HTTPException(status_code=403, detail="This one is for someone else to answer.")
+    # What kind of card it is, only once it is shown to be theirs.
     if alert.needs not in (NEEDS_ANSWER, NEEDS_CHOICE):
         raise HTTPException(status_code=409, detail="This card doesn't ask anything. Use its own buttons.")
     if (
@@ -479,17 +524,6 @@ async def answer_alert(
     answer = body.answer.strip()
     if not answer:
         raise HTTPException(status_code=422, detail="Write an answer first.")
-    answerer = _caller_person_id(request)
-    if not _caller_is_principal(request) and (
-        answerer is None or answerer != alert.routed_to_person_id
-    ):
-        raise HTTPException(status_code=403, detail="This one is for someone else to answer.")
-    from openexecutive.people.demo import is_demo_person
-
-    if not _caller_is_principal(request) and is_demo_person(answerer):
-        # A demo person reads and answers in chat only: answering a card closes
-        # it and starts work, as an approval does (people.demo).
-        raise HTTPException(status_code=403, detail="This one is for someone else to answer.")
     approval = approvals.claim(alert_id, approved_by_person_id=answerer, edited_body=answer)
     if approval is None:
         raise HTTPException(status_code=409, detail="This card was already answered or closed.")
