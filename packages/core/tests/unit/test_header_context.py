@@ -311,12 +311,14 @@ def test_an_old_open_item_writes_the_nothing_new_line_without_a_model_call(
     from openexecutive.briefing import narrative as briefing_narrative
     from tests.unit.test_today_route import (
         _make_client,
+        _principal,
         _seed_live_action_alert,
         _setup_isolated_db,
     )
 
     db = tmp_path / "rn-old.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()  # the principal's own header (the shared one is a fixed line)
     _seed_live_action_alert(db)
     # Open since a few days back, by the real clock /today reads (the fixed
     # NOW above is weeks old by now, and a card unseen that long has expired).
@@ -365,12 +367,14 @@ def test_a_draft_left_empty_is_cached_as_the_nothing_new_line(
     from openexecutive.briefing import narrative as briefing_narrative
     from tests.unit.test_today_route import (
         _make_client,
+        _principal,
         _seed_live_action_alert,
         _setup_isolated_db,
     )
 
     db = tmp_path / "rn-empty.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()  # the principal's own header (the shared one is a fixed line)
     _seed_live_action_alert(db)
     calls: list[int] = []
 
@@ -491,12 +495,14 @@ def test_a_point_on_home_says_which_email_it_is(tmp_path: Path, monkeypatch: pyt
     from openexecutive.briefing import narrative as briefing_narrative
     from tests.unit.test_today_route import (
         _make_client,
+        _principal,
         _seed_live_action_alert,
         _setup_isolated_db,
     )
 
     db = tmp_path / "rn-source.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()  # the principal's own header (the shared one is a fixed line)
     _seed_live_action_alert(db)
     ref = {"kind": "mail", "message_id": "m1", "thread_id": "t1"}
     live = LiveSignals(inbox=('[14:12] from Andy Agee (andy@svn.test): "Re: loan figures"',), inbox_refs=(ref,))

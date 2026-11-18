@@ -2410,6 +2410,9 @@ def _attach_narrative(
     from openexecutive.memory.workspace_settings import get_workspace
 
     scope, today_data, desc, viewer = _narrative_inputs(response, caller_person_id)
+    if scope == narrative_cache.COMPANY_SCOPE:
+        _attach_company_line(response)
+        return
     try:
         mode = get_workspace().mode
         context, _activity = _narrative_context(today_data, viewer, desc, mode, scope)
@@ -2446,6 +2449,24 @@ def _attach_narrative(
         )
     except Exception:
         logger.exception("today: briefing narrative attach failed (scope=%s)", scope)
+
+
+def _attach_company_line(response: TodayResponse) -> None:
+    """The header for the shared ``company`` scope: a caller who resolves to
+    no one on the roster (a signed-in email on no People entry, a service
+    call) or to a suspended or archived entry. Always the fixed quiet line:
+    no model call, and no ``company`` row is read or written."""
+    from openexecutive.briefing import right_now
+    from openexecutive.briefing.narrative import QUIET_PRINCIPAL
+
+    parts = right_now.split_narrative(QUIET_PRINCIPAL)
+    response.narrative = QUIET_PRINCIPAL
+    response.narrative_lead = parts.lead
+    response.narrative_points = []
+    response.narrative_move = parts.move
+    response.narrative_generated_at = None
+    response.narrative_stale = False
+    response.narrative_progress = None
 
 
 def _narrative_progress(scope: str, cached: Any, now: datetime | None = None) -> NarrativeProgress:
@@ -2539,7 +2560,11 @@ async def _regen_briefing_narrative(
     the company scope) we skip the write rather than churn / overwrite a
     different scope's cache entry.
     """
-    if _in_failure_backoff(expected_scope):
+    from openexecutive.briefing import narrative_cache
+
+    # The shared company scope is always the fixed quiet line
+    # (`_attach_company_line`): never a model call, never a cached row.
+    if expected_scope == narrative_cache.COMPANY_SCOPE or _in_failure_backoff(expected_scope):
         return
     lock = _regen_lock(expected_scope)
     if lock.locked():
@@ -2609,7 +2634,7 @@ async def _regen_briefing_narrative_locked(
         scope, today_data, viewer_desc, viewer = _narrative_inputs(
             snapshot, caller_person_id
         )
-        if scope != expected_scope:
+        if scope != expected_scope or scope == narrative_cache.COMPANY_SCOPE:
             logger.info(
                 "today: narrative scope changed (%s → %s) between serve and "
                 "regen; skipping write", expected_scope, scope,

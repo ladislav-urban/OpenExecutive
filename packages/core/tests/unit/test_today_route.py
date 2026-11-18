@@ -66,18 +66,32 @@ def _seed_live_action_alert(db: Path, headline: str = "Approve the Q3 budget") -
 
 
 def _current_narrative_hash() -> str:
-    """The unresolved caller's key exactly as `_attach_narrative` computes it
-    (no principal is seeded here, so a header-less request resolves to no
-    one and reads the shared ``company`` scope).
+    """The principal's key exactly as `_attach_narrative` computes it for a
+    header-less request (which runs as the principal; the shared ``company``
+    scope is a fixed line with no key, `_attach_company_line`).
 
     Derived through `_narrative_context` rather than rebuilt by hand: the key
     is a hash of the rendered model input, so a test that assembled it another
     way would drift from production the moment the renderer changed.
     """
-    snapshot = today_route._build_today()
-    scope, data, desc, viewer = today_route._narrative_inputs(snapshot, None)
+    from openexecutive.orchestrator.artifact_records import viewer_for_person
+
+    pid = _principal()
+    snapshot = today_route._build_today(include_private=True, viewer=viewer_for_person(pid))
+    scope, data, desc, viewer = today_route._narrative_inputs(snapshot, pid)
     context, _ = today_route._narrative_context(data, viewer, desc, scope=scope)
     return narrative_cache.build_narrative_input_hash(context, scope=scope)
+
+
+def _principal() -> int:
+    """Put the principal on the roster (once), so a header-less request runs
+    as them and reads their own header scope."""
+    found = people_store.find_principal_person()
+    if found is not None and found.id is not None:
+        return found.id
+    pid = people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="olivia@co.example")
+    people_registry.invalidate()
+    return pid
 
 
 def _make_client() -> TestClient:
@@ -158,6 +172,7 @@ def test_morning_brief_alias_returns_same_body(
     # only ever compare the fixed quiet line and alias parity on a real
     # synthesized narrative would go unexercised.
     _seed_live_action_alert(episodic.DB_PATH)
+    _principal()
 
     async def _synth(**_kw: object) -> str:
         return "- **Bottom line:** the budget needs you. [M1]"
@@ -174,6 +189,10 @@ def test_morning_brief_alias_returns_same_body(
     assert today["narrative"] == "- **Bottom line:** the budget needs you."
     # When each call found the header current: the moment of that call.
     assert today.pop("narrative_checked_at") and legacy.pop("narrative_checked_at")
+    # What GET /today adds for the principal alone; the alias never did.
+    for key in ("held_back", "first_week_card", "first_week", "morning_brief", "calendar_next", "right_now"):
+        today.pop(key, None)
+        legacy.pop(key, None)
     assert today == legacy
 
 
@@ -1162,7 +1181,7 @@ def test_narrative_served_from_cache(
     nhash = _current_narrative_hash()
     narrative_cache.put(
         narrative_cache.BriefingNarrative(
-            scope=narrative_cache.COMPANY_SCOPE,
+            scope=narrative_cache.DEFAULT_SCOPE,
             input_hash=nhash,
             narrative_text="**Top call:** ship the C2 decision.",
             generated_at=narrative_cache.utc_now_iso(),
@@ -1177,6 +1196,7 @@ def test_narrative_served_from_cache(
 def test_narrative_null_on_cold_cache(client: TestClient) -> None:
     """With no cached narrative, the field is null (the regen runs in the
     background; the synthesizer is stubbed to return '')."""
+    _principal()
     data = client.get("/today").json()
     assert data["narrative"] is None
 
@@ -1188,6 +1208,7 @@ def test_narrative_regenerated_in_background(
     populated and the next request serves it."""
     db = tmp_path / "regen.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     # A live action proposal, so the board is NOT quiet and the synthesizer
     # actually runs (an empty board short-circuits to the fixed quiet line
     # without a model call — see test_empty_board_skips_the_model_call).
@@ -1202,7 +1223,7 @@ def test_narrative_regenerated_in_background(
     first = c.get("/today").json()
     assert first["narrative"] is None  # cold at response-build time
     # Background task ran during the TestClient call → cache now populated.
-    cached = narrative_cache.get(narrative_cache.COMPANY_SCOPE, db_path=db)
+    cached = narrative_cache.get(narrative_cache.DEFAULT_SCOPE, db_path=db)
     assert cached is not None and cached.narrative_text == "- **What changed:** nothing dramatic."
     # Second request serves it.
     assert c.get("/today").json()["narrative"] == "- **What changed:** nothing dramatic."
@@ -1219,7 +1240,7 @@ def test_fresh_cache_does_not_trigger_regen(
     nhash = _current_narrative_hash()
     narrative_cache.put(
         narrative_cache.BriefingNarrative(
-            scope=narrative_cache.COMPANY_SCOPE, input_hash=nhash,
+            scope=narrative_cache.DEFAULT_SCOPE, input_hash=nhash,
             narrative_text="cached text", generated_at=narrative_cache.utc_now_iso(),
         ),
         db_path=db,
@@ -1474,9 +1495,9 @@ def test_narrative_personalized_per_viewer(
 def test_unrostered_viewer_gets_whole_company_narrative(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A caller whose email isn't on a Person row falls back to the shared
-    whole-company narrative — the ``company`` scope, never the principal's
-    own (which may carry what is private to them)."""
+    """A caller whose email isn't on a Person row gets the shared ``company``
+    scope: the fixed quiet line, no model call, no cached row, never the
+    principal's own (which may carry what is private to them)."""
     db = tmp_path / "unrostered.db"
     _setup_isolated_db(db, monkeypatch)
     _seed_live_action_alert(db)  # non-quiet board, so the synthesizer runs
@@ -1489,10 +1510,10 @@ def test_unrostered_viewer_gets_whole_company_narrative(
     c = _make_client()
     c.get("/today", headers={"x-caller-email": "stranger@x.com"})
     n = c.get("/today", headers={"x-caller-email": "stranger@x.com"}).json()["narrative"]
-    assert n == "- principal-brief"
-    # Structurally: the fallback writes the COMPANY_SCOPE key — never the
-    # principal's own row and never "person:None".
-    assert narrative_cache.get("company", db_path=db) is not None
+    assert n == briefing_narrative.QUIET_PRINCIPAL
+    # Structurally: nothing is written for it, nor the principal's own row,
+    # nor "person:None".
+    assert narrative_cache.get("company", db_path=db) is None
     assert narrative_cache.get("principal", db_path=db) is None
     assert narrative_cache.get("person:None", db_path=db) is None
 
@@ -2104,6 +2125,7 @@ def test_live_board_still_synthesizes(
     """The quiet short-circuit must not swallow a real board."""
     db = tmp_path / "live-board.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _seed_live_action_alert(db)
 
     calls = {"n": 0}
@@ -2336,6 +2358,7 @@ def test_inbound_today_makes_a_quiet_board_speak(
     'Quiet right now' over a busy inbox; it now reads the inbound."""
     db = tmp_path / "live.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _log_inbound(db, "sam@x.com", "vendor renewal terms")
     contexts = _capture_contexts(monkeypatch)
 
@@ -2363,11 +2386,11 @@ def test_private_inbound_only_in_the_principals_own_scope(
     c.get("/today", headers={"x-caller-email": "p@co.com"})
     c.get("/today", headers={"x-caller-email": "stranger@x.com"})
 
-    own, shared = contexts
+    # The stranger's shared scope is the fixed line: no model call at all.
+    [own] = contexts
     assert "a private matter" in own and "shared news" in own
-    assert "a private matter" not in shared and "shared news" in shared
     assert narrative_cache.get(narrative_cache.DEFAULT_SCOPE, db_path=db) is not None
-    assert narrative_cache.get(narrative_cache.COMPANY_SCOPE, db_path=db) is not None
+    assert narrative_cache.get(narrative_cache.COMPANY_SCOPE, db_path=db) is None
 
 
 def test_response_says_how_old_the_header_is_and_whether_it_is_refreshing(
@@ -2375,6 +2398,7 @@ def test_response_says_how_old_the_header_is_and_whether_it_is_refreshing(
 ) -> None:
     db = tmp_path / "fresh2.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _seed_live_action_alert(db)
     _capture_contexts(monkeypatch)
 
@@ -2392,10 +2416,11 @@ def test_a_header_being_rewritten_says_what_it_is_doing(
 ) -> None:
     db = tmp_path / "progress.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _seed_live_action_alert(db)
     written = (datetime.now(UTC) - timedelta(minutes=5)).isoformat()
     narrative_cache.put(narrative_cache.BriefingNarrative(
-        scope=narrative_cache.COMPANY_SCOPE, input_hash="old",
+        scope=narrative_cache.DEFAULT_SCOPE, input_hash="old",
         narrative_text="- an older read", generated_at=written,
     ), db_path=db)
     monkeypatch.setattr(today_route, "_regen_briefing_narrative", _noop_regen)
@@ -2404,7 +2429,7 @@ def test_a_header_being_rewritten_says_what_it_is_doing(
     assert first["narrative_stale"] is True
     assert first["narrative_progress"] == {"step": "reading", "new_mail": 0, "since": written}
 
-    monkeypatch.setitem(today_route._regen_step, narrative_cache.COMPANY_SCOPE, "writing")
+    monkeypatch.setitem(today_route._regen_step, narrative_cache.DEFAULT_SCOPE, "writing")
     second = _make_client().get("/today").json()
     assert second["narrative_progress"]["step"] == "writing"
 
@@ -2457,9 +2482,10 @@ def test_yesterdays_header_is_not_served_as_today(
 ) -> None:
     db = tmp_path / "yday.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _seed_live_action_alert(db)
     narrative_cache.put(narrative_cache.BriefingNarrative(
-        scope=narrative_cache.COMPANY_SCOPE, input_hash="old",
+        scope=narrative_cache.DEFAULT_SCOPE, input_hash="old",
         narrative_text="yesterday's read",
         generated_at=(datetime.now(UTC) - timedelta(days=1, hours=1)).isoformat(),
     ), db_path=db)
@@ -2481,6 +2507,7 @@ async def test_regen_is_serialized_per_scope(
 
     db = tmp_path / "lock.db"
     _setup_isolated_db(db, monkeypatch)
+    pid = _principal()
     _seed_live_action_alert(db)
     release = asyncio.Event()
     calls = {"n": 0}
@@ -2491,13 +2518,13 @@ async def test_regen_is_serialized_per_scope(
         return "- once [M1]"
 
     monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _slow)
-    first = asyncio.create_task(today_route._regen_briefing_narrative(None, "company"))
+    first = asyncio.create_task(today_route._regen_briefing_narrative(pid, narrative_cache.DEFAULT_SCOPE))
     await asyncio.sleep(0.05)
-    await today_route._regen_briefing_narrative(None, "company")  # skipped: one is running
+    await today_route._regen_briefing_narrative(pid, narrative_cache.DEFAULT_SCOPE)  # skipped: one is running
     release.set()
     await first
     assert calls["n"] == 1
-    cached = narrative_cache.get(narrative_cache.COMPANY_SCOPE, db_path=db)
+    cached = narrative_cache.get(narrative_cache.DEFAULT_SCOPE, db_path=db)
     assert cached is not None and cached.narrative_text == "- once"
 
 
@@ -2581,10 +2608,9 @@ def test_the_shared_header_never_quotes_the_principals_calendar(
     c.get("/today", headers={"x-caller-email": "p@co.com"})
     c.get("/today", headers={"x-caller-email": "stranger@x.com"})
 
-    own, shared = contexts
+    # The stranger's shared scope is the fixed line: no context is written.
+    [own] = contexts
     assert "Acquisition talks" in own
-    assert "Acquisition talks" not in shared
-    assert "REST OF TODAY'S CALENDAR" not in shared
 
 
 async def test_a_trigger_during_a_regen_gets_one_more_pass(
@@ -2596,6 +2622,7 @@ async def test_a_trigger_during_a_regen_gets_one_more_pass(
 
     db = tmp_path / "pending.db"
     _setup_isolated_db(db, monkeypatch)
+    pid = _principal()
     _seed_live_action_alert(db)
     release = asyncio.Event()
     in_model = asyncio.Event()
@@ -2609,17 +2636,17 @@ async def test_a_trigger_during_a_regen_gets_one_more_pass(
         return f"- pass {len(contexts)} [M1]"
 
     monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _synth)
-    first = asyncio.create_task(today_route._regen_briefing_narrative(None, "company"))
+    first = asyncio.create_task(today_route._regen_briefing_narrative(pid, narrative_cache.DEFAULT_SCOPE))
     # The first pass has read the board (in a thread) and is in the model call.
     await asyncio.wait_for(in_model.wait(), timeout=30)
     _log_inbound(db, "sam@x.com", "arrived mid-run")
-    await today_route._regen_briefing_narrative(None, "company")  # queued, not run
+    await today_route._regen_briefing_narrative(pid, narrative_cache.DEFAULT_SCOPE)  # queued, not run
     release.set()
     await first
 
     assert len(contexts) == 2
     assert "arrived mid-run" not in contexts[0] and "arrived mid-run" in contexts[1]
-    cached = narrative_cache.get(narrative_cache.COMPANY_SCOPE, db_path=db)
+    cached = narrative_cache.get(narrative_cache.DEFAULT_SCOPE, db_path=db)
     assert cached is not None and cached.narrative_text == "- pass 2"
 
 
@@ -2628,6 +2655,7 @@ def test_a_failed_regen_backs_off_instead_of_retrying_every_view(
 ) -> None:
     db = tmp_path / "backoff.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _seed_live_action_alert(db)
     calls = {"n": 0}
 
@@ -2646,7 +2674,7 @@ def test_a_failed_regen_backs_off_instead_of_retrying_every_view(
     assert calls["n"] == 1
 
     # Once the backoff has passed, a view tries again.
-    today_route._regen_failed_at["company"] = datetime.now(UTC) - timedelta(minutes=6)
+    today_route._regen_failed_at[narrative_cache.DEFAULT_SCOPE] = datetime.now(UTC) - timedelta(minutes=6)
     c.get("/today")
     assert calls["n"] == 2
 
@@ -2754,6 +2782,7 @@ async def test_a_slow_narrative_pass_leaves_the_event_loop_free(
 
     db = tmp_path / "free.db"
     _setup_isolated_db(db, monkeypatch)
+    pid = _principal()
     _seed_live_action_alert(db)
 
     async def _synth(**_kw: object) -> str:
@@ -2762,13 +2791,13 @@ async def test_a_slow_narrative_pass_leaves_the_event_loop_free(
     monkeypatch.setattr(briefing_narrative, "synthesize_briefing_narrative", _synth)
     _slow_build_today(monkeypatch)
 
-    task = asyncio.create_task(today_route._regen_briefing_narrative(None, "company"))
+    task = asyncio.create_task(today_route._regen_briefing_narrative(pid, narrative_cache.DEFAULT_SCOPE))
     gap = await _largest_gap(task)
     await task
     assert gap < _SLOW_S / 2, f"the loop was held for {gap:.2f}s"
     # Written and cached: the model's header, or Right now's fixed line when
     # nothing on the seeded board moved today (briefing.header_context).
-    cached = narrative_cache.get(narrative_cache.COMPANY_SCOPE, db_path=db)
+    cached = narrative_cache.get(narrative_cache.DEFAULT_SCOPE, db_path=db)
     assert cached is not None and cached.narrative_text in ("Fresh header.", briefing_narrative.NOTHING_NEW)
 
 
@@ -2823,6 +2852,7 @@ def test_today_splits_the_header_for_right_now(
 ) -> None:
     db = tmp_path / "rn.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _seed_live_action_alert(db)
 
     async def _fake(**_kw: object) -> str:
@@ -2842,9 +2872,6 @@ def test_today_splits_the_header_for_right_now(
     assert data["narrative_seen_at"] is None
     # Nothing moved since it was written: it was found current just now.
     assert data["narrative_checked_at"] >= data["narrative_generated_at"]
-    # Not the principal: no morning brief, calendar or own inbox.
-    assert data["morning_brief"] is None and data["calendar_next"] == []
-    assert data["inbox_also"] == [] and data["inbox_also_total"] == 0
 
 
 def test_right_now_also_in_is_the_principals_own_inbox(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -3076,7 +3103,7 @@ def test_brief_has_no_extra_row_when_every_goal_has_a_department(client: TestCli
 def _put_stale_header(db: Path, written: datetime) -> None:
     narrative_cache.put(
         narrative_cache.BriefingNarrative(
-            scope=narrative_cache.COMPANY_SCOPE, input_hash="an-older-state",
+            scope=narrative_cache.DEFAULT_SCOPE, input_hash="an-older-state",
             narrative_text="**Your 14:30 call is next.**",
             generated_at=written.isoformat(),
         ),
@@ -3092,6 +3119,7 @@ def test_a_stale_header_hours_old_is_not_served(
     still call a finished meeting next."""
     db = tmp_path / "old.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _put_stale_header(db, datetime.now(UTC) - timedelta(hours=3))
 
     assert _make_client().get("/today").json()["narrative"] is None
@@ -3102,6 +3130,7 @@ def test_a_recent_stale_header_is_served_while_it_is_rewritten(
 ) -> None:
     db = tmp_path / "recent.db"
     _setup_isolated_db(db, monkeypatch)
+    _principal()
     _put_stale_header(db, datetime.now(UTC) - timedelta(minutes=5))
 
     data = _make_client().get("/today").json()
