@@ -61,7 +61,8 @@ def test_the_principal_sees_everything_with_history(monkeypatch: pytest.MonkeyPa
 def test_a_teammate_sees_the_facts_but_not_the_principals_words(monkeypatch: pytest.MonkeyPatch) -> None:
     _, new, _ = _seed()
     facts.retire_fact(new, reason="annex sold, keep quiet")
-    body = _client(monkeypatch, principal=False).get("/memories/facts").json()
+    # A teammate on the roster (one nobody resolved reads nothing).
+    body = _as_teammate(monkeypatch, SAM).get("/memories/facts").json()
     assert body["can_retire"] is False
     assert body["facts"] and all(f["source_quote"] == "" for f in body["facts"])
     assert all(
@@ -98,7 +99,8 @@ def test_only_the_principal_retires(monkeypatch: pytest.MonkeyPatch, db: list[di
 
 def test_a_teammate_never_gets_the_principals_session_or_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     _, new, _ = _seed()
-    body = _client(monkeypatch, principal=False).get("/memories/facts").json()
+    # A teammate on the roster (one nobody resolved reads nothing).
+    body = _as_teammate(monkeypatch, SAM).get("/memories/facts").json()
     row = next(f for f in body["facts"] if f["id"] == new)
     assert row["statement"] == "Maple House has 48 units." and row["status"] == "active"
     assert row["session_id"] is None and row["turn_id"] is None

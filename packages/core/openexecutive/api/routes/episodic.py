@@ -251,7 +251,7 @@ def get_facts(
     company-profile fields changed from chat. Every prompt that produces
     output reads the active ones. The history is the principal's alone:
     anyone else gets the active rows, plus their own proposals waiting for
-    the principal.
+    the principal. A caller who resolves to no one gets an empty page.
 
     The facts themselves are company knowledge every conversation already
     sees, and so is who stated a teammate's (it renders "(per <name>)"),
@@ -270,12 +270,12 @@ def get_facts(
     if principal:
         rows = list_facts(include_inactive=include_inactive, limit=limit)
         retirable = [f.id for f in rows if f.status == "active" and f.kind != "profile"]
+    elif caller is None:
+        # Nobody resolved (a signed-in email on no People entry, a service
+        # call, a suspended entry, a roster that can't be read): nothing.
+        return FactsPage(facts=[], can_retire=False, retirable_ids=[], can_review=False)
     else:
-        rows = (
-            list_facts(own_proposals_of=caller, limit=limit)
-            if caller is not None
-            else list_facts(limit=limit)
-        )
+        rows = list_facts(own_proposals_of=caller, limit=limit)
         retirable = [f.id for f in rows if f.status == "active" and _is_own_teammate_fact(f, caller)]
         # Provenance is the principal's: their words, and which of their
         # chats and turns a fact came from (ids other routes may key on).

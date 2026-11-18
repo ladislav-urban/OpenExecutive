@@ -3099,7 +3099,9 @@ memory:
     principal only). Other viewers get the active rows plus their own
     proposals, with the retire reason, session_id, turn_id and
     recorded_by_person_id blanked, and the quote blanked except on their own
-    facts. Proposals show first with Approve / Decline; the principal sets
+    facts. A caller who resolves to no one (a signed-in email on no People
+    entry, a service call, a suspended entry, an unreadable roster) gets an
+    empty page. Proposals show first with Approve / Decline; the principal sets
     "needs my approval" per teammate at the bottom of the tab. A subject that
     folds to an empty key ("???") is refused, so such subjects never
     supersede one another. `/memories?tab=corrections` opens it; the chat
