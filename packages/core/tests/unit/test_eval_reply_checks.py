@@ -384,20 +384,22 @@ def test_run_evals_fails_a_live_turn_that_names_the_principal(monkeypatch: pytes
 
 
 @pytest.mark.usefixtures("principal")
-def test_a_live_reply_that_named_the_principal_is_stored_withheld(monkeypatch: pytest.MonkeyPatch) -> None:
-    said = "Rhoda Principal signs."
-    withheld = {"turn": 2, "response": runner_module.LIVE_REPLY_WITHHELD, "response_length": len(said)}
+def test_a_live_reply_that_named_the_principal_is_stored_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
+    said = "Rhoda Principal signs; ask rhoda."
+    scrubbed = {"turn": 2, "response": "[the principal] signs; ask [the principal].", "response_length": len(said)}
     done = _chat_turns(monkeypatch, LIVE_NAMED, said, "On time.", "On time.")
-    assert done["live_turns"][0] == withheld and done["scores"]["principal_name"]
+    assert done["live_turns"][0] == scrubbed and done["scores"]["principal_name"]
     leak = _evaluate(monkeypatch, LIVE_NAMED, _InTurn(said, "On time.", "On time."))
-    assert leak["live_turns"][0] == withheld and leak["scores"]["principal_name"]
+    assert leak["live_turns"][0] == scrubbed and leak["scores"]["principal_name"]
     # The name is in neither result, stored replies included.
     assert "rhoda" not in repr(done).lower() and "rhoda" not in repr(leak).lower()
     # A live reply that didn't name them is kept as it was.
     assert leak["live_turns"][1] == {"turn": 3, "response": "On time.", "response_length": 8}
-    # Without forbid_principal_name the reply is kept whole.
+    # Without forbid_principal_name the scenario may pass, but the stored
+    # reply is scrubbed all the same.
     unforbidden = {k: v for k, v in LIVE_NAMED.items() if k != "forbid_principal_name"}
-    assert _chat_turns(monkeypatch, unforbidden, said, "On time.", "On time.")["live_turns"][0]["response"] == said
+    free = _chat_turns(monkeypatch, unforbidden, said, "On time.", "On time.")
+    assert free["passed"] is True and free["live_turns"][0] == scrubbed
 
 
 @pytest.mark.usefixtures("principal")
@@ -405,7 +407,71 @@ def test_a_name_past_the_stored_cut_still_fails_the_live_turn(monkeypatch: pytes
     said = "x" * runner_module.LIVE_REPLY_STORED_CHARS + " Rhoda Principal signs."
     done = _chat_turns(monkeypatch, LIVE_NAMED, said, "On time.", "On time.")
     assert done["scores"]["principal_name"] == ["the principal's name appeared in live prior turn 2's reply"]
-    assert done["live_turns"][0]["response"] == runner_module.LIVE_REPLY_WITHHELD
+    assert done["live_turns"][0]["response"] == "x" * runner_module.LIVE_REPLY_STORED_CHARS
+    assert done["live_turns"][0]["response_truncated"] is True
+
+
+# The judge's notes echo what it read; a live reply reaches it scrubbed, and
+# whatever it still says of the principal is scrubbed before it's stored.
+ECHOING_SCORES = {"overall": 5, "notes": "Rhoda Principal is named.", "reasons": {"tone": ["ask RHODA"]}}
+
+
+def _echoing_judge(seen: list[dict[str, Any]]) -> Any:
+    async def judge(scenario: dict[str, Any], _response: str, drafts: Any = None) -> dict[str, Any]:
+        seen.append(scenario)
+        return {**ECHOING_SCORES, "reasons": {"tone": list(ECHOING_SCORES["reasons"]["tone"])}}
+
+    return judge
+
+
+@pytest.mark.usefixtures("principal")
+@pytest.mark.parametrize("forbid", [True, False])
+def test_the_package_runner_stores_no_principal_name_anywhere(monkeypatch: pytest.MonkeyPatch, forbid: bool) -> None:
+    scenario = LIVE_NAMED if forbid else {k: v for k, v in LIVE_NAMED.items() if k != "forbid_principal_name"}
+    seen: list[dict[str, Any]] = []
+    executive = _InTurn("Ask Rhoda.", "On time.", "Rhoda Principal signs.")
+
+    async def fake_chat(self: Any, **kwargs: Any) -> str:
+        return await executive.chat(**kwargs)
+
+    monkeypatch.setattr(Executive, "__init__", lambda self, mcp_gateway=None: None)
+    monkeypatch.setattr(Executive, "chat", fake_chat)
+    monkeypatch.setattr(runner_module, "judge_chat", _echoing_judge(seen))
+    queue: asyncio.Queue[Any] = asyncio.Queue()
+    asyncio.run(runner_module._make_chat_runner(asyncio.Semaphore(1), queue, [0], 1, None)(0, scenario))
+    (done,) = [e for e in (queue.get_nowait() for _ in range(queue.qsize())) if e["type"] == "scenario_done"]
+    assert done["response"] == "[the principal] signs."
+    assert done["scores"]["notes"] == "[the principal] is named."
+    assert done["scores"]["reasons"] == {"tone": ["ask [the principal]"]}
+    assert "rhoda" not in repr(done).lower()
+    # The judge read the live reply scrubbed, the fixed one as written.
+    (judged,) = seen
+    assert [t["assistant"] for t in judged["prior_turns"]] == ["fixed", "Ask [the principal].", "On time."]
+    # The check still read the whole replies.
+    assert done["passed"] is not forbid
+    if forbid:
+        assert done["scores"]["principal_name"] == [
+            "the principal's name appeared in the reply",
+            "the principal's name appeared in live prior turn 2's reply",
+        ]
+
+
+@pytest.mark.usefixtures("principal")
+@pytest.mark.parametrize("forbid", [True, False])
+def test_run_evals_stores_no_principal_name_anywhere(monkeypatch: pytest.MonkeyPatch, forbid: bool) -> None:
+    scenario = LIVE_NAMED if forbid else {k: v for k, v in LIVE_NAMED.items() if k != "forbid_principal_name"}
+    run_evals = _run_evals()
+    seen: list[dict[str, Any]] = []
+    monkeypatch.setattr(run_evals, "judge_response", _echoing_judge(seen))
+    said = "Rhoda Principal signs."
+    result = asyncio.run(run_evals.evaluate_chat(scenario, _InTurn("Ask Rhoda.", "On time.", said)))
+    assert result["response"] == "[the principal] signs." and result["response_length"] == len(said)
+    assert result["scores"]["notes"] == "[the principal] is named."
+    assert result["scores"]["reasons"] == {"tone": ["ask [the principal]"]}
+    assert "rhoda" not in repr(result).lower()
+    (judged,) = seen
+    assert [t["assistant"] for t in judged["prior_turns"]] == ["fixed", "Ask [the principal].", "On time."]
+    assert result["passed"] is not forbid
 
 
 # ── where evals/run_evals.py writes its results ────────────────────────────

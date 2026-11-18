@@ -32,24 +32,26 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     ``run_chat_turn``: the same session, surface, product name, advice policy
     and overrides as ``openexecutive.evals.runner`` gives it. The result's
     ``turn`` is the ``ChatTurn`` for ``chat_checks`` (``evaluate_chat``
-    takes it out before the result is written). ``live_turns`` holds each
-    ``live: true`` prior turn as it ran (``ChatTurn.live_turns``: its place
-    in ``prior_turns``, response and response_length; a long reply is cut
-    and one that named the principal withheld, ``stored_live_turn``), only
-    for a scenario that has one."""
+    takes it out before the result is written). ``response`` and
+    ``live_turns`` are as the result keeps them (``ChatTurn.stored``: the
+    principal's name scrubbed; ``live_turns`` holds each ``live: true``
+    prior turn as it ran, its place in ``prior_turns``, response and
+    response_length, a long reply cut, only for a scenario that has one);
+    ``response_length`` is the whole reply's."""
     from openexecutive.evals.runner import run_chat_turn
 
     turn = await run_chat_turn(executive, scenario)
+    stored = turn.stored({})
     result = {
         "id": scenario["id"],
         "domain": scenario["domain"],
         "query": scenario["query"],
-        "response": turn.response,
+        "response": stored["response"],
         "response_length": len(turn.response),
         "turn": turn,
     }
-    if turn.live_turns:
-        result["live_turns"] = turn.live_turns
+    if "live_turns" in stored:
+        result["live_turns"] = stored["live_turns"]
     return result
 
 
@@ -69,7 +71,9 @@ async def evaluate_chat(scenario: dict, executive) -> dict:
     # live prior turn's real reply), as it gives judge_chat that too.
     scores = await judge_response(turn.judged_scenario(scenario), turn.response, drafts=turn.drafts)
     held = chat_checks(scenario, turn, scores)
-    result["scores"] = scores
+    # The judge's notes with the principal's name scrubbed, as the package
+    # runner stores them (``ChatTurn.stored``).
+    result["scores"] = turn.stored(scores)["scores"]
     result["passed"] = float(scores.get("overall", 0) or 0) >= 3.5 and held
     return result
 

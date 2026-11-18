@@ -1027,9 +1027,55 @@ def principal_name_in(scenario: dict[str, Any], reply: str) -> bool:
     and the other way round."""
     if scenario.get("forbid_principal_name") is not True:
         return False
+    return any(_says(name, reply) for name in principal_name_variants())
+
+
+def principal_name_variants() -> list[str]:
+    """The ways a reply may name the install's principal, longest first:
+    their full name and first name. ``principal_name_in`` checks for them
+    and ``scrub_principal_name`` replaces them. Empty without a principal."""
     principal = _principal()
-    name = (getattr(principal, "full_name", None) or "").strip()
-    return bool(name) and (_says(name, reply) or _says(name.split()[0], reply))
+    name = " ".join((getattr(principal, "full_name", None) or "").split())
+    if not name:
+        return []
+    return sorted({name, name.split()[0]}, key=len, reverse=True)
+
+
+# What a stored eval result says in place of the principal's name.
+PRINCIPAL_SCRUBBED = "[the principal]"
+
+
+def scrub_principal_name(value: Any, names: list[str] | None = None) -> Any:
+    """``value`` with every whole-word, any-case mention of the principal's
+    name (``names``, else ``principal_name_variants()``) replaced by
+    ``PRINCIPAL_SCRUBBED``: a string, or a copy of a dict or list with each
+    string inside it scrubbed (a judge's scores, a result's live turns).
+    Anything else is returned as it is. Keeps the principal's name out of
+    what an eval run stores, whatever the scenario's flags; the checks read
+    the reply before it is scrubbed."""
+    import re
+
+    if names is None:
+        names = principal_name_variants()
+    if not names:
+        return value
+    pattern = re.compile(
+        r"(?<![A-Za-z0-9])(?:"
+        + "|".join(re.escape(n) for n in sorted(names, key=len, reverse=True))
+        + r")(?![A-Za-z0-9])",
+        re.IGNORECASE,
+    )
+
+    def scrub(item: Any) -> Any:
+        if isinstance(item, str):
+            return pattern.sub(PRINCIPAL_SCRUBBED, item)
+        if isinstance(item, dict):
+            return {key: scrub(v) for key, v in item.items()}
+        if isinstance(item, list):
+            return [scrub(v) for v in item]
+        return item
+
+    return scrub(value)
 
 
 def _plain(text: str) -> str:

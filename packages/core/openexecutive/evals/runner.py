@@ -90,6 +90,7 @@ from openexecutive.evals.scenarios import (
     load_scenarios,
     parse_prior_turns,
     principal_name_in,
+    principal_name_variants,
     reply_check_failures,
     routing_check,
     scenario_decided_cards,
@@ -101,6 +102,7 @@ from openexecutive.evals.scenarios import (
     scenario_turn_surface,
     scenario_voice_persona,
     scenario_watch_reason,
+    scrub_principal_name,
     view_kinds_check,
     with_prior_replies,
 )
@@ -641,36 +643,57 @@ class ChatTurn:
     prior_replies: list[str] = field(default_factory=list)
     # The live prior turns as they ran, oldest first: each one's place in
     # ``prior_turns`` (``turn``, from 1), its ``response`` as stored
-    # (``stored_live_turn``: cut or withheld) and the full reply's length in
+    # (``stored_live_turn``: scrubbed and cut) and the full reply's length in
     # characters (``response_length``), as a run's result records the
     # question's. Fixed turns aren't in it.
     live_turns: list[dict[str, Any]] = field(default_factory=list)
 
     def judged_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
         """``scenario`` with its prior turns' replies as they ran, for the
-        judge's view of the conversation (``prior_turns_section``)."""
-        return with_prior_replies(scenario, self.prior_replies)
+        judge's view of the conversation (``prior_turns_section``). A live
+        reply goes to the judge with the principal's name scrubbed
+        (``scrub_principal_name``), so the judge's notes can't carry it into
+        the stored scores; a fixed one is the scenario's own text."""
+        live = {entry["turn"] for entry in self.live_turns}
+        names = principal_name_variants()
+        replies = [
+            scrub_principal_name(reply, names) if n in live else reply
+            for n, reply in enumerate(self.prior_replies, start=1)
+        ]
+        return with_prior_replies(scenario, replies)
+
+    def stored(self, scores: dict[str, Any]) -> dict[str, Any]:
+        """What a run's result keeps of this turn once it is judged and
+        checked: ``response`` and the judge's ``scores`` with the principal's
+        name scrubbed (``scrub_principal_name``), whatever the scenario's
+        flags, and ``live_turns`` (already scrubbed, ``stored_live_turn``)
+        when there are any. Keeps the principal's name out of stored eval
+        results; the checks have read the whole replies by then."""
+        names = principal_name_variants()
+        out: dict[str, Any] = {
+            "response": scrub_principal_name(self.response, names),
+            "scores": scrub_principal_name(scores, names),
+        }
+        if self.live_turns:
+            out["live_turns"] = self.live_turns
+        return out
 
 
-# The most of a live prior turn's reply a result stores; the judge and the
-# checks still read it whole (``ChatTurn.prior_replies``).
+# The most of a live prior turn's reply a result stores; the checks still
+# read it whole (``ChatTurn.prior_replies``).
 LIVE_REPLY_STORED_CHARS = 4000
-# Stored in place of a live reply that named the principal, so the name is
-# never in a run's results (``forbid_principal_name``).
-LIVE_REPLY_WITHHELD = "[withheld: the reply named the principal]"
 
 
-def stored_live_turn(scenario: dict[str, Any], n: int, reply: str) -> dict[str, Any]:
+def stored_live_turn(n: int, reply: str) -> dict[str, Any]:
     """Live prior turn ``n``'s entry in ``ChatTurn.live_turns``, as a run's
-    results keep it: ``response`` is at most ``LIVE_REPLY_STORED_CHARS`` of
-    the reply (with ``response_truncated`` when cut), or
-    ``LIVE_REPLY_WITHHELD`` when it named the principal
-    (``principal_name_in``); ``response_length`` is always the full reply's."""
-    entry: dict[str, Any] = {"turn": n, "response": reply, "response_length": len(reply)}
-    if principal_name_in(scenario, reply):
-        entry["response"] = LIVE_REPLY_WITHHELD
-    elif len(reply) > LIVE_REPLY_STORED_CHARS:
-        entry["response"] = reply[:LIVE_REPLY_STORED_CHARS]
+    results keep it: ``response`` is the reply with the principal's name
+    scrubbed (``scrub_principal_name``, whatever the scenario's flags), then
+    cut to at most ``LIVE_REPLY_STORED_CHARS`` (with ``response_truncated``
+    when cut); ``response_length`` is always the full reply's."""
+    stored = scrub_principal_name(reply)
+    entry: dict[str, Any] = {"turn": n, "response": stored, "response_length": len(reply)}
+    if len(stored) > LIVE_REPLY_STORED_CHARS:
+        entry["response"] = stored[:LIVE_REPLY_STORED_CHARS]
         entry["response_truncated"] = True
     return entry
 
@@ -796,7 +819,7 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
             if not (reply or "").strip():
                 raise RuntimeError(LIVE_TURN_FAILED.format(n=n, why="it answered nothing"))
             prior_replies.append(reply)
-            live_turns.append(stored_live_turn(scenario, n, reply))
+            live_turns.append(stored_live_turn(n, reply))
         query = scenario_query(scenario)
         # Records which specialists the turn consulted (routing_check).
         collector = DebugCollector()
@@ -831,7 +854,7 @@ def chat_checks(scenario: dict[str, Any], turn: ChatTurn, scores: dict[str, Any]
     final reply does, under the same ``principal_name`` key, naming the
     turn (``LIVE_PRINCIPAL_NAME_SAID``) and never the name. It reads the
     whole reply (``ChatTurn.prior_replies``), not the stored one, which is
-    cut or withheld (``stored_live_turn``). Its other checks stay the
+    scrubbed and cut (``stored_live_turn``). Its other checks stay the
     question's alone."""
     failures = reply_check_failures(scenario, turn.response)
     named = [
@@ -917,21 +940,20 @@ def _make_chat_runner(
                     ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD and held
                     if ok:
                         passed[0] += 1
-                    done: dict[str, Any] = {
-                        "type": "scenario_done",
-                        "index": i,
-                        "total": total,
-                        "scenario_id": scenario["id"],
-                        "passed": ok,
-                        "scores": scores,
-                        "query": query,
-                        "response": response,
-                    }
-                    # Each live prior turn as it ran, kept with the run's
-                    # result (fixed turns are in the scenario as written).
-                    if turn.live_turns:
-                        done["live_turns"] = turn.live_turns
-                    await queue.put(done)
+                    # The response, scores and each live prior turn as the
+                    # run's result keeps them, the principal's name scrubbed
+                    # (fixed turns are in the scenario as written).
+                    await queue.put(
+                        {
+                            "type": "scenario_done",
+                            "index": i,
+                            "total": total,
+                            "scenario_id": scenario["id"],
+                            "passed": ok,
+                            "query": query,
+                            **turn.stored(scores),
+                        }
+                    )
                 except Exception as exc:
                     logger.exception("eval scenario %s failed", scenario["id"])
                     await queue.put(

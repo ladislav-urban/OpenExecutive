@@ -13270,6 +13270,20 @@ evals:
     and one tabling three of four delivered lines, passed at 4). A panel
     scenario's quality_criteria reach both judges (judges._panel_section,
     judges.chat_judge_context); other chat judge prompts are unchanged.
+    The principal's name is never stored in an eval result, whatever the
+    scenario's flags: both runners replace every whole-word, any-case
+    mention of it (scenarios.principal_name_variants) with "[the
+    principal]" (scenarios.scrub_principal_name, PRINCIPAL_SCRUBBED) in a
+    chat or mcp scenario's stored response, in every string of the judge's
+    scores (its notes and reasons) and in each stored live turn's response
+    (runner.ChatTurn.stored, runner.stored_live_turn), and the judge reads
+    a live prior reply already scrubbed (ChatTurn.judged_scenario), so its
+    notes can't echo the name. The checks read the replies before they are
+    scrubbed, so a forbid_principal_name hit still fails the scenario.
+    response_length is the whole reply's. Why: keep the principal's name
+    out of stored eval results (data minimisation). The Executive's own
+    audit log keeps each eval turn's whole reply, as it does for every
+    chat turn; the eval runners don't change that.
   prior_turns: |
     A chat or mcp scenario's prior_turns is the conversation its query
     follows, oldest first: {user, assistant, page?} is a fixed turn,
@@ -13296,10 +13310,11 @@ evals:
     (scenarios.LIVE_PRINCIPAL_NAME_SAID; N is the turn's place in
     prior_turns). The name is never in the score, and never in a stored
     live reply: the check reads the whole reply (ChatTurn.prior_replies),
-    and the stored one is runner.LIVE_REPLY_WITHHELD ("[withheld: the
-    reply named the principal]") instead. Both judges see the conversation
-    as it ran (ChatTurn.prior_replies, scenarios.with_prior_replies), in
-    both runners. A live turn is not judged itself, so after one the
+    and the stored one has it scrubbed to "[the principal]"
+    (runner.stored_live_turn; see reply_checks). Both judges see the
+    conversation as it ran (ChatTurn.prior_replies,
+    scenarios.with_prior_replies), in both runners, a live reply with the
+    principal's name scrubbed (ChatTurn.judged_scenario). A live turn is not judged itself, so after one the
     judge's conversation ends with scenarios.LIVE_PRIOR_TURNS_NOTE (set by
     with_prior_replies' PRIOR_TURNS_RAN_LIVE mark; a conversation of fixed
     turns gets no note): the earlier replies ran live and are not assumed
@@ -13312,10 +13327,11 @@ evals:
     live_turns, in the package runner's scenario_done event (kept in the
     run's results) and in evals/run_evals.py's results JSON; fixed turns
     aren't in it, and a scenario with no live turn has no live_turns key.
-    Its response is at most runner.LIVE_REPLY_STORED_CHARS (4000)
-    characters of the reply, with "response_truncated": true when cut;
-    response_length is always the full reply's. The judge and the checks
-    still read the reply whole. Neither runner measures the characters of a turn's tool results.
+    Its response is the reply with the principal's name scrubbed, then at
+    most runner.LIVE_REPLY_STORED_CHARS (4000) characters of it, with
+    "response_truncated": true when cut; response_length is always the
+    full reply's. The judge (name scrubbed) and the checks still read the
+    reply whole. Neither runner measures the characters of a turn's tool results.
     A live turn that raises or answers nothing fails the scenario with
     "live prior turn N failed..." (a scenario_error in the package
     runner, an error result in evals/run_evals.py). validate_scenario_yaml
