@@ -45,10 +45,8 @@ def setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 def _session_of(who: str, signed: bool) -> str:
     """A setup session already held for ``who`` (one started before the
     workspace had an owner), so the commit itself is what is tested."""
-    if who == "unsigned":
-        key = "service" if signed else "local"
-    else:
-        key = f"email:{EMAILS[who]}"
+    unsigned_key = "service" if signed else "local"
+    key = unsigned_key if who == "unsigned" else f"email:{EMAILS[who]}"
     sid = f"sid-{who}"
     route._interview_sessions[sid] = InterviewSession(owner_key=key)
     return sid
