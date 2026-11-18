@@ -173,3 +173,62 @@ def test_a_numbered_list_said_again_is_still_found() -> None:
         "4) Call Metro about the delivery today.",
     ]
     assert repeated_sentences(chr(10).join(lines)) == lines[2:]
+
+
+# --- A pipe table is one unit to new_line (eval erpnext_075, Nov 18, 2026:
+# a line cut before the first row kept only the table's header) ---
+
+_HEADER = "| Customer | Owed | Was due |"
+_TABLE = "\n".join([
+    _HEADER,
+    "|---|---|---|",
+    "| Pinecrest Supply | 123.40 | Oct 2 |",
+    "| Harbor Freight Co | 4,656.00 | Oct 9 |",
+    "| Metro Builders | 4,700.00 | Sep 28 |",
+    "| Riverbend Foods | 2,900.00 | Oct 14 |",
+    "| Brightline Media | 600.00 | Oct 21 |",
+    "| Northwind Supplies | 12,500.00 | Oct 30 |",
+])
+
+
+def test_a_table_that_does_not_fit_is_dropped_whole() -> None:
+    text = (
+        "Here is where things stand on the overdue accounts this week, by customer and amount.\n\n"
+        + _TABLE + "\n\nI couldn't note the follow-ups from here."
+    )
+    line = new_line("Hello.", text)
+    assert "|" not in line
+    assert line == (
+        "Here is where things stand on the overdue accounts this week, by customer and amount. "
+        "I couldn't note the follow-ups from here."
+    )
+
+
+def test_a_bare_header_is_never_kept() -> None:
+    for text in (_HEADER, _HEADER + "\n|---|---|---|", "Owed now:\n" + _HEADER + "\n|---|---|---|"):
+        assert "|" not in new_line("Hello.", text)
+
+
+def test_a_table_that_fits_is_kept_whole_on_its_own_lines() -> None:
+    table = "| Customer | Owed |\n|---|---|\n| Pinecrest | 123.40 |\n| Harbor | 4,656 |"
+    line = new_line("Hello.", "Two are open:\n" + table + "\nBoth are past due.")
+    assert line == "Two are open:\n\n" + table + "\n\nBoth are past due."
+    assert len(line) <= 300
+
+
+def test_a_table_the_reply_already_shows_adds_nothing() -> None:
+    assert new_line("Six are past due:\n\n" + _TABLE, _TABLE) == ""
+    # One new row makes it new: kept whole when it fits.
+    small = "| Customer | Owed |\n|---|---|\n| Pinecrest | 123.40 |"
+    grown = small + "\n| Harbor Freight Co | 4,656.00 |"
+    assert new_line(small, grown) == grown
+
+
+def test_prose_around_tables_is_cut_as_before() -> None:
+    earlier = "Whether to release it is Rachel's call; she holds customer credit."
+    text = (
+        "Whether to release it is Rachel's decision; she holds customer credit. "
+        "I couldn't leave her a note from here. " + "More detail follows here. " * 20
+    )
+    assert new_line(earlier, text) == new_line(earlier, text.replace("\n", " "))
+    assert new_line(earlier, text).startswith("I couldn't leave her a note from here.")

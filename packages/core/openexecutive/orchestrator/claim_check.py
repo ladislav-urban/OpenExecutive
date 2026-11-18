@@ -14,7 +14,10 @@ its last reply is checked against the tool calls the turn made:
    that the reply doesn't present as set up, or a change a call did make (or
    put up for approval) is not one.
 3. When it finds one, the claim must appear word for word in the reply (code
-   check), or it is ignored. The loop then gets one more round with
+   check), or it is ignored, as is a figure correction (``correction``:
+   "the ERP now shows 123, not the 67 I gave earlier" reports a figure, it
+   changes nothing; eval erpnext_075, Nov 18, 2026). The loop then gets one
+   more round with
    ``nudge(claim)``: do it now with the right tool, or tell the person
    plainly it couldn't be done. Once a turn, so a loop can't form.
 
@@ -40,6 +43,24 @@ CLAIM_RE = re.compile(
     r"won'?t (?:show|appear|include)|no longer|from now on|going forward)\b",
     re.IGNORECASE,
 )
+
+# A figure correction: what a system shows now, against what the reply gave
+# before ("now shows 123, not the 67 I gave earlier", "shows 123, not 67 as I
+# said"): a figure, set against one the reply itself gave. Read within one
+# sentence. It reports, never changes, so it is never an unbacked claim...
+_CORRECTION_RE = re.compile(
+    r"\b(?:shows?|showing|lists?|listing|has|reads?|says?)\b.*?\bnot\b.*?[0-9].*?"
+    r"\b(?:i (?:gave|said|quoted|had|mentioned|reported|wrote|stated|showed)|as i said)\b"
+)
+# ...unless the claim itself names a change: "I've updated the limit; it now
+# shows 123, not the 67 I gave earlier" still claims the update.
+_CHANGE_RE = re.compile(
+    r"\b(?:removed|deleted|dropped|closed|cancel+ed|marked|updated|changed|saved|"
+    r"noted|added|set (?:up|it|a)|scheduled|booked|sent|moved|archived|cleared|"
+    r"fixed|created|posted|submitted|recorded|amended|approved|reminder)\b"
+)
+_SENTENCE_BREAK = re.compile(r"[.!?](?=\s)")
+_CORRECTION_SPAN = 300
 
 MAX_REPLY_CHARS = 3000
 MAX_MESSAGE_CHARS = 2000
@@ -68,7 +89,9 @@ _SYSTEM = (
     "done earlier or by someone else; an offer or a question ('want me to "
     "remove it?'); advice; a plain answer to a question; saying it can't do "
     "something; a promise about how it will write or talk (shorter, more "
-    "formal), which needs no tool.\n\n"
+    "formal), which needs no tool; correcting a figure or fact it gave "
+    "earlier ('the ERP now shows 123, not the 67 I gave earlier'), which "
+    "reports what a system shows and changes nothing.\n\n"
     "When there is one, copy the claim word for word from the reply (one "
     "short phrase). Record your verdict with the tool."
 )
@@ -147,15 +170,35 @@ def _normalize(text: str) -> str:
     return " ".join(text.replace("’", "'").split()).lower()
 
 
+def correction(claim: str, reply: str) -> bool:
+    """Whether ``claim`` is part of a figure correction in ``reply`` ("the
+    ERP now shows 123, not the 67 I gave earlier") and names no change
+    itself: it reports what a system shows, so no call has to back it."""
+    said, text = _normalize(claim), _normalize(reply)
+    at = text.find(said)
+    if at < 0 or _CHANGE_RE.search(said):
+        return False
+    starts = [m.end() for m in _SENTENCE_BREAK.finditer(text, 0, at)]
+    end = _SENTENCE_BREAK.search(text, at + len(said))
+    # The claim's sentence, at most _CORRECTION_SPAN either side of it.
+    start = max(starts[-1] if starts else 0, at - _CORRECTION_SPAN)
+    stop = min(end.end() if end else len(text), at + len(said) + _CORRECTION_SPAN)
+    return _CORRECTION_RE.search(text[start:stop]) is not None
+
+
 def accept_claim(payload: dict[str, Any], reply: str) -> str | None:
     """The model's claim when it reported one and it is in the reply word
-    for word (whitespace, case and curly quotes aside); None otherwise."""
+    for word (whitespace, case and curly quotes aside), and isn't a figure
+    correction (``correction``); None otherwise."""
     if payload.get("unbacked") is not True:
         return None
     claim = " ".join(str(payload.get("claim") or "").split())
     if not claim or len(claim) > CLAIM_MAX_CHARS:
         return None
     if _normalize(claim) not in _normalize(reply):
+        return None
+    if correction(claim, reply):
+        logger.info("claim_check: read a figure correction, not a change")
         return None
     return claim
 

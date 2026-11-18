@@ -288,3 +288,38 @@ def test_the_check_sees_what_each_call_was_given() -> None:
     assert len(long) < claim_check.CALL_INPUT_CHARS + 40
     rendered = claim_check.render_calls([(label, "Successfully updated range 'A9:B10'")])
     assert "=SUM(B2:B9)" in rendered
+
+
+# --- A figure correction is not a change (eval erpnext_075, Nov 18, 2026) ---
+
+
+@pytest.mark.parametrize(("reply", "claim"), [
+    ("The ERP now shows Pinecrest owed 123.40, not the 67 I gave earlier.", "now shows Pinecrest owed 123.40"),
+    ("The ERP now shows Pinecrest owed 123.40, not the 67 I gave earlier.", "not the 67 I gave earlier"),
+    ("The ERP shows 4,656 for Harbor, not 4,650 as I said.", "The ERP shows 4,656 for Harbor"),
+    ("Done checking. The ledger now lists Metro at 4,700, not the 4,070 I quoted.", "lists Metro at 4,700"),
+])
+def test_a_figure_correction_is_not_an_unbacked_claim(reply: str, claim: str) -> None:
+    assert claim_check.correction(claim, reply)
+    assert claim_check.accept_claim({"unbacked": True, "claim": claim}, reply) is None
+
+
+@pytest.mark.parametrize(("reply", "claim"), [
+    ("I've updated the credit limit to 500.", "I've updated the credit limit to 500"),
+    ("I removed the hold. The ERP now shows 123.40, not the 67 I gave earlier.", "I removed the hold"),
+    (
+        "I've updated the limit; the ERP now shows 123.40, not the 67 I gave earlier.",
+        "I've updated the limit",
+    ),
+    # A change word inside the correction's own sentence still claims it.
+    ("The ERP now shows the order cancelled, not open at 67 as I said.", "now shows the order cancelled"),
+    # "not" alone, with no figure the reply gave before, is no correction.
+    ("Harbor is now closed, not open.", "Harbor is now closed"),
+    ("It now shows as paid, not overdue as before.", "It now shows as paid"),
+])
+def test_real_change_claims_are_still_flagged(reply: str, claim: str) -> None:
+    assert claim_check.accept_claim({"unbacked": True, "claim": claim}, reply) == claim
+
+
+def test_the_check_is_told_a_correction_changes_nothing() -> None:
+    assert "not the 67 I gave earlier" in claim_check._SYSTEM

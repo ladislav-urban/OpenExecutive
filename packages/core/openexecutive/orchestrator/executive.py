@@ -1668,6 +1668,9 @@ class Executive:
 
         t0 = time.monotonic()
         full_response = ""
+        # The reply as it stood when a collected turn's claim check asked
+        # for it again (the "rewrite" event): kept only if the retry is empty.
+        before_rewrite = ""
         with set_turn(session_id=session.session_id, turn_id=turn_id):
             _log_pushback(pushback, session, turn_id)
             # Per-person prefetch from Honcho. Runs once per turn (NOT inside
@@ -1781,9 +1784,16 @@ class Executive:
                 ):
                     if isinstance(item, str) and item != self._THINKING:
                         full_response += item
+                    elif isinstance(item, dict) and item.get("type") == "rewrite":
+                        # The next round writes the whole reply again: the
+                        # check, history and audit read that, not the draft.
+                        before_rewrite, full_response = full_response, ""
                     yield item
             finally:
                 outside_content.end_turn(outside_turn)
+            if before_rewrite:
+                # A retry that wrote nothing keeps the first reply.
+                full_response = full_response.lstrip() or before_rewrite
             # Every figure held to this turn's ERPNext results, and the reply
             # corrected in place when one isn't (orchestrator.answer_check).
             # A cost cap's stop sentence stays the reply's last paragraph.
@@ -2186,6 +2196,7 @@ class Executive:
 
         t0 = time.monotonic()
         draft = ""
+        before_rewrite = ""
         consulted: list[str] = []
         specialist_outputs: dict[str, str] = {}
         _emit_memory_snapshot(
@@ -2243,9 +2254,16 @@ class Executive:
                     if item != self._THINKING:
                         draft += item
                 else:
+                    if item.get("type") == "rewrite":
+                        # A collected turn's claim check asked for the whole
+                        # draft again: review that one, not the first.
+                        before_rewrite, draft = draft, ""
                     yield item
         finally:
             outside_content.end_turn(outside_turn)
+        if before_rewrite:
+            # A retry that wrote nothing keeps the first draft.
+            draft = draft.lstrip() or before_rewrite
 
         draft_ms = round((time.monotonic() - t0) * 1000)
         logger.info(
@@ -2923,7 +2941,8 @@ class Executive:
         # The reply as it stood when the claim check asked for one more round:
         # that round's text is held and only a short line of what the reply
         # doesn't already say is kept (utils.repeats), so a rewritten answer
-        # never follows the first one. None until the check nudges.
+        # never follows the first one. None until the check nudges, and for
+        # a collected reply (_COLLECTING), whose retry replaces it whole.
         reply_before_nudge: str | None = None
         reply_so_far = ""
         after_nudge = ""
@@ -3252,6 +3271,12 @@ class Executive:
                 if iteration == max_iterations - 1:
                     nudge.append({"type": "text", "text": LAST_ROUND_NOTE})
                 current_messages.append({"role": "user", "content": nudge})
+                if rewrite:
+                    # The collector dropped what it had: the retry is the
+                    # whole reply, kept as written (a table keeps its rows),
+                    # never trimmed to the one line a streamed reply gets.
+                    reply_so_far, streamed_tail = "", ""
+                    continue
                 # The retry's text gets its paragraph break from
                 # _round_separator, like any other round's.
                 reply_before_nudge = reply_so_far

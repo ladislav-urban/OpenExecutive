@@ -23,6 +23,10 @@ words-only rule, so a restated sentence with its figures written another way
 is still a repeat, and ``new_line`` (the claim check's extra round) is
 unchanged: words only.
 
+``new_line`` takes a pipe table whole: its lines are one unit, kept with its
+rows or dropped, never cut to a bare header. Eval erpnext_075, Nov 18, 2026:
+a line cut before the first row kept only "| Customer | Owed | Was due |".
+
 Cost is bounded: each sentence is compared on its first ``COMPARE_CHARS``
 characters, against at most ``MAX_EARLIER`` earlier sentences, and difflib's
 cheap upper bounds rule most pairs out before its quadratic ratio runs.
@@ -53,6 +57,9 @@ _WORD = re.compile(r"[a-z0-9$%.,]+")
 _FIGURE = re.compile(r"[0-9](?:[0-9,.]*[0-9])?")
 # A table row or a list item: where parallel lines differ only in figures.
 _ROW = re.compile(r"\s*(?:\||[-*\u2022]\s|[0-9]+[.)]\s)")
+# A pipe table's line, and its separator ("|---|:--:|").
+_TABLE_LINE = re.compile(r"\s*\|")
+_TABLE_SEPARATOR = re.compile(r"\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*")
 # Words that say something isn't so or didn't happen.
 _NOT = re.compile(
     r"\b(?:not|no|never|cannot|can't|couldn't|didn't|isn't|wasn't|won't|"
@@ -152,30 +159,81 @@ def repeated_sentences(reply: str) -> list[str]:
     return found
 
 
+def _units(text: str) -> list[tuple[str, bool]]:
+    """``text`` as ``sentences`` cuts it, except that each run of pipe-table
+    lines is one unit; each with whether it is a table."""
+    units: list[tuple[str, bool]] = []
+    prose: list[str] = []
+    table: list[str] = []
+    for line in (text or "").split("\n"):
+        if _TABLE_LINE.match(line):
+            if prose:
+                units.extend((s, False) for s in sentences("\n".join(prose)))
+                prose = []
+            table.append(line.strip())
+            continue
+        if table:
+            units.append(("\n".join(table), True))
+            table = []
+        prose.append(line)
+    units.extend((s, False) for s in sentences("\n".join(prose)))
+    if table:
+        units.append(("\n".join(table), True))
+    return units
+
+
+def _table_rows(table: str) -> list[str]:
+    """A pipe table's rows: the lines after its separator, or, with none,
+    after its first line. [] for a header with no row."""
+    lines = table.split("\n")
+    for i, line in enumerate(lines):
+        if _TABLE_SEPARATOR.fullmatch(line):
+            return [r for r in lines[i + 1:] if not _TABLE_SEPARATOR.fullmatch(r)]
+    return lines[1:]
+
+
 def new_line(earlier: str, text: str) -> str:
     """From an extra round's ``text``, the sentences ``earlier`` (the reply so
     far) doesn't already say, cut to one short line. A sentence that says
     something isn't done comes first and is always kept (cut if it alone is
-    longer than ``MAX_LINE_CHARS``); the rest fill the line in order."""
+    longer than ``MAX_LINE_CHARS``); the rest fill the line in order. A pipe
+    table is one unit: new when one of its rows is, kept whole when it fits,
+    else dropped whole, and a header with no row is never kept."""
     said = _Said()
     for s in sentences(earlier)[-MAX_EARLIER:]:
         said.add(s)
     fresh: list[str] = []
-    for s in sentences(text)[:MAX_SENTENCES]:
-        if not said.has(s):
+    tables: set[str] = set()
+    for s, is_table in _units(text)[:MAX_SENTENCES]:
+        if is_table:
+            rows = _table_rows(s)
+            if rows and any(not said.has(r) for r in rows):
+                fresh.append(s)
+                tables.add(s)
+            for r in s.split("\n"):
+                said.add(r)
+        elif not said.has(s):
             fresh.append(s)
             said.add(s)
-    failures = [s for s in fresh if _negative(s)]
-    others = [s for s in fresh if not _negative(s)]
+    failures = [s for s in fresh if s not in tables and _negative(s)]
+    others = [s for s in fresh if s in tables or not _negative(s)]
     kept: list[str] = []
     size = 0
     for s in failures + others:
-        if kept and size + len(s) + 1 > MAX_LINE_CHARS:
-            if s in failures:
+        # A table stands apart, a blank line either side.
+        cost = len(s) + (4 if s in tables else 1)
+        if (kept or s in tables) and size + cost > MAX_LINE_CHARS:
+            if s in failures or s in tables:
                 continue
             break
         kept.append(s)
-        size += len(s) + 1
+        size += cost
     kept.sort(key=fresh.index)
-    line = " ".join(kept)
+    line = ""
+    for s in kept:
+        if s in tables:
+            line = f"{line}\n\n{s}\n\n" if line else f"{s}\n\n"
+        else:
+            line = f"{line} {s}" if line and not line.endswith("\n") else line + s
+    line = line.strip()
     return line if len(line) <= MAX_LINE_CHARS else line[: MAX_LINE_CHARS - 1].rstrip() + "…"
