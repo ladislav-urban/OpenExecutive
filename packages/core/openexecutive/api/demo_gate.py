@@ -20,7 +20,7 @@ import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, Response
 
 logger = logging.getLogger(__name__)
@@ -101,3 +101,28 @@ async def demo_write_gate(
         return await call_next(request)
     logger.info("demo gate: refused %s %s for person %s", request.method, path, person.id)
     return JSONResponse({"detail": DEMO_REFUSED}, status_code=403)
+
+
+def refuse_demo_reader(request: Request) -> None:
+    """A route dependency for reads a demo person must not make (what the
+    team works on, the practice's clients, past advice, the workflow
+    designer): 403 for a caller this gate classes as a demo person, before
+    the route does any work. Classed exactly as ``demo_write_gate`` classes a
+    write: a signed-in email on a demo entry that is not the principal's. A
+    caller naming no one, a teammate, the principal and an email on nobody's
+    entry read on as before. Fails closed: a roster that can't be read is a
+    503."""
+    from openexecutive.api.caller import caller
+
+    email = caller(request).email
+    if not email:
+        return
+    try:
+        person = _person(email)
+    except Exception:
+        logger.warning("demo gate: roster lookup failed — refusing the read", exc_info=True)
+        raise HTTPException(status_code=503, detail=_ROSTER_UNREADABLE) from None
+    if person is None or not getattr(person, "demo", False) or getattr(person, "is_principal", False):
+        return
+    logger.info("demo gate: refused %s %s for person %s", request.method, _route_path(request), person.id)
+    raise HTTPException(status_code=403, detail=DEMO_REFUSED)
