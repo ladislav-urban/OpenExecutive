@@ -60,7 +60,9 @@ def test_a_demo_persons_write_to_the_company_is_refused() -> None:
     client = _client()
     refused = client.post("/departments", json={"title": "Skunkworks"}, headers=DEMO)
     assert refused.status_code == 403 and refused.json()["detail"] == demo_gate.DEMO_REFUSED
-    assert client.get("/departments", headers=DEMO).status_code == 200  # reading is fine
+    # The department list is the team's goals, owners and budgets: a demo
+    # person may not read it either (api.demo_gate.refuse_demo_reader).
+    assert client.get("/departments", headers=DEMO).status_code == 403
     assert client.post("/chat", headers=DEMO).json() == {"ok": True}  # so is asking
 
 
