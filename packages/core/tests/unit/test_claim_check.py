@@ -290,36 +290,21 @@ def test_the_check_sees_what_each_call_was_given() -> None:
     assert "=SUM(B2:B9)" in rendered
 
 
-# --- A figure correction is not a change (eval erpnext_075, Nov 18, 2026) ---
+# --- A change claim beside a figure correction is still flagged. A reply that
+# corrects a figure stays the model's call: a false flag costs one extra
+# round, and a collected reply's rewrite reaches the person whole (eval
+# erpnext_075, Nov 18, 2026) ---
 
 
 @pytest.mark.parametrize(("reply", "claim"), [
-    ("The ERP now shows Pinecrest owed 123.40, not the 67 I gave earlier.", "now shows Pinecrest owed 123.40"),
-    ("The ERP now shows Pinecrest owed 123.40, not the 67 I gave earlier.", "not the 67 I gave earlier"),
-    ("The ERP shows 4,656 for Harbor, not 4,650 as I said.", "The ERP shows 4,656 for Harbor"),
-    ("Done checking. The ledger now lists Metro at 4,700, not the 4,070 I quoted.", "lists Metro at 4,700"),
+    ("I raised Acme's credit limit, so it now shows 50,000, not the 20,000 I gave earlier.",
+     "I raised Acme's credit limit"),
+    ("I paid invoice ACC-1; it now shows 0 due, not the 4,500 I gave earlier.", "I paid invoice ACC-1"),
+    ("I set the limit to 50,000 and it now shows 50,000, not 20,000 as I said.", "I set the limit to 50,000"),
+    ("I've updated the limit; it now shows 50,000, not the 20,000 I gave earlier.", "it now shows 50,000"),
+    ("I've released the payment to Borealis; the ERP shows 0 due, not the 12,000 I said.",
+     "I've released the payment to Borealis"),
+    ("Done, the limit now shows 50,000, not the 20,000 I had before.", "Done"),
 ])
-def test_a_figure_correction_is_not_an_unbacked_claim(reply: str, claim: str) -> None:
-    assert claim_check.correction(claim, reply)
-    assert claim_check.accept_claim({"unbacked": True, "claim": claim}, reply) is None
-
-
-@pytest.mark.parametrize(("reply", "claim"), [
-    ("I've updated the credit limit to 500.", "I've updated the credit limit to 500"),
-    ("I removed the hold. The ERP now shows 123.40, not the 67 I gave earlier.", "I removed the hold"),
-    (
-        "I've updated the limit; the ERP now shows 123.40, not the 67 I gave earlier.",
-        "I've updated the limit",
-    ),
-    # A change word inside the correction's own sentence still claims it.
-    ("The ERP now shows the order cancelled, not open at 67 as I said.", "now shows the order cancelled"),
-    # "not" alone, with no figure the reply gave before, is no correction.
-    ("Harbor is now closed, not open.", "Harbor is now closed"),
-    ("It now shows as paid, not overdue as before.", "It now shows as paid"),
-])
-def test_real_change_claims_are_still_flagged(reply: str, claim: str) -> None:
+def test_a_change_claim_beside_a_figure_correction_is_flagged(reply: str, claim: str) -> None:
     assert claim_check.accept_claim({"unbacked": True, "claim": claim}, reply) == claim
-
-
-def test_the_check_is_told_a_correction_changes_nothing() -> None:
-    assert "not the 67 I gave earlier" in claim_check._SYSTEM
