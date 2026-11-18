@@ -236,7 +236,14 @@ async def _eval_gateway(enabled: bool):
         await gateway.close()
 
 
-async def main() -> None:
+# Where results go without --output: this script's own evals/results/, the
+# one directory .gitignore keeps out of git, whatever the current directory
+# (a run from packages/core or the repo root wrote full replies into an
+# un-ignored results/ there).
+DEFAULT_OUTPUT = Path(__file__).resolve().parent / "results"
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--scenarios",
@@ -244,7 +251,11 @@ async def main() -> None:
         help="Path to scenario YAML files (moved into the package; pass an "
         "explicit path to use a custom set)",
     )
-    parser.add_argument("--output", default="results/", help="Output directory for results")
+    parser.add_argument(
+        "--output",
+        default=str(DEFAULT_OUTPUT),
+        help="Output directory for results (default: evals/results/ beside this script, git-ignored)",
+    )
     parser.add_argument("--scenario-id", help="Run only this scenario ID")
     parser.add_argument(
         "--triage",
@@ -279,6 +290,11 @@ async def main() -> None:
             "so they are skipped unless this flag is set."
         ),
     )
+    return parser
+
+
+async def main() -> None:
+    parser = build_parser()
     args = parser.parse_args()
     mode_flags = [args.triage, args.workflow, args.mcp, args.inbox, args.supplier, args.watch_reason]
     if sum(mode_flags) > 1:

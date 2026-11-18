@@ -314,3 +314,21 @@ def test_run_evals_reports_the_principals_name_apart(monkeypatch: pytest.MonkeyP
     fixture = _evaluate(monkeypatch, scenario, _Replying("Rachel raises them."))
     assert fixture["passed"] is False
     assert _run_evals().failed_checks(fixture["scores"]) == ["forbidden_reply_words"]
+
+
+# ── where evals/run_evals.py writes its results ────────────────────────────
+
+
+def test_run_evals_writes_into_its_own_ignored_results_dir_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    # Before, the default was "results/" in the current directory, so a run
+    # from packages/core or the repo root wrote full replies outside the
+    # one ignored results directory.
+    repo = Path(__file__).resolve().parents[4]
+    monkeypatch.chdir(tmp_path)
+    parser = _run_evals().build_parser()
+    assert Path(parser.parse_args([]).output) == repo / "evals" / "results"
+    assert "evals/results/" in (repo / ".gitignore").read_text(encoding="utf-8").splitlines()
+    # --output still goes where it's given.
+    assert parser.parse_args(["--output", "elsewhere/"]).output == "elsewhere/"
