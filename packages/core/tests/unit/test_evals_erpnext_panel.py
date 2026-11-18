@@ -344,15 +344,19 @@ def test_the_cash_outlook_follow_up_opens_receivables_by_party() -> None:
 
 
 def test_the_cash_outlook_brevity_scenarios_run_on_the_panel_under_explain() -> None:
-    # BRIEF_RULE's gates: erpnext_094 (a what-if follow-up) and erpnext_099
-    # (a single figure), both after the same first turn.
-    found = {s["id"]: s for s in load_scenarios() if s["id"] in ("erpnext_094", "erpnext_099")}
-    assert set(found) == {"erpnext_094", "erpnext_099"}
+    # BRIEF_RULE's gates: erpnext_094 (a what-if follow-up), erpnext_099 (a
+    # single figure) and erpnext_100 (a credit decision), after one first turn.
+    ids = ("erpnext_094", "erpnext_099", "erpnext_100")
+    found = {s["id"]: s for s in load_scenarios() if s["id"] in ids}
+    assert set(found) == set(ids)
     for scenario in found.values():
         assert scenario_surface(scenario) == "erpnext_panel"
         assert scenario["advice_policy"] == "explain"
         assert scenario["quality_criteria"]["keeps_the_answer_short_enough_for_a_side_panel"]
     assert found["erpnext_099"]["prior_turns"] == found["erpnext_094"]["prior_turns"]
+    assert found["erpnext_100"]["prior_turns"] == found["erpnext_094"]["prior_turns"]
+    for one in ("erpnext_099", "erpnext_100"):
+        assert found[one]["expected_tool_calls"] == ["call_tool"]
 
 
 def test_the_chart_scenarios_ship_with_their_view_kinds() -> None:

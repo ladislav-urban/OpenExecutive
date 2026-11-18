@@ -297,6 +297,17 @@ def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
         assert "the assumptions in one short line" in block
         assert "that is how you show the arithmetic and every assumption" in block
         assert "rather than print it" in block
+        # Not repeating is not skipping the read (FOLLOW_UP_RULE).
+        assert "still read from ERPNext on this turn every figure the answer rests on" in block
+        assert "also the ones you don't repeat" in block
+        # A short line is fewer steps, never fewer terms (the answer check).
+        assert "leave out steps, never a term" in block
+        assert "still adds up to the result it gives" in block
+        # Only to a place SHOW_RULE allows: no bank or payroll view.
+        assert "a place you may open beside the panel" in block
+        assert "bank accounts, bank transactions, payroll, employees" in block
+        assert "stays in words, kept short" in block
+    assert "cash by account" not in erpnext_panel.BRIEF_RULE
     # Still the turn's own context, not a rule against explaining: nothing
     # tells it to drop the arithmetic or the assumptions.
     assert "no arithmetic" not in erpnext_panel.BRIEF_RULE

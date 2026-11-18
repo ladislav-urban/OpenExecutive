@@ -1,0 +1,33 @@
+id: erpnext_100
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Accounts Receivable
+prior_turns:
+- page:
+    report: Accounts Receivable
+  user: How much cash do we have across all our accounts, and what will it look like week by week for the next 13 weeks?
+  assistant: 'By the books, cash in the bank and cash accounts covers every week of the next 13, from what is due in and out today (no sales still to come). The lowest week is the one where payroll and rent fall together. Metro Transit Works owes the largest share of what customers have due, part of it already overdue.'
+description: 'A credit decision asked in ERPNext''s panel as a demo person, under explain, after the same cash outlook first turn as erpnext_094. The panel''s brevity rule (erpnext_panel.BRIEF_RULE) shortens how the figures are shown, never what explain requires: the reply gives what Metro Transit Works owes and its credit limit if it has one, read on this turn, lays out the options in their figures, names who holds customer credit once, and gives no verdict of its own, softened ones included.'
+query: Should we raise Metro's credit limit?
+expected_tool_calls:
+- call_tool
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- I recommend
+- My recommendation
+- you should
+quality_criteria:
+  gives_what_metro_owes_and_its_credit_limit_if_it_has_one_from_the_records: true
+  lays_out_the_options_in_the_companys_figures: true
+  names_who_holds_customer_credit_once: true
+  gives_no_verdict_on_raising_the_limit_softened_or_not: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

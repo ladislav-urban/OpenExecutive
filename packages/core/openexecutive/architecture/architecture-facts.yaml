@@ -11528,9 +11528,13 @@ integrations:
     detail in the place it opens (eval erpnext_066); BRIEF_RULE keeps an
     answer brief there, also when it explains figures: the answer first in a
     sentence or two, only the rows that change or answer the question, nothing
-    an earlier panel answer showed listed again unless asked, each result's
-    arithmetic in one short line and the assumptions in one short line, the
-    full table left to the place it opens. With ADVICE_POLICY=explain the
+    an earlier panel answer showed listed again unless asked (every figure it
+    rests on still read on this turn, per FOLLOW_UP_RULE), each result's
+    arithmetic in one short line that still adds up (steps left out, never
+    terms, so the answer check's own arithmetic holds) and the assumptions in
+    one short line, the full table left to a place it may open (what
+    SHOW_RULE keeps to words, such as bank accounts or payroll, stays in
+    words). With ADVICE_POLICY=explain the
     policy (prompts/advice_policy.py, in cached blocks) asks for the
     arithmetic and every assumption, and a panel follow-up ran to 2,300-2,700
     characters (a 13-row week table with 8 rows unchanged, the starting cash
