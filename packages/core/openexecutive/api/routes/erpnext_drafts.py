@@ -298,6 +298,7 @@ async def prepare_erpnext_alert_draft(alert_id: int, request: Request) -> Prepar
     from openexecutive.integrations import erpnext_credit
     from openexecutive.integrations.erpnext_alert_drafts import prepare, suggestion_for
     from openexecutive.integrations.erpnext_drafts import ApproveRefused
+    from openexecutive.prompts.connected_systems import in_product_reply
 
     gone = HTTPException(status_code=404, detail={"code": "gone", "message": "That alert isn't there."})
     alert = store.get_alert(alert_id)
@@ -322,7 +323,7 @@ async def prepare_erpnext_alert_draft(alert_id: int, request: Request) -> Prepar
             prepared = await erpnext_credit.prepare(alert, caller=api_caller.caller(request), tapper=tapper)
             return PreparedOut(
                 decision_id=prepared.decision_id, already_waiting=prepared.decision_id is not None and not prepared.new,
-                message=prepared.message,
+                message=in_product_reply(prepared.message),
             )
         decision_id, new = await prepare(alert, caller=api_caller.caller(request))
     except ApproveRefused as refused:
@@ -399,8 +400,11 @@ async def get_erpnext_draft_oversight(
         except Exception:
             logger.exception("erpnext_oversight: asking ERPNext what became of the drafts failed")
             _audit_export(request, {**asked, "erpnext_answered": False, "records": len(rows)})
+            from openexecutive.prompts.connected_systems import in_product_reply
+
             raise HTTPException(
-                status_code=502, detail="ERPNext didn't answer, so the drafts' state there isn't included."
+                status_code=502,
+                detail=in_product_reply("ERPNext didn't answer, so the drafts' state there isn't included."),
             ) from None
     _audit_export(request, {**asked, "erpnext_answered": True if erpnext else None, "records": len(rows)})
     if format == "csv":

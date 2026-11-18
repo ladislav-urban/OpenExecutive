@@ -1229,12 +1229,13 @@ EMPTY_ROUND_NOTE = (
 REFUSED_REPLY = "I can't answer that one as it's asked. Try putting it another way."
 
 
-def _cap_stop(cap: cost_caps.CostCapReached, streamed_tail: str) -> list[str]:
-    """The end of a turn a cost cap stopped: the cap's sentence as its own
-    last paragraph, after what was already written (or alone, when nothing
-    was), by the same exit as ``REFUSED_REPLY``. Marks the turn stopped, so
-    no route or adapter replaces or repeats the reply."""
-    sentence = cap.reply()
+def _cap_stop(cap: cost_caps.CostCapReached, streamed_tail: str, sentence: str | None = None) -> list[str]:
+    """The end of a turn a cost cap stopped: the cap's sentence (or
+    ``sentence``) as its own last paragraph, after what was already written
+    (or alone, when nothing was), by the same exit as ``REFUSED_REPLY``.
+    Marks the turn stopped, so no route or adapter replaces or repeats the
+    reply."""
+    sentence = sentence or cap.reply()
     cost_caps.mark_stopped(sentence)
     return _flush_held(sentence, streamed_tail)
 
@@ -4470,10 +4471,12 @@ class Executive:
             sentence = stop or cap.reply()
             cost_caps.mark_stopped(sentence)
             return sentence, {"type": "reply_replaced", "content": sentence, "session_id": session_id}
+        # Already shown: the figures stay on screen, so say they weren't
+        # checked (after a stop sentence too: it says nothing of them).
         if stop:
-            # Already ends with a stop sentence: nothing to add.
-            return reply, ""
-        chunk = "".join(_cap_stop(cap, reply[-2:]))
+            chunk = "".join(_flush_held(cap.unchecked_reply(), reply[-2:]))
+            return reply + chunk, chunk
+        chunk = "".join(_cap_stop(cap, reply[-2:], cap.unchecked_reply()))
         return reply + chunk, chunk
 
     async def chat(
@@ -4495,8 +4498,15 @@ class Executive:
         memory_text: str | None = None,
         standing_facts: str | None = None,
         cards: list[int] | None = None,
+        product_words: bool = True,
     ) -> str:
         """Non-streaming chat — collects and returns the full response.
+
+        The reply comes back in the product's words on an install with a name
+        (``connected_systems.in_product_reply``: "the ERP" for ERPNext), the
+        backstop the web chat's stream applies, for every chat app, email,
+        ERPNext's panel and the scheduler's runs. ``product_words=False``
+        returns the model's own words: the evals, which judge them.
 
         ``cards``, when given, collects the ids of the approval cards the
         reply left (the ``decision_id`` on its ``action_taken`` events, as the
@@ -4604,5 +4614,9 @@ class Executive:
             _COLLECTING.reset(collecting)
         if rewritten:
             # A retry that wrote nothing keeps the first reply.
-            return result.lstrip() or before
+            result = result.lstrip() or before
+        if product_words:
+            from openexecutive.prompts.connected_systems import in_product_reply
+
+            return in_product_reply(result)
         return result

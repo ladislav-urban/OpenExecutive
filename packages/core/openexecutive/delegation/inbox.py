@@ -186,9 +186,14 @@ class ScanResult:
     handled: int = 0
     # Meeting invite cards made (delegation.invites).
     invites: int = 0
+    # The outcome _consider recorded for a message it claimed and left for
+    # later before re-raising, by message id: this scan's own, never kept.
+    restored: dict[str, str] = field(default_factory=dict)
 
     def counts(self) -> dict[str, Any]:
-        return asdict(self)
+        out = asdict(self)
+        out.pop("restored", None)
+        return out
 
 
 # What each watch status tells the person on the Act as me card.
@@ -369,9 +374,13 @@ def _claim(
                 (outcome, reason, relation or None, moment, person_id, message.id, RETRY),
             )
         conn.commit()
-        return cur.rowcount == 1
+        claimed = cur.rowcount == 1
     finally:
         conn.close()
+    if claimed and outcome != PROCESSING:
+        # Settled here (a skip): the watcher's own marks no longer apply.
+        _clear_internal_flags(person_id, message.id, db_path=db_path)
+    return claimed
 
 
 def _record_ids(
@@ -425,7 +434,11 @@ def _retry_later(
         ).fetchone()
     finally:
         conn.close()
-    return str(row["outcome"]) if row else RETRY
+    outcome = str(row["outcome"]) if row else RETRY
+    if outcome == FAILED:
+        # Given up on: settled.
+        _clear_internal_flags(person_id, message_id, db_path=db_path)
+    return outcome
 
 
 def _set_outcome(
@@ -444,6 +457,41 @@ def _set_outcome(
         conn.commit()
     finally:
         conn.close()
+    if outcome not in (PROCESSING, RETRY):
+        # Settled: the watcher's own marks no longer apply.
+        _clear_internal_flags(person_id, message_id, db_path=db_path)
+
+
+# The watcher's own mark that a message's handling was cancelled once (a
+# step stopped): the next cancellation spends an attempt. Never shown on a
+# card (ledger_flags leaves it out), and cleared when the row settles.
+CANCELLED_ONCE = "cancelled_once"
+# The person asked for a reply (Home's Reply) that didn't finish: the next
+# scan writes it as theirs, on a card, never sent on its own.
+ASKED = "asked"
+_INTERNAL_FLAGS = frozenset({CANCELLED_ONCE, ASKED})
+
+
+def _clear_internal_flags(person_id: int, message_id: str, *, db_path: Path | None = None) -> None:
+    for flag in _INTERNAL_FLAGS:
+        _remove_flag(person_id, message_id, flag, db_path=db_path)
+
+
+def _row_flags(person_id: int, message_id: str, *, db_path: Path | None = None) -> list[str]:
+    """Every flag on the row, internal ones included."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            f"SELECT flags FROM {INBOX_MESSAGES_TABLE} WHERE person_id = ? AND message_id = ?",  # noqa: S608
+            (person_id, message_id),
+        ).fetchone()
+    finally:
+        conn.close()
+    try:
+        flags = json.loads(row["flags"] or "[]") if row else []
+    except ValueError:
+        flags = []
+    return [str(f) for f in flags if isinstance(f, str)]
 
 
 def _add_flag(person_id: int, message_id: str, flag: str, *, db_path: Path | None = None) -> None:
@@ -512,7 +560,7 @@ def ledger_flags(person_id: int, message_ids: list[str], *, db_path: Path | None
             flags = json.loads(row["flags"] or "[]")
         except ValueError:
             flags = []
-        out[str(row["message_id"])] = [str(f) for f in flags if isinstance(f, str)]
+        out[str(row["message_id"])] = [str(f) for f in flags if isinstance(f, str) and f not in _INTERNAL_FLAGS]
     return out
 
 
@@ -1194,9 +1242,17 @@ async def _scan(person: Any, client: Any, watch: InboxWatch, now: datetime) -> S
                 result.status = "spend_limit"
                 break
             # One message's trouble never holds up the rest: it is tried again
-            # on later scans, and given up on after MAX_ATTEMPTS.
+            # on later scans, and given up on after MAX_ATTEMPTS (counted once:
+            # _consider already left a claimed message for later).
             logger.warning("delegation.inbox: a message failed (%s)", type(exc).__name__)
-            _count_retry(result, _retry_later(person.id, message_id, "error", thread_id=thread_id))
+            # The outcome _consider already recorded for its own claim of
+            # this message, if it did.
+            restored = result.restored.pop(message_id, None)
+            _count_retry(
+                result,
+                restored if restored is not None
+                else _retry_later(person.id, message_id, "error", thread_id=thread_id),
+            )
             continue
         if stop:
             break
@@ -1252,6 +1308,8 @@ async def _answer(person: Any, client: Any, thread_id: str, *, now: datetime, ex
     result = ScanResult("ok")
     # Only staleness bounds it: the step named this thread, whenever the
     # watcher started watching (if it does at all).
+    # _consider leaves the message for a later scan on any raise after its
+    # own claim (never a claim someone else holds).
     await _consider(person, client, shown[-1].id, thread.id, own, exec_address, now - STALE, now, result)
     if result.handled:
         return "sent"
@@ -1315,17 +1373,40 @@ async def _consider(
             person, client, message, thread, relation=relation, known_as=known_as, own=own,
             exec_address=exec_address, now=now, result=result,
         )
-    except Exception as exc:
+    except BaseException as exc:
         from openexecutive.audit import cost_caps
+        from openexecutive.delegation.gmail import GmailError
 
-        if cost_caps.capped(exc) is None:
-            raise
-        # A spend limit: back to the watcher without spending an attempt (a
-        # cap is never the message's fault), and the scan stops here.
-        _retry_later(person.id, message.id, "cost_cap", count=False, thread_id=thread.id)
-        result.deferred += 1
-        result.status = "spend_limit"
-        return True
+        if isinstance(exc, Exception) and cost_caps.capped(exc) is not None:
+            # A spend limit: back to the watcher without spending an attempt
+            # (a cap is never the message's fault), and the scan stops here.
+            _retry_later(person.id, message.id, "cost_cap", count=False, thread_id=thread.id)
+            result.deferred += 1
+            result.status = "spend_limit"
+            return True
+        # Anything else: this claim's own message goes back to the watcher,
+        # never left PROCESSING (it would count as settled for good). A real
+        # error spends an attempt; the mailbox failing spends none; a
+        # cancellation spends none the first time (the step was stopped), but
+        # one that repeats (a step timing out on it every time) does.
+        left = _row_for(person.id, message.id)
+        if left is not None and left["outcome"] == PROCESSING:
+            if isinstance(exc, asyncio.CancelledError):
+                # Remembered on the row (CANCELLED_ONCE), so a second one
+                # counts whatever other leave came between.
+                seen = CANCELLED_ONCE in _row_flags(person.id, message.id)
+                reason, count = "cancelled", seen
+                if not seen:
+                    _add_flag(person.id, message.id, CANCELLED_ONCE)
+            elif isinstance(exc, GmailError):
+                reason, count = "gmail_error", False
+            else:
+                reason, count = "error", True
+            outcome = _retry_later(person.id, message.id, reason, count=count, thread_id=thread.id)
+            # For the scan that catches it: counted once, not twice (kept on
+            # this scan's own result, by message id).
+            result.restored[message.id] = outcome
+        raise
 
 
 async def _consider_claimed(
@@ -1340,6 +1421,16 @@ async def _consider_claimed(
         wants_draft,
     )
 
+    if ASKED in _row_flags(person.id, message.id):
+        # The person asked for this reply (Home's Reply) and it didn't
+        # finish: written as theirs, on a card, never sent on its own.
+        from openexecutive.delegation.inbox_classifier import Verdict
+
+        return await _draft_card(
+            person, client, message, thread, relation=relation, known_as=known_as,
+            verdict=Verdict(needs_reply=True, kind="request", confidence=1.0, asked_of_them=True),
+            own=own, exec_address=exec_address, now=now, result=result, asked=True,
+        )
     _note_mail(person.id, message, relation=relation)
     asked = addressing(message, name=person.full_name or "", own=own, exec_address=exec_address)
     verdict = await classify(
@@ -1506,7 +1597,7 @@ def _row_for(person_id: int, message_id: str, db_path: Path | None = None) -> di
     conn = _connect(db_path)
     try:
         row = conn.execute(
-            f"SELECT outcome, decision_id FROM {INBOX_MESSAGES_TABLE} "  # noqa: S608 — constant table name
+            f"SELECT outcome, decision_id, reason FROM {INBOX_MESSAGES_TABLE} "  # noqa: S608 — constant table name
             "WHERE person_id = ? AND message_id = ?",
             (person_id, message_id),
         ).fetchone()
@@ -1561,6 +1652,13 @@ async def draft_on_request(
         _note_mail(person_id, message, relation=relation)
     else:
         _set_outcome(person_id, message_id, PROCESSING, reason="asked")
+        # Reopened: a cancellation it had before no longer counts.
+        _remove_flag(person_id, message_id, CANCELLED_ONCE)
+    # Theirs from here: however this ends short of a card (a limit, a failed
+    # draft or card, an error, a cancellation), the scan that picks it up
+    # writes it as asked for, on a card, never sent on its own. Any settle
+    # clears it, so a Reply that makes its card leaves nothing behind.
+    _add_flag(person_id, message_id, ASKED)
     # They asked: the reply is theirs to write, so no verdict is needed.
     verdict = Verdict(needs_reply=True, kind="request", confidence=1.0, asked_of_them=True)
     result = ScanResult("ok")
@@ -1569,16 +1667,21 @@ async def draft_on_request(
             person, client, message, thread, relation=relation, known_as=known_as, verdict=verdict,
             own=own, exec_address=exec_address, now=now, result=result, asked=True,
         )
-    except Exception as exc:
+    except BaseException as exc:
         # Never left PROCESSING (every later Reply would say "busy"): it
         # goes back to the watcher for a later scan, as a scan's failure does
-        # (a spend limit's without spending an attempt).
+        # (a spend limit's, or a cancellation's, without spending an attempt).
         from openexecutive.audit import cost_caps
 
-        capped = cost_caps.capped(exc) is not None
+        if isinstance(exc, asyncio.CancelledError):
+            reason, count = "cancelled", False
+        elif isinstance(exc, Exception) and cost_caps.capped(exc) is not None:
+            reason, count = "cost_cap", False
+        else:
+            reason, count = "error", True
         left = _row_for(person_id, message_id)
         if left is not None and left["outcome"] == PROCESSING:
-            _retry_later(person_id, message_id, "cost_cap" if capped else "error", count=not capped)
+            _retry_later(person_id, message_id, reason, count=count)
         raise
     if result.drafted:
         done = _row_for(person_id, message_id)

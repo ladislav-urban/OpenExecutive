@@ -253,7 +253,10 @@ async def _run_quiet_work_for_live_client(settings: Any, slug: str) -> None:
                 raise RuntimeError(event.message or "morning brief failed")
         complete_run(run_id, artifact)
     except Exception as exc:
-        fail_run(run_id, str(exc)[:500])
+        from openexecutive.workflows.persistence import run_failure_text
+
+        # The detail goes up with the exception to the caller's log.
+        fail_run(run_id, run_failure_text(exc))
         raise
 
     # External monitor scan — refreshes this client's watchlist signals.

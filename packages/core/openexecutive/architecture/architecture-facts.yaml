@@ -699,11 +699,42 @@ providers:
     can't be told refuses the call as unreadable (fail closed).
     Sixth review (Nov 17, 2026): an asker that can't be read counts as
     outside (CostCapReached never raises building itself; unreadable keeps
-    its row and card); the run route's SSE error frame carries a fixed
-    sentence or cap.reply(), never the exception's text. Run again records
+    its row and card); the run route's own SSE error frame (an exception out
+    of the run) carries a fixed sentence or cap.reply(). Run again records
     who tapped it as the action's created_by_person_id: the scheduler binds
     them as spender for the dynamic workflow's run and their id is in its
     job key; a cadence's own runs keep the creator.
+    Follow-ups (after #197): the post-onboarding research runs under the job
+    post-onboarding-research and a turn of its own. A failed run's record
+    (fail_run) holds workflows.persistence.run_failure_text(exc) (a cap's
+    sentence, else "The run failed. Try again later."), never str(exc),
+    which stays in the server log; the morning brief, end-of-day digest,
+    reflection and engagement report send fixed text in their own error
+    events (other workflows' error events are their own words, passed as
+    is). A rerun that pauses on held writes keeps its starter on the resume
+    payload (WorkflowResumeState.spent_for_person_id), which the resumer
+    binds when the run has no owner, and a second held-writes pause carries
+    it on to the next payload. run_workflow's crash text and a resume's
+    invalid inputs reach no record either (a test checks every fail_run's
+    message through locals and up to two hops of parameters). inbox._consider
+    returns the message it claimed itself to RETRY on any raise after that
+    claim, never a claim someone else holds: a real error spends an attempt,
+    a Gmail failure none, a cancellation none the first time and one each
+    time it repeats (a step that times out on it), remembered on the row as
+    the internal flag cancelled_once (never shown on a card, cleared when the
+    row settles, a skip included, and when Home's Reply reopens it); the
+    outcome is kept on the scan's own result by message id
+    (ScanResult.restored), so the scan counts it once. Home's Reply marks
+    the row with the internal flag asked as it claims or reopens it, so
+    whatever leaves it for later short of a card (a limit, a failed draft
+    or card, an error, a cancellation or a cap: the last two uncounted) is
+    written by the next scan as asked for, on a card, never sent on its own
+    under Handle it for me; any settle (the card made, a FAILED give-up)
+    clears the flag.
+    Home's Reply has its own turn-cap sentence. A reply already shown whose
+    answer check a cap refused gets UNCHECKED_FIGURES ("I couldn't check the
+    figures above, so don't rely on them yet.") before the cap's sentence,
+    or alone for anyone off People, and the web route adds it only once.
     Owner decisions (Nov 17, 2026): recommended values when switched on are
     COST_CAP_TURN_USD=1, COST_CAP_PERSON_DAILY_USD=5,
     COST_CAP_JOB_DAILY_USD=2, COST_CAP_MONTHLY_USD=100 (commented in
@@ -5741,7 +5772,8 @@ chat:
     becomes WHOLE_REPLY (erpnext_views / the panel reply get open_call).
     Never WHOLE_REPLY when only names failed (the reply stands) or the
     question is a projection (answer_check._PROJECTION_Q: known values
-    written in, the rest under PROJECTION_NOTE); audit `kept`.
+    written in, the rest under PROJECTION_NOTE, in the product's words on
+    a named install); audit `kept`.
     Counts of records (figure_check._counts_records, Figure.count) match only
     Sources.counts of that record (count_words); unknown ones become
     "several" and unknown table cells "—" (answer_correct.vague), never a
@@ -8730,8 +8762,29 @@ auth:
     OE_PRODUCT_NAME, utils.product_name; with it set, every /chat reply,
     host or own page, streams and saves through connected_systems.
     ProductReplyStream: ERPNext as "the ERP", Open Executive as the
-    product, the panel's through in_product_reply; after a word that
-    already says which one, "this ERP user", never "this the ERP user"),
+    product, the panel's through in_product_reply, and every other
+    channel's (Slack, Telegram, Discord, Google Chat, email, the
+    scheduler's runs) as Executive.chat returns it (never A2A: a supplier
+    isn't one of the product's people); only the evals pass
+    product_words=False, to judge the model's own words; after a word that
+    already says which one, "this ERP user", never "this the ERP user".
+    What code adds is worded where it is added, so the evals see it as the
+    person does (eval erpnext_094, Nov 18, 2026): answer_check.
+    in_product_words for PROJECTION_NOTE and WHOLE_REPLY, a scheduled
+    brief's own text (scheduler runner, before held messages join it; the
+    weekly review and the clients digest, code's rows of stored titles and
+    names, go as written; scheduler _send_on_plan itself sends text
+    as given, so an alert, held message, reminder or mail-watch line keeps
+    its record values as read), erp_metrics' own "from ... own reports"
+    (the company's name as read), the morning brief's text,
+    channel_cards.outcome_text (a chat card itself stays as stored: it is
+    what a tap sends or saves), watch runner.notice_body's preamble and
+    notes and _fail_notice (summaries and values carry ERPNext's records
+    and stay as read), the ERPNext alert's sentence, Settings' reviewer
+    note, the oversight gate note and the alert-raise message. A name that
+    holds a part's name ("Acme ERPNext Suite", "OpenExecutive Cloud") is
+    refused as unset with a warning (utils.product_name), so the rewrite is
+    idempotent and a second pass is a no-op),
     never noted as the person's own
     words (history_chat.verified_speaker), and _stop_owner_key adds
     "|host" so it stops/adds to its own turns only. Each user line saves
