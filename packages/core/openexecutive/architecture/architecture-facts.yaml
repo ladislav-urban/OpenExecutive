@@ -10740,12 +10740,20 @@ integrations:
     on a 13-week outlook and came back truncated. Sales Invoice and Purchase
     Invoice each: company, docstatus 1, outstanding_amount != 0 (not > 0: a
     return carries a negative outstanding), due_date up to the outlook's
-    end; group_by [due_date, currency]; SUM(outstanding_amount) as
-    outstanding, COUNT(*) as invoices. Then each ordered by
+    end; group_by [due_date, party_account_currency]; SUM(outstanding_amount)
+    as outstanding, COUNT(*) as invoices. Then each ordered by
     outstanding_amount desc, limit 10, for the largest items. list_records
     buckets only by year / quarter / month, so the model puts due dates in
-    weeks itself. Outstanding is in the party's currency: never summed
-    across currencies (quote each, or convert at a stated rate). The read
+    weeks itself. outstanding_amount's options are party_account_currency
+    (the Debtors / Creditors account's currency), not `currency` (the
+    invoice's): a EUR invoice booked to a USD account has a USD
+    outstanding, so grouping by `currency` would mislabel it and convert it
+    twice. party_account_currency is a hidden field in the form, but
+    oe_connector's is_hidden_field drops only Password / Phone / Email and
+    bank details, so list_records reads and groups by it (its own chart
+    view filters on it too). Never summed across currencies: quote each,
+    or convert only at a rate the turn read (a Currency Exchange record),
+    never one from memory. The read
     covers invoices only (no opening balances or manual journal entries), so
     its total is compared with the AR / AP Summary's when that matters.
     Eval: erpnext_101.
