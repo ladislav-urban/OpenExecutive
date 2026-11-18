@@ -232,3 +232,30 @@ def test_prose_around_tables_is_cut_as_before() -> None:
     )
     assert new_line(earlier, text) == new_line(earlier, text.replace("\n", " "))
     assert new_line(earlier, text).startswith("I couldn't leave her a note from here.")
+
+
+def test_a_dropped_table_keeps_its_not_done_notice() -> None:
+    notice = "Not done: I don't have permission to change credit holds."
+    table = "\n".join([
+        "| Customer | Action | Result |",
+        "|---|---|---|",
+        "| Acme Corporation | Release the credit hold | " + notice + " |",
+        "| Borealis Trading | Send the overdue reminder | Drafted for your review in the inbox |",
+        "| Pinecrest Supply | Chase the payment | Waiting on their accounts team |",
+    ])
+    table += " " * (303 - len(table) - 1) + "|"
+    assert len(table) == 303
+    line = new_line("Hello.", table)
+    assert "|" not in line
+    assert notice in line
+    assert len(line) <= 300
+
+
+def test_a_lone_pipe_line_that_says_it_isnt_done_is_kept() -> None:
+    line = new_line("Hello.", "| I couldn't remove the hold on Acme: I don't have permission.")
+    assert line == "I couldn't remove the hold on Acme: I don't have permission."
+
+
+def test_a_not_done_row_the_reply_already_says_is_not_repeated() -> None:
+    earlier = "I couldn't remove the hold on Acme: I don't have permission."
+    assert new_line(earlier, "| I couldn't remove the hold on Acme: I don't have permission.") == ""

@@ -192,29 +192,47 @@ def _table_rows(table: str) -> list[str]:
     return lines[1:]
 
 
+def _plain(line: str) -> str:
+    """A table line as plain text: its cells, without the pipes."""
+    return " ".join(c.strip() for c in line.strip().strip("|").split("|") if c.strip())
+
+
 def new_line(earlier: str, text: str) -> str:
     """From an extra round's ``text``, the sentences ``earlier`` (the reply so
     far) doesn't already say, cut to one short line. A sentence that says
     something isn't done comes first and is always kept (cut if it alone is
     longer than ``MAX_LINE_CHARS``); the rest fill the line in order. A pipe
     table is one unit: new when one of its rows is, kept whole when it fits,
-    else dropped whole, and a header with no row is never kept."""
+    else dropped whole, and a header with no row is never kept. A dropped
+    table's lines that say something isn't done are still kept, as plain
+    sentences, the way such a sentence is."""
     said = _Said()
     for s in sentences(earlier)[-MAX_EARLIER:]:
         said.add(s)
     fresh: list[str] = []
-    tables: set[str] = set()
+    # Each new table, with the lines in it that say something isn't done.
+    tables: dict[str, list[str]] = {}
     for s, is_table in _units(text)[:MAX_SENTENCES]:
-        if is_table:
-            rows = _table_rows(s)
-            if rows and any(not said.has(r) for r in rows):
+        if not is_table:
+            if not said.has(s):
                 fresh.append(s)
-                tables.add(s)
-            for r in s.split("\n"):
-                said.add(r)
-        elif not said.has(s):
+                said.add(s)
+            continue
+        lines = [line for line in s.split("\n") if not _TABLE_SEPARATOR.fullmatch(line)]
+        rows = _table_rows(s)
+        new_table = bool(rows) and any(not said.has(r) for r in rows)
+        notices: list[str] = []
+        for line in lines:
+            plain = _plain(line)
+            if plain and _negative(plain) and not said.has(plain):
+                notices.append(plain)
+                said.add(plain)
+            said.add(line)
+        if new_table:
             fresh.append(s)
-            said.add(s)
+            tables[s] = notices
+        else:
+            fresh.extend(notices)
     failures = [s for s in fresh if s not in tables and _negative(s)]
     others = [s for s in fresh if s in tables or not _negative(s)]
     kept: list[str] = []
@@ -228,7 +246,18 @@ def new_line(earlier: str, text: str) -> str:
             break
         kept.append(s)
         size += cost
-    kept.sort(key=fresh.index)
+    place = {s: fresh.index(s) for s in kept}
+    # A table left out still says what isn't done, where it stood.
+    for table, notices in tables.items():
+        if table in place:
+            continue
+        for notice in notices:
+            if kept and size + len(notice) + 1 > MAX_LINE_CHARS:
+                continue
+            kept.append(notice)
+            size += len(notice) + 1
+            place[notice] = fresh.index(table)
+    kept.sort(key=place.__getitem__)
     line = ""
     for s in kept:
         if s in tables:
