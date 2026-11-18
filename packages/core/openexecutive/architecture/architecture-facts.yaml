@@ -5728,20 +5728,22 @@ chat:
     the change or say it isn't done. Once a turn, never on the last
     iteration, fails open. Why: replies said "Done" or "I'll treat it as
     closed" with no tool call, and the brief kept the item.
-    A figure correction is not a claim (claim_check.correction, code): a
-    claimed phrase whose sentence says what a system shows against a figure
-    the reply gave ("now shows 123, not the 67 I gave earlier", "shows X,
-    not Y as I said") and that names no change verb is dropped; "I've
-    updated X" still counts. The streamed web chat's extra round keeps one
+    The streamed web chat's extra round keeps one
     short line of what the reply didn't say (utils.repeats.new_line, 300
     chars; a pipe table is one unit there, kept with its rows or dropped,
-    never a bare header). A collected reply (Executive.chat: ERPNext panel,
+    never a bare header, and a dropped table's "isn't done" row is still
+    kept as a plain sentence). A collected reply (Executive.chat: ERPNext panel,
     chat apps, email) is written again whole after a "rewrite" event and
     never trimmed; stream_chat (and the committee's draft) reset what they
     hold on that event, so the answer check, reply_replaced, session
     history and the chat_turn audit row all carry the rewrite, not the
-    first draft (an empty retry keeps the first). Why: evals erpnext_075
-    and 064, Nov 18, 2026: a false positive on a figure correction threw
+    first draft. A retry that ends up empty keeps the first draft with
+    executive.REWRITE_EMPTY_NOTE after it ("I couldn't confirm that this
+    was done, so treat it as not done."), in what is sent, kept in history
+    and audited alike. A figure correction the check flags by mistake
+    ("now shows 123, not the 67 I gave earlier") is left to the model: it
+    costs one extra round, and the rewrite reaches the person whole. Why:
+    evals erpnext_075 and 064, Nov 18, 2026: such a false positive threw
     away a complete reply with a six-row table; the rewrite came back cut
     to 294 chars ending at the table's header, or garbled as the first
     draft plus the stray line.
