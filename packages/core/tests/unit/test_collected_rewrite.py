@@ -13,6 +13,7 @@ which session history and the audit row kept too.
 from __future__ import annotations
 
 import asyncio
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
@@ -231,6 +232,13 @@ def test_the_committee_reviews_the_rewritten_draft(monkeypatch: pytest.MonkeyPat
         return [Critique("quality_judge", "low", "ok", "none")]
 
     class _Stream:
+        """The revision: one text delta."""
+
+        def __init__(self) -> None:
+            self._events = [
+                SimpleNamespace(type="content_block_delta", delta=SimpleNamespace(type="text_delta", text="Revised."))
+            ]
+
         async def __aenter__(self) -> _Stream:
             return self
 
@@ -241,7 +249,9 @@ def test_the_committee_reviews_the_rewritten_draft(monkeypatch: pytest.MonkeyPat
             return self
 
         async def __anext__(self) -> Any:
-            raise StopAsyncIteration
+            if not self._events:
+                raise StopAsyncIteration
+            return self._events.pop(0)
 
         async def get_final_message(self) -> None:
             return None
