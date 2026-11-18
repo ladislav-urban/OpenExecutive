@@ -11596,7 +11596,7 @@ integrations:
     phrase replies must not say. No panel block (both channel blocks and
     the host page block) says "beside the panel" at all, since replies
     echoed it ("I opened the Accounts Payable report beside the panel") and
-    nine panel evals forbid it: SHOW_RULE ends "Never mention opening or
+    eight panel evals forbid it: SHOW_RULE ends "Never mention opening or
     showing it, or where it appears: the person already sees it.",
     SCREEN_RULE says "say the screen they have open shows it" (no screen
     eval, erpnext_020/021/032/033/080, asks for the old words), and
@@ -11609,7 +11609,7 @@ integrations:
     only because the top-level eval runner did not apply the policy then). The
     precedence sits in the panel rule, in the user turn ("on the panel that
     is how you show the arithmetic and every assumption"), so the cached
-    policy text is unchanged (evals erpnext_094, erpnext_099); SCREEN_RULE adds that beside
+    policy text is unchanged (eval erpnext_094); SCREEN_RULE adds that beside
     such a screen the turn can't see what it shows (briefing, watches,
     people, memory, settings), so it says so and suggests Conversations rather than
     guess, never sending the person to the screen they already have open (evals erpnext_020, erpnext_021: a scenario's `page` becomes the

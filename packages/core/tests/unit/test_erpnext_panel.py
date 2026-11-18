@@ -293,7 +293,7 @@ def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
         assert "Lead with the answer in a sentence or two" in block
         assert "never the rows that stay the same" in block
         assert "Don't list again what an earlier answer in the panel already showed" in block
-        # A starting figure is one figure (eval erpnext_099: today's cash by
+        # A starting figure is one figure (the Nov 18, 2026 gate: today's cash by
         # account listed under a question about one week).
         assert "is one figure, not broken down by account or invoice" in block
         assert "arithmetic for each result in one short line, not every step" in block
@@ -316,14 +316,14 @@ def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
         assert "stays in words, kept short" in block
     assert "cash by account" not in erpnext_panel.BRIEF_RULE
     # Nothing a reply might echo: "beside the panel" is a phrase the panel's
-    # replies must not say (SHOW_RULE; evals erpnext_094, erpnext_099).
+    # replies must not say (SHOW_RULE; eval erpnext_094).
     assert "beside the panel" not in erpnext_panel.BRIEF_RULE
 
 
 def test_no_panel_block_says_beside_the_panel() -> None:
     # Replies echoed the blocks' own phrase ("I opened the Accounts Payable
-    # report beside the panel", "is open beside the panel"), and nine panel
-    # evals forbid it (erpnext_054, erpnext_099 among them).
+    # report beside the panel", "is open beside the panel"), and eight panel
+    # evals forbid it (erpnext_054 among them).
     from openexecutive.api.models import ErpnextPage
     from openexecutive.api.routes.chat import _host_page_block
 
