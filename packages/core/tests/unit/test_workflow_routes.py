@@ -747,7 +747,9 @@ def test_a_jobs_page_run_is_its_starters_and_reads_as_them(
 
 
 # The eval runner calls workflow.run directly on live data and streams the
-# artifact back, so POST /evals/runs applies the same rule.
+# artifact back, so POST /evals/runs takes the same caller rule — for every
+# scenario, not only a principal-only workflow (api.routes.evals._principal_only;
+# tests/integration/test_evals_principal_only.py covers every route).
 
 def _eval_client(
     principal_only: Any, monkeypatch: pytest.MonkeyPatch, scenarios: list[dict]
@@ -779,25 +781,25 @@ def _scenario(workflow: str, mode: str | None = None) -> dict:
     return s
 
 
-def test_eval_run_of_a_principal_only_workflow_refuses_a_teammate(
+def test_eval_run_of_any_workflow_refuses_a_teammate(
     principal_only: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from openexecutive.api.routes.evals import PRINCIPAL_ONLY_DETAIL
+
     _roster()
     _set_mode("team")
-    # The weekly review in either mode; the morning brief as a solo scenario
-    # on a team install (the scenario's mode is the one it runs in).
+    # The weekly review in either mode, the morning brief in solo, and the
+    # workflows anyone may start from the Jobs page (the team morning brief,
+    # board prep): an eval run of any of them is the principal's.
     for scenario in (_scenario("weekly_review", "solo"), _scenario("weekly_review"),
-                     _scenario("morning_brief", "solo")):
-        client, ran = _eval_client(principal_only, monkeypatch, [_scenario("board_prep"), scenario])
+                     _scenario("morning_brief", "solo"), _scenario("morning_brief"),
+                     _scenario("board_prep")):
+        client, ran = _eval_client(principal_only, monkeypatch, [scenario])
         body = {"kind": "workflow"}
         r = client.post("/evals/runs", json=body, headers={"x-caller-email": TEAMMATE_EMAIL})
         assert r.status_code == 403, (scenario, r.text)
-        assert r.json()["detail"] == f"Only the principal can run the {scenario['id']} eval."
+        assert r.json()["detail"] == PRINCIPAL_ONLY_DETAIL
         assert ran == []
-    refusals = _refusals(principal_only.audit)
-    assert [d["surface"] for d in refusals] == ["evals"] * 3
-    assert [d["workspace_mode"] for d in refusals] == ["solo", "team", "solo"]
-    assert refusals[0]["scenario_id"] == "wf_weekly_review"
 
 
 def test_eval_run_with_no_principal_on_the_roster(
@@ -826,13 +828,8 @@ def test_eval_run_of_a_principal_only_workflow_allows_the_principal(
         r = client.post("/evals/runs", json={"kind": "workflow"}, headers=headers)
         assert r.status_code == 200, r.text
         assert _sse_events(r.text)[-1]["type"] == "done"
-    # The runner gets the very list that was checked, not a fresh load.
+    # The runner gets the very list that was loaded, not a fresh load.
     assert ran == [scenarios, scenarios]
-    # A teammate may still run the team morning brief scenario.
-    client, ran = _eval_client(principal_only, monkeypatch, [_scenario("morning_brief")])
-    r = client.post("/evals/runs", json={"kind": "workflow"},
-                    headers={"x-caller-email": TEAMMATE_EMAIL})
-    assert r.status_code == 200, r.text
     assert _refusals(principal_only.audit) == []
 
 
