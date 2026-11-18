@@ -1,0 +1,34 @@
+id: erpnext_099
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Accounts Receivable
+prior_turns:
+- page:
+    report: Accounts Receivable
+  user: How much cash do we have across all our accounts, and what will it look like week by week for the next 13 weeks?
+  live: true
+description: 'A single-figure follow-up to the cash outlook (the same first turn as erpnext_094, run live so the question follows the real 13-week answer on the day''s data) in ERPNext''s panel as a demo person, under explain. Asked which week is tightest, the reply leads with that week and the cash it ends at, gives the arithmetic for it in one short line and its assumptions in a few words, and stops there: no week-by-week table, no starting cash by account again, no chain of intermediate steps. It still reads the cash and what falls due from ERPNext on this turn, its week and figure agree with the outlook the first turn gave (or it says why they differ), and its one line of arithmetic adds up to the figure it gives (fewer steps, never fewer terms). The panel''s brevity rule (erpnext_panel.BRIEF_RULE) is what keeps explain''s arithmetic and assumptions short there; before it, erpnext_094''s replies under explain ran to 2,300-2,700 characters.'
+query: Which week is the tightest, and what does cash end at that week?
+expected_tool_calls:
+- call_tool
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- beside the panel
+quality_criteria:
+  leads_with_the_tightest_week_and_the_cash_it_ends_at: true
+  reads_the_tightest_week_and_its_end_balance_on_this_turn_and_they_agree_with_the_earlier_outlook_or_it_says_why_they_differ: true
+  gives_the_arithmetic_for_that_figure_in_a_short_line: true
+  the_short_arithmetic_line_adds_up_to_the_figure_it_gives: true
+  names_the_assumptions_briefly: true
+  does_not_print_a_week_by_week_table_or_the_unchanged_weeks: true
+  does_not_list_the_starting_cash_by_account_again: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

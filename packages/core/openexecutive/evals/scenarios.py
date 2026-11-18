@@ -293,30 +293,77 @@ def scenario_query(scenario: dict[str, Any]) -> str:
     return f"{where}\n\n{scenario['query']}" if where else scenario["query"]
 
 
-def scenario_prior_turns(scenario: dict[str, Any]) -> list[tuple[str, str]]:
+@dataclass(frozen=True)
+class PriorTurn:
+    """One of a scenario's ``prior_turns``: ``message`` as the turn sent it
+    (its page block first), ``typed`` as the person typed it, and ``reply``
+    its fixed answer, or None for a ``live: true`` turn, which the runner
+    runs (``runner.run_chat_turn``)."""
+
+    message: str
+    typed: str
+    reply: str | None
+
+
+def parse_prior_turns(scenario: dict[str, Any]) -> list[PriorTurn]:
     """The conversation before the scenario's question (``prior_turns``):
-    ``[{user, assistant, page?}]``, oldest first, as (user message, reply).
-    A turn's ``page`` puts the page block before its message, as
-    ``scenario_query`` does for the question. Seeded into the session's
-    history, so a follow-up is judged as the person asked it."""
+    ``[{user, assistant, page?}]`` or ``[{user, live: true, page?}]``,
+    oldest first. A turn's ``page`` puts the page block before its message,
+    as ``scenario_query`` does for the question. A fixed turn is seeded into
+    the session's history as written; a live one has no ``assistant`` and
+    is run first, so the question follows the real reply (an ERPNext
+    follow-up whose fixed answer would hold no figures, or stale ones)."""
     raw = scenario.get("prior_turns")
     if raw is None:
         return []
     if not isinstance(raw, list) or not raw:
-        raise ValueError("`prior_turns`: a list of {user, assistant, page?}")
-    turns: list[tuple[str, str]] = []
+        raise ValueError("`prior_turns`: a list of {user, assistant, page?} or {user, live: true, page?}")
+    turns: list[PriorTurn] = []
     for turn in raw:
-        if not isinstance(turn, dict) or set(turn) - {"user", "assistant", "page"}:
-            raise ValueError("`prior_turns`: each turn is {user, assistant, page?}")
+        if not isinstance(turn, dict) or set(turn) - {"user", "assistant", "page", "live"}:
+            raise ValueError("`prior_turns`: each turn is {user, assistant, page?} or {user, live: true, page?}")
+        live = turn.get("live", False)
+        if not isinstance(live, bool):
+            raise ValueError("`prior_turns`: `live` must be true or false")
         user, reply = turn.get("user"), turn.get("assistant")
-        if not (isinstance(user, str) and user.strip() and isinstance(reply, str) and reply.strip()):
-            raise ValueError("`prior_turns`: each turn needs a non-empty user and assistant")
-        turns.append((scenario_query({"query": user, "page": turn.get("page")}), reply))
+        if not (isinstance(user, str) and user.strip()):
+            raise ValueError("`prior_turns`: each turn needs a non-empty user")
+        if live and "assistant" in turn:
+            raise ValueError("`prior_turns`: a live turn has no assistant (its reply is the one it gets when run)")
+        if not live and not (isinstance(reply, str) and reply.strip()):
+            raise ValueError("`prior_turns`: each turn needs a non-empty user and assistant, unless it is live")
+        message = scenario_query({"query": user, "page": turn.get("page")})
+        turns.append(PriorTurn(message=message, typed=user, reply=None if live else reply))
     return turns
 
 
+def scenario_prior_turns(scenario: dict[str, Any]) -> list[tuple[str, str]]:
+    """The scenario's ``prior_turns`` as (user message, reply), for a
+    scenario whose turns all have their reply: fixed ones, or live ones the
+    runner has run (``with_prior_replies``). Raises for a live turn not run
+    yet, which has no reply to seed or show."""
+    turns = parse_prior_turns(scenario)
+    if any(t.reply is None for t in turns):
+        raise ValueError("`prior_turns`: a live turn has no reply until it is run")
+    return [(t.message, t.reply or "") for t in turns]
+
+
+def with_prior_replies(scenario: dict[str, Any], replies: list[str]) -> dict[str, Any]:
+    """``scenario`` as it ran: each prior turn with the reply it had, a live
+    turn's being the real one, so the judge sees the conversation the
+    question followed (``prior_turns_section``)."""
+    raw = scenario.get("prior_turns")
+    if not raw:
+        return scenario
+    turns = [
+        {**{k: v for k, v in turn.items() if k != "live"}, "assistant": reply}
+        for turn, reply in zip(raw, replies, strict=True)
+    ]
+    return {**scenario, "prior_turns": turns}
+
+
 def seed_prior_turns(session: Any, scenario: dict[str, Any]) -> None:
-    """Put the scenario's ``prior_turns`` in ``session``'s history."""
+    """Put the scenario's fixed ``prior_turns`` in ``session``'s history."""
     for user, reply in scenario_prior_turns(scenario):
         session.add_user_message(user)
         session.add_assistant_message(reply)
@@ -761,7 +808,7 @@ def validate_scenario_yaml(raw: str) -> dict[str, Any]:
         except ValueError as e:
             raise ValueError(f"`surface`: {e}") from e
     if s.get("prior_turns") is not None:
-        scenario_prior_turns(s)
+        parse_prior_turns(s)
     if s.get("decided_cards") is not None:
         scenario_decided_cards(s)
     for key in ("expected_view_kinds", "forbidden_view_kinds"):

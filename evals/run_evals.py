@@ -58,8 +58,9 @@ async def evaluate_chat(scenario: dict, executive) -> dict:
     result = await run_eval(scenario, executive, None)
     turn = result.pop("turn")
     # Act as me: the drafts it saved, which the judge reads, as the package
-    # runner gives them to judge_chat.
-    scores = await judge_response(scenario, turn.response, drafts=turn.drafts)
+    # runner gives them to judge_chat; and the conversation as it ran (a
+    # live prior turn's real reply), as it gives judge_chat that too.
+    scores = await judge_response(turn.judged_scenario(scenario), turn.response, drafts=turn.drafts)
     held = chat_checks(scenario, turn, scores)
     result["scores"] = scores
     result["passed"] = float(scores.get("overall", 0) or 0) >= 3.5 and held

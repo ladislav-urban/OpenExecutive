@@ -87,6 +87,7 @@ from openexecutive.evals.scenarios import (
     WATCH_REASON,
     SupplierCase,
     load_scenarios,
+    parse_prior_turns,
     reply_check_failures,
     routing_check,
     scenario_decided_cards,
@@ -98,8 +99,8 @@ from openexecutive.evals.scenarios import (
     scenario_turn_surface,
     scenario_voice_persona,
     scenario_watch_reason,
-    seed_prior_turns,
     view_kinds_check,
+    with_prior_replies,
 )
 from openexecutive.workflows.gate import ensure_workflow_event
 
@@ -633,6 +634,19 @@ class ChatTurn:
     views: list[dict[str, Any]] = field(default_factory=list)
     # Act as me: the drafts it saved for the asker; None without ``delegation``.
     drafts: list[dict[str, Any]] | None = None
+    # The reply each of the scenario's prior turns had, oldest first: a fixed
+    # turn's as written, a live turn's as it ran (``with_prior_replies``).
+    prior_replies: list[str] = field(default_factory=list)
+
+    def judged_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
+        """``scenario`` with its prior turns' replies as they ran, for the
+        judge's view of the conversation (``prior_turns_section``)."""
+        return with_prior_replies(scenario, self.prior_replies)
+
+
+# Why a scenario fails when a live prior turn errors or answers nothing:
+# the question would follow a conversation that never happened.
+LIVE_TURN_FAILED = "live prior turn {n} failed, so the question has no conversation to follow: {why}"
 
 
 async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
@@ -641,7 +655,14 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
     mode, role, voice, Act as me mailbox, surface (the panel's marks and
     channel block), prior turns and decided cards. Both runners use it, this
     module's and the repo's ``evals/run_evals.py``, so a scenario runs (and
-    is held to ``chat_checks``) the same way in each."""
+    is held to ``chat_checks``) the same way in each.
+
+    A fixed prior turn is seeded into the session's history as written. A
+    ``live: true`` one is run first, on the same session and with every
+    override above, as the person would have asked it; the real reply is the
+    history the question follows. Only the question's turn is returned and
+    checked: its specialists and views are its own. A live turn that errors
+    or answers nothing fails the scenario (``LIVE_TURN_FAILED``)."""
     from openexecutive.integrations.erpnext_drafts import decided_cards_override
     from openexecutive.integrations.erpnext_panel import TurnViews, collect_views
     from openexecutive.memory.company_profile import CompanyProfile
@@ -685,44 +706,65 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
             delegation_override=delegation,
             **surface,
         )
-        # A follow-up: the turns it follows, in the session's history.
-        seed_prior_turns(session, scenario)
+
+        async def one_turn(message: str, typed: str, collector: DebugCollector | None) -> tuple[str, TurnViews]:
+            # A panel turn keeps the views its show calls opened, as the
+            # panel's route collects them (view_kinds_check).
+            shown = TurnViews()
+            views_ctx = collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
+            with views_ctx:
+                response = await executive.chat(
+                    user_message=message,
+                    # The question as the person typed it, without the page
+                    # block scenario_query puts in front: what the panel
+                    # passes as the answer check's typed_question.
+                    typed_question=typed,
+                    session=session,
+                    channel_context_block=channel_block,
+                    # chat() sets the turn's speaker from this, as the chat
+                    # route passes the signed-in person: a `speaker`
+                    # scenario's caller, else None.
+                    person_id=surface.get("caller_person_id"),
+                    debug_collector=collector,
+                    # A scenario may supply the <peer_memory> body itself.
+                    # Evals run with no person_id, so the Honcho prefetch
+                    # never fires; this is the only way to exercise how the
+                    # Executive USES peer memory. None keeps chat()'s default.
+                    peer_memory_context=scenario.get("peer_memory_context"),
+                    # Likewise the <standing_facts> body (memory/facts.py):
+                    # the scenario's own lines under the shared header, or
+                    # none: an eval never reads the install's facts.
+                    standing_facts=scenario_standing_facts(scenario),
+                    # The model's own words: the channels' backstop
+                    # (connected_systems.in_product_reply) would hide one
+                    # that names ERPNext on a named install (erpnext_027).
+                    # What code adds to a reply is in the product's words
+                    # where it's added.
+                    product_words=False,
+                )
+            return response, shown
+
+        # A follow-up: the turns it follows, in the session's history. A
+        # live one goes through chat() like the question, which keeps the
+        # turn in the history as the route does.
+        prior_replies: list[str] = []
+        for n, prior in enumerate(parse_prior_turns(scenario), start=1):
+            if prior.reply is not None:
+                session.add_user_message(prior.message)
+                session.add_assistant_message(prior.reply)
+                prior_replies.append(prior.reply)
+                continue
+            try:
+                reply, _ = await one_turn(prior.message, prior.typed, None)
+            except Exception as exc:
+                raise RuntimeError(LIVE_TURN_FAILED.format(n=n, why=f"{type(exc).__name__}: {exc}")) from exc
+            if not (reply or "").strip():
+                raise RuntimeError(LIVE_TURN_FAILED.format(n=n, why="it answered nothing"))
+            prior_replies.append(reply)
         query = scenario_query(scenario)
         # Records which specialists the turn consulted (routing_check).
         collector = DebugCollector()
-        # A panel turn keeps the views its show calls opened, as the panel's
-        # route collects them (view_kinds_check).
-        shown = TurnViews()
-        views_ctx = collect_views(shown) if surface.get("erpnext_panel_email") else contextlib.nullcontext()
-        with views_ctx:
-            response = await executive.chat(
-                user_message=query,
-                # The question as the person typed it, without the page block
-                # scenario_query puts in front: what the panel passes as the
-                # answer check's typed_question.
-                typed_question=scenario["query"],
-                session=session,
-                channel_context_block=channel_block,
-                # chat() sets the turn's speaker from this, as the chat route
-                # passes the signed-in person: a `speaker` scenario's caller,
-                # else None.
-                person_id=surface.get("caller_person_id"),
-                debug_collector=collector,
-                # A scenario may supply the <peer_memory> body itself. Evals
-                # run with no person_id, so the Honcho prefetch never fires;
-                # this is the only way to exercise how the Executive USES
-                # peer memory. None keeps chat()'s default.
-                peer_memory_context=scenario.get("peer_memory_context"),
-                # Likewise the <standing_facts> body (memory/facts.py): the
-                # scenario's own lines under the shared header, or none: an
-                # eval never reads the install's facts.
-                standing_facts=scenario_standing_facts(scenario),
-                # The model's own words: the channels' backstop
-                # (connected_systems.in_product_reply) would hide one that
-                # names ERPNext on a named install (erpnext_027). What code
-                # adds to a reply is in the product's words where it's added.
-                product_words=False,
-            )
+        response, shown = await one_turn(query, scenario["query"], collector)
     finally:
         decided_cards_override.reset(cards_token)
         advice_policy_override.reset(policy_token)
@@ -735,6 +777,7 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
         ],
         views=list(shown.views),
         drafts=[asdict(d) for d in delegation.gmail.drafts] if delegation is not None else None,
+        prior_replies=prior_replies,
     )
 
 
@@ -811,10 +854,13 @@ def _make_chat_runner(
                 try:
                     turn = await run_chat_turn(executive_for_scenario(), scenario)
                     query, response = turn.query, turn.response
+                    # The judge sees the conversation as it ran: a live prior
+                    # turn's real reply, not the scenario's empty slot.
+                    judged = turn.judged_scenario(scenario)
                     if turn.drafts is not None:
-                        scores = await judge_chat(scenario, response, drafts=turn.drafts)
+                        scores = await judge_chat(judged, response, drafts=turn.drafts)
                     else:
-                        scores = await judge_chat(scenario, response)
+                        scores = await judge_chat(judged, response)
                     held = chat_checks(scenario, turn, scores)
                     ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD and held
                     if ok:

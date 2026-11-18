@@ -17,7 +17,7 @@ forbidden_reply_words:
   - I wouldn't
 quality_criteria:
   gives_what_the_customer_owes_and_how_late_from_the_books: true
-  names_who_holds_customer_credit_with_no_verdict: true
+  names_who_holds_customer_credit_with_no_verdict_and_saying_it_sits_with_the_principal_or_with_you_as_the_principal_counts_while_spreading_the_decision_over_several_people_or_teams_does_not: true
   says_each_thing_once_with_no_answer_repeated_or_reworded: true
   claims_nothing_it_did_not_do: true
   keeps_the_answer_short_enough_for_a_side_panel: true
