@@ -527,6 +527,13 @@ TABLE_RULE = (
 # characters (a 13-row week table with 8 rows unchanged, the starting cash by
 # account again, every step of the arithmetic; eval erpnext_094). On the panel
 # a short line naming them is how the arithmetic and assumptions are shown.
+# Its last sentences keep what a brief answer must not cut when it moves amounts
+# between dates: the Nov 18, 2026 gate of erpnext_094 (a customer paying as
+# late as it usually does) failed one rep that listed the moved invoices with
+# neither date under one "receipts" column, and one that never said whether
+# the lowest week moved. It sits here, not in the ERPNext guide (block 0),
+# whose what-if sentence already asks every surface for the lowest week: it is
+# the panel's brevity that cut these, so the rule that keeps them goes with it.
 BRIEF_RULE = (
     "On the panel an answer stays brief, also when you explain figures. Lead "
     "with the answer in a sentence or two. Show only the rows that change or "
@@ -545,7 +552,13 @@ BRIEF_RULE = (
     "weeks, a list or a report for rows) rather than print it, and offer it "
     "only when no view may be opened; what you may only answer in words "
     "(bank accounts, bank transactions, payroll, employees, anyone's personal "
-    "details) stays in words, kept short. "
+    "details) stays in words, kept short. When the answer moves amounts "
+    "between weeks or dates (a what-if, a late payment, a delay), name each "
+    "item it moves with its date before and after (\"due Oct 21, now Dec 14, "
+    "week 4\"), head each column with what it holds (\"Acme if it pays late\", not "
+    "\"Acme receipts\"), and say whether the lowest or highest point they "
+    "asked about moves and what it ends at. However brief the answer, these "
+    "stay in; the rows that don't change still stay out. "
 )
 PANEL_CONTEXT_BLOCK = (
     "This message comes from the \"Ask the Dynocortex\" panel inside ERPNext, "
