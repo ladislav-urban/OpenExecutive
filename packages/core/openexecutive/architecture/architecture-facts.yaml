@@ -13245,6 +13245,9 @@ route_gates:
     entry read them; an email on no entry, a service call, a suspended or
     archived entry and an unreadable roster get 403. The same
     caller_is_member rule gates GET /memories/decisions and /initiatives.
+    caller_is_member takes as the principal exactly whoever principal_only
+    does (caller_is_the_principal), so local login and an open-mode call
+    that names no one read these even with no principal on the roster.
   memories_records: |
     api/routes/episodic.py: GET /memories/decisions and GET
     /memories/initiatives answer the principal (and local login) and an
