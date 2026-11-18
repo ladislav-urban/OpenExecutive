@@ -222,12 +222,12 @@ def test_a_report_of_stored_titles_goes_as_written(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, named: None,
 ) -> None:
     # Security check of this branch: the weekly review is code's rows of stored
-    # area and project titles, so the runner sends it as written. Pinned here
-    # through the brief's kind, the one the shared helper runs.
+    # area and project titles, so the runner sends it as written: the real
+    # weekly-review action, the set unpatched (review of 60963a02).
     from . import test_principal_briefs as briefs
 
-    assert "weekly_review" in runner._SENT_AS_WRITTEN
-    monkeypatch.setattr(runner, "_SENT_AS_WRITTEN", frozenset({"principal_brief_morning"}))
+    # The weekly review is solo only; this test is about its wording.
+    monkeypatch.setattr(runner, "_team_for_sure", lambda kind: False)
     delivered: list[str] = []
 
     async def deliver(text: str, **_kw: object) -> runner.PrincipalDelivery:
@@ -236,7 +236,7 @@ def test_a_report_of_stored_titles_goes_as_written(
 
     monkeypatch.setattr(runner, "_with_held_messages", lambda kind, artifact: (artifact, []))
     workflow = briefs._fake_brief_workflow("fp-2", "### ERPNext rollout\n- **Migrate invoices to ERPNext**")
-    briefs._run_brief(tmp_path, monkeypatch, workflow=workflow, deliver=deliver)
+    briefs._run_brief(tmp_path, monkeypatch, workflow=workflow, deliver=deliver, kind=runner.WEEKLY_REVIEW_KIND)
     assert delivered == ["### ERPNext rollout\n- **Migrate invoices to ERPNext**"]
 
 

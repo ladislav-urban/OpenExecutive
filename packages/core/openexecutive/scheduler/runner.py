@@ -38,10 +38,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Scheduled reports sent as written on a named install: code's rows of
-# stored titles, not the model's prose (connected_systems.in_product_reply).
-_SENT_AS_WRITTEN = frozenset({"weekly_review"})
-
 
 # Strong refs so GC cannot cancel in-flight tasks mid-execution.
 _inflight: set[asyncio.Task[None]] = set()
@@ -1918,6 +1914,10 @@ _RECURRING_KIND_ENV: dict[str, tuple[str, str]] = {
 _WEEKLY_KINDS: frozenset[str] = frozenset({WEEKLY_REVIEW_KIND, GOAL_REVIEW_KIND})
 # Kinds that exist only in a solo workspace.
 _SOLO_ONLY_KINDS: frozenset[str] = frozenset({WEEKLY_REVIEW_KIND})
+# Scheduled reports sent as written on a named install: code's rows of
+# stored titles, not the model's prose (connected_systems.in_product_reply).
+# Action kinds, as _run_principal_brief compares them.
+_SENT_AS_WRITTEN: frozenset[str] = frozenset({WEEKLY_REVIEW_KIND})
 # The recurring principal kinds that run a workflow and deliver its artifact
 # to the principal (see _run_principal_brief).
 _PRINCIPAL_WORKFLOWS: dict[str, str] = {
