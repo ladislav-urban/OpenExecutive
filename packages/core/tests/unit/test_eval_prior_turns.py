@@ -81,7 +81,7 @@ def test_the_follow_up_scenarios_load_and_validate() -> None:
     shipped = {s["id"]: s for s in load_scenarios()}
     for sid in ("erpnext_063", "erpnext_064", "erpnext_065"):
         s = shipped[sid]
-        assert len(scenario_prior_turns(s)) >= 1, sid
+        assert len(parse_prior_turns(s)) >= 1, sid
         validate_scenario_yaml(yaml.safe_dump(s))
     assert scenarios.scenario_surface(shipped["erpnext_063"]) == "erpnext_panel"
 
