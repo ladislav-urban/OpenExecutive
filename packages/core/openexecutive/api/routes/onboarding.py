@@ -186,6 +186,16 @@ async def submit_answer(body: OnboardAnswerRequest, request: Request) -> Onboard
 
 
 async def _fire_post_onboarding_research(session_id: str) -> None:
+    """``_post_onboarding_research`` under its own budget for the cost caps:
+    the job ``post-onboarding-research`` (its daily cap) and one turn of its
+    own (the turn cap), so more than the month's cap holds it."""
+    from openexecutive.audit import cost_caps
+
+    with cost_caps.bind_job("post-onboarding-research"), cost_caps.bind_turn(fresh=True):
+        await _post_onboarding_research(session_id)
+
+
+async def _post_onboarding_research(session_id: str) -> None:
     """Run the executive_research workflow once at end of onboarding.
 
     The workflow itself routes findings via the Executive's outbound
@@ -252,7 +262,10 @@ async def _fire_post_onboarding_research(session_id: str) -> None:
             _RESEARCH_WALLCLOCK_TIMEOUT_SECONDS, session_id,
         )
     except Exception as exc:
-        last_error = str(exc)[:200]
+        from openexecutive.workflows.persistence import run_failure_text
+
+        # The record says a fixed sentence; the detail stays in this log.
+        last_error = run_failure_text(exc)
         logger.exception(
             "post-onboarding research failed (session=%s)", session_id,
         )

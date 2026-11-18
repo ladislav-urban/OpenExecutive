@@ -566,7 +566,8 @@ class EndOfDayDigestWorkflow(Workflow):
             artifact_text = fix_slips(draft, reader)
         except Exception as exc:
             logger.exception("eod_digest: synthesis failed")
-            yield WorkflowEvent(type="error", message=f"Synthesis failed: {exc}")
+            # The detail is logged above; the stream and the record get fixed text.
+            yield WorkflowEvent(type="error", message=_synthesis_failed(exc))
             return
 
         # Nobody reads this before it ships: hold back any line naming a
@@ -596,3 +597,12 @@ class EndOfDayDigestWorkflow(Workflow):
 
 
 __all__ = ["BRIEF_KIND", "EndOfDayDigestWorkflow", "EndOfDayDigestInput"]
+
+
+def _synthesis_failed(exc: BaseException) -> str:
+    """What a failed synthesis says on the stream: a cap's own sentence, else
+    fixed text, never the exception's."""
+    from openexecutive.audit import cost_caps
+
+    cap = cost_caps.capped(exc)
+    return cap.reply() if cap is not None else "Writing the digest failed. Try again later."

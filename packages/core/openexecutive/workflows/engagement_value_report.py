@@ -20,6 +20,7 @@ belongs to the overnight-rotation phase.
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -231,7 +232,9 @@ def _resolve_context(inputs: EngagementValueReportInput) -> dict[str, Any]:
         try:
             slot = _require_slot(settings, slug)
         except ClientSlotError as exc:
-            raise _ContextError(str(exc)) from exc
+            # Fixed text on the stream; the slot's own message stays in the log.
+            logging.getLogger(__name__).warning("engagement report: client slot %r unreadable: %s", slug, exc)
+            raise _ContextError("That client's records couldn't be read.") from exc
         meta = _read_meta(slot)
         db_path = slot / "state.db"
         if not db_path.exists():

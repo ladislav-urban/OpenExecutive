@@ -14,6 +14,15 @@ isn't done, or failed, is never taken for a repeat of one that says it was:
 the line the extra round exists for. ``repeated_sentences`` finds a sentence a
 reply says twice, for the evals' deterministic check.
 
+For the evals' check only, two table rows or list items that both name
+figures, and not the same ones, are not repeats however alike their words: a
+forecast's rows ("| Jan 13 | 203,526.52 |" and "| Jan 20 | 203,526.52 |") and
+a list of invoices ("- $332.50 lands Nov 25", "- $645.90 lands Dec 28") (eval
+erpnext_094, Nov 18, 2026: 12 of 15 runs flagged such rows). Prose keeps the
+words-only rule, so a restated sentence with its figures written another way
+is still a repeat, and ``new_line`` (the claim check's extra round) is
+unchanged: words only.
+
 Cost is bounded: each sentence is compared on its first ``COMPARE_CHARS``
 characters, against at most ``MAX_EARLIER`` earlier sentences, and difflib's
 cheap upper bounds rule most pairs out before its quadratic ratio runs.
@@ -40,6 +49,10 @@ MAX_RATIOS = 2000
 
 _SENTENCE_END = re.compile(r"(?<=[.!?])[\"'”’)\]]*\s+|\n+")
 _WORD = re.compile(r"[a-z0-9$%.,]+")
+# A figure: ASCII digits, with the separators a number is written with.
+_FIGURE = re.compile(r"[0-9](?:[0-9,.]*[0-9])?")
+# A table row or a list item: where parallel lines differ only in figures.
+_ROW = re.compile(r"\s*(?:\||[-*\u2022]\s|[0-9]+[.)]\s)")
 # Words that say something isn't so or didn't happen.
 _NOT = re.compile(
     r"\b(?:not|no|never|cannot|can't|couldn't|didn't|isn't|wasn't|won't|"
@@ -65,6 +78,18 @@ def _norm(sentence: str) -> str:
     return " ".join(_WORD.findall(text.replace("'", ""))).strip(" .,")[:COMPARE_CHARS]
 
 
+def _figures(sentence: str) -> tuple[str, ...]:
+    """The figures a table row or list item names, as a sorted multiset
+    ("$5,382.50" and "$5382.50" alike), from as much of it as is compared and
+    as much again; () for prose, or a row with no figure."""
+    row = _ROW.match(sentence)
+    if not row:
+        return ()
+    # The item's own marker ("1) ") is not one of its figures.
+    body = sentence[row.end():][: COMPARE_CHARS * 2]
+    return tuple(sorted(f.replace(",", "") for f in _FIGURE.findall(body)))
+
+
 def _negative(sentence: str) -> bool:
     return _NOT.search(sentence.replace("’", "'").lower()) is not None
 
@@ -76,12 +101,14 @@ def _failed(sentence: str) -> bool:
 class _Said:
     """Sentences said so far, normalized, with whether each says "not"."""
 
-    def __init__(self) -> None:
-        self._items: list[tuple[str, bool]] = []
+    def __init__(self, *, rows_by_figures: bool = False) -> None:
+        self._items: list[tuple[str, bool, tuple[str, ...]]] = []
         self._ratios = 0
+        # The evals' check: rows naming different figures differ.
+        self._rows_by_figures = rows_by_figures
 
     def add(self, sentence: str) -> None:
-        self._items.append((_norm(sentence), _negative(sentence)))
+        self._items.append((_norm(sentence), _negative(sentence), _figures(sentence)))
         del self._items[:-MAX_EARLIER]
 
     def _alike(self, a: str, b: str) -> bool:
@@ -103,16 +130,20 @@ class _Said:
         # the line that retracts a claim: a repeat only word for word. A
         # doubled negative sentence is the lesser harm.
         if _failed(sentence) or _negative(sentence):
-            return any(norm == e for e, _ in self._items)
+            return any(norm == e for e, _, _ in self._items)
+        figures = _figures(sentence) if self._rows_by_figures else ()
         return any(
-            not neg and len(e) >= MIN_SENTENCE_CHARS and self._alike(norm, e)
-            for e, neg in self._items
+            not neg
+            and len(e) >= MIN_SENTENCE_CHARS
+            and not (figures and figs and figs != figures)
+            and self._alike(norm, e)
+            for e, neg, figs in self._items
         )
 
 
 def repeated_sentences(reply: str) -> list[str]:
     """Each sentence of ``reply`` that says again what an earlier one said."""
-    said = _Said()
+    said = _Said(rows_by_figures=True)
     found = []
     for s in sentences(reply)[:MAX_SENTENCES]:
         if said.has(s):

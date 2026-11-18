@@ -471,7 +471,8 @@ class MorningBriefWorkflow(Workflow):
                 )
         except Exception as exc:
             logger.exception("morning_brief: synthesis failed")
-            yield WorkflowEvent(type="error", message=f"Synthesis failed: {exc}")
+            # The detail is logged above; the stream and the record get fixed text.
+            yield WorkflowEvent(type="error", message=_synthesis_failed(exc))
             return
 
         from openexecutive.briefing.narrative import QUIET_PRINCIPAL
@@ -526,3 +527,12 @@ class MorningBriefWorkflow(Workflow):
 # `openexecutive.scheduler.runner._execute_action` (see the
 # `principal_brief_morning` branch).
 __all__ = ["BRIEF_KIND", "MorningBriefWorkflow", "MorningBriefInput"]
+
+
+def _synthesis_failed(exc: BaseException) -> str:
+    """What a failed synthesis says on the stream: a cap's own sentence, else
+    fixed text, never the exception's."""
+    from openexecutive.audit import cost_caps
+
+    cap = cost_caps.capped(exc)
+    return cap.reply() if cap is not None else "Writing the brief failed. Try again later."

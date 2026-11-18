@@ -794,8 +794,8 @@ async def _execute_action(
                 _chain_dept_cadence(slug)
             if run_id:
                 try:
-                    from openexecutive.workflows.persistence import fail_run
-                    fail_run(run_id, str(exc))
+                    from openexecutive.workflows.persistence import fail_run, run_failure_text
+                    fail_run(run_id, run_failure_text(exc))
                 except Exception:
                     pass
                 if new_status == "failed":
@@ -2674,6 +2674,8 @@ async def _run_dynamic_workflow(action: ScheduledAction, now: datetime) -> None:
                         and event.resume_state.kind == "held_writes"
                     ):
                         event.resume_state.deliver_to_person_id = deliver_to
+                        # A rerun someone tapped resumes spent for them too.
+                        event.resume_state.spent_for_person_id = getattr(action, "created_by_person_id", None)
                         await checkpoint_gate(run_id=run_id, event=event, workflow_title=workflow.title)
                         paused = True
                         break
@@ -2697,8 +2699,10 @@ async def _run_dynamic_workflow(action: ScheduledAction, now: datetime) -> None:
                 complete_run(run_id, artifact or "(no artifact)")
         except Exception as exc:
             logger.exception("scheduler: dynamic_workflow %r (action %d) failed", name, action.id)
+            from openexecutive.workflows.persistence import run_failure_text
+
             with contextlib.suppress(Exception):
-                fail_run(run_id, str(exc))
+                fail_run(run_id, run_failure_text(exc))
             file_failed_run_card(
                 run_id=run_id,
                 workflow_name=name,
@@ -2887,8 +2891,11 @@ async def _run_principal_brief(action: ScheduledAction, now: datetime) -> None:
     except Exception as exc:
         logger.exception("scheduler: %s (action %d) failed", kind, action.id)
         import contextlib
+
+        from openexecutive.workflows.persistence import run_failure_text
+
         with contextlib.suppress(Exception):
-            fail_run(run_id, str(exc))
+            fail_run(run_id, run_failure_text(exc))
         if not recorded:
             brief_state.record_delivery_outcome(
                 kind, reason="send_failed" if sending else "not_written", channel=None,
@@ -3145,8 +3152,10 @@ async def _reflect(now: datetime, *, kind: str) -> None:
         )
     except Exception as exc:
         logger.exception("scheduler: %s failed", kind)
+        from openexecutive.workflows.persistence import run_failure_text
+
         with contextlib.suppress(Exception):
-            fail_run(run_id, str(exc))
+            fail_run(run_id, run_failure_text(exc))
         audit_log(
             "scheduled_action",
             f"{kind} FAILED: {exc}",

@@ -448,7 +448,9 @@ def test_a_streamed_reply_whose_check_was_capped_keeps_what_was_shown() -> None:
     cap = cost_caps.CostCapReached("total", "all", 1.0, 1.0, datetime.now(UTC))
     with cost_caps.bind_turn(fresh=True):
         reply, event = Executive._capped_check("North owes $12,900.", cap, "s")
-    assert reply == f"North owes $12,900.\n\n{cap.reply()}" and event == f"\n\n{cap.reply()}"
+    # The figures stay on screen, so what follows says they weren't checked.
+    note = f"{cost_caps.UNCHECKED_FIGURES} {cap.reply()}"
+    assert reply == f"North owes $12,900.\n\n{note}" and event == f"\n\n{note}"
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,7 @@ drafted, the limits, the cards it leaves and how they close."""
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import copy
 import json
 from collections.abc import Iterator
@@ -1450,3 +1451,243 @@ def test_a_composer_a_cap_refused_leaves_the_email_for_a_later_scan(
     assert _ledger(db)["m1"] == ("retry", "cost_cap")
     monkeypatch.setattr(gw, "_call_model", working)
     assert _scan(owner, mailbox, now=NOW + timedelta(minutes=30)).drafted == 1
+
+
+def _attempts(db: Path, message_id: str) -> int:
+    import sqlite3
+
+    with sqlite3.connect(db) as conn:
+        row = conn.execute(
+            "SELECT attempts FROM delegation_inbox_messages WHERE message_id = ?", (message_id,),
+        ).fetchone()
+    return int(row[0]) if row else -1
+
+
+@pytest.mark.parametrize(("raised", "reason", "spent"), [
+    (RuntimeError("the composer broke"), "error", 1),
+    (asyncio.CancelledError(), "cancelled", 0),
+])
+def test_an_answer_step_that_raises_never_leaves_the_email_processing(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+    raised: BaseException, reason: str, spent: int,
+) -> None:
+    # oe__answer_email_as_me's step: an error goes back to the watcher and
+    # spends an attempt; a cancellation (the step stopped) spends none.
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise raised
+
+    # Raised after the claim, past every handler inside the step.
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with pytest.raises(type(raised)):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
+    assert _ledger(db)["m1"] == ("retry", reason)
+    assert _attempts(db, "m1") == spent
+
+
+def test_a_raise_before_the_claim_leaves_someone_elses_claim_alone(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Home's Reply holds the message (PROCESSING); an answer step that fails
+    # before it claims anything must not hand that claim back to the watcher.
+    mailbox = FakeInbox()
+    message = _msg("m1", "t1")
+    mailbox.add(message)
+    assert inbox._claim(owner.id, message, relation="contact", outcome=inbox.PROCESSING, now=NOW)
+
+    async def broken(*_a: Any, **_k: Any) -> str:
+        raise RuntimeError("before the claim")
+
+    monkeypatch.setattr(inbox, "relation_of", broken)
+    with pytest.raises(RuntimeError):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
+    assert _ledger(db)["m1"][0] == "processing"
+    assert _attempts(db, "m1") == 0
+
+
+def test_a_cancellation_that_repeats_spends_an_attempt(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A step that times out on the same email every time (asyncio.wait_for
+    # cancels it) must not hold it forever: the first stop is free, the next
+    # ones count, and MAX_ATTEMPTS gives it up.
+    async def stopped(*_a: Any, **_k: Any) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inbox, "_draft_card", stopped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    spent = []
+    for i in range(inbox.MAX_ATTEMPTS + 1):
+        with pytest.raises(asyncio.CancelledError):
+            asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW + timedelta(minutes=i)))
+        spent.append(_attempts(db, "m1"))
+    assert spent[:2] == [0, 1]
+    assert _ledger(db)["m1"][0] == "failed"
+
+
+def test_a_scan_counts_a_claimed_messages_error_once(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise RuntimeError("after the claim")
+
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    result = _scan(owner, mailbox)
+    assert result.deferred == 1
+    assert _ledger(db)["m1"] == ("retry", "error") and _attempts(db, "m1") == 1
+
+
+def test_many_answer_step_failures_never_hide_a_later_scans_own_failure(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The old shape of the leak: restores on the answer path, then a scan
+    # whose message fails before any claim must still record that failure.
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise RuntimeError("after the claim")
+
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    for i in range(20):
+        mailbox.add(_msg(f"a{i}", f"ta{i}"))
+        with pytest.raises(RuntimeError):
+            asyncio.run(inbox.answer_thread(owner, mailbox, f"ta{i}", now=NOW))
+    assert not hasattr(inbox, "_RESTORED")
+
+    async def no_relation(*_a: Any, **_k: Any) -> str:
+        raise RuntimeError("before any claim")
+
+    monkeypatch.setattr(inbox, "relation_of", no_relation)
+    other = FakeInbox()
+    other.add(_msg("m2", "t2", sender="ben@northpeak.example"))
+    assert _scan(owner, other).deferred == 1
+    assert _ledger(db)["m2"] == ("retry", "error")
+
+
+def test_an_invite_that_raises_after_its_own_claim_goes_back_for_later(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.delegation import invites
+
+    async def claims_then_fails(person: Any, client: Any, message: Any, thread: Any, **_k: Any) -> None:
+        assert inbox._claim(person.id, message, relation="", outcome=inbox.PROCESSING, now=NOW)
+        raise RuntimeError("the calendar broke")
+
+    monkeypatch.setattr(invites, "watching", lambda person_id: True)
+    monkeypatch.setattr(invites, "skip_reason", lambda *a, **k: None)
+    monkeypatch.setattr(invites, "consider", claims_then_fails)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1", calendar_invite=True))
+    _scan(owner, mailbox)
+    assert _ledger(db)["m1"] == ("retry", "error")
+
+
+def test_a_cancellation_alternating_with_a_spend_limit_still_counts(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openexecutive.audit import cost_caps
+
+    turns = {"n": 0}
+
+    async def alternating(*_a: Any, **_k: Any) -> bool:
+        turns["n"] += 1
+        if turns["n"] % 2:
+            raise asyncio.CancelledError()
+        raise cost_caps.CostCapReached("person", str(owner.id), 1.0, 1.0, datetime.now(UTC))
+
+    monkeypatch.setattr(inbox, "_draft_card", alternating)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    spent = []
+    for i in range(4):
+        with contextlib.suppress(asyncio.CancelledError):
+            asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW + timedelta(minutes=i)))
+        spent.append(_attempts(db, "m1"))
+    # cancelled (free), cap (free), cancelled again (counts), cap (free)
+    assert spent == [0, 0, 1, 1]
+    # The mark is the watcher's own: never on a card.
+    assert inbox.CANCELLED_ONCE not in inbox.ledger_flags(owner.id, ["m1"]).get("m1", [])
+    assert inbox.CANCELLED_ONCE in inbox._row_flags(owner.id, "m1")
+
+
+def test_the_cancelled_mark_goes_once_the_message_settles(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    working = inbox._draft_card
+
+    async def stopped(*_a: Any, **_k: Any) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inbox, "_draft_card", stopped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
+    assert inbox.CANCELLED_ONCE in inbox._row_flags(owner.id, "m1")
+    monkeypatch.setattr(inbox, "_draft_card", working)
+    assert _scan(owner, mailbox, now=NOW + timedelta(minutes=5)).drafted == 1
+    assert inbox.CANCELLED_ONCE not in inbox._row_flags(owner.id, "m1")
+
+
+def test_a_cancelled_reply_from_home_goes_back_for_later_uncounted(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def stopped(*_a: Any, **_k: Any) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inbox, "_draft_card", stopped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(inbox.draft_on_request(owner, "t1", "m1", gmail=mailbox, now=NOW))
+    assert _ledger(db)["m1"] == ("retry", "cancelled") and _attempts(db, "m1") == 0
+
+
+def test_a_skip_clears_a_cancellation_mark(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Cancelled once, then skipped as stale: a later cancellation starts over
+    # and spends no attempt.
+    working_skip = inbox.skip_reason
+
+    async def stopped(*_a: Any, **_k: Any) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inbox, "_draft_card", stopped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
+    assert inbox.CANCELLED_ONCE in inbox._row_flags(owner.id, "m1")
+    monkeypatch.setattr(inbox, "skip_reason", lambda *a, **k: "stale")
+    _scan(owner, mailbox, now=NOW + timedelta(minutes=1))
+    assert _ledger(db)["m1"][0] == "skipped"
+    assert inbox.CANCELLED_ONCE not in inbox._row_flags(owner.id, "m1")
+    # Left for later again (as a later run might), then cancelled afresh.
+    monkeypatch.setattr(inbox, "skip_reason", working_skip)
+    inbox._retry_later(owner.id, "m1", "error", count=False)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW + timedelta(minutes=2)))
+    assert _attempts(db, "m1") == 0
+
+
+def test_one_exception_raised_for_two_messages_is_counted_for_each(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = RuntimeError("the same instance")
+
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise shared
+
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"), _msg("m2", "t2", sender="ben@northpeak.example"))
+    result = _scan(owner, mailbox)
+    assert result.deferred == 2
+    ledger_rows = _ledger(db)
+    assert ledger_rows["m1"] == ("retry", "error") and ledger_rows["m2"] == ("retry", "error")
+    assert _attempts(db, "m1") == 1 and _attempts(db, "m2") == 1
+    assert "restored" not in result.counts()

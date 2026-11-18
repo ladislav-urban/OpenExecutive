@@ -921,8 +921,13 @@ class ExecutiveReflectionWorkflow(Workflow):
                     )
                 except Exception as exc:
                     logger.exception("reflection: provider call failed iter=%d", iteration)
+                    from openexecutive.audit import cost_caps
+
+                    cap = cost_caps.capped(exc)
                     yield WorkflowEvent(
-                        type="error", message=f"Reflection LLM call failed: {exc}"
+                        # Fixed text: the exception's own stays in the log.
+                        type="error",
+                        message=cap.reply() if cap is not None else "The reflection couldn't be written. Try again later.",
                     )
                     return
                 log_model_usage(response, model=model, actor=self.name, iteration=iteration)

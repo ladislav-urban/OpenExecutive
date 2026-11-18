@@ -170,9 +170,11 @@ def rerun_target(run: dict[str, Any]) -> tuple[str, str, int | None]:
 def queue_rerun(run: dict[str, Any], *, started_by: int | None = None) -> int:
     """Queue the scheduled action that reruns ``run``, due now, and close its
     failure card. Returns the action's id. ``started_by``: who asked for it
-    again, kept as the action's ``created_by_person_id``, so the rerun is
-    spent for them (and counts in their own job bucket), never the workflow's
-    creator.
+    again, kept as the action's ``created_by_person_id``. The scheduler binds
+    them as spender for the run (their person cap) and puts them in its job
+    key; a run that pauses on held writes keeps them on its resume payload
+    (``spent_for_person_id``), so it resumes spent for them too. Never the
+    workflow's creator.
 
     Refuses (409) while a rerun of the same scheduled action is already
     queued (from this run or an earlier one on the same card), so a double

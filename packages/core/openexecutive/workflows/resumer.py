@@ -372,16 +372,29 @@ async def _execute_resume(
 
     run = _wf_persistence.get_run(row["run_id"], db_path=db_path) or {}
     owner = run.get("owner_person_id")
+    # Spent for whoever started it: its owner when someone started it by
+    # hand, else whoever tapped Run again (kept on its resume payload).
+    spender = owner if isinstance(owner, int) and not isinstance(owner, bool) else _spent_for(row)
     with (
         pinned_viewer(viewer_for_person(owner) if owner is not None else NOBODY),
         private_run(str(run.get("workflow_name") or "")),
         # Spent for whoever started it, never whoever answered its question
         # (nor its creator, when someone started it by hand); a scheduled run
         # with no one keeps its creator (chat_tools.in_workflow). One turn.
-        cost_caps.bind_spender(owner if isinstance(owner, int) and not isinstance(owner, bool) else None),
+        cost_caps.bind_spender(spender),
         cost_caps.bind_turn(fresh=True),
     ):
         return await _drive_resume(row, claim, db_path=db_path)
+
+
+def _spent_for(row: dict) -> int | None:
+    """The person a resumed run's payload says it is spent for, if any."""
+    try:
+        payload = json.loads(row.get("resume_state_json") or "{}")
+    except (TypeError, ValueError):
+        return None
+    person = payload.get("spent_for_person_id") if isinstance(payload, dict) else None
+    return person if isinstance(person, int) and not isinstance(person, bool) else None
 
 
 async def _drive_resume(
@@ -454,7 +467,9 @@ async def _drive_resume(
     try:
         inputs = workflow.input_model().model_validate(row["inputs"])
     except Exception as exc:
-        _abort(f"the workflow's inputs no longer validate: {exc}")
+        # The detail stays in the log; the record says what happened.
+        logger.warning("resumer: run %s inputs no longer validate (%s)", run_id, type(exc).__name__)
+        _abort("the workflow's inputs no longer validate")
         return True
 
     store = ChromaDBStore(persist_directory=get_settings().vector_store_path)
@@ -474,6 +489,9 @@ async def _drive_resume(
             # A scheduled run still owes its artifact to its recipient.
             if event.resume_state is not None and state.deliver_to_person_id is not None:
                 event.resume_state.deliver_to_person_id = state.deliver_to_person_id
+            # And whoever tapped Run again stays the one it is spent for.
+            if event.resume_state is not None and state.spent_for_person_id is not None:
+                event.resume_state.spent_for_person_id = state.spent_for_person_id
             try:
                 await checkpoint_gate(
                     run_id=run_id,
