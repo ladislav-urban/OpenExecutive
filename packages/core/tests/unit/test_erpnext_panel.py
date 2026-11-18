@@ -251,7 +251,7 @@ def test_both_panel_blocks_say_a_dynocortex_screen_is_not_seen() -> None:
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
         assert erpnext_panel.SCREEN_RULE in block
         assert "suggest Conversations" in block and "Never guess what the screen shows" in block
-        assert "never send them to it" in block and "the screen beside the panel shows it" in block
+        assert "never send them to it" in block and "say the screen they have open shows it" in block
         assert "its headline is all you have of it" in block
 
 
@@ -280,7 +280,7 @@ def test_both_panel_blocks_read_a_follow_up_with_the_turns_before_it() -> None:
 def test_both_panel_blocks_keep_a_table_to_four_columns() -> None:
     for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK):
         assert erpnext_panel.TABLE_RULE in block
-        assert "four at most" in block and "wider detail goes in the place you open" in block
+        assert "four at most" in block and "wider detail goes in the view you open" in block
 
 
 def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
@@ -318,6 +318,23 @@ def test_both_panel_blocks_keep_an_explained_answer_brief() -> None:
     # Nothing a reply might echo: "beside the panel" is a phrase the panel's
     # replies must not say (SHOW_RULE; evals erpnext_094, erpnext_099).
     assert "beside the panel" not in erpnext_panel.BRIEF_RULE
+
+
+def test_no_panel_block_says_beside_the_panel() -> None:
+    # Replies echoed the blocks' own phrase ("I opened the Accounts Payable
+    # report beside the panel", "is open beside the panel"), and nine panel
+    # evals forbid it (erpnext_054, erpnext_099 among them).
+    from openexecutive.api.models import ErpnextPage
+    from openexecutive.api.routes.chat import _host_page_block
+
+    host = _host_page_block(ErpnextPage(doctype="Sales Invoice"), None)
+    assert host
+    for block in (erpnext_panel.PANEL_CONTEXT_BLOCK, erpnext_panel.PANEL_DRAFTS_CONTEXT_BLOCK, host):
+        assert "beside the panel" not in block.lower()
+    # And the rule against narrating the opening says so outright.
+    assert erpnext_panel.SHOW_RULE.endswith(
+        "Never mention opening or showing it, or where it appears: the person already sees it."
+    )
     # Still the turn's own context, not a rule against explaining: nothing
     # tells it to drop the arithmetic or the assumptions.
     assert "no arithmetic" not in erpnext_panel.BRIEF_RULE

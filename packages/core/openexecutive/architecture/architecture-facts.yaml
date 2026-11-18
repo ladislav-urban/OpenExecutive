@@ -11540,7 +11540,15 @@ integrations:
     chart for amounts over weeks, a list or report for rows) and is offered
     only when no view may be opened (erpnext_054 opened a report, not its
     chart, under "or offer it"); no "beside the panel" in the rule, a
-    phrase replies must not say. With ADVICE_POLICY=explain the
+    phrase replies must not say. No panel block (both channel blocks and
+    the host page block) says "beside the panel" at all, since replies
+    echoed it ("I opened the Accounts Payable report beside the panel") and
+    nine panel evals forbid it: SHOW_RULE ends "Never mention opening or
+    showing it, or where it appears: the person already sees it.",
+    SCREEN_RULE says "say the screen they have open shows it" (no screen
+    eval, erpnext_020/021/032/033/080, asks for the old words), and
+    TABLE_RULE sends wider detail to "the view you open". With
+    ADVICE_POLICY=explain the
     policy (prompts/advice_policy.py, in cached blocks) asks for the
     arithmetic and every assumption, and a panel follow-up ran to 2,300-2,700
     characters (a 13-row week table with 8 rows unchanged, the starting cash

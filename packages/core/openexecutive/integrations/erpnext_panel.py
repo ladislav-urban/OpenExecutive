@@ -436,7 +436,7 @@ SHOW_RULE = (
     "When your answer is about something in ERPNext (the list you ranked, the "
     "report you ran, the document you described), also call "
     "erpnext__show_in_erpnext with it, with the same filters and sort, once per "
-    "place and the main one first, so ERPNext opens it beside the panel. Pass "
+    "place and the main one first, so ERPNext opens it next to the chat. Pass "
     "{'view': {'kind': ..., ...}}, the view exactly one of: a list {'kind': "
     "'list', 'doctype', 'filters', 'sort'}; a report {'kind': 'report', "
     "'report_name', 'filters' with the report's own filter names}; one "
@@ -471,9 +471,8 @@ SHOW_RULE = (
     "view of bank transactions, bank accounts, payroll, employees or anyone's "
     "personal details: answer those in words. "
     "Never write "
-    "routes or links. Call it before you write your answer, and don't write "
-    "that you opened or showed anything: the person sees it open beside the "
-    "panel."
+    "routes or links. Call it before you write your answer. Never mention "
+    "opening or showing it, or where it appears: the person already sees it."
 )
 # Both panel blocks carry it too: beside one of Dynocortex's own screens the
 # panel names the screen, but its turn reads none of what the screen shows.
@@ -483,11 +482,11 @@ SCREEN_RULE = (
     "screen shows: not their briefing, watches, people, memory or settings. "
     "Say so in a sentence, answer what you can from ERPNext and your "
     "specialists, and suggest Conversations for the rest. They already have that "
-    "screen open beside you, so never send them to it, or to the "
-    "OpenExecutive app for it: say the screen beside the panel shows it. "
+    "screen open, so never send them to it, or to the "
+    "OpenExecutive app for it: say the screen they have open shows it. "
     "Never guess what the screen shows, and describe it only from this turn's "
-    "page block and what you open on this turn: once you open a report beside "
-    "the panel, the list that was there before is gone, so never point at it. "
+    "page block and what you open on this turn: once you open a report, the "
+    "list that was there before is gone, so never point at it. "
     "When the page block names the Home "
     "card in focus, its headline is all you have of it: answer about what it "
     "names from ERPNext and your specialists. "
@@ -520,7 +519,7 @@ FOLLOW_UP_RULE = (
 # table wraps into something unreadable (the website retake of Nov 3, 2026).
 TABLE_RULE = (
     "Keep a table to the columns the question needs, four at most, so it fits "
-    "the panel; wider detail goes in the place you open beside it. "
+    "the panel; wider detail goes in the view you open. "
 )
 # Both panel blocks carry it, and so does the host page block (api.routes.chat):
 # with ADVICE_POLICY=explain on, the advice policy asks for the arithmetic and
