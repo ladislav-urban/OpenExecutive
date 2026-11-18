@@ -909,6 +909,8 @@ async def _execute_action(
                 digest = result.get("digest") or ""
                 if digest:
                     try:
+                        # Sent as given: code builds the digest from the
+                        # clients' stored names and roles, which stay as read.
                         await _deliver_to_principal(digest, label="Across your clients")
                     except Exception:
                         logger.exception(
@@ -1912,6 +1914,10 @@ _RECURRING_KIND_ENV: dict[str, tuple[str, str]] = {
 _WEEKLY_KINDS: frozenset[str] = frozenset({WEEKLY_REVIEW_KIND, GOAL_REVIEW_KIND})
 # Kinds that exist only in a solo workspace.
 _SOLO_ONLY_KINDS: frozenset[str] = frozenset({WEEKLY_REVIEW_KIND})
+# Scheduled reports sent as written on a named install: code's rows of
+# stored titles, not the model's prose (connected_systems.in_product_reply).
+# Action kinds, as _run_principal_brief compares them.
+_SENT_AS_WRITTEN: frozenset[str] = frozenset({WEEKLY_REVIEW_KIND})
 # The recurring principal kinds that run a workflow and deliver its artifact
 # to the principal (see _run_principal_brief).
 _PRINCIPAL_WORKFLOWS: dict[str, str] = {
@@ -2506,7 +2512,10 @@ async def _send_on_plan(
     principal: Person, plan: list[str], text: str, *, label: str
 ) -> PrincipalDelivery:
     """Try ``plan``'s channels for ``principal`` (any Person) in order until
-    one sends."""
+    one sends. ``text`` goes as given: a sender whose text is all our own
+    words or the model's (a brief, a digest, a scheduled ERP metric) puts it
+    in the product's words itself; an alert, a held message or a reminder
+    carries record values, which stay as read."""
     if not plan:
         # Email set up but its gateway down is the Executive's fault, not a
         # missing setting: say so, with the start failure, instead of
@@ -2834,7 +2843,14 @@ async def _run_principal_brief(action: ScheduledAction, now: datetime) -> None:
             sending = True
             # Messages the principal asked to get in their brief ride along
             # as one "While you were away" block (people.held_messages).
-            delivered_text, held_ids = _with_held_messages(kind, artifact)
+            from openexecutive.prompts.connected_systems import in_product_reply
+
+            # A brief or report the model writes, in the product's words on a
+            # named install; the held messages riding along stay as sent. The
+            # weekly review is mostly code's rows of stored area and project
+            # titles, so it goes as written.
+            worded = artifact if kind in _SENT_AS_WRITTEN else in_product_reply(artifact)
+            delivered_text, held_ids = _with_held_messages(kind, worded)
             from openexecutive.audit.erpnext_reads import DELIVERING_ERPNEXT
 
             erp_token = DELIVERING_ERPNEXT.set(read_erpnext)

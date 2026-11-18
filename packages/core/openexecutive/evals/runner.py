@@ -713,6 +713,11 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
                 # scenario's own lines under the shared header, or none: an
                 # eval never reads the install's facts.
                 standing_facts=scenario_standing_facts(scenario),
+                # The model's own words: the channels' backstop
+                # (connected_systems.in_product_reply) would hide one that
+                # names ERPNext on a named install (erpnext_027). What code
+                # adds to a reply is in the product's words where it's added.
+                product_words=False,
             )
     finally:
         decided_cards_override.reset(cards_token)

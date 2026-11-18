@@ -222,7 +222,14 @@ async def compute(slug: str, today: date) -> str | None:
         except Exception:
             logger.warning("erp_metrics: computing %s failed", slug, exc_info=True)
             return None
-    return f"{metric.label} ({company}, from ERPNext's own reports): {line}" if line else None
+    if not line:
+        return None
+    from openexecutive.prompts.connected_systems import in_product_reply
+
+    # Our own words in the product's on a named install; the company's name,
+    # a record value, stays as read.
+    source = in_product_reply("from ERPNext's own reports")
+    return f"{metric.label} ({company}, {source}): {line}"
 
 
 # ---------------------------------------------------------------------------
