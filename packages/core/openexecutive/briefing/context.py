@@ -157,6 +157,12 @@ def format_open_alerts_for_prompt(
     if callable(cards_for):
         live = [a for a in live if cards_for(a)]
 
+    def _theirs(alert: Any) -> bool:
+        # The closed half follows the same caller rule as the open one.
+        if routed_to is not None and alert.routed_to_person_id != routed_to:
+            return False
+        return not callable(cards_for) or bool(cards_for(alert))
+
     if trusted_ids is not None:
         # Clamped to BOARD_LIMIT, never to `limit`. `limit` only decides how
         # much gets printed; letting it size the trusted set would mean a
@@ -205,7 +211,7 @@ def format_open_alerts_for_prompt(
         # An empty board is exactly when the handled block matters most: the
         # principal just cleared everything and is still talking about it.
         try:
-            return _handled_block(db_path, now)
+            return _handled_block(db_path, now, keep=_theirs)
         except Exception:
             logger.exception("briefing_context.handled_block_failed")
             return ""
@@ -233,7 +239,7 @@ def format_open_alerts_for_prompt(
     # the open board we already rendered (this function promises never to
     # raise, and `_handled_block` reaches the store).
     try:
-        handled = _handled_block(db_path, now)
+        handled = _handled_block(db_path, now, keep=_theirs)
     except Exception:
         logger.exception("briefing_context.handled_block_failed")
         handled = ""
@@ -256,8 +262,11 @@ def _card_ask(alert: Any) -> str:
     return ""
 
 
-def _handled_block(db_path: Path | None, now: datetime) -> str:
+def _handled_block(db_path: Path | None, now: datetime, keep: Any = None) -> str:
     """Recently closed items, so the Executive knows what is already settled.
+    ``keep`` (an alert predicate) holds them to the cards this reader's own
+    Home would show (``format_open_alerts_for_prompt``'s ``routed_to`` and
+    ``cards_for``).
 
     These ids are deliberately NOT added to the session's trusted set: the
     rows are closed, so there is nothing to ack, and widening the ack surface
@@ -295,6 +304,7 @@ def _handled_block(db_path: Path | None, now: datetime) -> str:
         and alert.source != _ROSTER_SOURCE
         and not is_private_alert(alert)
         and visible_alert(alert, None)
+        and (keep is None or keep(alert))
     ]
     fresh.sort(key=lambda a: a.created_at, reverse=True)
 
