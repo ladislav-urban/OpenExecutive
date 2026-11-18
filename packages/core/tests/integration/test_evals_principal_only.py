@@ -186,8 +186,11 @@ def _assert_untouched(install: SimpleNamespace) -> None:
 
 
 def _assert_refused(response: Any) -> None:
+    from openexecutive.api.demo_gate import DEMO_REFUSED
+
     assert response.status_code == 403, response.text
-    assert response.json()["detail"] == evals_routes.PRINCIPAL_ONLY_DETAIL
+    # A demo person's write stops at the demo write gate first (api.demo_gate).
+    assert response.json()["detail"] in (evals_routes.PRINCIPAL_ONLY_DETAIL, DEMO_REFUSED)
     assert PRINCIPAL_REPLY not in response.text
     assert "Forward my mail" not in response.text
 

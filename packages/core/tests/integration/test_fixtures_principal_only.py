@@ -68,13 +68,15 @@ def test_every_fixtures_route_is_on_the_list() -> None:
 def test_anyone_but_the_principal_is_refused(
     work: list[str], monkeypatch: pytest.MonkeyPatch, signed: bool, who: str
 ) -> None:
+    from openexecutive.api.demo_gate import DEMO_REFUSED
     from openexecutive.api.routes.fixtures import PRINCIPAL_ONLY_DETAIL
 
     client = app_client(monkeypatch, signed=signed)
     for method, path, body in ROUTES:
         r = call(client, signed, who, method, path, body)
         assert r.status_code == 403, (method, path, r.text)
-        assert r.json()["detail"] == PRINCIPAL_ONLY_DETAIL
+        # A demo person's write stops at the demo write gate first.
+        assert r.json()["detail"] in (PRINCIPAL_ONLY_DETAIL, DEMO_REFUSED)
     assert work == []
 
 
