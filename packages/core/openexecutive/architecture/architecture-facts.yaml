@@ -13296,7 +13296,14 @@ evals:
     (scenarios.LIVE_PRINCIPAL_NAME_SAID; N is the turn's place in
     prior_turns), never the name itself. Both judges see the conversation
     as it ran (ChatTurn.prior_replies, scenarios.with_prior_replies), in
-    both runners. Each live turn as it ran (ChatTurn.live_turns: turn,
+    both runners. A live turn is not judged itself, so after one the
+    judge's conversation ends with scenarios.LIVE_PRIOR_TURNS_NOTE (set by
+    with_prior_replies' PRIOR_TURNS_RAN_LIVE mark; a conversation of fixed
+    turns gets no note): the earlier replies ran live and are not assumed
+    correct, a final answer that agrees with one passes only if its figures
+    are right from what that turn read, and one that carries an earlier
+    error forward fails the criterion it touches (erpnext_099's agreement
+    with the earlier outlook, erpnext_065's project). Each live turn as it ran (ChatTurn.live_turns: turn,
     response, response_length) goes into the scenario's result under
     live_turns, in the package runner's scenario_done event (kept in the
     run's results) and in evals/run_evals.py's results JSON; fixed turns

@@ -361,10 +361,26 @@ def scenario_prior_turns(scenario: dict[str, Any]) -> list[tuple[str, str]]:
     return [(t.message, t.reply or "") for t in turns]
 
 
+# Set by ``with_prior_replies`` on a scenario some of whose prior turns ran
+# live, so ``prior_turns_section`` tells the judge those replies are unjudged.
+PRIOR_TURNS_RAN_LIVE = "_prior_turns_ran_live"
+
+# For the judge, after a conversation with a live turn: no live turn is
+# judged itself, so the final answer can't lean on one being right.
+LIVE_PRIOR_TURNS_NOTE = (
+    "The earlier assistant replies above were produced live on this run and "
+    "are not assumed correct. A final answer that agrees with an earlier reply "
+    "passes only if its figures are right from what this turn read; a final "
+    "answer that carries an earlier reply's error forward fails the criterion "
+    "that error touches."
+)
+
+
 def with_prior_replies(scenario: dict[str, Any], replies: list[str]) -> dict[str, Any]:
     """``scenario`` as it ran: each prior turn with the reply it had, a live
     turn's being the real one, so the judge sees the conversation the
-    question followed (``prior_turns_section``)."""
+    question followed (``prior_turns_section``). When any turn ran live it
+    is marked (``PRIOR_TURNS_RAN_LIVE``), for ``LIVE_PRIOR_TURNS_NOTE``."""
     raw = scenario.get("prior_turns")
     if not raw:
         return scenario
@@ -372,7 +388,10 @@ def with_prior_replies(scenario: dict[str, Any], replies: list[str]) -> dict[str
         {**{k: v for k, v in turn.items() if k != "live"}, "assistant": reply}
         for turn, reply in zip(raw, replies, strict=True)
     ]
-    return {**scenario, "prior_turns": turns}
+    ran = {**scenario, "prior_turns": turns}
+    if any(turn.get("live") is True for turn in raw):
+        ran[PRIOR_TURNS_RAN_LIVE] = True
+    return ran
 
 
 def seed_prior_turns(session: Any, scenario: dict[str, Any]) -> None:
@@ -384,16 +403,19 @@ def seed_prior_turns(session: Any, scenario: dict[str, Any]) -> None:
 
 def prior_turns_section(scenario: dict[str, Any]) -> str:
     """For a judge: the conversation the question follows, or "" when it
-    follows none (every other judge prompt stays byte-identical)."""
+    follows none (every other judge prompt stays byte-identical). After a
+    conversation with a live turn (``with_prior_replies``) it ends with
+    ``LIVE_PRIOR_TURNS_NOTE``: a live reply is never judged itself."""
     turns = scenario_prior_turns(scenario)
     if not turns:
         return ""
     lines = "\n\n".join(
         f"ASKER: {user}\nASSISTANT: {reply}" for user, reply in turns
     )
+    note = f"{LIVE_PRIOR_TURNS_NOTE}\n" if scenario.get(PRIOR_TURNS_RAN_LIVE) is True else ""
     return (
         "\nEARLIER IN THIS CONVERSATION (the asker sees these turns; the question "
-        f"below follows them):\n{lines}\n"
+        f"below follows them):\n{lines}\n{note}"
     )
 
 

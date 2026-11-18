@@ -134,6 +134,20 @@ def test_a_live_turn_validates_and_has_no_reply_until_it_runs() -> None:
     assert LIVE["prior_turns"][0].get("assistant") is None  # the scenario itself is unchanged
 
 
+def test_the_judge_is_told_a_live_turn_is_not_assumed_correct() -> None:
+    note = scenarios.LIVE_PRIOR_TURNS_NOTE
+    assert "not assumed correct" in note and "error forward fails" in note
+    # After a live turn the section ends with the note.
+    assert prior_turns_section(with_prior_replies(LIVE, [FIRST])).endswith(f"\n{note}\n")
+    mixed = with_prior_replies(MIXED, ["first live", "fixed", "second, live"])
+    assert note in prior_turns_section(mixed)
+    # Fixed turns only: no note, as written or as run.
+    assert note not in prior_turns_section(FOLLOW_UP)
+    fixed_ran = with_prior_replies(FOLLOW_UP, ["One: ACC-PINV-1 has no receipt.", "No PO."])
+    assert prior_turns_section(fixed_ran) == prior_turns_section(FOLLOW_UP)
+    assert scenarios.PRIOR_TURNS_RAN_LIVE not in fixed_ran
+
+
 class _Turns:
     """Executive.chat as the tests need it: each call answers the next reply
     and keeps the turn in the session's history, as stream_chat does."""
@@ -289,6 +303,7 @@ def test_the_package_runner_judges_and_checks_the_final_turn_only(monkeypatch: p
     assert done["passed"] is True
     assert done["response"] == "Week 7, at 41,200."
     assert "ASSISTANT: Cash dips in week 7." in seen["section"]
+    assert scenarios.LIVE_PRIOR_TURNS_NOTE in seen["section"]
 
 
 def test_the_package_runner_reports_a_failed_live_turn(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -329,6 +344,7 @@ def test_run_evals_runs_the_live_turn_and_its_judge_sees_the_reply(monkeypatch: 
     assert result["passed"] is True and result["response"] == "Week 7, ending at 41,200."
     assert executive.calls[1]["history"][1]["content"] == FIRST
     assert f"ASSISTANT: {FIRST}" in seen["section"]
+    assert scenarios.LIVE_PRIOR_TURNS_NOTE in seen["section"]
     assert result["live_turns"] == [{"turn": 1, "response": FIRST, "response_length": len(FIRST)}]
     assert "turn" not in result  # the ChatTurn itself is never written
 
