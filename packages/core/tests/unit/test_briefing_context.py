@@ -442,6 +442,9 @@ def test_render_and_trust_records_the_live_board(
     set_status(closed_id, "dismissed", db_path=db)
 
     session = _FakeSession()
+    # The whole board, as the principal reads it (who sees which cards is
+    # tests/integration/test_card_lookups_scope.py).
+    monkeypatch.setattr(ctx, "_home_cards_for", lambda _caller: None)
     block = ctx.render_and_trust(session, db_path=db)
 
     oldest = open_ids[0]

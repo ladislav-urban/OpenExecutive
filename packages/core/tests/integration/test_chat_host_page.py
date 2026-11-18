@@ -261,12 +261,23 @@ def cards(temp_db: Path) -> dict[str, int]:
 
 
 def test_a_visible_card_is_read_by_id_and_wrapped_never_trusted(
-    turns: list[dict[str, Any]], switch_on: None, cards: dict[str, int]
+    turns: list[dict[str, Any]], switch_on: None, cards: dict[str, int], temp_db: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from openexecutive.people import registry as people_registry
+    from openexecutive.people import store as people_store
+
+    # A card is read only for someone its Home shows it to (a caller who
+    # resolves to no one has an empty Home): a teammate, for this shared card.
+    monkeypatch.setattr(people_store, "DB_PATH", temp_db)
+    people_store.initialize_db()
+    people_store.upsert_person(full_name="Ben Teammate", email="ben@co.example")
+    people_registry.invalidate()
+    headers = {**HOST, "x-caller-email": "ben@co.example"}
     client = _client()
-    plain = client.post("/chat", json={"message": "Why?", "erpnext_page": HOME}, headers=HOST)
+    plain = client.post("/chat", json={"message": "Why?", "erpnext_page": HOME}, headers=headers)
     response = client.post(
-        "/chat", json={"message": "Why?", "erpnext_page": HOME, "card_id": cards["visible"]}, headers=HOST
+        "/chat", json={"message": "Why?", "erpnext_page": HOME, "card_id": cards["visible"]}, headers=headers
     )
     assert plain.status_code == response.status_code == 200
     block = turns[1]["block"]

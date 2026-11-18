@@ -1108,8 +1108,9 @@ def _host_card(card_id: int, caller_person_id: int | None) -> Any:
     to the principal (a host turn is never the principal speaking), and one
     that is theirs (``today._card_for_caller``: routed to them or to no one,
     or, when it is backed by a decision, one they approve, were routed or
-    raised). Anything else, missing or hidden, answers the same 404, so a
-    page can't tell which."""
+    raised). The principal opens any card but a private one; a caller who
+    resolves to no one, none. Anything else, missing or hidden, answers the
+    same 404, so a page can't tell which."""
     from openexecutive.alerts.lifecycle import BOARD_LIMIT, list_live_alerts
     from openexecutive.alerts.models import is_private_alert
     from openexecutive.orchestrator.artifact_records import viewer_for_person
@@ -1123,11 +1124,20 @@ def _host_card(card_id: int, caller_person_id: int | None) -> Any:
     from openexecutive.api.routes.today import (
         _card_for_caller,
         _decision_instances,
+        _is_principal,
         _parse_decision_instance_id,
     )
 
+    # The principal's Home shows every card but the ones private to them
+    # (a host turn is never the principal speaking); nobody resolved has an
+    # empty Home.
+    principal = caller_person_id is not None and _is_principal(caller_person_id)
     for alert in live:
         if alert.id == card_id and alert.source != roster_source and not is_private_alert(alert):
+            if principal:
+                return alert
+            if caller_person_id is None:
+                break
             instance_id = _parse_decision_instance_id(alert.topic_tags or [])
             instances = _decision_instances([instance_id] if instance_id is not None else [])
             if _card_for_caller(alert.routed_to_person_id, instance_id, caller_person_id, instances):

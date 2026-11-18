@@ -80,11 +80,16 @@ def format_open_alerts_for_prompt(
     include_private: bool = False,
     viewer: object | None = None,
     routed_to: int | None = None,
+    cards_for: object = None,
 ) -> str:
     """Render current open (unread) alerts as a compact digest, or ``""`` when none.
 
     ``routed_to``: only the cards assigned to that person (a team member's
     own board, in their own direct messages).
+
+    ``cards_for``: when given (a callable taking an alert), only the cards it
+    keeps, shown and trusted alike: the cards that person's own Home shows
+    (``render_and_trust``, ``today._card_for_caller``).
 
     A drafted artifact's card is listed only for its owner, ``viewer``
     (``alerts.models.visible_alert``).
@@ -149,6 +154,8 @@ def format_open_alerts_for_prompt(
         live = [a for a in live if not is_private_alert(a)]
     if routed_to is not None:
         live = [a for a in live if a.routed_to_person_id == routed_to]
+    if callable(cards_for):
+        live = [a for a in live if cards_for(a)]
 
     if trusted_ids is not None:
         # Clamped to BOARD_LIMIT, never to `limit`. `limit` only decides how
@@ -307,6 +314,32 @@ def _handled_block(db_path: Path | None, now: datetime) -> str:
     )
 
 
+def _home_cards_for(caller: int | None) -> Any:
+    """A predicate keeping the cards ``caller``'s own Home shows
+    (``today._card_for_caller``), or None for the principal (every card).
+    Nobody resolved: no card. Fails closed."""
+    from openexecutive.api.routes.today import (
+        _card_for_caller,
+        _decision_instances,
+        _is_principal,
+        _parse_decision_instance_id,
+    )
+
+    if caller is not None and _is_principal(caller):
+        return None
+    if caller is None:
+        return lambda _alert: False
+    cache: dict[int, Any] = {}
+
+    def keep(alert: Any) -> bool:
+        instance_id = _parse_decision_instance_id(alert.topic_tags or [])
+        if instance_id is not None and instance_id not in cache:
+            cache.update(_decision_instances([instance_id]))
+        return _card_for_caller(alert.routed_to_person_id, instance_id, caller, cache)
+
+    return keep
+
+
 def render_and_trust(
     session: object, *, db_path: Path | None = None, routed_to: int | None = None,
 ) -> str:
@@ -340,13 +373,16 @@ def render_and_trust(
         verified = is_principal_on_verified_surface(session) and (
             getattr(session, "shared_chat", False) is not True
         )
+        caller = getattr(session, "caller_person_id", None)
         block = format_open_alerts_for_prompt(
             db_path=db_path, trusted_ids=trusted,
             # Alerts private to the principal only on their own verified turn.
             include_private=verified,
             # A drafted artifact's card only on its owner's turn.
-            viewer=viewer_for_person(getattr(session, "caller_person_id", None)),
+            viewer=viewer_for_person(caller),
             routed_to=None if verified else routed_to,
+            # Anyone but the principal: only the cards their own Home shows.
+            cards_for=None if verified else _home_cards_for(caller),
         )
     except Exception:
         logger.exception("briefing_context.render_and_trust_failed")
