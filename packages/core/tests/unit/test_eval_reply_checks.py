@@ -244,7 +244,7 @@ def test_the_where_is_my_order_scenario_holds_every_line(monkeypatch: pytest.Mon
 
 # ── the principal's name, apart from the scenario's own words ─────────────
 
-PRINCIPAL = "Rhoda Principal"
+PRINCIPAL = "Rhoda Prentiss"
 
 
 @pytest.fixture
@@ -254,6 +254,71 @@ def principal(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.evals import scenarios
 
     monkeypatch.setattr(scenarios, "_principal", lambda: SimpleNamespace(full_name=PRINCIPAL))
+
+
+# The ways a reply may name the principal (scenarios.name_variants): not
+# only the full or first name.
+def _olivia(monkeypatch: pytest.MonkeyPatch, full_name: str, email: str | None = None) -> None:
+    from types import SimpleNamespace
+
+    from openexecutive.evals import scenarios
+
+    monkeypatch.setattr(scenarios, "_principal", lambda: SimpleNamespace(full_name=full_name, email=email))
+
+
+FORBID = {"forbid_principal_name": True}
+
+
+def test_the_name_variants_are_the_full_given_surname_and_inverted_names() -> None:
+    from openexecutive.evals.scenarios import name_variants
+
+    assert name_variants("Dr. Olivia  Owner") == ["Owner, Olivia", "Olivia Owner", "Olivia", "Owner"]
+    assert name_variants("Prof Olivia Mae Owner", "olivia.owner@example.com") == [
+        "Olivia Mae Owner", "Owner, Olivia", "olivia.owner", "Olivia", "Owner",
+    ]
+    # A part shorter than three characters is left out, and so is an
+    # inverted name built from one.
+    assert name_variants("Al Owner") == ["Al Owner", "Owner"]
+    assert name_variants("Ms. Jo") == []
+    assert name_variants(None) == [] and name_variants("  ") == []
+
+
+@pytest.mark.parametrize(
+    "reply",
+    ["Ms. Owner signs off.", "Ask olivia.", "Owner, Olivia approves.", "OLIVIA OWNER approves.", "Mail olivia.owner today."],
+)
+def test_each_variant_of_the_principals_name_is_caught(monkeypatch: pytest.MonkeyPatch, reply: str) -> None:
+    from openexecutive.evals.scenarios import principal_name_in
+
+    _olivia(monkeypatch, "Dr. Olivia Owner", "olivia.owner@example.com")
+    assert principal_name_in(FORBID, reply)
+
+
+@pytest.mark.parametrize("reply", ["Dr. Smith approves.", "The owners approve.", "Prof. Jones and Mr. Lee."])
+def test_an_honorific_or_a_longer_word_is_not_the_principals_name(monkeypatch: pytest.MonkeyPatch, reply: str) -> None:
+    from openexecutive.evals.scenarios import principal_name_in
+
+    _olivia(monkeypatch, "Dr. Olivia Owner")
+    assert not principal_name_in(FORBID, reply)
+
+
+def test_a_short_name_part_is_not_matched(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.evals.scenarios import principal_name_in
+
+    _olivia(monkeypatch, "Al Owner")
+    assert not principal_name_in(FORBID, "Al said yes.")
+    assert principal_name_in(FORBID, "Owner said yes.")
+
+
+def test_the_scrub_replaces_every_variant(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.evals.scenarios import scrub_principal_name
+
+    _olivia(monkeypatch, "Dr. Olivia Owner", "olivia.owner@example.com")
+    text = "Dr. Olivia Owner, Ms. Owner, Owner, Olivia, olivia.owner@example.com; Dr. Smith and the owners."
+    assert scrub_principal_name(text) == (
+        "Dr. [the principal], Ms. [the principal], [the principal], [the principal]@example.com;"
+        " Dr. Smith and the owners."
+    )
 
 
 # A sweep reported "Rachel", a demo-fixture name in erpnext_064's own list,
@@ -266,7 +331,7 @@ def test_a_fixture_name_and_the_principals_name_have_a_key_each() -> None:
     assert reply_check_failures(NAMED, "Rachel raises them.") == {"forbidden_reply_words": ["Rachel"]}
     leak = reply_check_failures(NAMED, "Rhoda raises them.")
     assert leak == {"principal_name": ["the principal's name appeared in the reply"]}
-    both = reply_check_failures(NAMED, "Rachel drafts them and Rhoda Principal approves.")
+    both = reply_check_failures(NAMED, "Rachel drafts them and Rhoda Prentiss approves.")
     assert both["forbidden_reply_words"] == ["Rachel"] and both["principal_name"]
     # The name is never recorded, whatever path records it.
     assert "Rhoda" not in repr(both)
@@ -277,7 +342,7 @@ def test_a_fixture_name_and_the_principals_name_have_a_key_each() -> None:
 
 @pytest.mark.usefixtures("principal")
 def test_the_package_runner_fails_a_principal_name_under_its_own_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    done = _chat(monkeypatch, {"id": "c", "query": "q", **NAMED}, "Rhoda Principal raises them.")
+    done = _chat(monkeypatch, {"id": "c", "query": "q", **NAMED}, "Rhoda Prentiss raises them.")
     assert done["passed"] is False
     assert done["scores"]["principal_name"] == ["the principal's name appeared in the reply"]
     assert "forbidden_reply_words" not in done["scores"]
@@ -307,7 +372,7 @@ def test_the_supplier_runner_keys_the_principals_name_apart(monkeypatch: pytest.
 @pytest.mark.usefixtures("principal")
 def test_run_evals_reports_the_principals_name_apart(monkeypatch: pytest.MonkeyPatch) -> None:
     scenario = {"id": "m", "domain": "mcp", "query": "q", **NAMED}
-    leak = _evaluate(monkeypatch, scenario, _Replying("Rhoda Principal raises them."))
+    leak = _evaluate(monkeypatch, scenario, _Replying("Rhoda Prentiss raises them."))
     assert leak["passed"] is False
     assert _run_evals().failed_checks(leak["scores"]) == ["principal_name"]
     assert "Rhoda" not in repr(leak["scores"])
@@ -361,7 +426,7 @@ def test_the_package_runner_fails_a_live_turn_that_names_the_principal(monkeypat
     # Which turn, by its place in prior_turns; the final reply's own hit is apart.
     assert done["scores"]["principal_name"] == ["the principal's name appeared in live prior turn 2's reply"]
     assert "Rhoda" not in repr(done["scores"]) and "rhoda" not in repr(done["scores"])
-    both = _chat_turns(monkeypatch, LIVE_NAMED, "On time.", "Rhoda Principal signs.", "Rhoda approves.")
+    both = _chat_turns(monkeypatch, LIVE_NAMED, "On time.", "Rhoda Prentiss signs.", "Rhoda approves.")
     assert both["scores"]["principal_name"] == [
         "the principal's name appeared in the reply",
         "the principal's name appeared in live prior turn 3's reply",
@@ -376,7 +441,7 @@ def test_the_package_runner_fails_a_live_turn_that_names_the_principal(monkeypat
 
 @pytest.mark.usefixtures("principal")
 def test_run_evals_fails_a_live_turn_that_names_the_principal(monkeypatch: pytest.MonkeyPatch) -> None:
-    leak = _evaluate(monkeypatch, LIVE_NAMED, _InTurn("Rhoda Principal signs.", "On time.", "On time."))
+    leak = _evaluate(monkeypatch, LIVE_NAMED, _InTurn("Rhoda Prentiss signs.", "On time.", "On time."))
     assert leak["passed"] is False
     assert leak["scores"]["principal_name"] == ["the principal's name appeared in live prior turn 2's reply"]
     assert _run_evals().failed_checks(leak["scores"]) == ["principal_name"]
@@ -385,7 +450,7 @@ def test_run_evals_fails_a_live_turn_that_names_the_principal(monkeypatch: pytes
 
 @pytest.mark.usefixtures("principal")
 def test_a_live_reply_that_named_the_principal_is_stored_scrubbed(monkeypatch: pytest.MonkeyPatch) -> None:
-    said = "Rhoda Principal signs; ask rhoda."
+    said = "Rhoda Prentiss signs; ask rhoda."
     scrubbed = {"turn": 2, "response": "[the principal] signs; ask [the principal].", "response_length": len(said)}
     done = _chat_turns(monkeypatch, LIVE_NAMED, said, "On time.", "On time.")
     assert done["live_turns"][0] == scrubbed and done["scores"]["principal_name"]
@@ -404,7 +469,7 @@ def test_a_live_reply_that_named_the_principal_is_stored_scrubbed(monkeypatch: p
 
 @pytest.mark.usefixtures("principal")
 def test_a_name_past_the_stored_cut_still_fails_the_live_turn(monkeypatch: pytest.MonkeyPatch) -> None:
-    said = "x" * runner_module.LIVE_REPLY_STORED_CHARS + " Rhoda Principal signs."
+    said = "x" * runner_module.LIVE_REPLY_STORED_CHARS + " Rhoda Prentiss signs."
     done = _chat_turns(monkeypatch, LIVE_NAMED, said, "On time.", "On time.")
     assert done["scores"]["principal_name"] == ["the principal's name appeared in live prior turn 2's reply"]
     assert done["live_turns"][0]["response"] == "x" * runner_module.LIVE_REPLY_STORED_CHARS
@@ -413,7 +478,7 @@ def test_a_name_past_the_stored_cut_still_fails_the_live_turn(monkeypatch: pytes
 
 # The judge's notes echo what it read; a live reply reaches it scrubbed, and
 # whatever it still says of the principal is scrubbed before it's stored.
-ECHOING_SCORES = {"overall": 5, "notes": "Rhoda Principal is named.", "reasons": {"tone": ["ask RHODA"]}}
+ECHOING_SCORES = {"overall": 5, "notes": "Rhoda Prentiss is named.", "reasons": {"tone": ["ask RHODA"]}}
 
 
 def _echoing_judge(seen: list[dict[str, Any]]) -> Any:
@@ -429,7 +494,7 @@ def _echoing_judge(seen: list[dict[str, Any]]) -> Any:
 def test_the_package_runner_stores_no_principal_name_anywhere(monkeypatch: pytest.MonkeyPatch, forbid: bool) -> None:
     scenario = LIVE_NAMED if forbid else {k: v for k, v in LIVE_NAMED.items() if k != "forbid_principal_name"}
     seen: list[dict[str, Any]] = []
-    executive = _InTurn("Ask Rhoda.", "On time.", "Rhoda Principal signs.")
+    executive = _InTurn("Ask Rhoda.", "On time.", "Rhoda Prentiss signs.")
 
     async def fake_chat(self: Any, **kwargs: Any) -> str:
         return await executive.chat(**kwargs)
@@ -463,7 +528,7 @@ def test_run_evals_stores_no_principal_name_anywhere(monkeypatch: pytest.MonkeyP
     run_evals = _run_evals()
     seen: list[dict[str, Any]] = []
     monkeypatch.setattr(run_evals, "judge_response", _echoing_judge(seen))
-    said = "Rhoda Principal signs."
+    said = "Rhoda Prentiss signs."
     result = asyncio.run(run_evals.evaluate_chat(scenario, _InTurn("Ask Rhoda.", "On time.", said)))
     assert result["response"] == "[the principal] signs." and result["response_length"] == len(said)
     assert result["scores"]["notes"] == "[the principal] is named."
