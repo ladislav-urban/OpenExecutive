@@ -44,10 +44,19 @@
 # slow. Multi-arch is a follow-up.
 name: Publish images
 
-# No workflow_dispatch: `type=ref,event=branch` below would publish a tag
-# named after whatever branch it was dispatched from. Re-run a failed run from
-# the Actions UI instead.
+# workflow_dispatch publishes the images of one exact commit, for a release
+# cut from a commit that never lands on main as such (a fix on an older
+# base). Give `ref` as the full 40-character commit SHA. The run checks out
+# exactly that commit and pushes only its immutable `sha-<short>` tag: never
+# `latest`, `main`, a branch name or a semver tag, so it moves nothing a
+# server follows. Re-run a failed run from the Actions UI.
 on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Full 40-character commit SHA to build and publish
+        required: true
+        type: string
   pull_request:
     paths:
       - docker/**
@@ -91,9 +100,33 @@ jobs:
           - name: ui
             dockerfile: docker/Dockerfile.ui
     steps:
+      # A dispatch names one commit by its full SHA, never a branch or tag,
+      # so what is built cannot move under the run.
+      - name: Check the dispatched ref
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          if ! printf '%s' "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::ref must be a full 40-character lowercase commit SHA"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
+
+      - name: Confirm the checked-out commit
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          REF: ${{ inputs.ref }}
+        run: |
+          head="$(git rev-parse HEAD)"
+          if [ "$head" != "$REF" ]; then
+            echo "::error::checked out $head, not $REF"
+            exit 1
+          fi
 
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
@@ -113,6 +146,7 @@ jobs:
       # Tag set:
       #   v1.2.3 tag  -> 1.2.3, 1.2, latest, sha-<short>
       #   main push   -> main, sha-<short>
+      #   dispatch    -> sha-<short> of the dispatched commit only
       # `latest` follows semver tags only (metadata-action's default
       # latest=auto), never a branch push. No bare `{{major}}` tag while the
       # project is pre-1.0 — a `0` tag would be misleading.
@@ -120,10 +154,16 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ${{ steps.image.outputs.name }}
+          # On a dispatch, read the commit from the checkout (git context),
+          # not the branch the run was started from, and allow only its sha
+          # tag.
+          context: ${{ github.event_name == 'workflow_dispatch' && 'git' || 'workflow' }}
+          flavor: |
+            latest=${{ github.event_name == 'workflow_dispatch' && 'false' || 'auto' }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=ref,event=branch
+            type=semver,pattern={{version}},enable=${{ github.event_name != 'workflow_dispatch' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name != 'workflow_dispatch' }}
+            type=ref,event=branch,enable=${{ github.event_name != 'workflow_dispatch' }}
             type=sha
 
       # Layer cache lives in the registry under a `buildcache` tag, not the
@@ -156,13 +196,14 @@ jobs:
           IMAGE: ${{ steps.image.outputs.name }}
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
+          COMMIT: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
         run: |
           {
             echo "### ${IMAGE##*/}"
             echo
             echo "Pin: \`${IMAGE}@${DIGEST}\`"
             echo
-            echo "Commit \`${GITHUB_SHA}\`, tags:"
+            echo "Commit \`${COMMIT}\`, tags:"
             echo
             printf '%s\n' "$TAGS" | sed 's/^/- `/; s/$/`/'
           } >> "$GITHUB_STEP_SUMMARY"
