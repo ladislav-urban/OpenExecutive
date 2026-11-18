@@ -813,3 +813,29 @@ def test_the_check_runs_only_when_a_reply_would_go(owner: Any, models: dict[str,
     # Handle it for me off: every reply waits anyway, so nothing is checked.
     _scan_one(owner)
     assert models["checked"] == []
+
+
+def test_a_reply_they_asked_for_that_didnt_finish_waits_on_a_card(
+    owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Home's Reply is cancelled mid-way: the next scan writes it as theirs,
+    # on a card, never sent on its own, whatever Handle it for me says.
+    _on(owner)
+    working = inbox._draft_card
+
+    async def stopped(*_a: Any, **_k: Any) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inbox, "_draft_card", stopped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(inbox.draft_on_request(owner, "t1", "m1", gmail=mailbox, now=NOW))
+    assert inbox.ASKED in inbox._row_flags(owner.id, "m1")
+    assert inbox.ASKED not in inbox.ledger_flags(owner.id, ["m1"]).get("m1", [])
+    monkeypatch.setattr(inbox, "_draft_card", working)
+    result = _scan(owner, mailbox, now=NOW + timedelta(minutes=5))
+    assert result.drafted == 1 and result.handled == 0 and mailbox.sent == []
+    assert _only_card(owner).status == "proposed"
+    # Settled: the mark goes.
+    assert inbox.ASKED not in inbox._row_flags(owner.id, "m1")

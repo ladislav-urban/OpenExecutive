@@ -722,9 +722,14 @@ providers:
     a Gmail failure none, a cancellation none the first time and one each
     time it repeats (a step that times out on it), remembered on the row as
     the internal flag cancelled_once (never shown on a card, cleared when the
-    row settles); the outcome rides on the re-raised exception
-    (inbox_outcome), so the scan counts it once. Home's Reply leaves a
-    cancelled row for later, uncounted.
+    row settles, a skip included, and when Home's Reply reopens it); the
+    outcome is kept on the scan's own result by message id (and marked on
+    the re-raised exception as (person, message, outcome), read only from
+    its own attributes and only for that message), so the scan counts it
+    once. A Home Reply that doesn't finish leaves the row for later with the
+    internal flag asked (cancellation and cap uncounted, an error counted):
+    the next scan writes it as asked for, on a card, never sent on its own
+    under Handle it for me.
     Home's Reply has its own turn-cap sentence. A reply already shown whose
     answer check a cap refused gets UNCHECKED_FIGURES ("I couldn't check the
     figures above, so don't rely on them yet.") before the cap's sentence,

@@ -1644,3 +1644,66 @@ def test_a_cancelled_reply_from_home_goes_back_for_later_uncounted(
     with pytest.raises(asyncio.CancelledError):
         asyncio.run(inbox.draft_on_request(owner, "t1", "m1", gmail=mailbox, now=NOW))
     assert _ledger(db)["m1"] == ("retry", "cancelled") and _attempts(db, "m1") == 0
+
+
+def test_a_skip_clears_a_cancellation_mark(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Cancelled once, then skipped as stale: a later cancellation starts over
+    # and spends no attempt.
+    working_skip = inbox.skip_reason
+
+    async def stopped(*_a: Any, **_k: Any) -> bool:
+        raise asyncio.CancelledError()
+
+    monkeypatch.setattr(inbox, "_draft_card", stopped)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"))
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW))
+    assert inbox.CANCELLED_ONCE in inbox._row_flags(owner.id, "m1")
+    monkeypatch.setattr(inbox, "skip_reason", lambda *a, **k: "stale")
+    _scan(owner, mailbox, now=NOW + timedelta(minutes=1))
+    assert _ledger(db)["m1"][0] == "skipped"
+    assert inbox.CANCELLED_ONCE not in inbox._row_flags(owner.id, "m1")
+    # Left for later again (as a later run might), then cancelled afresh.
+    monkeypatch.setattr(inbox, "skip_reason", working_skip)
+    inbox._retry_later(owner.id, "m1", "error", count=False)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(inbox.answer_thread(owner, mailbox, "t1", now=NOW + timedelta(minutes=2)))
+    assert _attempts(db, "m1") == 0
+
+
+def test_one_exception_raised_for_two_messages_is_counted_for_each(
+    db: Path, owner: Any, models: dict[str, Any], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared = RuntimeError("the same instance")
+
+    async def broken(*_a: Any, **_k: Any) -> bool:
+        raise shared
+
+    monkeypatch.setattr(inbox, "_draft_card", broken)
+    mailbox = FakeInbox()
+    mailbox.add(_msg("m1", "t1"), _msg("m2", "t2", sender="ben@northpeak.example"))
+    result = _scan(owner, mailbox)
+    assert result.deferred == 2
+    ledger_rows = _ledger(db)
+    assert ledger_rows["m1"] == ("retry", "error") and ledger_rows["m2"] == ("retry", "error")
+    assert _attempts(db, "m1") == 1 and _attempts(db, "m2") == 1
+    assert "restored" not in result.counts()
+
+
+def test_a_mark_for_another_message_or_a_faked_one_is_ignored() -> None:
+    class _Anything(Exception):
+        def __getattr__(self, name: str) -> Any:
+            return (1, "m1", inbox.RETRY)
+
+    result = inbox.ScanResult("ok")
+    assert inbox._restored_outcome(_Anything(), result, 1, "m1") is None
+    other = RuntimeError("x")
+    other.inbox_outcome = (1, "m2", inbox.RETRY)  # type: ignore[attr-defined]
+    assert inbox._restored_outcome(other, result, 1, "m1") is None
+    other.inbox_outcome = (1, "m1", inbox.PROCESSING)  # type: ignore[attr-defined]
+    assert inbox._restored_outcome(other, result, 1, "m1") is None
+    other.inbox_outcome = (1, "m1", inbox.RETRY)  # type: ignore[attr-defined]
+    assert inbox._restored_outcome(other, result, 1, "m1") == inbox.RETRY

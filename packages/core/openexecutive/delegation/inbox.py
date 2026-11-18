@@ -187,9 +187,14 @@ class ScanResult:
     handled: int = 0
     # Meeting invite cards made (delegation.invites).
     invites: int = 0
+    # The outcome _consider recorded for a message it claimed and left for
+    # later before re-raising, by message id: this scan's own, never kept.
+    restored: dict[str, str] = field(default_factory=dict)
 
     def counts(self) -> dict[str, Any]:
-        return asdict(self)
+        out = asdict(self)
+        out.pop("restored", None)
+        return out
 
 
 # What each watch status tells the person on the Act as me card.
@@ -370,9 +375,13 @@ def _claim(
                 (outcome, reason, relation or None, moment, person_id, message.id, RETRY),
             )
         conn.commit()
-        return cur.rowcount == 1
+        claimed = cur.rowcount == 1
     finally:
         conn.close()
+    if claimed and outcome != PROCESSING:
+        # Settled here (a skip): the watcher's own marks no longer apply.
+        _clear_internal_flags(person_id, message.id, db_path=db_path)
+    return claimed
 
 
 def _record_ids(
@@ -429,7 +438,7 @@ def _retry_later(
     outcome = str(row["outcome"]) if row else RETRY
     if outcome == FAILED:
         # Given up on: settled.
-        _remove_flag(person_id, message_id, CANCELLED_ONCE, db_path=db_path)
+        _clear_internal_flags(person_id, message_id, db_path=db_path)
     return outcome
 
 
@@ -450,18 +459,46 @@ def _set_outcome(
     finally:
         conn.close()
     if outcome not in (PROCESSING, RETRY):
-        # Settled: a cancellation it once had no longer matters.
-        _remove_flag(person_id, message_id, CANCELLED_ONCE, db_path=db_path)
+        # Settled: the watcher's own marks no longer apply.
+        _clear_internal_flags(person_id, message_id, db_path=db_path)
 
 
 # The watcher's own mark that a message's handling was cancelled once (a
 # step stopped): the next cancellation spends an attempt. Never shown on a
 # card (ledger_flags leaves it out), and cleared when the row settles.
 CANCELLED_ONCE = "cancelled_once"
-_INTERNAL_FLAGS = frozenset({CANCELLED_ONCE})
+# The person asked for a reply (Home's Reply) that didn't finish: the next
+# scan writes it as theirs, on a card, never sent on its own.
+ASKED = "asked"
+_INTERNAL_FLAGS = frozenset({CANCELLED_ONCE, ASKED})
+
+
+def _clear_internal_flags(person_id: int, message_id: str, *, db_path: Path | None = None) -> None:
+    for flag in _INTERNAL_FLAGS:
+        _remove_flag(person_id, message_id, flag, db_path=db_path)
 # The attribute _consider sets on an exception it re-raises after leaving its
 # own claim for later: the outcome it recorded.
 INBOX_OUTCOME_ATTR = "inbox_outcome"
+
+
+def _restored_outcome(exc: BaseException, result: ScanResult, person_id: int, message_id: str) -> str | None:
+    """The outcome _consider recorded for ``message_id`` before it re-raised
+    ``exc``: from this scan's own result, else the exception's mark when it
+    names this very message (read from its own attributes, so a catch-all
+    ``__getattr__`` can't fake it). None when it recorded nothing."""
+    local = result.restored.pop(message_id, None)
+    if local is not None:
+        return local
+    try:
+        mark = vars(exc).get(INBOX_OUTCOME_ATTR)
+    except TypeError:
+        return None
+    if (
+        isinstance(mark, tuple) and len(mark) == 3
+        and mark[0] == person_id and mark[1] == message_id and mark[2] in (RETRY, FAILED)
+    ):
+        return str(mark[2])
+    return None
 
 
 def _row_flags(person_id: int, message_id: str, *, db_path: Path | None = None) -> list[str]:
@@ -1232,9 +1269,9 @@ async def _scan(person: Any, client: Any, watch: InboxWatch, now: datetime) -> S
             # on later scans, and given up on after MAX_ATTEMPTS (counted once:
             # _consider already left a claimed message for later).
             logger.warning("delegation.inbox: a message failed (%s)", type(exc).__name__)
-            # The outcome _consider already recorded for its own claim, if it
-            # did (carried on the exception, never kept anywhere else).
-            restored = getattr(exc, INBOX_OUTCOME_ATTR, None)
+            # The outcome _consider already recorded for its own claim of
+            # this message, if it did.
+            restored = _restored_outcome(exc, result, person.id, message_id)
             _count_retry(
                 result,
                 restored if restored is not None
@@ -1390,10 +1427,13 @@ async def _consider(
             else:
                 reason, count = "error", True
             outcome = _retry_later(person.id, message.id, reason, count=count, thread_id=thread.id)
+            # For the scan that catches it: counted once, not twice. Kept on
+            # this scan's result, and marked on the exception with the
+            # message it belongs to.
+            result.restored[message.id] = outcome
             if isinstance(exc, Exception):
-                # For the scan that catches it: counted once, not twice.
                 with contextlib.suppress(Exception):
-                    setattr(exc, INBOX_OUTCOME_ATTR, outcome)
+                    setattr(exc, INBOX_OUTCOME_ATTR, (person.id, message.id, outcome))
         raise
 
 
@@ -1409,6 +1449,16 @@ async def _consider_claimed(
         wants_draft,
     )
 
+    if ASKED in _row_flags(person.id, message.id):
+        # The person asked for this reply (Home's Reply) and it didn't
+        # finish: written as theirs, on a card, never sent on its own.
+        from openexecutive.delegation.inbox_classifier import Verdict
+
+        return await _draft_card(
+            person, client, message, thread, relation=relation, known_as=known_as,
+            verdict=Verdict(needs_reply=True, kind="request", confidence=1.0, asked_of_them=True),
+            own=own, exec_address=exec_address, now=now, result=result, asked=True,
+        )
     _note_mail(person.id, message, relation=relation)
     asked = addressing(message, name=person.full_name or "", own=own, exec_address=exec_address)
     verdict = await classify(
@@ -1630,6 +1680,8 @@ async def draft_on_request(
         _note_mail(person_id, message, relation=relation)
     else:
         _set_outcome(person_id, message_id, PROCESSING, reason="asked")
+        # Reopened: a cancellation it had before no longer counts.
+        _remove_flag(person_id, message_id, CANCELLED_ONCE)
     # They asked: the reply is theirs to write, so no verdict is needed.
     verdict = Verdict(needs_reply=True, kind="request", confidence=1.0, asked_of_them=True)
     result = ScanResult("ok")
@@ -1653,6 +1705,9 @@ async def draft_on_request(
         left = _row_for(person_id, message_id)
         if left is not None and left["outcome"] == PROCESSING:
             _retry_later(person_id, message_id, reason, count=count)
+            # Still theirs: the scan that picks it up writes it as asked for
+            # (a card, never sent on its own), whatever Handle it for me says.
+            _add_flag(person_id, message_id, ASKED)
         raise
     if result.drafted:
         done = _row_for(person_id, message_id)
