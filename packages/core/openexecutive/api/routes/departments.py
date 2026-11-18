@@ -18,6 +18,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from openexecutive.api.demo_gate import refuse_demo_reader
+from openexecutive.api.principal_gate import member_only
 from openexecutive.departments import registry, store
 from openexecutive.departments.cadence import (
     CADENCE_FORMATS_HINT,
@@ -189,7 +190,15 @@ def _translate_legacy_body(body: dict) -> dict:
 # Read routes
 # --------------------------------------------------------------------------- #
 
-@router.get("/departments", response_model=list[DepartmentState], dependencies=[Depends(refuse_demo_reader)])
+# The departments and goals are read by the principal and the active team:
+# a demo person (refuse_demo_reader, first), a signed-in email on no People
+# entry, a service call and a suspended entry get 403 (api.principal_gate).
+_MEMBER_ONLY = Depends(member_only("Only the principal and the team can see the departments and goals."))
+
+@router.get(
+    "/departments", response_model=list[DepartmentState],
+    dependencies=[Depends(refuse_demo_reader), _MEMBER_ONLY],
+)
 def list_departments() -> list[DepartmentState]:
     """List all departments with their Goals."""
     # Read straight through the store (not the cache) so the API view is always
@@ -197,7 +206,10 @@ def list_departments() -> list[DepartmentState]:
     return store.list_departments()
 
 
-@router.get("/departments/{slug}", response_model=DepartmentDetail, dependencies=[Depends(refuse_demo_reader)])
+@router.get(
+    "/departments/{slug}", response_model=DepartmentDetail,
+    dependencies=[Depends(refuse_demo_reader), _MEMBER_ONLY],
+)
 def get_department(slug: str) -> DepartmentDetail:
     state = store.get_department(slug)
     if state is None:
@@ -406,7 +418,7 @@ def create_goal(slug: str, body: GoalCreate) -> Goal:
 
 
 # What the team works on is not a demo person's to read.
-@router.get("/goals", response_model=list[GoalView], dependencies=[Depends(refuse_demo_reader)])
+@router.get("/goals", response_model=list[GoalView], dependencies=[Depends(refuse_demo_reader), _MEMBER_ONLY])
 def list_all_goals(request: Request) -> list[GoalView]:
     """Every goal, with or without a department, with its owner resolved. A
     demo person reads no other demo person as an owner and the principal by

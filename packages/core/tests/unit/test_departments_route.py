@@ -23,6 +23,9 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     registry.invalidate()
     store.initialize_db()
     store.seed_default_departments()
+    # No roster here: the caller reads as the team (who may read these is
+    # test_departments_member_reads).
+    monkeypatch.setattr("openexecutive.api.principal_gate.caller_is_member", lambda request: True)
 
     app = FastAPI()
     app.include_router(departments_route.router)
@@ -523,6 +526,9 @@ def test_delete_department_invalidates_registry(client: TestClient) -> None:
 def empty_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     monkeypatch.setattr(store, "DB_PATH", tmp_path / "departments.db")
     registry.invalidate()
+    # No roster here: the caller reads as the team (who may read these is
+    # test_departments_member_reads).
+    monkeypatch.setattr("openexecutive.api.principal_gate.caller_is_member", lambda request: True)
     app = FastAPI()
     app.include_router(departments_route.router)
     return TestClient(app)

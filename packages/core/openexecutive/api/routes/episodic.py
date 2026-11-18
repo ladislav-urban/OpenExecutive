@@ -377,18 +377,9 @@ def _require_member(request: Request, what: str) -> None:
     """403 unless the caller is the principal or on an active, non-demo
     People entry. Fails closed: a caller nobody resolved (a signed-in email
     on no entry, a service call) or a roster that can't be read is refused."""
-    if _caller_is_principal(request):
-        return
-    from openexecutive.people.store import get_person
+    from openexecutive.api.principal_gate import caller_is_member
 
-    caller = _caller_id(request)
-    person = None
-    if caller is not None:
-        try:
-            person = get_person(caller)
-        except Exception:
-            logger.warning("memories: reading the caller failed — refusing the read", exc_info=True)
-    if person is None or not person.active or person.demo:
+    if not caller_is_member(request):
         raise HTTPException(status_code=403, detail=f"Only the principal and the team can {what}")
 
 

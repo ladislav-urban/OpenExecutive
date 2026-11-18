@@ -47,3 +47,36 @@ def principal_only(detail: str) -> Callable[[Request], None]:
         raise HTTPException(status_code=403, detail=detail)
 
     return _gate
+
+
+def caller_is_member(request: Request) -> bool:
+    """Whether this caller is the principal (``people.caller_is_principal``)
+    or on an active, non-demo People entry. Fails closed: a caller nobody
+    resolved (a signed-in email on no entry, a service call), a suspended or
+    archived entry, a demo person and a roster that can't be read are not."""
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+    from openexecutive.api.routes.people import caller_is_principal
+    from openexecutive.people.store import get_person
+
+    if caller_is_principal(request):
+        return True
+    try:
+        caller = _resolve_caller_person_id(request)
+        person = get_person(caller) if caller is not None else None
+    except Exception:
+        logger.warning("member check: reading the caller failed — refusing", exc_info=True)
+        return False
+    return person is not None and person.active and not person.demo
+
+
+def member_only(detail: str) -> Callable[[Request], None]:
+    """A dependency that raises 403 with ``detail`` unless the caller is the
+    principal or an active, non-demo teammate (``caller_is_member``)."""
+
+    def _gate(request: Request) -> None:
+        if caller_is_member(request):
+            return
+        logger.info("member-only read refused method=%s path=%r", request.method, request.url.path[:200])
+        raise HTTPException(status_code=403, detail=detail)
+
+    return _gate

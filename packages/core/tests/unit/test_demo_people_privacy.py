@@ -227,9 +227,10 @@ def test_the_goals_page_names_no_other_demo_person_nor_the_principal(
     assert "Olivia" not in demo.text and "Pete" not in demo.text
     team = client.get("/goals", headers=_as("tom@example.com")).json()
     assert [g["owner_name"] for g in team] == ["Pete Prospect", "Olivia Owner", "Tom Team"]
-    # Someone signed in whom the roster doesn't place sees nothing once there
-    # is a principal.
-    assert client.get("/goals", headers=_as("stranger@nowhere.example")).json() == []
+    # Someone signed in whom the roster doesn't place is refused
+    # (api.principal_gate.member_only).
+    stranger = client.get("/goals", headers=_as("stranger@nowhere.example"))
+    assert stranger.status_code == 403 and "Olivia" not in stranger.text
 
 
 def test_homes_goals_name_no_other_demo_person(roster: SimpleNamespace) -> None:

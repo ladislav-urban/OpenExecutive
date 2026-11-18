@@ -36,7 +36,10 @@ def db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 @pytest.fixture()
-def client(db: Path) -> TestClient:
+def client(db: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
+    # No roster here: the caller reads as the team (who may read these is
+    # test_departments_member_reads).
+    monkeypatch.setattr("openexecutive.api.principal_gate.caller_is_member", lambda request: True)
     app = FastAPI()
     app.include_router(departments_route.router)
     return TestClient(app)

@@ -13236,7 +13236,12 @@ route_gates:
     principal's) on GET /goals, GET /clients/cockpit, GET /memories/advice,
     GET /workflows/custom and GET /workflows/custom/{name}. An email on
     nobody's entry is not a demo person to that helper and reads on, as do
-    teammates and the principal.
+    teammates and the principal. GET /departments, GET /departments/{slug}
+    and GET /goals also take api.principal_gate.member_only (after
+    refuse_demo_reader): only the principal and an active, non-demo People
+    entry read them; an email on no entry, a service call, a suspended or
+    archived entry and an unreadable roster get 403. The same
+    caller_is_member rule gates GET /memories/decisions and /initiatives.
   memories_records: |
     api/routes/episodic.py: GET /memories/decisions and GET
     /memories/initiatives answer the principal (and local login) and an
