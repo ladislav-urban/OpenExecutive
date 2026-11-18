@@ -11685,7 +11685,19 @@ integrations:
     its proposal marker) and erpnext__proposed_rules (Home's own read, no
     job's). Phase 3 pins those three (ladislav-urban/oe_connector#562,
     TOOLS_DIGEST abbbe630, 33 tools; re-pinned to main's value at merge,
-    1e3c00b2 with #564). POST /audit/log refuses the watch_* rows
+    1e3c00b2 with #564). The current pin is TOOLS_DIGEST d0c3a6f0, 33 tools
+    (ladislav-urban/oe_connector#617): run_report (b4d391a1) takes an
+    optional `columns`, a list of the report's own served column fieldnames
+    to keep (unknown or hidden names refused); its result then also carries
+    columns_kept (a list) and columns_dropped (a count), and is otherwise
+    unchanged, truncation included. figure_check skips both keys
+    (_SKIP_KEYS), so a slim report reads as the full one; check 3 never takes
+    a report as a quick way. The guide reads single invoices from the
+    AR / AP report's slim set (posting_date, due_date, party, voucher_type,
+    voucher_no, currency, invoiced, outstanding), and a slim read still
+    truncated goes to the grouped outlook read, never projected from partial
+    rows. connected_systems.ERPNEXT_ARGS_WRITTEN_FOR follows the pin.
+    POST /audit/log refuses the watch_* rows
     (CODE_ONLY_EVENT_TYPES): only the app writes them.
     The phase 2 pin is aa01ad95, 30 tools:
     draft_check takes fill and match, and draft_match_bank_line and
