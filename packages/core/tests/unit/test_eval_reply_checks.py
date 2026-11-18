@@ -448,6 +448,20 @@ def test_an_initial_or_a_lowercase_short_word_is_not_the_principals_name(
     assert all(len(v.text) > 1 for v in name_variants(full_name, "a@b.example"))
 
 
+@pytest.mark.parametrize(
+    ("full_name", "reply"),
+    [("김 민준", "Ask 김."), ("王 伟", "Ask 王 today."), ("Weiß, Olivia", "WEISS signs."), ("Weiß, Olivia", "Ask weiß.")],
+)
+def test_an_uncased_one_character_name_and_a_sharp_s_are_caught(
+    monkeypatch: pytest.MonkeyPatch, full_name: str, reply: str,
+) -> None:
+    from openexecutive.evals.scenarios import principal_name_in, scrub_principal_name
+
+    _olivia(monkeypatch, full_name)
+    assert principal_name_in(FORBID, reply)
+    assert "[the principal]" in scrub_principal_name(reply)
+
+
 def test_an_initialled_name_still_matches_its_surname(monkeypatch: pytest.MonkeyPatch) -> None:
     from openexecutive.evals.scenarios import principal_name_in
 
@@ -464,6 +478,7 @@ ROSTERS = [
     (["Olivia Owner PhD", "Olivia Owner - CEO", "Olivia Owner (CEO)", "Olivia Owner-Smith"], ["x@y.example"]),
     (["Dr. Olivia Owner", "Prof Al Bo"], ["al.bo@uni.example"]),
     (["Dr. Olivia", "Olivia Li", "Wu, Olivia", "A. Owner"], []),
+    (["김 민준", "王 伟", "Weiß, Olivia"], []),
 ]
 
 
@@ -478,8 +493,9 @@ def test_the_eval_matches_every_word_the_demo_guard_hides(
     pattern = name_pattern(principal_name_variants())
     assert pattern is not None
     for word in principal_name_words(names, addresses):
-        if word.strip(".").casefold() in _HONORIFICS or len(word.strip(".")) < 2:
-            continue  # "Dr." or an initial ("A.") alone is no name
+        bare = word.strip(".")
+        if bare.casefold() in _HONORIFICS or (len(bare) < 2 and bare.lower() != bare.upper()):
+            continue  # "Dr." or an initial ("A.") alone is no name; "김" is
         for reply in (word, f"Ask {word} today.", f"Ask {word.lower()} today."):
             assert pattern.search(reply), (word, reply)
 

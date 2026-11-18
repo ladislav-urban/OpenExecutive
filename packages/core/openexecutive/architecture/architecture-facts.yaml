@@ -13272,9 +13272,11 @@ evals:
     approves" name Olivia Owner and "the account owner" doesn't, and a
     surname of several words or an inverted name gives every name word
     without guessing which is the given name. No variant is a single
-    character, from any source, so an initial ("A. Owner") never matches
-    every "a"; the guard's own words are matched but honorifics and
-    initials. Known limits,
+    cased letter or punctuation mark, from any source, so an initial ("A.
+    Owner") never matches every "a", while a one-character name in an
+    uncased script ("김") is kept; and a capitals form the any-case
+    variants don't match ("WEISS" for "Weiß") is kept too. The guard's own
+    words are all matched but honorifics and initials. Known limits,
     accepted since over-scrubbing is safe: an inverted roster name's
     surname is the guard's first word and so matches in any case ("the
     account owner" for "Owner, Olivia"), a name that is a common word

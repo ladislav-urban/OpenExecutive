@@ -1112,8 +1112,10 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
     more and not a suffix or credential (``_SUFFIXES``), as written and in
     capitals, so "Owner approves" and "OWNER approves" name Olivia Owner and
     "the account owner" doesn't. A title and a single name ("Dr. Olivia")
-    give that name in any case. No variant is a single character, so an
-    initial ("A. Owner") never matches every "a". A surname of
+    give that name in any case. No variant is a single cased letter or
+    punctuation mark (``_is_initial``), so an initial ("A. Owner") never
+    matches every "a"; a one-character name in an uncased script ("김")
+    is kept. A surname of
     several words or an inverted name gives every one of its name words,
     with no guess at which is the given name."""
     from openexecutive.people.demo import principal_name_words
@@ -1121,8 +1123,8 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
     found: dict[str, bool] = {}
 
     def add(text: str, any_case: bool) -> None:
-        # A single character (an initial, "A." or "I.") is never a name.
-        if len(text) > 1:
+        # An initial ("A." or "I.") is never a name on its own.
+        if not _is_initial(text):
             found[text] = found.get(text, False) or any_case
 
     stored = " ".join((full_name or "").split())
@@ -1155,12 +1157,27 @@ def name_variants(full_name: str | None, *emails: str | None) -> list[NameVarian
     return _sorted_variants(found)
 
 
+def _is_initial(text: str) -> bool:
+    """Whether ``text`` is empty or a single cased letter or punctuation mark
+    (an initial): a single character of an uncased script ("김", "王") is a
+    whole name."""
+    if len(text) > 1:
+        return False
+    return not (text.isalpha() and text.lower() == text.upper())
+
+
 def _sorted_variants(found: dict[str, bool]) -> list[NameVariant]:
     """``found`` (text: any_case) as variants, longest first, without a
-    case-sensitive form that an any-case variant already covers."""
-    any_case = {text.casefold() for text, anywhere in found.items() if anywhere}
+    case-sensitive form that an any-case variant already matches (by the
+    regex's own case folding: "(?i:Weiß)" doesn't match "WEISS", so that
+    form stays)."""
+    covering = [re.compile(f"(?i:{re.escape(t)})") for t, a in found.items() if a]
     return sorted(
-        (NameVariant(t, a) for t, a in found.items() if a or t.casefold() not in any_case),
+        (
+            NameVariant(t, a)
+            for t, a in found.items()
+            if a or not any(c.fullmatch(t) for c in covering)
+        ),
         key=lambda v: (-len(v.text), v.text),
     )
 
