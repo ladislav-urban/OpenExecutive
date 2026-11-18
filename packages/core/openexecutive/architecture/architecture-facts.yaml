@@ -11681,11 +11681,10 @@ integrations:
     its date before and after, each column headed with what it holds ("Acme
     if it pays late", not "Acme receipts"), and whether the lowest or highest point
     asked about moves and what it ends at; unchanged rows still stay out. The
-    first Nov 18, 2026 gate of erpnext_094 (without this sentence) passed 1 of
-    3: one rep listed the moved invoices with neither date under one
-    "receipts" column, one never said whether the lowest week moved. On the
-    rehearsal bench's re-gate the same day it passed 2 of 3 with it, against 0
-    of 3 on main. It sits in BRIEF_RULE (user turn, so the
+    Nov 18, 2026 gates of erpnext_094 on main showed why: one rep listed the
+    moved invoices with neither date under one "receipts" column, one never
+    said whether the lowest week moved. On the same demo data it passed 0 of 3
+    on main and 2 of 3 with this sentence. It sits in BRIEF_RULE (user turn, so the
     host page block carries it too), not in the cached ERPNext guide, whose
     what-if sentence already asks every surface for the lowest week: the
     panel's brevity is what cut these. SCREEN_RULE adds that beside
