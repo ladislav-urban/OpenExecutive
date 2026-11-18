@@ -654,8 +654,9 @@ _SKIP_KEYS = frozenset({
     "filters", "limit", "docstatus", "idx", "indent", "is_group", "lft", "rgt", "period", "notes",
     "columns", "views", "history",
     # run_report's answer to its `columns` argument (ladislav-urban/oe_connector#617):
-    # the columns kept and a count of those left out, never a business figure.
-    "columns_kept", "columns_dropped",
+    # the columns kept and a count of those left out, never a business figure;
+    # and the count of empty columns it trims (ladislav-urban/oe_connector#619).
+    "columns_kept", "columns_dropped", "columns_empty",
 })
 _NUMERIC_FIELDTYPES = frozenset({"Currency", "Float", "Int", "Percent"})
 
