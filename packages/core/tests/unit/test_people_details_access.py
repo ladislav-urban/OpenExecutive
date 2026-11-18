@@ -109,4 +109,5 @@ def test_details_fail_closed_and_by_scope_hides_them(owner: int, api: TestClient
 
     monkeypatch.setattr(chat_route, "_resolve_caller_person_id", broken)
     rows = api.get("/people", headers={"x-caller-email": OWNER}).json()
-    assert [r["details"] for r in rows if r["id"] == owner] == [[]]
+    # A caller who can't be looked up gets no roster at all.
+    assert rows == []

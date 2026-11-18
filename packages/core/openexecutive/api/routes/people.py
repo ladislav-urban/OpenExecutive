@@ -217,6 +217,8 @@ def list_people(
     )
     if principal:
         return people
+    if _resolves_to_no_one(request):
+        return []
     people = [p for p in people if not p.suspended]
     demo, viewer = _demo_viewer(request)
     if demo:
@@ -224,6 +226,24 @@ def list_people(
 
         people = shown_to_demo_viewer(people, viewer)
     return _shown(people, request)
+
+
+def _resolves_to_no_one(request: Request) -> bool:
+    """Whether the caller resolves to no one on the roster (a signed-in email
+    on no People entry, a service call, a suspended or archived entry, a
+    roster that can't be read) and is not the principal as
+    ``api.principal_gate.principal_only`` decides it (local login and an
+    open-mode call that names no one are). Such a caller gets no roster."""
+    from openexecutive.api.principal_gate import caller_is_the_principal
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+
+    try:
+        if _resolve_caller_person_id(request) is not None:
+            return False
+    except Exception:
+        logger.warning("people: caller lookup failed — showing no one", exc_info=True)
+        return True
+    return not caller_is_the_principal(request)
 
 
 @router.get("/people/me", response_model=PeopleViewer)

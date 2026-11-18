@@ -2837,6 +2837,7 @@ def _today_for(
     )
     response.caller_person_id = caller
     _departments_for_members(response, request, principal=principal)
+    no_one = _empty_for_no_one(response, request, caller, principal=principal)
     if stale:
         background_tasks.add_task(_regen_stale_insights, stale)
     _attach_narrative(
@@ -2852,7 +2853,7 @@ def _today_for(
         response.morning_brief = _morning_brief_today()
         response.calendar_next = _calendar_next(datetime.now(UTC))
         response.right_now = _right_now_rows()
-    response.done_for_you = _done_for_you(request, caller, datetime.now(UTC))
+    response.done_for_you = [] if no_one else _done_for_you(request, caller, datetime.now(UTC))
     _attach_home_rules(response, caller=caller, principal=principal, now=datetime.now(UTC), tz=tz)
     return response
 
@@ -2866,6 +2867,29 @@ def _departments_for_members(response: TodayResponse, request: Request, *, princ
 
     if not principal and not caller_is_member(request):
         response.departments = []
+
+
+def _empty_for_no_one(response: TodayResponse, request: Request, caller: int | None, *, principal: bool) -> bool:
+    """A caller who resolves to no one on the roster (a signed-in email on no
+    People entry, a service call, a suspended or archived entry, a roster
+    that can't be read) gets an empty Home: no cards, no people, no
+    departments, nothing in flight or waited on, nothing handled overnight;
+    the header is the shared fixed line (`_attach_company_line`). Local login
+    and an open-mode call that names no one count as the principal, as
+    api.principal_gate.principal_only decides it."""
+    from openexecutive.api.principal_gate import caller_is_the_principal
+
+    if caller is not None or principal or caller_is_the_principal(request):
+        return False
+    response.proposals = []
+    response.people = []
+    response.departments = []
+    response.in_flight = []
+    response.awaiting = []
+    response.handled_overnight = []
+    response.practice_clients = []
+    response.done_for_you = []
+    return True
 
 
 def _workspace_solo() -> bool:
@@ -3937,6 +3961,7 @@ def get_morning_brief(request: Request, response: Response) -> TodayResponse:
     )
     payload.caller_person_id = caller
     _departments_for_members(payload, request, principal=principal)
+    _empty_for_no_one(payload, request, caller, principal=principal)
     # Serve the viewer's cached narrative (cache-only — this deprecated alias
     # has no BackgroundTasks to schedule a regen). Before the home rules, as
     # GET /today does, so a demo person's header names the principal by role.

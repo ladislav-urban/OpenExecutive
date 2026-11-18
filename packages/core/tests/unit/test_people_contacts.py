@@ -1342,7 +1342,8 @@ def test_today_shows_a_private_alert_to_the_principal_only(
     assert headlines(OWNER_EMAIL) == {"Board seat for Jordan", "Server down"}
     assert headlines(None) == {"Board seat for Jordan", "Server down"}
     assert headlines(TEAM_EMAIL) == {"Server down"}
-    assert headlines("nobody@elsewhere.example") == {"Server down"}
+    # A caller who resolves to no one gets an empty Home.
+    assert headlines("nobody@elsewhere.example") == set()
     # The unattended readers (brief, digest, reflection) never get it, and the
     # narrative — cached per scope — is never written from it.
     assert {p.headline for p in today_route._build_today().proposals} == {"Server down"}
