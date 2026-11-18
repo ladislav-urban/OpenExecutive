@@ -203,6 +203,47 @@ def test_fixed_and_live_turns_keep_their_order() -> None:
     turn = asyncio.run(runner_module.run_chat_turn(executive, scenario))
     assert [m["content"] for m in executive.calls[1]["history"]] == ["a", "fixed", "b", "live reply"]
     assert turn.prior_replies == ["fixed", "live reply"]
+    # Only the live one is kept as it ran, by its place in prior_turns.
+    assert turn.live_turns == [{"turn": 2, "response": "live reply", "response_length": 10}]
+
+
+MIXED: dict[str, Any] = {
+    "id": "m",
+    "domain": "mcp",
+    "query": "q",
+    "prior_turns": [{"user": "a", "live": True}, {"user": "b", "assistant": "fixed"}, {"user": "c", "live": True}],
+}
+MIXED_LIVE = [
+    {"turn": 1, "response": "first live", "response_length": 10},
+    {"turn": 3, "response": "second, live", "response_length": 12},
+]
+
+
+def test_the_package_runner_records_each_live_turn_with_its_result(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    async def fake_judge(scenario: dict[str, Any], response: str) -> dict[str, Any]:
+        return {"overall": 5}
+
+    def run(scenario: dict[str, Any], *replies: str) -> dict[str, Any]:
+        executive = _Turns(*replies)
+
+        async def fake_chat(self: Any, **kwargs: Any) -> str:
+            return await executive.chat(**kwargs)
+
+        monkeypatch.setattr(Executive, "chat", fake_chat)
+        queue: asyncio.Queue[Any] = asyncio.Queue()
+        asyncio.run(runner_module._make_chat_runner(asyncio.Semaphore(1), queue, [0], 1, None)(0, scenario))
+        (done,) = [e for e in (queue.get_nowait() for _ in range(queue.qsize())) if e["type"] == "scenario_done"]
+        return done
+
+    monkeypatch.setattr(Executive, "__init__", lambda self, mcp_gateway=None: None)
+    monkeypatch.setattr(runner_module, "judge_chat", fake_judge)
+    done = run(MIXED, "first live", "second, live", "answer")
+    assert done["live_turns"] == MIXED_LIVE and done["response"] == "answer"
+    assert json.loads(json.dumps(done))["live_turns"] == MIXED_LIVE  # stored as the run's JSON
+    # A scenario with no live turn records none.
+    assert "live_turns" not in run({**MIXED, "prior_turns": [{"user": "b", "assistant": "fixed"}]}, "answer")
 
 
 @pytest.mark.parametrize(
@@ -288,6 +329,21 @@ def test_run_evals_runs_the_live_turn_and_its_judge_sees_the_reply(monkeypatch: 
     assert result["passed"] is True and result["response"] == "Week 7, ending at 41,200."
     assert executive.calls[1]["history"][1]["content"] == FIRST
     assert f"ASSISTANT: {FIRST}" in seen["section"]
+    assert result["live_turns"] == [{"turn": 1, "response": FIRST, "response_length": len(FIRST)}]
+    assert "turn" not in result  # the ChatTurn itself is never written
+
+
+def test_run_evals_records_only_the_live_turns(monkeypatch: pytest.MonkeyPatch) -> None:
+    run_evals = _run_evals()
+
+    async def judge(scenario: dict[str, Any], response: str, drafts: Any = None) -> dict[str, Any]:
+        return {"overall": 5}
+
+    monkeypatch.setattr(run_evals, "judge_response", judge)
+    result = asyncio.run(run_evals.evaluate_chat(MIXED, _Turns("first live", "second, live", "answer")))
+    assert result["live_turns"] == MIXED_LIVE
+    fixed = {**MIXED, "prior_turns": [{"user": "b", "assistant": "fixed"}]}
+    assert "live_turns" not in asyncio.run(run_evals.evaluate_chat(fixed, _Turns("answer")))
 
 
 def test_the_cash_outlook_follow_ups_run_their_first_turn_live() -> None:

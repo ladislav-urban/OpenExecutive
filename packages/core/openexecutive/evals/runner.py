@@ -640,8 +640,9 @@ class ChatTurn:
     # turn's as written, a live turn's as it ran (``with_prior_replies``).
     prior_replies: list[str] = field(default_factory=list)
     # The live prior turns as they ran, oldest first: each one's place in
-    # ``prior_turns`` (``turn``, from 1) and its ``reply``. Fixed turns
-    # aren't in it.
+    # ``prior_turns`` (``turn``, from 1), its ``response`` and that reply's
+    # length in characters (``response_length``), as a run's result records
+    # the question's. Fixed turns aren't in it.
     live_turns: list[dict[str, Any]] = field(default_factory=list)
 
     def judged_scenario(self, scenario: dict[str, Any]) -> dict[str, Any]:
@@ -771,7 +772,7 @@ async def run_chat_turn(executive: Any, scenario: dict[str, Any]) -> ChatTurn:
             if not (reply or "").strip():
                 raise RuntimeError(LIVE_TURN_FAILED.format(n=n, why="it answered nothing"))
             prior_replies.append(reply)
-            live_turns.append({"turn": n, "reply": reply})
+            live_turns.append({"turn": n, "response": reply, "response_length": len(reply)})
         query = scenario_query(scenario)
         # Records which specialists the turn consulted (routing_check).
         collector = DebugCollector()
@@ -810,7 +811,7 @@ def chat_checks(scenario: dict[str, Any], turn: ChatTurn, scores: dict[str, Any]
     named = [
         LIVE_PRINCIPAL_NAME_SAID.format(n=live["turn"])
         for live in turn.live_turns
-        if principal_name_in(scenario, live["reply"])
+        if principal_name_in(scenario, live["response"])
     ]
     if named:
         failures["principal_name"] = failures.get("principal_name", []) + named
@@ -890,18 +891,21 @@ def _make_chat_runner(
                     ok = float(scores.get("overall", 0)) >= _PASS_THRESHOLD and held
                     if ok:
                         passed[0] += 1
-                    await queue.put(
-                        {
-                            "type": "scenario_done",
-                            "index": i,
-                            "total": total,
-                            "scenario_id": scenario["id"],
-                            "passed": ok,
-                            "scores": scores,
-                            "query": query,
-                            "response": response,
-                        }
-                    )
+                    done: dict[str, Any] = {
+                        "type": "scenario_done",
+                        "index": i,
+                        "total": total,
+                        "scenario_id": scenario["id"],
+                        "passed": ok,
+                        "scores": scores,
+                        "query": query,
+                        "response": response,
+                    }
+                    # Each live prior turn as it ran, kept with the run's
+                    # result (fixed turns are in the scenario as written).
+                    if turn.live_turns:
+                        done["live_turns"] = turn.live_turns
+                    await queue.put(done)
                 except Exception as exc:
                     logger.exception("eval scenario %s failed", scenario["id"])
                     await queue.put(

@@ -32,11 +32,14 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
     ``run_chat_turn``: the same session, surface, product name, advice policy
     and overrides as ``openexecutive.evals.runner`` gives it. The result's
     ``turn`` is the ``ChatTurn`` for ``chat_checks`` (``evaluate_chat``
-    takes it out before the result is written)."""
+    takes it out before the result is written). ``live_turns`` holds each
+    ``live: true`` prior turn as it ran (``ChatTurn.live_turns``: its place
+    in ``prior_turns``, response and response_length), only for a scenario
+    that has one."""
     from openexecutive.evals.runner import run_chat_turn
 
     turn = await run_chat_turn(executive, scenario)
-    return {
+    result = {
         "id": scenario["id"],
         "domain": scenario["domain"],
         "query": scenario["query"],
@@ -44,6 +47,9 @@ async def run_eval(scenario: dict, executive, session_factory) -> dict:
         "response_length": len(turn.response),
         "turn": turn,
     }
+    if turn.live_turns:
+        result["live_turns"] = turn.live_turns
+    return result
 
 
 async def evaluate_chat(scenario: dict, executive) -> dict:

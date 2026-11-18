@@ -13276,13 +13276,28 @@ evals:
     Only the final turn is judged and checked: forbidden_reply_words,
     forbid_repeated_text, reply_must_name, routing and the panel's views
     hold the query's reply alone (the live turn gets no debug collector
-    and its views are dropped). Both judges see the conversation as it ran
-    (ChatTurn.prior_replies, scenarios.with_prior_replies), in both runners.
+    and its views are dropped). The one exception is the principal's name
+    (forbid_principal_name): runner.chat_checks holds every live turn's
+    reply to it too, and a hit fails the scenario as one in the final
+    reply does, under the same principal_name score key, as "the
+    principal's name appeared in live prior turn N's reply"
+    (scenarios.LIVE_PRINCIPAL_NAME_SAID; N is the turn's place in
+    prior_turns), never the name itself. Both judges see the conversation
+    as it ran (ChatTurn.prior_replies, scenarios.with_prior_replies), in
+    both runners. Each live turn as it ran (ChatTurn.live_turns: turn,
+    response, response_length) goes into the scenario's result under
+    live_turns, in the package runner's scenario_done event (kept in the
+    run's results) and in evals/run_evals.py's results JSON; fixed turns
+    aren't in it, and a scenario with no live turn has no live_turns key.
+    Neither runner measures the characters of a turn's tool results.
     A live turn that raises or answers nothing fails the scenario with
     "live prior turn N failed..." (a scenario_error in the package
     runner, an error result in evals/run_evals.py). validate_scenario_yaml
     (scenarios.parse_prior_turns) requires live to be a bool, refuses an
-    assistant on a live turn and requires a non-empty one on any other.
+    assistant on a live turn and requires a non-empty one on any other,
+    and allows at most scenarios.MAX_LIVE_PRIOR_TURNS (2) live turns: each
+    is a billed chat() turn with its own tool calls, run on every run of
+    the scenario; two covers erpnext_064's.
 
 company_onboarding:
   module: openexecutive.onboarding (interview.py, commit.py, wizard.py) + api.routes.onboarding
