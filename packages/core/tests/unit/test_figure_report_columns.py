@@ -71,6 +71,15 @@ def test_the_reader_reads_a_slim_report_as_the_full_one() -> None:
     assert 21.0 not in sources_for([_report(slim=True)]).values
 
 
+def test_the_empty_column_count_is_never_a_figure() -> None:
+    # ladislav-urban/oe_connector#619 trims empty columns and says how many.
+    result = _report(slim=True)
+    result.payload["columns_empty"] = 17
+    assert 17.0 not in sources_for([result]).values
+    assert sources_for([result]) == sources_for([_report(slim=True)])
+    assert _statuses("17 customers are overdue.", result)["17"] != "confirmed"
+
+
 def test_a_slim_reports_figures_are_found() -> None:
     got = _statuses(
         "Northwind owes $12,500 and Southgate $35,700; the dollar invoices come to $48,200, "
