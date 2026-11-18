@@ -194,9 +194,14 @@ def test_the_panel_passes_the_signed_message_without_its_page_block() -> None:
 
 
 def test_evals_pass_the_raw_query_not_the_page_block() -> None:
+    # One chat() call runs every turn (a live prior turn and the question):
+    # the message with its page block, and the text as typed. Which text each
+    # turn passes is held at run time in test_eval_prior_turns.
     [call] = _calls(PACKAGE / "evals/runner.py", {"chat"})
-    assert ast.unparse(_kw(call, "typed_question")) == "scenario['query']"  # type: ignore[arg-type]
-    assert ast.unparse(_kw(call, "user_message")) == "query"  # type: ignore[arg-type]
+    assert ast.unparse(_kw(call, "typed_question")) == "typed"  # type: ignore[arg-type]
+    assert ast.unparse(_kw(call, "user_message")) == "message"  # type: ignore[arg-type]
+    turns = {ast.unparse(c.args[0]): ast.unparse(c.args[1]) for c in _calls(PACKAGE / "evals/runner.py", {"one_turn"})}
+    assert turns == {"query": "scenario['query']", "prior.message": "prior.typed"}
 
 
 # --------------------------------------------------------------- web chat
