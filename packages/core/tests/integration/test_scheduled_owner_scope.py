@@ -77,26 +77,26 @@ def install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleN
 def _client(monkeypatch: pytest.MonkeyPatch, *, signed: bool) -> TestClient:
     from openexecutive.api.main import create_app
 
+    # As the UI proxy calls it on a server: the shared secret plus the caller
+    # email it stamps (what lets a signed-in user cancel at all), and with
+    # signed callers on, its assertion too.
+    monkeypatch.setenv("BACKEND_SHARED_SECRET", SECRET)
     if signed:
-        monkeypatch.delenv("BACKEND_SHARED_SECRET", raising=False)
         monkeypatch.setenv("CALLER_ASSERTION_PUBLIC_KEYS", VECTORS["public_keys"])
     else:
-        # As the UI proxy calls it on a server: the shared secret plus the
-        # caller email it stamps (what lets a signed-in user cancel at all).
-        monkeypatch.setenv("BACKEND_SHARED_SECRET", SECRET)
         monkeypatch.delenv("CALLER_ASSERTION_PUBLIC_KEYS", raising=False)
     return TestClient(create_app(), client=("203.0.113.5", 50000))
 
 
 def _headers(signed: bool, email: str | None, method: str, path: str) -> dict[str, str]:
+    headers = {"x-api-key": SECRET}
     if signed:
         if email is None:
-            return {}
+            return headers
         token = caller_signing.mint_assertion(
             VECTORS["test_signing_key"], kind="user", email=email, method=method, target=path
         )
-        return {"x-caller-assertion": str(token), "x-caller-email": email}
-    headers = {"x-api-key": SECRET}
+        return {**headers, "x-caller-assertion": str(token), "x-caller-email": email}
     if email is not None:
         headers["x-caller-email"] = email
     return headers
@@ -124,6 +124,9 @@ def test_a_teammate_sees_and_cancels_only_their_own(
 ) -> None:
     client = _client(monkeypatch, signed=signed)
     own = install.actions[who]
+    # A demo person's DELETE stops at the demo write gate (api.demo_gate),
+    # their own action included: they change nothing.
+    deletes_own = who != "demo"
     assert _intents(_call(client, signed, email, "GET", "/scheduled?status=all")) == {f"{who}-own"}
     for name, action_id in install.actions.items():
         if action_id == own:
@@ -131,13 +134,13 @@ def test_a_teammate_sees_and_cancels_only_their_own(
         r = _call(client, signed, email, "GET", f"/scheduled/{action_id}")
         assert r.status_code == 404, (name, r.text)
         r = _call(client, signed, email, "DELETE", f"/scheduled/{action_id}")
-        assert r.status_code == 404, (name, r.text)
+        assert r.status_code == (404 if deletes_own else 403), (name, r.text)
         assert _status(action_id) == "pending"
     r = _call(client, signed, email, "GET", f"/scheduled/{own}")
     assert r.status_code == 200 and r.json()["intent_text"] == f"{who}-own"
     r = _call(client, signed, email, "DELETE", f"/scheduled/{own}")
-    assert r.status_code == 200, r.text
-    assert _status(own) == "cancelled"
+    assert r.status_code == (200 if deletes_own else 403), r.text
+    assert _status(own) == ("cancelled" if deletes_own else "pending")
 
 
 @pytest.mark.parametrize("signed", [False, True])
