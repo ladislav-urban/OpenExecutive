@@ -293,6 +293,13 @@ def scenario_query(scenario: dict[str, Any]) -> str:
     return f"{where}\n\n{scenario['query']}" if where else scenario["query"]
 
 
+# The most ``live: true`` prior turns a scenario may have: each is a billed
+# chat() turn, with its own tool calls, run before the question every time
+# the scenario runs. Two covers a follow-up that needs its first steps real
+# (erpnext_064); more would make one scenario cost several.
+MAX_LIVE_PRIOR_TURNS = 2
+
+
 @dataclass(frozen=True)
 class PriorTurn:
     """One of a scenario's ``prior_turns``: ``message`` as the turn sent it
@@ -312,7 +319,8 @@ def parse_prior_turns(scenario: dict[str, Any]) -> list[PriorTurn]:
     as ``scenario_query`` does for the question. A fixed turn is seeded into
     the session's history as written; a live one has no ``assistant`` and
     is run first, so the question follows the real reply (an ERPNext
-    follow-up whose fixed answer would hold no figures, or stale ones)."""
+    follow-up whose fixed answer would hold no figures, or stale ones).
+    At most ``MAX_LIVE_PRIOR_TURNS`` turns may be live."""
     raw = scenario.get("prior_turns")
     if raw is None:
         return []
@@ -334,6 +342,11 @@ def parse_prior_turns(scenario: dict[str, Any]) -> list[PriorTurn]:
             raise ValueError("`prior_turns`: each turn needs a non-empty user and assistant, unless it is live")
         message = scenario_query({"query": user, "page": turn.get("page")})
         turns.append(PriorTurn(message=message, typed=user, reply=None if live else reply))
+    live_count = sum(1 for t in turns if t.reply is None)
+    if live_count > MAX_LIVE_PRIOR_TURNS:
+        raise ValueError(
+            f"`prior_turns`: at most {MAX_LIVE_PRIOR_TURNS} live turns (each is a billed turn), not {live_count}"
+        )
     return turns
 
 

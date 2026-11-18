@@ -75,6 +75,25 @@ def test_a_malformed_prior_turns_fails_validation(bad: str) -> None:
         validate_scenario_yaml(f"id: x\nquery: q\n{bad}\n")
 
 
+def test_a_scenario_runs_at_most_the_capped_number_of_live_turns() -> None:
+    live = "  - {user: a, live: true}
+"
+    at_cap = f"id: x
+query: q
+prior_turns:
+{live * scenarios.MAX_LIVE_PRIOR_TURNS}"
+    validate_scenario_yaml(at_cap)
+    # Fixed turns don't count toward it.
+    validate_scenario_yaml(at_cap + "  - {user: b, assistant: c}
+")
+    with pytest.raises(ValueError, match="at most 2 live turns"):
+        validate_scenario_yaml(at_cap + live)
+    assert scenarios.MAX_LIVE_PRIOR_TURNS == 2
+    # Every shipped scenario keeps within it.
+    for s in load_scenarios():
+        parse_prior_turns(s)
+
+
 def test_the_follow_up_scenarios_load_and_validate() -> None:
     import yaml
 
