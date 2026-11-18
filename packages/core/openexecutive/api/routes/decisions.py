@@ -267,7 +267,69 @@ def _visible_instance(instance_id: int, request: Request) -> DecisionInstance:
         return instance
     if _is_private(instance) and not _approver_is_principal(request):
         raise HTTPException(status_code=404, detail="Decision instance not found")
+    if not _may_see_card(instance, request):
+        raise HTTPException(status_code=404, detail="Decision instance not found")
     return instance
+
+
+def _may_see_card(instance: DecisionInstance, request: Request) -> bool:
+    """Whether the caller may see a card no class rule keeps to one person:
+    the principal (as ``principal_only`` decides it) sees any; anyone else
+    only one they are the approver of, that was routed to them (its
+    companion alert), or that came from a conversation of theirs. Fails
+    closed."""
+    from openexecutive.api.principal_gate import caller_is_the_principal
+    from openexecutive.api.routes.chat import _resolve_caller_person_id
+
+    if _approver_is_principal(request) or caller_is_the_principal(request):
+        return True
+    try:
+        caller = _resolve_caller_person_id(request)
+    except Exception:
+        logger.exception("decisions: caller lookup failed — the card stays hidden")
+        return False
+    if caller is None:
+        return False
+    if instance.approver_person_id == caller:
+        return True
+    try:
+        return caller in _card_routees(instance) or _card_creator(instance) == caller
+    except Exception:
+        logger.exception("decisions: reading who card %d is for failed — it stays hidden", instance.id)
+        return False
+
+
+def _card_routees(instance: DecisionInstance) -> set[int]:
+    """Who the card's companion alert was routed to (``decision:<id>`` or a
+    ``decision_instance:<id>`` tag)."""
+    from openexecutive.alerts.store import _get_conn, _resolve_db_path
+    from openexecutive.memory.decision_ledger import (
+        DECISION_INSTANCE_TAG_PREFIX,
+        decision_alert_external_id,
+    )
+
+    if not _resolve_db_path(None).exists():
+        return set()
+    tag = f"%{DECISION_INSTANCE_TAG_PREFIX}{instance.id}\"%"
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT routed_to_person_id FROM alerts WHERE routed_to_person_id IS NOT NULL "
+            "AND (external_id = ? OR topic_tags LIKE ?)",
+            (decision_alert_external_id(instance.id), tag),
+        ).fetchall()
+    return {int(r[0]) for r in rows}
+
+
+def _card_creator(instance: DecisionInstance) -> int | None:
+    """Whose conversation the card came from (its originating session's
+    owner), or None."""
+    from openexecutive.memory.episodic import _resolve_db_path
+    from openexecutive.memory.session_store import get_session_owner
+
+    if not instance.originating_session_id:
+        return None
+    exists, owner = get_session_owner(instance.originating_session_id, db_path=_resolve_db_path(None))
+    return owner if exists else None
 
 
 _NOT_YOURS = (

@@ -13248,6 +13248,10 @@ route_gates:
     entry read them; an email on no entry, a service call, a suspended or
     archived entry and an unreadable roster get 403. The same
     caller_is_member rule gates GET /memories/decisions and /initiatives.
+    GET /decisions/{id} (and approve, reject, cancel) shows a card to the
+    principal, else only to its approver, the person its companion alert was
+    routed to, or the owner of the conversation it came from
+    (decisions._may_see_card); anyone else gets 404.
     caller_is_member takes as the principal exactly whoever principal_only
     does (caller_is_the_principal), so local login and an open-mode call
     that names no one read these even with no principal on the roster.

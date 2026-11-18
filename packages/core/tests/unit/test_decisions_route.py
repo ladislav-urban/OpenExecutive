@@ -498,8 +498,9 @@ def test_only_the_approver_or_the_owner_may_decide(client: TestClient, db: Path)
     sam_headers = {"x-caller-email": "sam@co.example"}
     for action in ("approve", "reject", "cancel"):
         resp = client.post(f"/decisions/{iid}/{action}", json={}, headers=sam_headers)
-        assert resp.status_code == 403, action
-        assert "Only the person this went to for approval" in resp.json()["detail"]
+        # Not his card: he is told it doesn't exist (decisions._may_see_card).
+        assert resp.status_code == 404, action
+        assert resp.json()["detail"] == "Decision instance not found"
     assert get_decision_instance(iid).status == "proposed"  # type: ignore[union-attr]
 
     resp = client.post(f"/decisions/{iid}/reject", json={}, headers={"x-caller-email": "tia@co.example"})
@@ -529,7 +530,7 @@ def test_a_decision_nobody_was_asked_is_the_owners(client: TestClient, db: Path)
     _teammates()
     iid = _seed_for(db, approver=None)
     resp = client.post(f"/decisions/{iid}/reject", json={}, headers={"x-caller-email": "tia@co.example"})
-    assert resp.status_code == 403
+    assert resp.status_code == 404
     assert client.post(f"/decisions/{iid}/reject", json={}).status_code == 200
 
 
