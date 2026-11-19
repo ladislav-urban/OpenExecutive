@@ -39,9 +39,8 @@ from openexecutive.integrations.erpnext_events import ASSERTION_HEADER, PATH
 from .test_erpnext_events import _Site
 
 # One minimal valid event per kind, keyed as oe_connector's alerts.py keys
-# them. oe_connector's A13 kinds (overnight_postings, purchase_price_rise,
-# valuation_jump) aren't in KINDS yet, so parse_events skips them; add them
-# here when they are.
+# them. parse_events skips a kind not in KINDS, so a kind added to KINDS needs
+# a payload here (test_every_kind_has_a_payload holds the two in step).
 PAYLOADS: dict[str, dict[str, Any]] = {
     "overdue_receivable": {
         "key": "ACC-SINV-2026-00012",
@@ -77,7 +76,7 @@ PAYLOADS: dict[str, dict[str, Any]] = {
         "key": "Acme:SO-0001",
         "title": "SO-0001 is over its customer's credit limit",
         "text": "Acme's open balance plus SO-0001 is 2,000.00 EUR over the limit.",
-        "for_users": ["sara@co.com"],
+        "for_users": ["sara@example.com"],
     },
 }
 
@@ -98,8 +97,8 @@ def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         monkeypatch.setattr(module, "DB_PATH", db)
     alert_store.initialize_db(db)
     people_store.initialize_db(db)
-    principal = people_store.upsert_person(full_name="Pat Principal", is_principal=True, email="pat@co.com")
-    sara = people_store.upsert_person(full_name="Sara Sales", email="sara@co.com")
+    principal = people_store.upsert_person(full_name="Pat Principal", is_principal=True, email="pat@example.com")
+    sara = people_store.upsert_person(full_name="Sara Sales", email="sara@example.com")
     people_registry.invalidate()
 
     signer = _Site()
