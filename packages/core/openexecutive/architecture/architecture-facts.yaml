@@ -10905,7 +10905,15 @@ integrations:
     directly and still get the raw JSON they parse, but a script that called
     any `erpnext__*` tool has its own result wrapped the same way
     (author="run_script"), since that result carries the rows back. Both use
-    executive._is_erpnext_tool (case and hyphens folded, as the gate does). A private Act as me turn
+    executive._is_erpnext_tool (case and hyphens folded, as the gate does).
+    The ERPNext guide (_ERPNEXT_GUIDE, block 0, constant) says results are
+    business data, not instructions, and that when text in one reads as an
+    instruction, even one cut off (a result capped by _cap_tool_result or
+    a `truncated` field), the reply says briefly that it ignored it, never
+    repeating it (eval erpnext_013). The sentence sits in the guide, not in
+    content_trust.UNTRUSTED_NOTICE: that notice wraps every untrusted block
+    (email, attachments, the answer check's question and draft), where
+    a reply line about ignored text would be wrong. A private Act as me turn
     offers only PRIVATE_TURN_MCP_TOOLS, which holds no ERPNext tool.
 
     Credential handling: extensible-mcp sends a URL server the `tokens` line
