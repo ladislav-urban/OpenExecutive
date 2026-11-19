@@ -365,7 +365,7 @@ async def leave_drafts(
     from openexecutive.delegation.gmail import normalize_email
     from openexecutive.integrations import erpnext_drafts as drafts
     from openexecutive.watch.runner import clean, dedup_key
-    from openexecutive.watch.settings import take_day_cards
+    from openexecutive.watch.settings import JobRow, effective_settings, take_day_cards
 
     out = DraftOutcome()
     if not specs:
@@ -394,6 +394,9 @@ async def leave_drafts(
         if not specs:
             return out
     email = normalize_email(reviewer.email or "")
+    # The company the run's settings name, recorded on each card it leaves.
+    named = effective_settings(job, row).get("company") if isinstance(row, JobRow) else None
+    company = named.strip() if isinstance(named, str) else ""
     configured_by = getattr(row, "configured_by_person_id", None)
     if not isinstance(configured_by, int) or isinstance(configured_by, bool):
         out.withheld = len(specs)
@@ -446,7 +449,7 @@ async def leave_drafts(
             break
         left = False
         try:
-            left = await _leave_one(job, day, spec, key, reviewer, email, configured_by, reasons, out)
+            left = await _leave_one(job, day, spec, key, reviewer, email, configured_by, reasons, out, company)
         finally:
             if not left:
                 # Not left after all: its place in the day's cap goes back.
@@ -700,7 +703,7 @@ def _mark_carded(job: registry.WatchJob, day: str, key: str, record: Any = None)
 
 async def _leave_one(
     job: registry.WatchJob, day: str, spec: registry.DraftSpec, key: str, reviewer: Any, email: str,
-    configured_by: int, reasons: Mapping[str, str], out: DraftOutcome,
+    configured_by: int, reasons: Mapping[str, str], out: DraftOutcome, company: str = "",
 ) -> bool:
     """Check one card as the reviewer and leave it; whether it was left (a
     new card). A finding with no card is added to ``out.unproposed``."""
@@ -779,6 +782,7 @@ async def _leave_one(
                 reviewer=reviewer, configured_by_person_id=configured_by, dedup_key=key,
                 why=clean(spec.title, 140), reason=clean(reasons.get(spec.reason_key, ""), MAX_REASON_CHARS),
                 name=spec.name if spec.operation != "create" else None, kept=kept, also=spec.shown,
+                company=company,
             )
         except Exception:
             logger.error("watch: job %s couldn't leave a card", job.id)
