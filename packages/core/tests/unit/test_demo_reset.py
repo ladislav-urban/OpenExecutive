@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -475,7 +476,7 @@ def _job_card(db: Path, person_id: int, job: str, *, status: str = "proposed", *
             "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
             " idempotency_key, gate_mode, approver_person_id, status)"
             " VALUES ('erpnext_draft', 'now', ?, ?, 'propose', ?, ?)",
-            (json.dumps(payload), f"job-{job}-{status}-{len(extra)}-{person_id}", person_id, status),
+            (json.dumps(payload), f"job-{uuid.uuid4().hex}", person_id, status),
         )
         return int(cur.lastrowid or 0)
 
