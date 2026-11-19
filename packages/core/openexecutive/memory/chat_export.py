@@ -14,6 +14,8 @@ from typing import Any
 from openexecutive.memory.session_store import export_rows
 
 EXECUTIVE = "Executive"
+# Who wrote a message in a demo person's chat, when it isn't them.
+SOMEONE_ELSE = "Someone else"
 _FILE_NAME_MAX = 60
 
 
@@ -62,6 +64,14 @@ def to_markdown(meta: dict[str, Any], *, owner_person_id: int | None) -> str:
     }
     if owner_person_id is not None:
         people.add(int(owner_person_id))
+    # A demo person's chat (people.demo) names no one but them: anyone else
+    # who wrote in it (a share from before they were refused) is
+    # SOMEONE_ELSE. Fails closed when the roster can't be read.
+    from openexecutive.people.demo import demo_state
+
+    owner_only = demo_state(owner_person_id) is not False
+    if owner_only:
+        people = {int(owner_person_id)} if owner_person_id is not None else set()
     names = _names(people)
     owner_name = names.get(owner_person_id) if owner_person_id is not None else None
 
@@ -74,7 +84,10 @@ def to_markdown(meta: dict[str, Any], *, owner_person_id: int | None) -> str:
         if row["role"] == "assistant":
             who = EXECUTIVE
         else:
-            who = (names.get(int(sender)) if sender is not None else None) or owner_name or "You"
+            if owner_only and sender is not None and int(sender) != owner_person_id:
+                who = SOMEONE_ELSE
+            else:
+                who = (names.get(int(sender)) if sender is not None else None) or owner_name or "You"
             # Sent from another app's page, where a script may have written it.
             if row.get("sender_surface") == "host":
                 who = f"{who} (from another app's page)"

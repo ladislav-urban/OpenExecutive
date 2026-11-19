@@ -146,3 +146,40 @@ def test_the_principal_and_a_teammate_still_share(client: TestClient, people: di
     # Sharing with a demo person stays the 422 it was.
     refused = client.put(f"/sessions/{mine}/shares", json={"person_ids": [people["dana"]]}, headers=ALEX)
     assert refused.status_code == 422
+
+
+def test_a_demo_owners_export_names_no_one_else(client: TestClient, people: dict[str, int]) -> None:
+    sid = _chat_of(people["dana"], "web-demo")
+    session_store.set_shares(sid, [people["sabin"], people["alex"]], people["dana"])
+    session_store.save_message(sid, "user", "from the principal", sender_person_id=people["alex"])
+    session_store.save_message(sid, "user", "from a teammate", sender_person_id=people["sabin"])
+
+    got = client.get(f"/sessions/{sid}/export", headers=DANA)
+    assert got.status_code == 200
+    text = got.text
+    for name in ("Alex", "Sabin"):
+        assert name not in text
+    # Their words are someone else's, never the demo person's.
+    assert "## Someone else\n\nfrom the principal" in text
+    assert "## Someone else\n\nfrom a teammate" in text
+    assert "## Dana Demo\n\nquestion" in text
+
+
+def test_an_export_names_everyone_in_a_real_shared_chat(client: TestClient, people: dict[str, int]) -> None:
+    sid = _chat_of(people["sabin"], "web-sabin")
+    session_store.set_shares(sid, [people["riya"]], people["sabin"])
+    session_store.save_message(sid, "user", "from riya", sender_person_id=people["riya"])
+    text = client.get(f"/sessions/{sid}/export", headers=RIYA).text
+    assert "## Sabin Team\n\nquestion" in text and "## Riya Team\n\nfrom riya" in text
+
+
+def test_shares_answer_503_while_the_roster_cant_be_read(
+    client: TestClient, people: dict[str, int], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = _chat_of(people["sabin"], "web-sabin")
+    session_store.set_shares(sid, [people["riya"]], people["sabin"])
+    monkeypatch.setattr("openexecutive.people.demo.demo_state", lambda _pid: None)
+
+    assert client.get(f"/sessions/{sid}/shares", headers=SABIN).status_code == 503
+    assert client.put(f"/sessions/{sid}/shares", json={"person_ids": []}, headers=SABIN).status_code == 503
+    assert [r["person_id"] for r in session_store.shared_with(sid)] == [people["riya"]]

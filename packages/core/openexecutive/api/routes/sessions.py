@@ -586,13 +586,24 @@ def _share_list(session_id: str) -> list[ShareEntry]:
 @router.get("/sessions/{session_id:session}/shares", response_model=list[ShareEntry])
 def get_session_shares(session_id: str, request: Request) -> list[ShareEntry]:
     """Who the owner shared this chat with. Nobody for a demo owner, whose
-    chats are never shared (``put_session_shares``)."""
-    from openexecutive.people.demo import is_demo_person
-
+    chats are never shared (``put_session_shares``). 503 when the roster
+    can't be read, so the dialog never loads an empty list it would then save."""
     owner = _require_owner(request, session_id)
-    if is_demo_person(owner):
+    if _owner_is_demo(owner):
         return []
     return _share_list(session_id)
+
+
+def _owner_is_demo(owner: int) -> bool:
+    """Whether the chat's owner is a demo person; 503 when the roster can't
+    be read (as ``demo_gate`` answers), never a guess either way."""
+    from openexecutive.api.demo_gate import _ROSTER_UNREADABLE
+    from openexecutive.people.demo import demo_state
+
+    state = demo_state(owner)
+    if state is None:
+        raise HTTPException(status_code=503, detail=_ROSTER_UNREADABLE)
+    return state
 
 
 @router.put("/sessions/{session_id:session}/shares", response_model=list[ShareEntry])
@@ -606,11 +617,11 @@ def put_session_shares(session_id: str, body: SharesUpdate, request: Request) ->
     person shares nothing (people.demo): 403, the same for any list."""
     owner = _require_owner(request, session_id)
     from openexecutive.api.demo_gate import DEMO_REFUSED
-    from openexecutive.people.demo import is_demo_person
 
     # Refused before any target is looked up, so the answer is the same for
-    # every id and says nothing about who is on the roster. Fails closed.
-    if is_demo_person(owner):
+    # every id and says nothing about who is on the roster. 503 when the
+    # roster can't be read.
+    if _owner_is_demo(owner):
         raise HTTPException(status_code=403, detail=DEMO_REFUSED)
     person_ids = sorted(set(body.person_ids))
     if person_ids and _is_channel_namespaced(session_id):

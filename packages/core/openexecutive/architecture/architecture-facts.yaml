@@ -2762,9 +2762,12 @@ memory:
     member, session_store.list_shared_with_person leaves the chat out of
     everyone's shared-with-me, and chat.chat_people is empty, so GET
     /sessions/{id}/people names no one but the caller (all fail closed on
-    an unreadable roster). Export (memory/chat_export.py) is Markdown
-    with each message under its writer's People name or Executive and the
-    reply's sources. Try again and Edit both call POST
+    an unreadable roster; GET and PUT .../shares answer 503 then, so a real
+    owner's dialog never loads an empty list and saves it). Export
+    (memory/chat_export.py) is Markdown with each message under its
+    writer's People name or Executive and the reply's sources; in a demo
+    person's chat (or with the roster unreadable) only the owner is named
+    and anyone else's message is under "Someone else". Try again and Edit both call POST
     /sessions/{id}/rewind, which, under the conversation's turn lock and
     only while the given reply is still the chat's last row, deletes the
     last turn and returns the person's words; the page resends them (or the
