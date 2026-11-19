@@ -215,3 +215,36 @@ def test_only_erpnext_twins_fold(board: dict[str, Any]) -> None:
     )
     mine = {p["alert_id"] for p in _make_client().get("/today", headers=_as("pat@example.com")).json()["proposals"]}
     assert shared in mine
+
+
+def test_a_demo_person_sees_the_bundles_card_and_never_the_private_live_twin(board: dict[str, Any]) -> None:
+    # A demo bundle's card is shared and unrouted on purpose (oe_connector#280);
+    # the live event's alert is the principal's, as the pipeline stores it.
+    demo = people_store.upsert_person(full_name="Dee Demo", email="dee@prospect.example", role="Demo user")
+    people_store.link_directory(demo, "kc-dee@prospect.example")
+    assert people_store.set_directory_demo(demo, True)
+    ref = "ACC-SINV-2026-00042"
+    shared = alert_store.insert_alert(
+        source="erpnext", external_id=f"demo-overdue-{ref}", severity="high",
+        headline=f"Bundle: {ref}", body="The bundle's copy.",
+        dedup_key=f"erpnext:overdue_receivable:{ref}", db_path=board["db"],
+    )
+    live = alert_store.insert_alert(
+        source="erpnext", external_id=f"erpnext:overdue_receivable:{ref}:2026-11", severity="high",
+        headline=f"Live: {ref}", body="The principal's live figures.", topic_tags=["finance", PRIVATE_ALERT_TAG],
+        dedup_key=f"private:erpnext:overdue_receivable:{ref}", routed_to_person_id=board["principal"],
+        db_path=board["db"],
+    )
+    client = _make_client()
+    seen = client.get("/today", headers=_as("dee@prospect.example")).json()
+    ids = {p["alert_id"] for p in seen["proposals"]}
+    assert shared in ids and live not in ids
+    assert "live figures" not in str(seen) and "Live: " not in str(seen)
+    assert client.get(f"/alerts/{shared}/card", headers=_as("dee@prospect.example")).status_code == 200
+    assert client.get(f"/alerts/{live}/card", headers=_as("dee@prospect.example")).status_code == 404
+    # The principal's board folds the twins into the live one.
+    mine = {
+        p["alert_id"] for p in client.get("/today", headers=_as("pat@example.com")).json()["proposals"]
+        if p["alert_id"] in (shared, live)
+    }
+    assert mine == {live}
