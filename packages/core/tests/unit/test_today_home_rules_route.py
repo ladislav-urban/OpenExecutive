@@ -296,9 +296,9 @@ def test_a_teammate_sees_a_private_erp_alert_only_when_it_names_them(board: dict
     sams = home("sam@example.com")
     assert hold in sams and overdue not in sams
     # The named person's card page is look-only on Home today: get_alert_card
-    # opens only for the principal or whom the card is routed to. Whether it
-    # should open for a named person is a product question
-    # (ladislav-urban/OpenExecutive#283 review).
+    # opens only for the principal or whom the card is routed to. Opening it
+    # look-only for a named person is planned (coordinator decision) for PR A
+    # or W6.
     assert card(hold, "sam@example.com") == 404
     assert card(overdue, "sam@example.com") == 404
     assert {overdue, hold} <= home("pat@example.com")
