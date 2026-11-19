@@ -600,7 +600,11 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
     out is left alone and counted. Chat-made and alert-suggested cards stay.
     The job's next run leaves a new card on today's records."""
     from openexecutive.integrations.erpnext_drafts import JOB_SOURCE
-    from openexecutive.memory.decision_ledger import STATUS_EXECUTING, STATUS_PROPOSED, close_externally
+    from openexecutive.memory.decision_ledger import (
+        STATUS_EXECUTING,
+        STATUS_PROPOSED,
+        close_externally,
+    )
     from openexecutive.watch.settings import get_row
 
     counts = {"closed": 0, "executing_kept": 0}
