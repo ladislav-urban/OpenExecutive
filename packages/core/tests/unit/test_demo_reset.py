@@ -527,12 +527,34 @@ async def test_a_kept_reviewers_job_cards_for_the_demo_company_close(env: Simple
     assert _status(env.db, int(chat or 0)) == ("proposed", None)
     assert _status(env.db, int(alert or 0)) == ("proposed", None)
     assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (2, 1)
+    assert summary["job_cards_error"] is None
 
 
 async def test_no_job_cards_count_zero(env: SimpleNamespace) -> None:
     _person("Pat Principal", principal=True, directory=True)
     summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
     assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (0, 0)
+
+
+async def test_a_failing_card_close_never_fails_the_reset(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _person("Pat Principal", principal=True, directory=True)
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", COMPANY)
+    card = _job_card(env.db, ellen, "bank-matching")
+
+    def _boom(company: str, db_path: Path) -> dict[str, int]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(dr, "close_job_cards", _boom)
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    assert env.rebootstrapped == [True]
+    assert env.audited == ["demo_reset"]
+    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (0, 0)
+    assert summary["job_cards_error"] == "OperationalError"
+    assert _status(env.db, card) == ("proposed", None)
 
 
 def test_no_demo_company_closes_nothing(env: SimpleNamespace) -> None:

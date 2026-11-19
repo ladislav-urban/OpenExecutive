@@ -771,10 +771,17 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
                 # Their memory in Honcho too, or the Executive recalls yesterday's demo.
                 peer_memory = await honcho_client.forget_people(gone_ids, gone_sessions)
                 _drop_orphan_alert_rows(DB_PATH)
-                # Kept reviewers' job cards name records the reset remade.
-                job_cards = close_job_cards(settings.demo_reset_company, DB_PATH)
                 # memory.json replaced every scheduled action, the built-in ones too.
                 fixture_loader.rebootstrap_scheduled_actions()
+                # Kept reviewers' job cards name records the reset remade. Last,
+                # and never failing the reset: a card left open only fails safely.
+                job_cards_error: str | None = None
+                try:
+                    job_cards = close_job_cards(settings.demo_reset_company, DB_PATH)
+                except Exception as failure:
+                    logger.exception("demo_reset: could not close the watch jobs' cards")
+                    job_cards = {"closed": 0, "executing_kept": 0}
+                    job_cards_error = type(failure).__name__
             except Exception as error:
                 log_event(
                     "demo_reset_failed",
@@ -795,6 +802,7 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "peer_memory": peer_memory,
             "job_cards_closed": job_cards["closed"],
             "job_cards_executing_kept": job_cards["executing_kept"],
+            "job_cards_error": job_cards_error,
             "seconds": seconds,
         }
     )
@@ -810,6 +818,7 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "peer_memory": peer_memory["status"],
             "job_cards_closed": job_cards["closed"],
             "job_cards_executing_kept": job_cards["executing_kept"],
+            "job_cards_error": job_cards_error,
             "seconds": seconds,
         },
     )

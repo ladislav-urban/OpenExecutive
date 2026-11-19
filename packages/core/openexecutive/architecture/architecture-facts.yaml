@@ -13787,8 +13787,11 @@ fixtures:
     watch_jobs settings name DEMO_RESET_COMPANY and any top-level company in
     the payload does too; a job with no company or another one keeps its
     cards. An executing card (an approval in flight) is left and counted.
-    Chat-made and alert-suggested cards stay. The summary and the demo_reset
-    audit row carry job_cards_closed and job_cards_executing_kept. A closed
+    Chat-made and alert-suggested cards stay. It runs last, after
+    rebootstrap_scheduled_actions, and an error there is logged and never
+    fails the reset (counts 0, job_cards_error names it). The summary and the
+    demo_reset audit row carry job_cards_closed, job_cards_executing_kept and
+    job_cards_error. A closed
     card holds no finding (cards._once_held), so the job's next run leaves
     a fresh card on the new records. The API holds a shared flock on company/.demo_reset.lock from
     the first step of its lifespan to the last of its shutdown
