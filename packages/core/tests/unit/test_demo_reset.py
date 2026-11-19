@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -450,6 +451,217 @@ async def test_the_api_lock_is_released_by_closing_its_handle(env: SimpleNamespa
     (env.tmp / "bundle").rename(env.tmp / "refused")
     await dr.demo_reset(_bundle(env.tmp), env.settings)
     assert _count(env.db, "SELECT COUNT(*) FROM people WHERE id = ?", fictional) == 0
+
+
+# ── Watch jobs' cards ────────────────────────────────────────────────────────
+
+
+def _job(db: Path, job: str, company: str | None, *, stored: dict[str, Any] | None = None) -> None:
+    """The job's row: its defaults with ``company`` (none: never set), or
+    ``stored`` as given."""
+    from openexecutive.watch import registry
+    from openexecutive.watch import settings as watch_settings
+
+    known = registry.get(job)
+    assert known is not None
+    if stored is None:
+        stored = {} if company is None else {**known.default_settings, "company": company}
+    conn = watch_settings.connect(db)
+    try:
+        conn.execute("INSERT INTO watch_jobs (job, enabled, settings) VALUES (?, 1, ?)", (job, json.dumps(stored)))
+    finally:
+        conn.close()
+
+
+def _job_card(
+    db: Path, person_id: int, job: str, fields: dict[str, Any], *, status: str = "proposed", **extra: Any,
+) -> int:
+    """A watch job's card as ``leave_job_card`` stores it; ``extra`` adds
+    top-level keys (``company``, ``slice``)."""
+    payload = {
+        "source": "watch", "job": job, "fields": fields, "dedup_key": f"{job}:{uuid.uuid4().hex}",
+        "run_day": "2026-11-18", "asked_by_person_id": person_id, "approver_person_id": person_id, **extra,
+    }
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.execute(
+            "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
+            " idempotency_key, gate_mode, approver_person_id, status)"
+            " VALUES ('erpnext_draft', 'now', ?, ?, 'propose', ?, ?)",
+            (json.dumps(payload), f"job-{uuid.uuid4().hex}", person_id, status),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def _match_card(
+    db: Path, person_id: int, *, status: str = "proposed", slice_company: str | None = COMPANY, **extra: Any,
+) -> int:
+    """A bank-matching card: ``{vouchers}`` fields and the check's slice,
+    which names the company (``erpnext_match.slice_of``)."""
+    kept = None if slice_company is None else {
+        "company": slice_company, "bank_account": "Main - AC", "line": {"name": "ACC-BTN-0001"}, "vouchers": [],
+    }
+    return _job_card(
+        db, person_id, "bank-matching", {"vouchers": [{"doctype": "Payment Entry", "name": "ACC-PAY-0001"}]},
+        status=status, **({} if kept is None else {"slice": kept}), **extra,
+    )
+
+
+def _todo_card(db: Path, person_id: int, job: str = "late-deliveries", *, company: str | None = COMPANY) -> int:
+    """A ToDo job's card: the six ToDo fields (no company among them) and the
+    top-level company leave_job_card records; ``None``: a card left before it
+    recorded one."""
+    fields = {
+        "description": "Chase PO-0001", "allocated_to": "ellen@co.example", "priority": "High",
+        "date": "2026-11-18", "reference_type": "Purchase Order", "reference_name": "PO-0001",
+    }
+    return _job_card(db, person_id, job, fields, **({} if company is None else {"company": company}))
+
+
+def _status(db: Path, card: int) -> tuple[str, str | None]:
+    with sqlite3.connect(str(db)) as conn:
+        row = conn.execute("SELECT status, reversal_reason FROM decision_instances WHERE id = ?", (card,)).fetchone()
+    return row[0], row[1]
+
+
+async def test_a_kept_reviewers_job_cards_for_the_demo_company_close(env: SimpleNamespace) -> None:
+    _person("Pat Principal", principal=True, directory=True)
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", COMPANY)
+    _job(env.db, "late-deliveries", COMPANY)
+    _job(env.db, "quote-follow-up", "Other Company Ltd")
+    _job(env.db, "payment-checks", None)
+    match = _match_card(env.db, ellen)
+    todo = _todo_card(env.db, ellen)
+    older_todo = _todo_card(env.db, ellen, company=None)
+    in_flight = _match_card(env.db, ellen, status="executing")
+    other_job = _todo_card(env.db, ellen, "quote-follow-up")
+    no_company = _todo_card(env.db, ellen, "payment-checks")
+    with sqlite3.connect(str(env.db)) as conn:
+        chat = conn.execute(
+            "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
+            " idempotency_key, gate_mode, approver_person_id, status)"
+            " VALUES ('erpnext_draft', 'now', ?, 'chat-card', 'propose', ?, 'proposed')",
+            (json.dumps({"doctype": "ToDo", "asked_by": "ellen@co.example"}), ellen),
+        ).lastrowid
+        alert = conn.execute(
+            "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
+            " idempotency_key, gate_mode, approver_person_id, status)"
+            " VALUES ('erpnext_draft', 'now', ?, 'alert-card', 'propose', ?, 'proposed')",
+            (json.dumps({"doctype": "Dunning", "from_alert": 7, "fields": {"company": COMPANY}}), ellen),
+        ).lastrowid
+
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    assert _status(env.db, match) == ("closed_externally", "demo_reset")
+    assert _status(env.db, todo) == ("closed_externally", "demo_reset")
+    # A card left before cards recorded their company closes on the job's settings.
+    assert _status(env.db, older_todo) == ("closed_externally", "demo_reset")
+    # An approval in flight is left alone and counted.
+    assert _status(env.db, in_flight) == ("executing", None)
+    # Another company's job, a job with no company.
+    assert _status(env.db, other_job) == ("proposed", None)
+    assert _status(env.db, no_company) == ("proposed", None)
+    # Chat-made and alert-suggested cards stay.
+    assert _status(env.db, int(chat or 0)) == ("proposed", None)
+    assert _status(env.db, int(alert or 0)) == ("proposed", None)
+    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (3, 1)
+    assert summary["job_cards_error"] is None
+
+
+def test_a_card_recording_another_company_stays(env: SimpleNamespace) -> None:
+    # The jobs now name the demo company, but each card was left for another
+    # one, as its slice or its top-level company records: they stay.
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", COMPANY)
+    _job(env.db, "late-deliveries", COMPANY)
+    by_slice = _match_card(env.db, ellen, slice_company="Real Company Ltd")
+    by_top = _todo_card(env.db, ellen, company="Real Company Ltd")
+    # Either one naming another company is enough, even when the other matches.
+    mixed = _match_card(env.db, ellen, company="Real Company Ltd")
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 0, "executing_kept": 0}
+    for card in (by_slice, by_top, mixed):
+        assert _status(env.db, card) == ("proposed", None)
+
+
+def test_the_close_follows_the_company_the_job_runs_with(env: SimpleNamespace) -> None:
+    # Stored settings that no longer fit the job run as its defaults (no
+    # company), and its cards record that: the stored company closes nothing.
+    from openexecutive.watch import registry
+
+    ellen = _person("Ellen Reviewer", directory=True)
+    job = registry.get("bank-matching")
+    assert job is not None
+    _job(env.db, "bank-matching", None, stored={**job.default_settings, "company": COMPANY, "retired_key": 1})
+    card = _match_card(env.db, ellen, slice_company=None)
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 0, "executing_kept": 0}
+    assert _status(env.db, card) == ("proposed", None)
+    # Once they fit again, the stored company is the one the job runs with.
+    with sqlite3.connect(str(env.db)) as conn:
+        conn.execute(
+            "UPDATE watch_jobs SET settings = ? WHERE job = 'bank-matching'",
+            (json.dumps({**job.default_settings, "company": COMPANY}),),
+        )
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 1, "executing_kept": 0}
+    assert _status(env.db, card) == ("closed_externally", "demo_reset")
+
+
+def test_leave_job_card_records_the_runs_company(monkeypatch: pytest.MonkeyPatch) -> None:
+    from openexecutive.integrations import erpnext_drafts as drafts
+
+    stored: list[dict[str, Any]] = []
+
+    def _propose(*args: Any, **kwargs: Any) -> tuple[int, bool, dict[str, Any]]:
+        stored.append(kwargs["extra"])
+        return 1, False, {}
+
+    monkeypatch.setattr(drafts, "propose", _propose)
+    monkeypatch.setattr(drafts, "fingerprint_of", lambda check: "f" * 64)
+    monkeypatch.setattr(drafts, "job_card_view", lambda *args: {"fields": []})
+    reviewer = SimpleNamespace(id=7, email="ellen@co.example")
+    job = SimpleNamespace(id="late-deliveries")
+    for company in (COMPANY, ""):
+        drafts.leave_job_card(
+            job, "2026-11-18", "create", "ToDo", {"description": "x"}, {},
+            reviewer=reviewer, configured_by_person_id=1, dedup_key="k", why="Chase", company=company,
+        )
+    assert stored[0]["company"] == COMPANY
+    assert "company" not in stored[1]
+
+
+async def test_no_job_cards_count_zero(env: SimpleNamespace) -> None:
+    _person("Pat Principal", principal=True, directory=True)
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (0, 0)
+
+
+async def test_a_failing_card_close_never_fails_the_reset(
+    env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _person("Pat Principal", principal=True, directory=True)
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", COMPANY)
+    card = _match_card(env.db, ellen)
+
+    def _boom(company: str, db_path: Path) -> dict[str, int]:
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(dr, "close_job_cards", _boom)
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    assert env.rebootstrapped == [True]
+    assert env.audited == ["demo_reset"]
+    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (0, 0)
+    assert summary["job_cards_error"] == "OperationalError"
+    assert _status(env.db, card) == ("proposed", None)
+
+
+def test_no_demo_company_closes_nothing(env: SimpleNamespace) -> None:
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", "")
+    card = _match_card(env.db, ellen)
+    assert dr.close_job_cards("", env.db) == {"closed": 0, "executing_kept": 0}
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 0, "executing_kept": 0}
+    assert _status(env.db, card) == ("proposed", None)
 
 
 class _AsyncList(list):  # type: ignore[type-arg]
