@@ -19,6 +19,9 @@ What it does (decided by the owner, Oct 27, 2026):
 - **Keeps** every directory-managed Person as it is, anyone added by hand,
   everyone's sign-in, the workspace settings, keys, the audit log and usage
   records, and the principal's own chats, memory and cards.
+- **Closes the watch jobs' waiting cards** for this company (``close_job_cards``):
+  a kept reviewer's cards name ERPNext records the reset remade, so they could
+  only fail. Closed, not deleted; a card being carried out is left and counted.
 - **Keeps the last research run** when the install already holds this same
   company and one of that run's alerts is still live: its alerts, its watch
   rows (re-baselined) and its run row (``monitoring/research/carry.py``), so
@@ -584,6 +587,84 @@ def seed_demo_people(people_path: Path) -> int:
     return len(name_to_id)
 
 
+def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
+    """Close the watch jobs' waiting cards for ``company`` (``closed`` and
+    ``executing_kept`` counts). A directory-managed reviewer is kept, cards
+    and all, but the ERPNext records a job's card names were remade under new
+    names, so approving it could only fail. A card is a job's when its
+    payload's ``source`` is ``JOB_SOURCE`` with a ``job``, whoever approves
+    it; it closes only when the settings that job runs with
+    (``effective_settings``, as ``leave_drafts`` reads them) name ``company``, and
+    every company the card itself records names it too: the top-level
+    ``company`` ``leave_job_card`` writes, and the ``company`` in a bank
+    match's or invoice fill's ``slice``. A card recording none (one left
+    before cards recorded it) closes on the job's settings alone. Through
+    ``close_externally(proposed_only=True)``: kept, not deleted, so the
+    oversight export and the audit still show it, and a card being carried
+    out is left alone and counted. Chat-made and alert-suggested cards stay.
+    The job's next run leaves a new card on today's records."""
+    from openexecutive.integrations.erpnext_drafts import DECISION_CLASS, JOB_SOURCE
+    from openexecutive.memory.decision_ledger import (
+        STATUS_EXECUTING,
+        STATUS_PROPOSED,
+        close_externally,
+    )
+    from openexecutive.watch import registry
+    from openexecutive.watch.settings import effective_settings, get_row
+
+    counts = {"closed": 0, "executing_kept": 0}
+    wanted = company.strip()
+    if not wanted or not db_path.exists():
+        return counts
+    conn = sqlite3.connect(str(db_path))
+    try:
+        if not {"id", "status", "proposed_payload_json"} <= _tables(conn).get("decision_instances", set()):
+            return counts
+        rows = conn.execute(
+            "SELECT id, status, proposed_payload_json FROM decision_instances"
+            " WHERE decision_class = ? AND status IN (?, ?) ORDER BY id",
+            (DECISION_CLASS, STATUS_PROPOSED, STATUS_EXECUTING),
+        ).fetchall()
+    finally:
+        conn.close()
+    job_company: dict[str, str | None] = {}
+    for instance_id, status, raw in rows:
+        try:
+            payload = json.loads(raw or "{}")
+        except ValueError:
+            continue
+        if not isinstance(payload, dict) or payload.get("source") != JOB_SOURCE:
+            continue
+        job = payload.get("job")
+        if not isinstance(job, str) or not job:
+            continue
+        if job not in job_company:
+            # The settings a run uses, as the cards record them (a job's
+            # stored settings that no longer fit it run as its defaults).
+            row = get_row(job, path=db_path)
+            known = registry.get(job)
+            named = (effective_settings(known, row) if known is not None else row.settings).get("company")
+            job_company[job] = named.strip() if isinstance(named, str) else None
+        # The company the card itself records, where it records one: the
+        # top-level one leave_job_card writes, and a bank match's or invoice
+        # fill's slice. Each must match. An older card recording none closes
+        # on the job's settings alone.
+        kept = payload.get("slice")
+        named = [payload["company"]] if "company" in payload else []
+        if isinstance(kept, dict) and "company" in kept:
+            named.append(kept["company"])
+        if job_company[job] != wanted or any(not isinstance(c, str) or c.strip() != wanted for c in named):
+            continue
+        if status == STATUS_EXECUTING:
+            counts["executing_kept"] += 1
+        elif close_externally(instance_id, reason="demo_reset", proposed_only=True, db_path=db_path):
+            counts["closed"] += 1
+        else:
+            # Turned executing since the read: an approval in flight.
+            counts["executing_kept"] += 1
+    return counts
+
+
 def _drop_orphan_alert_rows(db_path: Path) -> None:
     """The replaced alerts' approvals and held actions."""
     conn = sqlite3.connect(str(db_path))
@@ -708,6 +789,15 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
                 _drop_orphan_alert_rows(DB_PATH)
                 # memory.json replaced every scheduled action, the built-in ones too.
                 fixture_loader.rebootstrap_scheduled_actions()
+                # Kept reviewers' job cards name records the reset remade. Last,
+                # and never failing the reset: a card left open only fails safely.
+                job_cards_error: str | None = None
+                try:
+                    job_cards = close_job_cards(settings.demo_reset_company, DB_PATH)
+                except Exception as failure:
+                    logger.exception("demo_reset: could not close the watch jobs' cards")
+                    job_cards = {"closed": 0, "executing_kept": 0}
+                    job_cards_error = type(failure).__name__
             except Exception as error:
                 log_event(
                     "demo_reset_failed",
@@ -726,6 +816,9 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "demo_people": len(demo_ids),
             "people_state_cleared": cleared,
             "peer_memory": peer_memory,
+            "job_cards_closed": job_cards["closed"],
+            "job_cards_executing_kept": job_cards["executing_kept"],
+            "job_cards_error": job_cards_error,
             "seconds": seconds,
         }
     )
@@ -739,6 +832,9 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "people_seeded": summary.get("people_seeded"),
             "demo_people": len(demo_ids),
             "peer_memory": peer_memory["status"],
+            "job_cards_closed": job_cards["closed"],
+            "job_cards_executing_kept": job_cards["executing_kept"],
+            "job_cards_error": job_cards_error,
             "seconds": seconds,
         },
     )

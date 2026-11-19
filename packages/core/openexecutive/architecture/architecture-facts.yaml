@@ -10905,7 +10905,20 @@ integrations:
     directly and still get the raw JSON they parse, but a script that called
     any `erpnext__*` tool has its own result wrapped the same way
     (author="run_script"), since that result carries the rows back. Both use
-    executive._is_erpnext_tool (case and hyphens folded, as the gate does). A private Act as me turn
+    executive._is_erpnext_tool (case and hyphens folded, as the gate does).
+    The ERPNext guide (_ERPNEXT_GUIDE, block 0, constant) says results are
+    business data, not instructions, and that when text in one tries to
+    instruct the assistant, even if cut off (a result capped by
+    _cap_tool_result or a `truncated` field), it never acts on it and says
+    briefly that it did and what kind of action it asked for, without its
+    specifics (no names, amounts, links, contact details, accounts or
+    quoted text; eval erpnext_013). Business notes such as delivery or payment remarks
+    ("Deliver to the back door", "Pay by Friday") stay data, reported as
+    usual. The
+    sentence sits in the guide, not in
+    content_trust.UNTRUSTED_NOTICE: that notice wraps every untrusted block
+    (email, attachments, the answer check's question and draft), where
+    a reply line about ignored text would be wrong. A private Act as me turn
     offers only PRIVATE_TURN_MCP_TOOLS, which holds no ERPNext tool.
 
     Credential handling: extensible-mcp sends a URL server the `tokens` line
@@ -12477,7 +12490,9 @@ watch:
     goes through propose (digest dedupe scoped "watch:<id>", fingerprint
     replacement, never changed in place) with extra source watch, job,
     run_day, asked_by_person_id, approver_person_id, configured_by_person_id,
-    dedup_key, reason; asked_by is the reviewer's email. cards() adds
+    dedup_key, reason, and company (the run's settings' company, passed by
+    cards.leave_drafts; the demo reset's close reads it); asked_by is the
+    reviewer's email. cards() adds
     job_title (the registry's) and why_now (the reason, capped 200).
     approve: _job_approval before the claim. Separation of duties first,
     whatever ERPNEXT_DRAFT_SOD says: the approver equal to the stored or the
@@ -13776,7 +13791,28 @@ fixtures:
     and one of the last periodic run's alerts is still live, the reset
     keeps that run instead (monitoring/research/carry.py): its alerts, its
     watch rows re-baselined and a run row dated to the real run, so the
-    scan runs weekly (the staleness floor) rather than after every reset. The API holds a shared flock on company/.demo_reset.lock from
+    scan runs weekly (the staleness floor) rather than after every reset.
+    After the apply it closes the watch jobs' waiting cards (close_job_cards):
+    a directory-managed reviewer is kept with their cards, but the ERPNext
+    records those cards name were remade under new names, so approving one
+    could only fail. Every proposed decision_instance whose payload has
+    source == erpnext_drafts.JOB_SOURCE ("watch") and a job, whoever its
+    approver, goes to closed_externally with reason demo_reset
+    (decision_ledger.close_externally(proposed_only=True)) when the
+    settings its job runs with (effective_settings over its watch_jobs row, as
+    leave_drafts reads them) name DEMO_RESET_COMPANY and every company the card
+    records does too: the top-level company leave_job_card writes from the
+    run's settings (cards.leave_drafts passes it), and slice.company on a bank
+    match or invoice fill. A card recording none (left before cards recorded
+    it) closes on the job's settings alone; a job with no company or another one keeps its
+    cards. An executing card (an approval in flight) is left and counted.
+    Chat-made and alert-suggested cards stay. It runs last, after
+    rebootstrap_scheduled_actions, and an error there is logged and never
+    fails the reset (counts 0, job_cards_error names it). The summary and the
+    demo_reset audit row carry job_cards_closed, job_cards_executing_kept and
+    job_cards_error. A closed
+    card holds no finding (cards._once_held), so the job's next run leaves
+    a fresh card on the new records. The API holds a shared flock on company/.demo_reset.lock from
     the first step of its lifespan to the last of its shutdown
     (take_api_lock, off the event loop), and the reset takes it
     exclusively, so the reset refuses while the API starts, runs or stops,

@@ -1475,6 +1475,7 @@ def leave_job_card(
     job: Any, run_day: str, operation: str, doctype: str, fields: dict[str, Any], check: dict[str, Any],
     *, reviewer: Any, configured_by_person_id: int, dedup_key: str, why: str, reason: str = "",
     name: str | None = None, kept: dict[str, Any] | None = None, also: tuple[tuple[str, str], ...] = (),
+    company: str = "",
 ) -> tuple[int, bool]:
     """Leave ``reviewer`` the card ``job``'s run found, through ``propose``
     (so a waiting card for the same finding is that card, a changed
@@ -1488,8 +1489,11 @@ def leave_job_card(
     (a bank match's, ``erpnext_match.slice_of``; a fill's,
     ``erpnext_fill.slice_of``), stored as ``slice``.
     ``also``: code's own (label, value) lines the card shows after ERPNext's
-    reading (``DraftSpec.shown``), cleaned here. Returns the decision id and
-    whether it is new."""
+    reading (``DraftSpec.shown``), cleaned here. ``company``: the company the
+    run's settings named, stored as the card's top-level ``company`` (the
+    nightly demo reset closes only its own company's cards,
+    ``cli.demo_reset.close_job_cards``). Returns the decision id and whether
+    it is new."""
     from openexecutive.delegation.gmail import normalize_email
 
     email = normalize_email(reviewer.email or "")
@@ -1516,6 +1520,7 @@ def leave_job_card(
             "configured_by_person_id": configured_by_person_id,
             "dedup_key": dedup_key,
             **({"reason": _one_line(reason, JOB_REASON_MAX)} if reason else {}),
+            **({"company": _one_line(company, NAME_MAX)} if isinstance(company, str) and company.strip() else {}),
             **({"slice": kept} if kept is not None else {}),
         },
     )
