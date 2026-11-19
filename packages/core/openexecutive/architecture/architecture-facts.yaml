@@ -12477,7 +12477,9 @@ watch:
     goes through propose (digest dedupe scoped "watch:<id>", fingerprint
     replacement, never changed in place) with extra source watch, job,
     run_day, asked_by_person_id, approver_person_id, configured_by_person_id,
-    dedup_key, reason; asked_by is the reviewer's email. cards() adds
+    dedup_key, reason, and company (the run's settings' company, passed by
+    cards.leave_drafts; the demo reset's close reads it); asked_by is the
+    reviewer's email. cards() adds
     job_title (the registry's) and why_now (the reason, capped 200).
     approve: _job_approval before the claim. Separation of duties first,
     whatever ERPNEXT_DRAFT_SOD says: the approver equal to the stored or the
@@ -13784,9 +13786,11 @@ fixtures:
     source == erpnext_drafts.JOB_SOURCE ("watch") and a job, whoever its
     approver, goes to closed_externally with reason demo_reset
     (decision_ledger.close_externally(proposed_only=True)) when that job's
-    watch_jobs settings name DEMO_RESET_COMPANY and the company the card names
-    does too (fields.company, as leave_job_card writes it, and any top-level
-    company); a job with no company or another one keeps its
+    watch_jobs settings name DEMO_RESET_COMPANY and every company the card
+    records does too: the top-level company leave_job_card writes from the
+    run's settings (cards.leave_drafts passes it), and slice.company on a bank
+    match or invoice fill. A card recording none (left before cards recorded
+    it) closes on the job's settings alone; a job with no company or another one keeps its
     cards. An executing card (an approval in flight) is left and counted.
     Chat-made and alert-suggested cards stay. It runs last, after
     rebootstrap_scheduled_actions, and an error there is logged and never

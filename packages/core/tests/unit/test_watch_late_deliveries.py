@@ -732,6 +732,8 @@ def test_a_card_a_demo_reset_closed_is_left_again_on_the_next_run(
     assert second.draft_cards == 1
     old, new = sorted(_job_cards(), key=lambda c: c.id)
     assert (old.status, old.reversal_reason) == ("closed_externally", "demo_reset")
+    # Each card records the company the run's settings named.
+    assert drafts._payload(old)["company"] == drafts._payload(new)["company"] == SETTINGS["company"]
     assert new.status == "proposed"
     assert drafts._payload(new)["dedup_key"] == drafts._payload(old)["dedup_key"]
 

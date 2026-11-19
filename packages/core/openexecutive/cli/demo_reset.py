@@ -593,9 +593,11 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
     and all, but the ERPNext records a job's card names were remade under new
     names, so approving it could only fail. A card is a job's when its
     payload's ``source`` is ``JOB_SOURCE`` with a ``job``, whoever approves
-    it; it closes only when that job's stored settings name ``company`` (and
-    a ``company`` in the card's ``fields`` or at the payload's top level, if
-    any, does too). Through
+    it; it closes only when that job's stored settings name ``company``, and
+    every company the card itself records names it too: the top-level
+    ``company`` ``leave_job_card`` writes, and the ``company`` in a bank
+    match's or invoice fill's ``slice``. A card recording none (one left
+    before cards recorded it) closes on the job's settings alone. Through
     ``close_externally(proposed_only=True)``: kept, not deleted, so the
     oversight export and the audit still show it, and a card being carried
     out is left alone and counted. Chat-made and alert-suggested cards stay.
@@ -637,12 +639,14 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
         if job not in job_company:
             named = get_row(job, path=db_path).settings.get("company")
             job_company[job] = named.strip() if isinstance(named, str) else None
-        # The card's own company, where it names one: the draft's fields
-        # (what leave_job_card writes) and a top-level one. Each must match.
-        fields = payload.get("fields")
+        # The company the card itself records, where it records one: the
+        # top-level one leave_job_card writes, and a bank match's or invoice
+        # fill's slice. Each must match. An older card recording none closes
+        # on the job's settings alone.
+        kept = payload.get("slice")
         named = [payload["company"]] if "company" in payload else []
-        if isinstance(fields, dict) and "company" in fields:
-            named.append(fields["company"])
+        if isinstance(kept, dict) and "company" in kept:
+            named.append(kept["company"])
         if job_company[job] != wanted or any(not isinstance(c, str) or c.strip() != wanted for c in named):
             continue
         if status == STATUS_EXECUTING:
