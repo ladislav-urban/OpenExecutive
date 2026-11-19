@@ -288,3 +288,23 @@ def test_the_check_sees_what_each_call_was_given() -> None:
     assert len(long) < claim_check.CALL_INPUT_CHARS + 40
     rendered = claim_check.render_calls([(label, "Successfully updated range 'A9:B10'")])
     assert "=SUM(B2:B9)" in rendered
+
+
+# --- A change claim beside a figure correction is still flagged. A reply that
+# corrects a figure stays the model's call: a false flag costs one extra
+# round, and a collected reply's rewrite reaches the person whole (eval
+# erpnext_075, Nov 18, 2026) ---
+
+
+@pytest.mark.parametrize(("reply", "claim"), [
+    ("I raised Acme's credit limit, so it now shows 50,000, not the 20,000 I gave earlier.",
+     "I raised Acme's credit limit"),
+    ("I paid invoice ACC-1; it now shows 0 due, not the 4,500 I gave earlier.", "I paid invoice ACC-1"),
+    ("I set the limit to 50,000 and it now shows 50,000, not 20,000 as I said.", "I set the limit to 50,000"),
+    ("I've updated the limit; it now shows 50,000, not the 20,000 I gave earlier.", "it now shows 50,000"),
+    ("I've released the payment to Borealis; the ERP shows 0 due, not the 12,000 I said.",
+     "I've released the payment to Borealis"),
+    ("Done, the limit now shows 50,000, not the 20,000 I had before.", "Done"),
+])
+def test_a_change_claim_beside_a_figure_correction_is_flagged(reply: str, claim: str) -> None:
+    assert claim_check.accept_claim({"unbacked": True, "claim": claim}, reply) == claim
