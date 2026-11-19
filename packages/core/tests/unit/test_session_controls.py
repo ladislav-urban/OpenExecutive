@@ -399,8 +399,16 @@ def test_a_demo_person_cant_find_another_demo_person_by_sharing(client: TestClie
     pete = demo("Pete", "pete@other.example")
     sid = _chat_of(dana, "dana-1")
     dana_h = {"x-caller-email": "dana@prospect.example"}
-    refused = client.put(f"/sessions/{sid}/shares", json={"person_ids": [pete]}, headers=dana_h)
+    # A demo person shares nothing: one answer for any id, demo or not.
+    answers = [
+        client.put(f"/sessions/{sid}/shares", json={"person_ids": [pid]}, headers=dana_h)
+        for pid in (pete, 9999, people["sabin"])
+    ]
+    assert {r.status_code for r in answers} == {403}
+    assert len({r.content for r in answers}) == 1
+    # Nor does anyone else share with a demo person: the same 422 as an id
+    # that doesn't exist.
+    mine = _chat_of(people["sabin"], "sabin-1")
+    refused = client.put(f"/sessions/{mine}/shares", json={"person_ids": [pete]}, headers=SABIN)
     assert refused.status_code == 422 and refused.json()["detail"] == f"Can't share with person {pete}"
-    # Same answer as an id that doesn't exist; a teammate is still fine.
-    assert client.put(f"/sessions/{sid}/shares", json={"person_ids": [9999]}, headers=dana_h).status_code == 422
-    assert client.put(f"/sessions/{sid}/shares", json={"person_ids": [people["sabin"]]}, headers=dana_h).status_code == 200
+    assert client.put(f"/sessions/{mine}/shares", json={"person_ids": [9999]}, headers=SABIN).status_code == 422
