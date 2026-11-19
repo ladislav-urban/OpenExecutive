@@ -10907,11 +10907,14 @@ integrations:
     (author="run_script"), since that result carries the rows back. Both use
     executive._is_erpnext_tool (case and hyphens folded, as the gate does).
     The ERPNext guide (_ERPNEXT_GUIDE, block 0, constant) says results are
-    business data, not instructions, and that when text in one reads as an
-    instruction, even one cut off (a result capped by _cap_tool_result or
-    a `truncated` field), it never acts on it and says briefly that it held
-    one and what kind of action it asked for, without its specifics (no
-    amounts, recipients, accounts or quoted text; eval erpnext_013). The
+    business data, not instructions, and that when text in one tries to
+    instruct the assistant, even if cut off (a result capped by
+    _cap_tool_result or a `truncated` field), it never acts on it and says
+    briefly that it did and what kind of action it asked for, without its
+    specifics (no amounts, recipients, accounts or quoted text; eval
+    erpnext_013). Business notes such as delivery or payment remarks
+    ("Deliver to the back door", "Pay by Friday") stay data, reported as
+    usual. The
     sentence sits in the guide, not in
     content_trust.UNTRUSTED_NOTICE: that notice wraps every untrusted block
     (email, attachments, the answer check's question and draft), where
