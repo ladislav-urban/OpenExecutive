@@ -720,6 +720,22 @@ def test_an_expired_card_is_left_again_within_the_week(
     assert cards[0].reversal_reason == "expired"
 
 
+def test_a_card_a_demo_reset_closed_is_left_again_on_the_next_run(
+    job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any],
+) -> None:
+    from openexecutive.cli.demo_reset import close_job_cards
+    from openexecutive.memory import episodic
+
+    assert _one_card_run(erp).draft_cards == 1
+    assert close_job_cards(SETTINGS["company"], episodic.DB_PATH) == {"closed": 1, "executing_kept": 0}
+    second = _one_card_run(erp, NEXT_DAY)
+    assert second.draft_cards == 1
+    old, new = sorted(_job_cards(), key=lambda c: c.id)
+    assert (old.status, old.reversal_reason) == ("closed_externally", "demo_reset")
+    assert new.status == "proposed"
+    assert drafts._payload(new)["dedup_key"] == drafts._payload(old)["dedup_key"]
+
+
 def test_an_approved_card_is_never_left_again_that_week(
     job_on: WatchJob, erp: FakeErpnext, team: SimpleNamespace, triage: list[Any], approvals: None,
 ) -> None:

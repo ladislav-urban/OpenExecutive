@@ -19,6 +19,9 @@ What it does (decided by the owner, Oct 27, 2026):
 - **Keeps** every directory-managed Person as it is, anyone added by hand,
   everyone's sign-in, the workspace settings, keys, the audit log and usage
   records, and the principal's own chats, memory and cards.
+- **Closes the watch jobs' waiting cards** for this company (``close_job_cards``):
+  a kept reviewer's cards name ERPNext records the reset remade, so they could
+  only fail. Closed, not deleted; a card being carried out is left and counted.
 - **Keeps the last research run** when the install already holds this same
   company and one of that run's alerts is still live: its alerts, its watch
   rows (re-baselined) and its run row (``monitoring/research/carry.py``), so
@@ -584,6 +587,63 @@ def seed_demo_people(people_path: Path) -> int:
     return len(name_to_id)
 
 
+def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
+    """Close the watch jobs' waiting cards for ``company`` (``closed`` and
+    ``executing_kept`` counts). A directory-managed reviewer is kept, cards
+    and all, but the ERPNext records a job's card names were remade under new
+    names, so approving it could only fail. A card is a job's when its
+    payload's ``source`` is ``JOB_SOURCE`` with a ``job``, whoever approves
+    it; it closes only when that job's stored settings name ``company`` (and
+    a ``company`` in the payload, if any, does too). Through
+    ``close_externally(proposed_only=True)``: kept, not deleted, so the
+    oversight export and the audit still show it, and a card being carried
+    out is left alone and counted. Chat-made and alert-suggested cards stay.
+    The job's next run leaves a new card on today's records."""
+    from openexecutive.integrations.erpnext_drafts import JOB_SOURCE
+    from openexecutive.memory.decision_ledger import STATUS_EXECUTING, STATUS_PROPOSED, close_externally
+    from openexecutive.watch.settings import get_row
+
+    counts = {"closed": 0, "executing_kept": 0}
+    wanted = company.strip()
+    if not wanted or not db_path.exists():
+        return counts
+    conn = sqlite3.connect(str(db_path))
+    try:
+        if not {"id", "status", "proposed_payload_json"} <= _tables(conn).get("decision_instances", set()):
+            return counts
+        rows = conn.execute(
+            "SELECT id, status, proposed_payload_json FROM decision_instances WHERE status IN (?, ?) ORDER BY id",
+            (STATUS_PROPOSED, STATUS_EXECUTING),
+        ).fetchall()
+    finally:
+        conn.close()
+    job_company: dict[str, str | None] = {}
+    for instance_id, status, raw in rows:
+        try:
+            payload = json.loads(raw or "{}")
+        except ValueError:
+            continue
+        if not isinstance(payload, dict) or payload.get("source") != JOB_SOURCE:
+            continue
+        job = payload.get("job")
+        if not isinstance(job, str) or not job:
+            continue
+        if job not in job_company:
+            named = get_row(job, path=db_path).settings.get("company")
+            job_company[job] = named.strip() if isinstance(named, str) else None
+        own = payload.get("company", wanted)
+        if job_company[job] != wanted or not isinstance(own, str) or own.strip() != wanted:
+            continue
+        if status == STATUS_EXECUTING:
+            counts["executing_kept"] += 1
+        elif close_externally(instance_id, reason="demo_reset", proposed_only=True, db_path=db_path):
+            counts["closed"] += 1
+        else:
+            # Turned executing since the read: an approval in flight.
+            counts["executing_kept"] += 1
+    return counts
+
+
 def _drop_orphan_alert_rows(db_path: Path) -> None:
     """The replaced alerts' approvals and held actions."""
     conn = sqlite3.connect(str(db_path))
@@ -706,6 +766,8 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
                 # Their memory in Honcho too, or the Executive recalls yesterday's demo.
                 peer_memory = await honcho_client.forget_people(gone_ids, gone_sessions)
                 _drop_orphan_alert_rows(DB_PATH)
+                # Kept reviewers' job cards name records the reset remade.
+                job_cards = close_job_cards(settings.demo_reset_company, DB_PATH)
                 # memory.json replaced every scheduled action, the built-in ones too.
                 fixture_loader.rebootstrap_scheduled_actions()
             except Exception as error:
@@ -726,6 +788,8 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "demo_people": len(demo_ids),
             "people_state_cleared": cleared,
             "peer_memory": peer_memory,
+            "job_cards_closed": job_cards["closed"],
+            "job_cards_executing_kept": job_cards["executing_kept"],
             "seconds": seconds,
         }
     )
@@ -739,6 +803,8 @@ async def demo_reset(bundle_dir: Path, settings: Any) -> dict[str, Any]:
             "people_seeded": summary.get("people_seeded"),
             "demo_people": len(demo_ids),
             "peer_memory": peer_memory["status"],
+            "job_cards_closed": job_cards["closed"],
+            "job_cards_executing_kept": job_cards["executing_kept"],
             "seconds": seconds,
         },
     )

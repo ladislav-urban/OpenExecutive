@@ -13776,7 +13776,21 @@ fixtures:
     and one of the last periodic run's alerts is still live, the reset
     keeps that run instead (monitoring/research/carry.py): its alerts, its
     watch rows re-baselined and a run row dated to the real run, so the
-    scan runs weekly (the staleness floor) rather than after every reset. The API holds a shared flock on company/.demo_reset.lock from
+    scan runs weekly (the staleness floor) rather than after every reset.
+    After the apply it closes the watch jobs' waiting cards (close_job_cards):
+    a directory-managed reviewer is kept with their cards, but the ERPNext
+    records those cards name were remade under new names, so approving one
+    could only fail. Every proposed decision_instance whose payload has
+    source == erpnext_drafts.JOB_SOURCE ("watch") and a job, whoever its
+    approver, goes to closed_externally with reason demo_reset
+    (decision_ledger.close_externally(proposed_only=True)) when that job's
+    watch_jobs settings name DEMO_RESET_COMPANY and any top-level company in
+    the payload does too; a job with no company or another one keeps its
+    cards. An executing card (an approval in flight) is left and counted.
+    Chat-made and alert-suggested cards stay. The summary and the demo_reset
+    audit row carry job_cards_closed and job_cards_executing_kept. A closed
+    card holds no finding (cards._once_held), so the job's next run leaves
+    a fresh card on the new records. The API holds a shared flock on company/.demo_reset.lock from
     the first step of its lifespan to the last of its shutdown
     (take_api_lock, off the event loop), and the reset takes it
     exclusively, so the reset refuses while the API starts, runs or stops,

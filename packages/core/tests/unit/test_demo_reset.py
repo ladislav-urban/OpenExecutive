@@ -452,6 +452,97 @@ async def test_the_api_lock_is_released_by_closing_its_handle(env: SimpleNamespa
     assert _count(env.db, "SELECT COUNT(*) FROM people WHERE id = ?", fictional) == 0
 
 
+# ── Watch jobs' cards ────────────────────────────────────────────────────────
+
+
+def _job(db: Path, job: str, company: str | None) -> None:
+    from openexecutive.watch import settings as watch_settings
+
+    conn = watch_settings.connect(db)
+    try:
+        conn.execute(
+            "INSERT INTO watch_jobs (job, enabled, settings) VALUES (?, 1, ?)",
+            (job, json.dumps({} if company is None else {"company": company})),
+        )
+    finally:
+        conn.close()
+
+
+def _job_card(db: Path, person_id: int, job: str, *, status: str = "proposed", **extra: Any) -> int:
+    payload = {"source": "watch", "job": job, "dedup_key": f"{job}:k", "approver_person_id": person_id, **extra}
+    with sqlite3.connect(str(db)) as conn:
+        cur = conn.execute(
+            "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
+            " idempotency_key, gate_mode, approver_person_id, status)"
+            " VALUES ('erpnext_draft', 'now', ?, ?, 'propose', ?, ?)",
+            (json.dumps(payload), f"job-{job}-{status}-{len(extra)}-{person_id}", person_id, status),
+        )
+        return int(cur.lastrowid or 0)
+
+
+def _status(db: Path, card: int) -> tuple[str, str | None]:
+    with sqlite3.connect(str(db)) as conn:
+        row = conn.execute("SELECT status, reversal_reason FROM decision_instances WHERE id = ?", (card,)).fetchone()
+    return row[0], row[1]
+
+
+async def test_a_kept_reviewers_job_cards_for_the_demo_company_close(env: SimpleNamespace) -> None:
+    _person("Pat Principal", principal=True, directory=True)
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", COMPANY)
+    _job(env.db, "late-deliveries", "Other Company Ltd")
+    _job(env.db, "quote-follow-up", None)
+    closing = _job_card(env.db, ellen, "bank-matching")
+    also = _job_card(env.db, ellen, "bank-matching", company=COMPANY)
+    in_flight = _job_card(env.db, ellen, "bank-matching", status="executing")
+    named_other = _job_card(env.db, ellen, "bank-matching", company="Other Company Ltd")
+    other_job = _job_card(env.db, ellen, "late-deliveries")
+    no_company = _job_card(env.db, ellen, "quote-follow-up")
+    with sqlite3.connect(str(env.db)) as conn:
+        chat = conn.execute(
+            "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
+            " idempotency_key, gate_mode, approver_person_id, status)"
+            " VALUES ('erpnext_draft', 'now', ?, 'chat-card', 'propose', ?, 'proposed')",
+            (json.dumps({"doctype": "ToDo", "asked_by": "ellen@co.example"}), ellen),
+        ).lastrowid
+        alert = conn.execute(
+            "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
+            " idempotency_key, gate_mode, approver_person_id, status)"
+            " VALUES ('erpnext_draft', 'now', ?, 'alert-card', 'propose', ?, 'proposed')",
+            (json.dumps({"doctype": "Dunning", "from_alert": 7, "company": COMPANY}), ellen),
+        ).lastrowid
+
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+
+    assert _status(env.db, closing) == ("closed_externally", "demo_reset")
+    assert _status(env.db, also) == ("closed_externally", "demo_reset")
+    # An approval in flight is left alone and counted.
+    assert _status(env.db, in_flight) == ("executing", None)
+    # Another company's job, a card naming another company, a job with no company.
+    assert _status(env.db, named_other) == ("proposed", None)
+    assert _status(env.db, other_job) == ("proposed", None)
+    assert _status(env.db, no_company) == ("proposed", None)
+    # Chat-made and alert-suggested cards stay.
+    assert _status(env.db, int(chat or 0)) == ("proposed", None)
+    assert _status(env.db, int(alert or 0)) == ("proposed", None)
+    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (2, 1)
+
+
+async def test_no_job_cards_count_zero(env: SimpleNamespace) -> None:
+    _person("Pat Principal", principal=True, directory=True)
+    summary = await dr.demo_reset(_bundle(env.tmp), env.settings)
+    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (0, 0)
+
+
+def test_no_demo_company_closes_nothing(env: SimpleNamespace) -> None:
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", "")
+    card = _job_card(env.db, ellen, "bank-matching")
+    assert dr.close_job_cards("", env.db) == {"closed": 0, "executing_kept": 0}
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 0, "executing_kept": 0}
+    assert _status(env.db, card) == ("proposed", None)
+
+
 class _AsyncList(list):  # type: ignore[type-arg]
     def __aiter__(self) -> Any:
         async def _gen() -> Any:
