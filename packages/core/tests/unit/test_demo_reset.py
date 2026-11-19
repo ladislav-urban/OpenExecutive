@@ -469,8 +469,17 @@ def _job(db: Path, job: str, company: str | None) -> None:
         conn.close()
 
 
-def _job_card(db: Path, person_id: int, job: str, *, status: str = "proposed", **extra: Any) -> int:
-    payload = {"source": "watch", "job": job, "dedup_key": f"{job}:k", "approver_person_id": person_id, **extra}
+def _job_card(
+    db: Path, person_id: int, job: str, *, status: str = "proposed", fields_company: str | None = COMPANY,
+    **extra: Any,
+) -> int:
+    """A card in the shape ``leave_job_card`` writes: the draft's company in
+    ``fields``; ``extra`` adds top-level keys."""
+    fields: dict[str, Any] = {"bank_transaction": "ACC-BTN-0001", **({} if fields_company is None else {"company": fields_company})}
+    payload = {
+        "source": "watch", "job": job, "doctype": "Bank Transaction", "fields": fields,
+        "dedup_key": f"{job}:k", "approver_person_id": person_id, **extra,
+    }
     with sqlite3.connect(str(db)) as conn:
         cur = conn.execute(
             "INSERT INTO decision_instances (decision_class, created_at, proposed_payload_json,"
@@ -496,7 +505,9 @@ async def test_a_kept_reviewers_job_cards_for_the_demo_company_close(env: Simple
     closing = _job_card(env.db, ellen, "bank-matching")
     also = _job_card(env.db, ellen, "bank-matching", company=COMPANY)
     in_flight = _job_card(env.db, ellen, "bank-matching", status="executing")
+    no_fields_company = _job_card(env.db, ellen, "bank-matching", fields_company=None)
     named_other = _job_card(env.db, ellen, "bank-matching", company="Other Company Ltd")
+    draft_other = _job_card(env.db, ellen, "bank-matching", fields_company="Other Company Ltd")
     other_job = _job_card(env.db, ellen, "late-deliveries")
     no_company = _job_card(env.db, ellen, "quote-follow-up")
     with sqlite3.connect(str(env.db)) as conn:
@@ -517,17 +528,29 @@ async def test_a_kept_reviewers_job_cards_for_the_demo_company_close(env: Simple
 
     assert _status(env.db, closing) == ("closed_externally", "demo_reset")
     assert _status(env.db, also) == ("closed_externally", "demo_reset")
+    assert _status(env.db, no_fields_company) == ("closed_externally", "demo_reset")
     # An approval in flight is left alone and counted.
     assert _status(env.db, in_flight) == ("executing", None)
     # Another company's job, a card naming another company, a job with no company.
     assert _status(env.db, named_other) == ("proposed", None)
+    assert _status(env.db, draft_other) == ("proposed", None)
     assert _status(env.db, other_job) == ("proposed", None)
     assert _status(env.db, no_company) == ("proposed", None)
     # Chat-made and alert-suggested cards stay.
     assert _status(env.db, int(chat or 0)) == ("proposed", None)
     assert _status(env.db, int(alert or 0)) == ("proposed", None)
-    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (2, 1)
+    assert (summary["job_cards_closed"], summary["job_cards_executing_kept"]) == (3, 1)
     assert summary["job_cards_error"] is None
+
+
+def test_a_card_whose_draft_names_another_company_stays(env: SimpleNamespace) -> None:
+    # The job now names the demo company, but the card was left for another
+    # one (its draft's fields say so): it stays, as leave_job_card wrote it.
+    ellen = _person("Ellen Reviewer", directory=True)
+    _job(env.db, "bank-matching", COMPANY)
+    card = _job_card(env.db, ellen, "bank-matching", fields_company="Real Company Ltd")
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 0, "executing_kept": 0}
+    assert _status(env.db, card) == ("proposed", None)
 
 
 async def test_no_job_cards_count_zero(env: SimpleNamespace) -> None:
