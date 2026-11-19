@@ -696,14 +696,18 @@ def _shared_member(session_id: str, caller_person_id: int | None) -> bool:
     Never a chat that read its owner's mail, nor a chat app's conversation.
     Only the turn and the read routes use this: renaming, pinning, sharing,
     rating and deleting stay with whoever may use the chat
-    (``_session_access``). Fails closed."""
+    (``_session_access``). Never a chat a demo person owns: they share
+    nothing (``sessions.put_session_shares``). Fails closed."""
     if caller_person_id is None or _is_channel_namespaced(session_id):
         return False
-    from openexecutive.memory.session_store import is_shared_with
+    from openexecutive.memory.session_store import get_session_owner, is_shared_with
+    from openexecutive.people.demo import demo_state
     from openexecutive.people.store import get_person
 
     try:
         shared = is_shared_with(session_id, caller_person_id)
+        if shared and demo_state(get_session_owner(session_id)[1]) is not False:
+            return False
         # Someone archived since (offboarded) is out of every chat at once.
         person = get_person(caller_person_id) if shared else None
     except Exception:
@@ -721,9 +725,12 @@ def chat_people(session_id: str, *, strict: bool = False) -> list[tuple[int, str
     the owner first, then whoever it is shared with in the order they were
     added. Empty when it is shared with nobody (or can't be read), so a chat
     of one stays as it was. People no longer on the roster are left out.
+    Empty too for a chat a demo person owns, which nobody else is in
+    (``_shared_member``), so no one's name comes back for it.
     ``strict`` raises when the list can't be read, for a caller that must
     not take that for "nobody else is in it"."""
     from openexecutive.memory.session_store import get_session_owner, shared_with
+    from openexecutive.people.demo import demo_state
     from openexecutive.people.store import get_person
 
     if _is_channel_namespaced(session_id):
@@ -733,6 +740,11 @@ def chat_people(session_id: str, *, strict: bool = False) -> list[tuple[int, str
         if not shares:
             return []
         _, owner = get_session_owner(session_id)
+        owner_demo = demo_state(owner)
+        if owner_demo is None:
+            raise RuntimeError("the owner's roster row can't be read")
+        if owner_demo:
+            return []
         ids = ([owner] if owner is not None else []) + [r["person_id"] for r in shares]
         out: list[tuple[int, str, bool]] = []
         for pid in ids:

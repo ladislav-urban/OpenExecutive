@@ -2754,7 +2754,15 @@ memory:
     open, list (GET /sessions/shared-with-me) and export the chat and nothing
     else; every write route keeps the usual owner check. A mail_private chat
     (Act as me read the owner's mail) is never shared and stops being
-    readable by earlier readers. Export (memory/chat_export.py) is Markdown
+    readable by earlier readers. A demo person (people.demo) shares
+    nothing: PUT /sessions/{id}/shares on their chat is a 403 before any
+    target id is looked up (the same answer for every id, so it tells them
+    nothing about the roster), GET .../shares lists nobody, and a share row
+    left from before is ignored: chat._shared_member lets no one in as a
+    member, session_store.list_shared_with_person leaves the chat out of
+    everyone's shared-with-me, and chat.chat_people is empty, so GET
+    /sessions/{id}/people names no one but the caller (all fail closed on
+    an unreadable roster). Export (memory/chat_export.py) is Markdown
     with each message under its writer's People name or Executive and the
     reply's sources. Try again and Edit both call POST
     /sessions/{id}/rewind, which, under the conversation's turn lock and

@@ -585,8 +585,13 @@ def _share_list(session_id: str) -> list[ShareEntry]:
 
 @router.get("/sessions/{session_id:session}/shares", response_model=list[ShareEntry])
 def get_session_shares(session_id: str, request: Request) -> list[ShareEntry]:
-    """Who the owner shared this chat with."""
-    _require_owner(request, session_id)
+    """Who the owner shared this chat with. Nobody for a demo owner, whose
+    chats are never shared (``put_session_shares``)."""
+    from openexecutive.people.demo import is_demo_person
+
+    owner = _require_owner(request, session_id)
+    if is_demo_person(owner):
+        return []
     return _share_list(session_id)
 
 
@@ -597,8 +602,16 @@ def put_session_shares(session_id: str, body: SharesUpdate, request: Request) ->
     conversation lives in that app.
 
     Team members only (not contacts, not archived, not the owner). A chat
-    that read its owner's own mail (Act as me) is never shared: 409."""
+    that read its owner's own mail (Act as me) is never shared: 409. A demo
+    person shares nothing (people.demo): 403, the same for any list."""
     owner = _require_owner(request, session_id)
+    from openexecutive.api.demo_gate import DEMO_REFUSED
+    from openexecutive.people.demo import is_demo_person
+
+    # Refused before any target is looked up, so the answer is the same for
+    # every id and says nothing about who is on the roster. Fails closed.
+    if is_demo_person(owner):
+        raise HTTPException(status_code=403, detail=DEMO_REFUSED)
     person_ids = sorted(set(body.person_ids))
     if person_ids and _is_channel_namespaced(session_id):
         raise HTTPException(status_code=409, detail="Only a chat started here can be shared.")

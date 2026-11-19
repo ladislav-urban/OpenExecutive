@@ -894,7 +894,10 @@ def list_shared_with_person(person_id: int, db_path: Path = DB_PATH) -> list[dic
     """The chats shared with ``person_id``, newest activity first, each with
     its owner (``owner_person_id``) and when it was shared (``shared_at``).
     An Act as me conversation is left out even if it was shared before it
-    read mail."""
+    read mail, and so is a chat a demo person owns: they share nothing
+    (people.demo). Fails closed: an owner the roster can't read is left out."""
+    from openexecutive.people.demo import demo_state
+
     if not db_path.exists():
         return []
     with _get_conn(db_path) as conn:
@@ -911,7 +914,10 @@ def list_shared_with_person(person_id: int, db_path: Path = DB_PATH) -> list[dic
             """,
             (person_id,),
         ).fetchall()
-    return [dict(r) for r in rows]
+    return [
+        dict(r) for r in rows
+        if demo_state(None if r["owner_person_id"] is None else int(r["owner_person_id"])) is False
+    ]
 
 
 def export_rows(session_id: str, db_path: Path = DB_PATH) -> list[dict[str, Any]]:
