@@ -1,11 +1,23 @@
+"""Demo fixtures: load, unload, snapshot, reset, generate.
+
+A development and demo tool that swaps or wipes the install's whole state, the
+principal's included. Mounted only when ``OE_FIXTURES_ENABLED`` is on and the
+process is not a public deployment (``utils.deployment.fixtures_enabled``),
+and every route, reads included, is the principal's alone
+(``api.principal_gate``), refused before any work.
+"""
 from __future__ import annotations
 
 import re
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
-router = APIRouter()
+from openexecutive.api.principal_gate import principal_only
+
+PRINCIPAL_ONLY_DETAIL = "Only the principal can manage fixtures."
+
+router = APIRouter(dependencies=[Depends(principal_only(PRINCIPAL_ONLY_DETAIL))])
 
 _SAFE_NAME = re.compile(r"^[a-z0-9_-]+$")
 

@@ -1852,9 +1852,14 @@ def list_scheduled_actions(
     limit: int = 100,
     order: str = "asc",
     exclude_internal: bool = False,
+    created_by_person_id: int | None = None,
     db_path: Path | None = None,
 ) -> list[ScheduledAction]:
     """List scheduled actions, optionally filtered by status.
+
+    ``created_by_person_id`` keeps only the rows that person's turns queued
+    (``GET /scheduled`` for anyone but the principal), in SQL so other
+    people's rows never fill the ``limit``.
 
     ``exclude_internal`` drops ``__internal__``-channel rows in SQL, so a
     caller that only wants real sends (the activity feed) is not starved by
@@ -1881,6 +1886,9 @@ def list_scheduled_actions(
         clauses.append("channel != '__internal__'")
         clauses.append("kind != ?")
         params.append(BRIEF_DELIVERY_KIND)
+    if created_by_person_id is not None:
+        clauses.append("created_by_person_id = ?")
+        params.append(created_by_person_id)
     where = f"WHERE {' AND '.join(clauses)} " if clauses else ""
     with _get_conn(resolved) as conn:
         rows = conn.execute(

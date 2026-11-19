@@ -212,8 +212,9 @@ def test_the_goals_page_names_no_other_demo_person_nor_the_principal(
     roster: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Upstream's GET /goals (merged Nov 2026) names each goal's owner, the
-    principal by default: a demo person reads neither them nor another demo
-    person."""
+    principal by default. A demo person is refused the page outright
+    (api.demo_gate.refuse_demo_reader), so reads neither them nor another
+    demo person; the team reads every owner."""
     from openexecutive.api.routes import departments as departments_route
     from openexecutive.departments import goals
 
@@ -221,21 +222,14 @@ def test_the_goals_page_names_no_other_demo_person_nor_the_principal(
     app = FastAPI()
     app.include_router(departments_route.router)
     client = TestClient(app)
-    demo = client.get("/goals", headers=_as("dana@prospect.example")).json()
-    assert [(g["owner_id"], g["owner_name"]) for g in demo] == [
-        (None, ""), (roster.principal, "The principal"), (roster.teammate, "Tom Team"),
-    ]
-    assert "Olivia" not in str(demo) and "Pete" not in str(demo)
+    demo = client.get("/goals", headers=_as("dana@prospect.example"))
+    assert demo.status_code == 403
+    assert "Olivia" not in demo.text and "Pete" not in demo.text
     team = client.get("/goals", headers=_as("tom@example.com")).json()
     assert [g["owner_name"] for g in team] == ["Pete Prospect", "Olivia Owner", "Tom Team"]
     # Someone signed in whom the roster doesn't place sees nothing once there
-    # is a principal; nor does a demo person when the principal's name can't
-    # be checked.
+    # is a principal.
     assert client.get("/goals", headers=_as("stranger@nowhere.example")).json() == []
-    from openexecutive.api.routes import today
-
-    monkeypatch.setattr(today, "principal_by_role_for", lambda _caller, _value: None)
-    assert client.get("/goals", headers=_as("dana@prospect.example")).json() == []
 
 
 def test_homes_goals_name_no_other_demo_person(roster: SimpleNamespace) -> None:

@@ -34,6 +34,15 @@ def _db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = tmp_path / "episodic.db"
     initialize_db(db_path)
     monkeypatch.setattr("openexecutive.memory.episodic.DB_PATH", db_path)
+    # The signed-in caller these tests use is the principal: anyone else may
+    # cancel only their own actions (tests/integration/test_scheduled_owner_scope.py).
+    from openexecutive.people import registry as people_registry
+    from openexecutive.people import store as people_store
+
+    monkeypatch.setattr(people_store, "DB_PATH", db_path)
+    people_store.initialize_db(db_path)
+    people_store.upsert_person(full_name="Olivia Owner", is_principal=True, email="owner@example.com")
+    people_registry.invalidate()
     # Empty rather than deleted: Settings also reads the repo .env (a
     # developer's may set the token) and the process env wins over it.
     monkeypatch.setenv("SCHEDULED_ADMIN_TOKEN", "")

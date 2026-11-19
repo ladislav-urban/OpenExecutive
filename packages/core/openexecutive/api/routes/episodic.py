@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel
 
+from openexecutive.api.demo_gate import refuse_demo_reader
 from openexecutive.memory.episodic import (
     Advice,
     Decision,
@@ -72,7 +73,7 @@ class AdviceUpdate(BaseModel):
 # --- Decisions ---
 
 
-@router.get("/memories/decisions", response_model=list[Decision])
+@router.get("/memories/decisions", response_model=list[Decision], dependencies=[Depends(refuse_demo_reader)])
 def get_decisions() -> list[Decision]:
     return list_decisions()
 
@@ -127,7 +128,8 @@ def remove_initiative(initiative_id: int) -> Response:
 # --- Advice ---
 
 
-@router.get("/memories/advice", response_model=list[Advice])
+# Past advice is the principal's and the team's, not a demo person's to read.
+@router.get("/memories/advice", response_model=list[Advice], dependencies=[Depends(refuse_demo_reader)])
 def get_advice_list() -> list[Advice]:
     return list_advice()
 

@@ -32,6 +32,7 @@ dev:
 	mode=$$(cd packages/ui && node --no-warnings --experimental-strip-types scripts/devMode.mjs) || \
 	  { echo "Could not work out how to start the web app. Open Executive needs Node 22.6 or newer."; exit 1; }; \
 	export OE_LOCAL_LOGIN=; ui_host=; \
+	export OE_FIXTURES_ENABLED=$${OE_FIXTURES_ENABLED:-1}; \
 	if [ "$$mode" != sign-in ]; then \
 	  echo "Google sign-in is not set up, so this uses local login: open http://localhost:3000 on this computer."; \
 	  export OE_LOCAL_LOGIN=1; ui_host="-H 127.0.0.1"; \

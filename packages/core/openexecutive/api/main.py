@@ -1030,7 +1030,12 @@ def create_app() -> FastAPI:
             return await call_next(request)
 
     app.include_router(auth_route.router, tags=["auth"])
-    app.include_router(fixtures.router, tags=["fixtures"])
+    # Demo fixtures swap or wipe the whole install: only where explicitly
+    # turned on, never on a public deployment (utils.deployment).
+    from openexecutive.utils.deployment import fixtures_enabled
+
+    if fixtures_enabled():
+        app.include_router(fixtures.router, tags=["fixtures"])
     app.include_router(clients.router, tags=["clients"])
     app.include_router(agents.router, tags=["agents"])
     app.include_router(personas.router, tags=["personas"])
