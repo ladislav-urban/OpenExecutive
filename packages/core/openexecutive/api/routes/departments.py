@@ -14,9 +14,10 @@ from __future__ import annotations
 import logging
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from openexecutive.api.demo_gate import refuse_demo_reader
 from openexecutive.departments import registry, store
 from openexecutive.departments.cadence import (
     CADENCE_FORMATS_HINT,
@@ -188,7 +189,7 @@ def _translate_legacy_body(body: dict) -> dict:
 # Read routes
 # --------------------------------------------------------------------------- #
 
-@router.get("/departments", response_model=list[DepartmentState])
+@router.get("/departments", response_model=list[DepartmentState], dependencies=[Depends(refuse_demo_reader)])
 def list_departments() -> list[DepartmentState]:
     """List all departments with their Goals."""
     # Read straight through the store (not the cache) so the API view is always
@@ -196,7 +197,7 @@ def list_departments() -> list[DepartmentState]:
     return store.list_departments()
 
 
-@router.get("/departments/{slug}", response_model=DepartmentDetail)
+@router.get("/departments/{slug}", response_model=DepartmentDetail, dependencies=[Depends(refuse_demo_reader)])
 def get_department(slug: str) -> DepartmentDetail:
     state = store.get_department(slug)
     if state is None:
@@ -404,7 +405,8 @@ def create_goal(slug: str, body: GoalCreate) -> Goal:
     return _create_goal(slug, body)
 
 
-@router.get("/goals", response_model=list[GoalView])
+# What the team works on is not a demo person's to read.
+@router.get("/goals", response_model=list[GoalView], dependencies=[Depends(refuse_demo_reader)])
 def list_all_goals(request: Request) -> list[GoalView]:
     """Every goal, with or without a department, with its owner resolved. A
     demo person reads no other demo person as an owner and the principal by

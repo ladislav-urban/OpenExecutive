@@ -391,6 +391,21 @@ def _sweep_interview_sessions() -> None:
         _interview_sessions.popitem(last=False)
 
 
+OWNER_ONLY_SETUP = "Only the owner can run setup, because it rewrites the company profile and People."
+
+
+def _refuse_unless_owner_or_unclaimed(request: Request) -> None:
+    """403 unless the caller is the owner, or no one is yet
+    (``chat._caller_is_principal_or_unclaimed``, the rule /onboard/answer
+    applies on save): a teammate, a demo person or a signed-in email on
+    nobody's entry may not start or save the interview once there is an
+    owner, and a service never may."""
+    from openexecutive.api.routes.chat import _caller_is_principal_or_unclaimed
+
+    if not _caller_is_principal_or_unclaimed(request):
+        raise HTTPException(status_code=403, detail=OWNER_ONLY_SETUP)
+
+
 def _persist_interview(session_id: str, session: InterviewSession) -> None:
     if session.discarded:
         return
@@ -540,6 +555,9 @@ async def start_interview(
     typed, no files, a site that couldn't be read) — that path costs no model
     call and cannot fail. ``website_pages`` says which pages were read.
     """
+    # Setup ends in rewriting the profile and People, the owner's to do once
+    # there is one: refused before anything is read or stored.
+    _refuse_unless_owner_or_unclaimed(request)
     if len(description) > ONBOARD_MESSAGE_MAX_CHARS:
         raise HTTPException(
             status_code=422,
@@ -801,6 +819,9 @@ async def commit_interview(body: OnboardCommitRequest, request: Request) -> Comp
     # sign-in email, which must be someone signed in.
     if api_caller.caller(request).kind == "service":
         raise HTTPException(status_code=403, detail="Sign in to save setup.")
+    # Saving rewrites the profile, People, departments and goals: once there
+    # is an owner it is theirs to do, as on /onboard/answer.
+    _refuse_unless_owner_or_unclaimed(request)
 
     settings = get_settings()
 
