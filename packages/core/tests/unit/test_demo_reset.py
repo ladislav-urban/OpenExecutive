@@ -456,15 +456,19 @@ async def test_the_api_lock_is_released_by_closing_its_handle(env: SimpleNamespa
 # ── Watch jobs' cards ────────────────────────────────────────────────────────
 
 
-def _job(db: Path, job: str, company: str | None) -> None:
+def _job(db: Path, job: str, company: str | None, *, stored: dict[str, Any] | None = None) -> None:
+    """The job's row: its defaults with ``company`` (none: never set), or
+    ``stored`` as given."""
+    from openexecutive.watch import registry
     from openexecutive.watch import settings as watch_settings
 
+    known = registry.get(job)
+    assert known is not None
+    if stored is None:
+        stored = {} if company is None else {**known.default_settings, "company": company}
     conn = watch_settings.connect(db)
     try:
-        conn.execute(
-            "INSERT INTO watch_jobs (job, enabled, settings) VALUES (?, 1, ?)",
-            (job, json.dumps({} if company is None else {"company": company})),
-        )
+        conn.execute("INSERT INTO watch_jobs (job, enabled, settings) VALUES (?, 1, ?)", (job, json.dumps(stored)))
     finally:
         conn.close()
 
@@ -577,6 +581,28 @@ def test_a_card_recording_another_company_stays(env: SimpleNamespace) -> None:
     assert dr.close_job_cards(COMPANY, env.db) == {"closed": 0, "executing_kept": 0}
     for card in (by_slice, by_top, mixed):
         assert _status(env.db, card) == ("proposed", None)
+
+
+def test_the_close_follows_the_company_the_job_runs_with(env: SimpleNamespace) -> None:
+    # Stored settings that no longer fit the job run as its defaults (no
+    # company), and its cards record that: the stored company closes nothing.
+    from openexecutive.watch import registry
+
+    ellen = _person("Ellen Reviewer", directory=True)
+    job = registry.get("bank-matching")
+    assert job is not None
+    _job(env.db, "bank-matching", None, stored={**job.default_settings, "company": COMPANY, "retired_key": 1})
+    card = _match_card(env.db, ellen, slice_company=None)
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 0, "executing_kept": 0}
+    assert _status(env.db, card) == ("proposed", None)
+    # Once they fit again, the stored company is the one the job runs with.
+    with sqlite3.connect(str(env.db)) as conn:
+        conn.execute(
+            "UPDATE watch_jobs SET settings = ? WHERE job = 'bank-matching'",
+            (json.dumps({**job.default_settings, "company": COMPANY}),),
+        )
+    assert dr.close_job_cards(COMPANY, env.db) == {"closed": 1, "executing_kept": 0}
+    assert _status(env.db, card) == ("closed_externally", "demo_reset")
 
 
 def test_leave_job_card_records_the_runs_company(monkeypatch: pytest.MonkeyPatch) -> None:

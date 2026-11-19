@@ -593,7 +593,8 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
     and all, but the ERPNext records a job's card names were remade under new
     names, so approving it could only fail. A card is a job's when its
     payload's ``source`` is ``JOB_SOURCE`` with a ``job``, whoever approves
-    it; it closes only when that job's stored settings name ``company``, and
+    it; it closes only when the settings that job runs with
+    (``effective_settings``, as ``leave_drafts`` reads them) name ``company``, and
     every company the card itself records names it too: the top-level
     ``company`` ``leave_job_card`` writes, and the ``company`` in a bank
     match's or invoice fill's ``slice``. A card recording none (one left
@@ -608,7 +609,8 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
         STATUS_PROPOSED,
         close_externally,
     )
-    from openexecutive.watch.settings import get_row
+    from openexecutive.watch import registry
+    from openexecutive.watch.settings import effective_settings, get_row
 
     counts = {"closed": 0, "executing_kept": 0}
     wanted = company.strip()
@@ -637,7 +639,11 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
         if not isinstance(job, str) or not job:
             continue
         if job not in job_company:
-            named = get_row(job, path=db_path).settings.get("company")
+            # The settings a run uses, as the cards record them (a job's
+            # stored settings that no longer fit it run as its defaults).
+            row = get_row(job, path=db_path)
+            known = registry.get(job)
+            named = (effective_settings(known, row) if known is not None else row.settings).get("company")
             job_company[job] = named.strip() if isinstance(named, str) else None
         # The company the card itself records, where it records one: the
         # top-level one leave_job_card writes, and a bank match's or invoice

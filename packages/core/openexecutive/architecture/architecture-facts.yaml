@@ -13785,8 +13785,9 @@ fixtures:
     could only fail. Every proposed decision_instance whose payload has
     source == erpnext_drafts.JOB_SOURCE ("watch") and a job, whoever its
     approver, goes to closed_externally with reason demo_reset
-    (decision_ledger.close_externally(proposed_only=True)) when that job's
-    watch_jobs settings name DEMO_RESET_COMPANY and every company the card
+    (decision_ledger.close_externally(proposed_only=True)) when the
+    settings its job runs with (effective_settings over its watch_jobs row, as
+    leave_drafts reads them) name DEMO_RESET_COMPANY and every company the card
     records does too: the top-level company leave_job_card writes from the
     run's settings (cards.leave_drafts passes it), and slice.company on a bank
     match or invoice fill. A card recording none (left before cards recorded
