@@ -599,7 +599,7 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
     oversight export and the audit still show it, and a card being carried
     out is left alone and counted. Chat-made and alert-suggested cards stay.
     The job's next run leaves a new card on today's records."""
-    from openexecutive.integrations.erpnext_drafts import JOB_SOURCE
+    from openexecutive.integrations.erpnext_drafts import DECISION_CLASS, JOB_SOURCE
     from openexecutive.memory.decision_ledger import (
         STATUS_EXECUTING,
         STATUS_PROPOSED,
@@ -616,8 +616,9 @@ def close_job_cards(company: str, db_path: Path) -> dict[str, int]:
         if not {"id", "status", "proposed_payload_json"} <= _tables(conn).get("decision_instances", set()):
             return counts
         rows = conn.execute(
-            "SELECT id, status, proposed_payload_json FROM decision_instances WHERE status IN (?, ?) ORDER BY id",
-            (STATUS_PROPOSED, STATUS_EXECUTING),
+            "SELECT id, status, proposed_payload_json FROM decision_instances"
+            " WHERE decision_class = ? AND status IN (?, ?) ORDER BY id",
+            (DECISION_CLASS, STATUS_PROPOSED, STATUS_EXECUTING),
         ).fetchall()
     finally:
         conn.close()
