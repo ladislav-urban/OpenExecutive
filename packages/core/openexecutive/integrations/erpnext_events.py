@@ -72,6 +72,12 @@ KINDS: dict[str, str] = {
     "weekly_margin_drop": "last week's gross margin well below the weeks before it",
     "stalled_repost": "stock reposts that failed or stopped moving, so stock values are not up to date",
     "credit_hold": "a sales order over its customer's credit limit, waiting as a draft",
+    # One a day per site, only when one of ERPNext's own scheduled jobs
+    # failed overnight or a result looks wrong; what it found comes as
+    # evidence (erpnext_evidence), never in the text.
+    "overnight_postings": (
+        "ERPNext's unattended overnight postings, where a scheduled job failed or a result looks wrong"
+    ),
 }
 # The kinds whose event may name who it is for (``for_users``): the ERPNext
 # users oe_connector checked can read everything the text says. Each is
@@ -94,6 +100,12 @@ MAX_BODY_BYTES = 128 * 1024
 _KEY_RE = re.compile(r"[\w .,:/()&'+@-]{1,140}")
 _MAX_TITLE = 200
 _MAX_TEXT = 1500
+# overnight_postings reads ERPNext's error and job logs, so only its fixed
+# shape is taken: the day's key and a title of counts. Its own text is
+# dropped and the title stands for it, so nothing from a log can reach triage
+# or the alert even if the site's rule ever sent it.
+_OVERNIGHT_KEY_RE = re.compile(r"overnight:\d{4}-\d{2}-\d{2}")
+_OVERNIGHT_TITLE_RE = re.compile(r"Overnight: (?:\d{1,4} failed(?:, \d{1,4} to check)?|\d{1,4} to check)")
 
 _ledger = JtiLedger()
 _recent: deque[float] = deque()
@@ -174,6 +186,11 @@ def parse_events(data: Any) -> list[dict[str, Any]]:
         title, text = _text(raw.get("title"), _MAX_TITLE), _text(raw.get("text"), _MAX_TEXT)
         if kind not in KINDS or not isinstance(key, str) or not _KEY_RE.fullmatch(key) or not title:
             continue
+        if kind == "overnight_postings":
+            if not _OVERNIGHT_KEY_RE.fullmatch(key) or not _OVERNIGHT_TITLE_RE.fullmatch(title):
+                logger.warning("erpnext events: an overnight_postings event not in its fixed shape was dropped")
+                continue
+            text = ""
         # The draft it suggests, if any: kept as sent, checked by
         # erpnext_alert_drafts.remember before it is stored.
         events.append({
