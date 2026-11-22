@@ -240,6 +240,17 @@ logger = logging.getLogger(__name__)
 # correction after it.
 _COLLECTING: ContextVar[bool] = ContextVar("executive_collecting", default=False)
 
+# After a collected reply's claim-check retry that wrote nothing: the first
+# reply is kept, but the check found it claims a change no call made, so
+# this follows it rather than letting the claim stand.
+REWRITE_EMPTY_NOTE = "I couldn't confirm that this was done, so treat it as not done."
+
+
+def _kept_after_empty_rewrite(first: str) -> str:
+    """The first reply of a collected turn whose rewrite came back empty
+    ("" when there was none)."""
+    return f"{first.rstrip()}\n\n{REWRITE_EMPTY_NOTE}" if first.strip() else ""
+
 # The tools that read the speaker's own notes or earlier chats: private rows,
 # withheld from the process log, and checked like a mail read.
 _OWN_RECALL_TOOL_NAMES: frozenset[str] = HISTORY_TOOL_NAMES | CHAT_SEARCH_TOOL_NAMES
@@ -1668,6 +1679,9 @@ class Executive:
 
         t0 = time.monotonic()
         full_response = ""
+        # The reply as it stood when a collected turn's claim check asked
+        # for it again (the "rewrite" event): kept only if the retry is empty.
+        before_rewrite = ""
         with set_turn(session_id=session.session_id, turn_id=turn_id):
             _log_pushback(pushback, session, turn_id)
             # Per-person prefetch from Honcho. Runs once per turn (NOT inside
@@ -1781,9 +1795,22 @@ class Executive:
                 ):
                     if isinstance(item, str) and item != self._THINKING:
                         full_response += item
+                    elif isinstance(item, dict) and item.get("type") == "rewrite":
+                        # The next round writes the whole reply again: the
+                        # check, history and audit read that, not the draft.
+                        before_rewrite, full_response = full_response, ""
                     yield item
             finally:
                 outside_content.end_turn(outside_turn)
+            if before_rewrite:
+                rewritten = full_response.lstrip()
+                if rewritten:
+                    full_response = rewritten
+                else:
+                    # A retry that wrote nothing keeps the first reply, with
+                    # the line that its claim isn't confirmed; sent as kept.
+                    full_response = _kept_after_empty_rewrite(before_rewrite)
+                    yield {"type": "reply_replaced", "content": full_response, "session_id": session.session_id}
             # Every figure held to this turn's ERPNext results, and the reply
             # corrected in place when one isn't (orchestrator.answer_check).
             # A cost cap's stop sentence stays the reply's last paragraph.
@@ -2186,6 +2213,7 @@ class Executive:
 
         t0 = time.monotonic()
         draft = ""
+        before_rewrite = ""
         consulted: list[str] = []
         specialist_outputs: dict[str, str] = {}
         _emit_memory_snapshot(
@@ -2243,9 +2271,18 @@ class Executive:
                     if item != self._THINKING:
                         draft += item
                 else:
+                    if item.get("type") == "rewrite":
+                        # A collected turn's claim check asked for the whole
+                        # draft again: review that one, not the first.
+                        before_rewrite, draft = draft, ""
                     yield item
         finally:
             outside_content.end_turn(outside_turn)
+        # A retry that wrote nothing keeps the first draft, with the line
+        # that its claim isn't confirmed (kept in the revision below).
+        kept_first = bool(before_rewrite) and not draft.strip()
+        if before_rewrite:
+            draft = draft.lstrip() or _kept_after_empty_rewrite(before_rewrite)
 
         draft_ms = round((time.monotonic() - t0) * 1000)
         logger.info(
@@ -2469,6 +2506,11 @@ class Executive:
             )
             revision_capped = True
             yield final_response
+        if kept_first and final_response.strip() and REWRITE_EMPTY_NOTE not in final_response:
+            # The revision of a kept first draft never drops that line.
+            note = "".join(_flush_held(REWRITE_EMPTY_NOTE, final_response[-2:]))
+            final_response += note
+            yield note
         revision_ms = round((time.monotonic() - revision_t0) * 1000)
         if revision_final_msg is not None:
             _emit_cache_event(
@@ -2923,7 +2965,8 @@ class Executive:
         # The reply as it stood when the claim check asked for one more round:
         # that round's text is held and only a short line of what the reply
         # doesn't already say is kept (utils.repeats), so a rewritten answer
-        # never follows the first one. None until the check nudges.
+        # never follows the first one. None until the check nudges, and for
+        # a collected reply (_COLLECTING), whose retry replaces it whole.
         reply_before_nudge: str | None = None
         reply_so_far = ""
         after_nudge = ""
@@ -3252,6 +3295,12 @@ class Executive:
                 if iteration == max_iterations - 1:
                     nudge.append({"type": "text", "text": LAST_ROUND_NOTE})
                 current_messages.append({"role": "user", "content": nudge})
+                if rewrite:
+                    # The collector dropped what it had: the retry is the
+                    # whole reply, kept as written (a table keeps its rows),
+                    # never trimmed to the one line a streamed reply gets.
+                    reply_so_far, streamed_tail = "", ""
+                    continue
                 # The retry's text gets its paragraph break from
                 # _round_separator, like any other round's.
                 reply_before_nudge = reply_so_far
@@ -4632,8 +4681,9 @@ class Executive:
         finally:
             _COLLECTING.reset(collecting)
         if rewritten:
-            # A retry that wrote nothing keeps the first reply.
-            result = result.lstrip() or before
+            # A retry that wrote nothing keeps the first reply, with the
+            # line that its claim isn't confirmed (stream_chat sends it so).
+            result = result.lstrip() or _kept_after_empty_rewrite(before)
         if product_words:
             from openexecutive.prompts.connected_systems import in_product_reply
 
