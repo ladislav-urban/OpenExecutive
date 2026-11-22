@@ -7,6 +7,7 @@ import json
 import secrets
 import time
 from collections.abc import Iterator
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -221,3 +222,84 @@ def test_an_overnight_event_not_in_its_fixed_shape_is_dropped(site: SimpleNamesp
 @pytest.mark.parametrize("title", ["Overnight: 1 failed", "Overnight: 3 to check", "Overnight: 12 failed, 1 to check"])
 def test_every_title_the_site_writes_is_taken(site: SimpleNamespace, title: str) -> None:
     assert _post(site, {"events": [{**OVERNIGHT, "title": title}]}).json() == {"accepted": 1}
+
+
+# The overnight key and title shape, pinned with oe_connector by a shared
+# vector (a byte copy of oe_connector's tests/overnight_shape_vectors.json).
+_SHAPES = json.loads(
+    (Path(__file__).resolve().parents[1] / "fixtures" / "erpnext" / "overnight_shape_vectors.json")
+    .read_text(encoding="utf-8")
+)
+
+
+def test_the_overnight_patterns_are_the_shared_ones() -> None:
+    assert erpnext_events._OVERNIGHT_KEY_RE.pattern == _SHAPES["key_pattern"]
+    assert erpnext_events._OVERNIGHT_TITLE_RE.pattern == _SHAPES["title_pattern"]
+
+
+@pytest.mark.parametrize("case", _SHAPES["produced"], ids=lambda c: c["title"])
+def test_every_overnight_shape_the_site_produces_is_taken(site: SimpleNamespace, case: dict[str, Any]) -> None:
+    event = {**OVERNIGHT, "key": case["key"], "title": case["title"]}
+    assert _post(site, {"events": [event]}).json() == {"accepted": 1}
+
+
+@pytest.mark.parametrize("key", _SHAPES["rejected"]["keys"])
+def test_every_overnight_key_the_vector_rejects_is_dropped(site: SimpleNamespace, key: str) -> None:
+    assert _post(site, {"events": [{**OVERNIGHT, "key": key}]}).json() == {"accepted": 0}
+
+
+@pytest.mark.parametrize("title", _SHAPES["rejected"]["titles"])
+def test_every_overnight_title_the_vector_rejects_is_dropped(site: SimpleNamespace, title: str) -> None:
+    assert _post(site, {"events": [{**OVERNIGHT, "title": title}]}).json() == {"accepted": 0}
+
+
+def test_an_event_dropped_for_its_key_is_logged(site: SimpleNamespace, caplog: pytest.LogCaptureFixture) -> None:
+    import logging
+
+    bad = {"kind": "valuation_jump", "key": "Acme:CABLE#1:Stores", "title": "CABLE#1 valuation rose 30%", "text": ""}
+    with caplog.at_level(logging.WARNING, logger="openexecutive.integrations.erpnext_events"):
+        assert _post(site, {"events": [bad]}).json() == {"accepted": 0}
+    assert any("kind=valuation_jump" in r.getMessage() for r in caplog.records)
+    assert not any("CABLE" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize(("key", "accepted"), [
+    ("valuation_jump:0123456789abcdef01234567", 1),
+    ("Acme:DEMO-PNL-12:Stores - AC", 0),
+    ("valuation_jump:0123456789ABCDEF01234567", 0),
+    ("valuation_jump:0123456789abcdef0123456", 0),
+])
+def test_a_valuation_jump_is_taken_only_keyed_by_its_hash(site: SimpleNamespace, key: str, accepted: int) -> None:
+    event = {"kind": "valuation_jump", "key": key, "title": "DEMO-PNL-12 valuation rose 35% in Stores - AC", "text": ""}
+    assert _post(site, {"events": [event]}).json() == {"accepted": accepted}
+
+
+@pytest.mark.parametrize("case", _SHAPES["produced"], ids=lambda c: c["title"])
+def test_every_overnight_totals_table_the_site_produces_is_taken_as_sent(case: dict[str, Any]) -> None:
+    from openexecutive.integrations.erpnext_evidence import parse_evidence
+
+    assert parse_evidence([case["totals_table"]]) == [case["totals_table"]]
+
+
+# The valuation_jump key, pinned with oe_connector by a shared vector (a byte
+# copy of oe_connector's tests/valuation_key_vectors.json).
+_VALUATION_KEYS = json.loads(
+    (Path(__file__).resolve().parents[1] / "fixtures" / "erpnext" / "valuation_key_vectors.json")
+    .read_text(encoding="utf-8")
+)
+
+
+def test_the_valuation_key_pattern_is_the_shared_one() -> None:
+    assert erpnext_events._VALUATION_KEY_RE.pattern == _VALUATION_KEYS["key_pattern"]
+
+
+@pytest.mark.parametrize("case", _VALUATION_KEYS["produced"], ids=lambda c: c["key"])
+def test_every_valuation_key_the_site_produces_is_taken(site: SimpleNamespace, case: dict[str, Any]) -> None:
+    event = {"kind": "valuation_jump", "key": case["key"], "title": "An item's valuation moved", "text": ""}
+    assert _post(site, {"events": [event]}).json() == {"accepted": 1}
+
+
+@pytest.mark.parametrize("key", _VALUATION_KEYS["rejected"])
+def test_every_valuation_key_the_vector_rejects_is_dropped(site: SimpleNamespace, key: str) -> None:
+    event = {"kind": "valuation_jump", "key": key, "title": "An item's valuation moved", "text": ""}
+    assert _post(site, {"events": [event]}).json() == {"accepted": 0}
