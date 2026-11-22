@@ -40,13 +40,16 @@ import math
 import re
 import sqlite3
 import unicodedata
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeVar
 
 from openexecutive.memory import episodic
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 MAX_TABLES = 3
 MAX_COLUMNS = 6
@@ -93,10 +96,26 @@ def _db_path(db_path: Path | None) -> Path:
     return db_path if db_path is not None else episodic.DB_PATH
 
 
-def _connect(db_path: Path | None) -> sqlite3.Connection:
-    conn = sqlite3.connect(_db_path(db_path))
-    conn.executescript(_SCHEMA)
-    return conn
+# The databases whose table is already made, so a read on every Home build
+# doesn't run the schema again.
+_READY: set[str] = set()
+
+
+def _run(db_path: Path | None, work: Callable[[sqlite3.Connection], T]) -> T:
+    """``work`` on the evidence table, made first when this process hasn't
+    yet, or again when it has gone since (a database made again)."""
+    path = str(_db_path(db_path))
+    for attempt in range(2):
+        with sqlite3.connect(path) as conn:
+            if path not in _READY or attempt:
+                conn.executescript(_SCHEMA)
+                _READY.add(path)
+            try:
+                return work(conn)
+            except sqlite3.OperationalError as error:
+                if attempt or "no such table" not in str(error):
+                    raise
+    raise AssertionError("unreachable")
 
 
 def _string(value: Any, cap: int, *, empty: bool = False) -> str:
@@ -205,20 +224,20 @@ def remember(
         logger.info("erpnext_evidence: dropped evidence not in the shape kind=%s", kind)
     identity = alert_identity(f"erpnext:{kind}:{key}", readers)
     now = datetime.now(UTC)
-    try:
-        with _connect(db_path) as conn:
-            if evidence is None:
-                conn.execute("DELETE FROM erpnext_alert_evidence WHERE alert = ?", (identity,))
-            else:
-                conn.execute(
-                    "INSERT INTO erpnext_alert_evidence (alert, kind, evidence, received_at) VALUES (?, ?, ?, ?) "
-                    "ON CONFLICT(alert) DO UPDATE SET kind = excluded.kind, evidence = excluded.evidence, "
-                    "received_at = excluded.received_at",
-                    (identity, kind, json.dumps(evidence), now.isoformat()),
-                )
+    def keep(conn: sqlite3.Connection) -> None:
+        if evidence is None:
+            conn.execute("DELETE FROM erpnext_alert_evidence WHERE alert = ?", (identity,))
+        else:
             conn.execute(
-                "DELETE FROM erpnext_alert_evidence WHERE received_at < ?", ((now - KEEP_FOR).isoformat(),)
+                "INSERT INTO erpnext_alert_evidence (alert, kind, evidence, received_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(alert) DO UPDATE SET kind = excluded.kind, evidence = excluded.evidence, "
+                "received_at = excluded.received_at",
+                (identity, kind, json.dumps(evidence), now.isoformat()),
             )
+        conn.execute("DELETE FROM erpnext_alert_evidence WHERE received_at < ?", ((now - KEEP_FOR).isoformat(),))
+
+    try:
+        _run(db_path, keep)
     except sqlite3.Error:
         logger.warning("erpnext_evidence: couldn't keep evidence", exc_info=True)
         return False
@@ -248,11 +267,10 @@ def evidence_for(alert: Any, *, db_path: Path | None = None) -> list[dict[str, A
     identity = alert_identity(ref, readers)
     oldest = (datetime.now(UTC) - KEEP_FOR).isoformat()
     try:
-        with _connect(db_path) as conn:
-            row = conn.execute(
-                "SELECT kind, evidence FROM erpnext_alert_evidence WHERE alert = ? AND received_at >= ?",
-                (identity, oldest),
-            ).fetchone()
+        row = _run(db_path, lambda conn: conn.execute(
+            "SELECT kind, evidence FROM erpnext_alert_evidence WHERE alert = ? AND received_at >= ?",
+            (identity, oldest),
+        ).fetchone())
     except sqlite3.Error:
         logger.warning("erpnext_evidence: couldn't read evidence", exc_info=True)
         return None

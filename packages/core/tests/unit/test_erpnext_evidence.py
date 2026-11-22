@@ -257,3 +257,15 @@ def test_the_home_card_carries_the_alerts_evidence(alerts_db: Path) -> None:
         alert_store.insert_alert(severity="low", headline="h", body="", source="email", external_id="m-1")
     )
     assert today._erp_evidence(other) is None
+
+
+def test_a_database_made_again_gets_its_table_back(alerts_db: Path) -> None:
+    assert _keep(VECTOR["kind"], VECTOR["key"], TABLES)
+    import sqlite3
+
+    with sqlite3.connect(alerts_db) as conn:
+        conn.execute("DROP TABLE erpnext_alert_evidence")
+    # The table is made again on the next call.
+    assert evidence.evidence_for(_seen(VECTOR["kind"], VECTOR["key"])) is None
+    assert _keep(VECTOR["kind"], VECTOR["key"], TABLES)
+    assert evidence.evidence_for(_seen(VECTOR["kind"], VECTOR["key"])) == TABLES
