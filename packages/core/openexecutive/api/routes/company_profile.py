@@ -2,14 +2,19 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from openexecutive.api.models import CompanyProfileResponse, CompanyProfileUpdateRequest
+from openexecutive.api.principal_gate import principal_only
 from openexecutive.config import get_settings
 from openexecutive.memory.company_profile import PROFILE_EDIT_LOCK, CompanyProfile
 from openexecutive.onboarding.profile_builder import load_or_create_profile
 
 router = APIRouter()
+
+# The profile is in every prompt; the chat tool that edits it is the
+# principal's alone, and so is this route (api.principal_gate).
+PRINCIPAL_ONLY_DETAIL = "Only the principal can edit the company profile."
 
 
 @router.get("/company-profile", response_model=CompanyProfileResponse)
@@ -20,7 +25,11 @@ async def get_company_profile() -> CompanyProfileResponse:
     return CompanyProfileResponse(**profile.model_dump())
 
 
-@router.patch("/company-profile", response_model=CompanyProfileResponse)
+@router.patch(
+    "/company-profile",
+    response_model=CompanyProfileResponse,
+    dependencies=[Depends(principal_only(PRINCIPAL_ONLY_DETAIL))],
+)
 async def update_company_profile(body: CompanyProfileUpdateRequest) -> CompanyProfileResponse:
     # A worker thread: the edit holds PROFILE_EDIT_LOCK (shared with the
     # update_company_profile chat tool) around blocking file I/O, which must

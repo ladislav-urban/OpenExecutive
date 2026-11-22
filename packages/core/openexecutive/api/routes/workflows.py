@@ -19,11 +19,12 @@ import time
 import uuid
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import ValidationError
 
 from openexecutive.api import caller as api_caller
+from openexecutive.api.demo_gate import refuse_demo_reader
 from openexecutive.workflows import (
     get_workflow,
     list_workflows,
@@ -306,7 +307,8 @@ def _refuse_unless_creator(
         raise HTTPException(status_code=403, detail=refused)
 
 
-@router.get("/workflows/custom")
+# The workflow designer's definitions are not a demo person's to read.
+@router.get("/workflows/custom", dependencies=[Depends(refuse_demo_reader)])
 async def list_custom_workflows() -> dict[str, Any]:
     """All dynamic definitions (active and inactive) for the builder UI."""
     return {"definitions": [_with_owner(d) for d in list_definitions(active_only=False)]}
@@ -339,7 +341,7 @@ async def create_custom_workflow(request: Request) -> dict[str, Any]:
     return _with_owner(stored)
 
 
-@router.get("/workflows/custom/{name}")
+@router.get("/workflows/custom/{name}", dependencies=[Depends(refuse_demo_reader)])
 async def get_custom_workflow(name: str) -> dict[str, Any]:
     defn = get_definition(name)
     if defn is None:
