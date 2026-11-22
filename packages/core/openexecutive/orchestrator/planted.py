@@ -26,7 +26,10 @@ assistant:
 **Candidates** are what a span may hold that the reply must not repeat:
 contact details (emails, phone numbers), URLs, IBANs and quoted runs of
 three or more words, from any span; names and number-plus-unit phrases
-("500-unit") only from sp**The cut** acts only on a candidate that the turn's material (everything
+("500-unit") only from spans opened by verified evidence, since markers are
+placed by whoever wrote the text.
+
+**The cut** acts only on a candidate that the turn's material (everything
 its prompt held: system blocks, facts, memory, retrieved knowledge, history,
 every tool result and the specialists' replies) has only inside spans.
 Anything that is also in a real field stays. Matching runs on one normalised
@@ -44,9 +47,6 @@ so "40 units" in a span is kept against a record's qty 40.
 - When the rest doesn't already say what kind of request it was, ``LINE`` is
   appended; its ``{kind}`` comes only from ``content_scan.CATEGORIES``' keys
   (``KINDS``), never from the text.
-
- ``{kind}`` comes only
-from ``content_scan.CATEGORIES``' keys (``KINDS``), never from the text.
 
 Left to the wording and the evals: specifics split or reworded ("payroll
 at outside-example dot com", "five hundred units"), and an injection with
