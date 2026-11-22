@@ -5909,7 +5909,10 @@ chat:
     tell|mention this|anyone") inside a double-quoted run, code fence or >
     lines of the person's message (note_person, at note_given's call sites)
     and of history's user messages (note_messages), never the request
-    itself; the same markers anywhere in ERP text (note_erpnext_result for
+    itself, the span being that whole quoted part (so a specific written
+    before the marker is inside it; security review of #289); the same
+    markers anywhere in ERP text, the span being the whole paragraph or JSON
+    string value (note_erpnext_result for
     every erpnext__* call, and untrusted_content source="erpnext" blocks in
     messages and tool results); and content_scan's verified evidence
     (outside_content._apply from mark_read and settle, and check_mail_read,
@@ -5924,12 +5927,17 @@ chat:
     Candidates: emails, URLs, phones (7+ digits), IBANs, quoted runs of 3+
     words from any span; names (capitalised runs, stopwords, months,
     weekdays and DocTypes left out) and number-plus-unit phrases only from
-    evidence spans, since markers are placed at will. A reply unit
-    (answer_correct.units) is dropped only when its candidate is in the
-    material only inside spans. Normalised on both sides: JSON escapes,
-    NFKC, Cc/Cf stripped, casefold, quotes plain; numbers by value, units
-    stemmed. Cap: more than half the units would go -> reply kept, LINE
-    appended (planted_capped). LINE ("Part of what I read was addressed to
+    evidence spans, since markers are placed at will. Only a candidate the
+    material holds only inside spans is acted on. Normalised on both sides:
+    JSON escapes, NFKC, Cc/Cf stripped, casefold, quotes plain; numbers by
+    value, units stemmed. A strong candidate (contact, URL, IBAN, phone,
+    quoted run) is written over with "[removed]" in place, always, the
+    sentence kept (planted_redacted; a unit still holding one in another
+    form is "[removed]" whole). A unit (answer_correct.units) holding a name
+    or amount is dropped (planted_cut); cap: more than half the units would
+    go -> reply kept, LINE appended (planted_capped). Why redaction: the cap
+    used to keep a short reply whole, address included, and panel and brief
+    replies are short (security review of #289). LINE ("Part of what I read was addressed to
     an AI assistant and asked me to {kind}; I didn't act on it.") is also
     appended after a cut unless the rest already says so; {kind} only from
     planted.KINDS, keyed by content_scan.CATEGORIES.
@@ -5939,8 +5947,16 @@ chat:
     repeats, capped inputs (MAX_SCAN_CHARS, MAX_SPAN_CHARS, MAX_SPANS,
     MAX_REPLY_CHARS). The figure check reads the cut text (answer_check_changes
     never holds a specific); the answer_check row gains planted_spans,
-    planted_cut, planted_appended, planted_capped, counts only, on a turn
-    that had a span; never the text.
+    planted_cut, planted_redacted, planted_appended, planted_capped, counts
+    only, on a turn that had a span; never the text.
+    Known limits: Session.planted_spans is process memory only (a restart or
+    another worker loses the carried evidence spans; sessions are rebuilt
+    from saved messages and nothing else of them is persisted, so nothing
+    was persisted); marker spans are found again from history, so a pasted
+    note stays covered. An assistant reply already in history holding a
+    specific (written before this shipped, or a name kept by the cap) is
+    material outside any span, so a later turn keeps it: transitional for
+    old conversations, accepted for the cap.
     Stored: the reply_replaced text is what session history, memory passes,
     the chat_turn row, the live mirror and Executive.chat's return keep. The
     web chat (and the panel's chat route, oe_connector_panel_via_chat) shows

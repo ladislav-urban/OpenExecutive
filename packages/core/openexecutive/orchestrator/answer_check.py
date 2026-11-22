@@ -39,7 +39,9 @@ markers on ERP text, and ``content_scan``'s verified evidence through
 ``note_planted``). Bounded (``PLANTED_BUDGET_S``, in a thread); on any error
 or timeout the reply goes on as it was. The figure check reads the cut text,
 so no record of its changes holds a specific; the audit row holds counts
-only (``planted_*``), and only on a turn that had a span.
+only (``planted_*``), and only on a turn that had a span. A contact
+detail, link, account or quoted run is written over in place; a sentence
+naming a party or amount from verified evidence is dropped.
 
 Off with ``ERPNEXT_ANSWER_CHECK=off``. Any error inside the check is logged
 and the reply is left as it was: a checker must never cost the person their
@@ -373,9 +375,11 @@ class _Counts:
     # Record ids given their titles (record_titles).
     titles: int = 0
     # The planted cut (orchestrator.planted): spans the turn had, units cut,
-    # whether its line was added, and whether the half-reply cap held.
+    # specifics written over in place, whether its line was added, and
+    # whether the half-reply cap held.
     planted_spans: int = 0
     planted_cut: int = 0
+    planted_redacted: int = 0
     planted_appended: int = 0
     planted_capped: int = 0
     # Each failed figure or name as written, and why it failed: for the
@@ -843,6 +847,7 @@ def _audit(counts: _Counts, *, changed: bool) -> None:
     planted_counts = {
         "planted_spans": counts.planted_spans,
         "planted_cut": counts.planted_cut,
+        "planted_redacted": counts.planted_redacted,
         "planted_appended": counts.planted_appended,
         "planted_capped": counts.planted_capped,
     } if counts.planted_spans else {}
@@ -936,6 +941,7 @@ async def check_reply(
                 logger.warning("answer_check: out of time; checking with code alone")
                 counts = _Counts(
                     code_only=True, planted_spans=counts.planted_spans, planted_cut=counts.planted_cut,
+                    planted_redacted=counts.planted_redacted,
                     planted_appended=counts.planted_appended, planted_capped=counts.planted_capped,
                 )
                 fixed = await asyncio.wait_for(
@@ -1012,6 +1018,7 @@ async def _cut_planted(text: str, turn: AnswerCheckTurn, counts: _Counts) -> str
         logger.warning("answer_check: the planted cut failed (%s); the reply is left as it was", type(exc).__name__)
         return text
     counts.planted_cut = outcome.cut
+    counts.planted_redacted = outcome.redacted
     counts.planted_appended = int(outcome.appended)
     counts.planted_capped = int(outcome.capped)
     return outcome.text
