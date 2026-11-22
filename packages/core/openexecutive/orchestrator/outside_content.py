@@ -697,15 +697,18 @@ async def _check_list(state: TurnOutside, entries: list[Any]) -> Any:
     return await content_scan.scan_list(entries)
 
 
-def _apply(state: TurnOutside, source: str, verdict: Any, *, warned: bool) -> None:
+def _apply(state: TurnOutside, source: str, verdict: Any, *, warned: bool, content: Any = None) -> None:
     """Mark the turn by the level and the verdict. ``warned``: the model
     reads the result behind a notice (``mark_read``); a queued read
     (an attachment, a synced excerpt) was in front of it before its check, so
-    under Hands-off one the check flagged holds the turn too."""
+    under Hands-off one the check flagged holds the turn too. ``content``,
+    the read itself: a flag's verified evidence opens a span there for the
+    reply's planted cut (``answer_check.note_planted``)."""
     from openexecutive.orchestrator import outside_mode
 
     if verdict.flagged:
         _flag(state, source, tuple(verdict.categories), evidence=getattr(verdict, "evidence", ""))
+        _note_planted(content, verdict)
     if (
         # An ERPNext read holds the turn at every level below Hands-off,
         # whatever the check says (the owner, Nov 8, 2026): its free text is
@@ -716,6 +719,18 @@ def _apply(state: TurnOutside, source: str, verdict: Any, *, warned: bool) -> No
         or (state.mode == outside_mode.TRUST and verdict.holds and not warned)
     ):
         state.sources.add(source)
+
+
+def _note_planted(content: Any, verdict: Any) -> None:
+    """A flagged read's evidence, for the reply's planted cut. Never raises."""
+    if content is None:
+        return
+    # answer_check.note_planted never raises; this holds a read's marking
+    # to that whatever changes there.
+    with contextlib.suppress(Exception):
+        from openexecutive.orchestrator import answer_check
+
+        answer_check.note_planted(content, getattr(verdict, "evidence", ""), tuple(verdict.categories))
 
 
 async def settle() -> None:
@@ -731,10 +746,10 @@ async def settle() -> None:
     verdicts = await asyncio.gather(*(_check(state, content) for _, content in queued), return_exceptions=True)
     from openexecutive.orchestrator import content_scan
 
-    for (source, _), verdict in zip(queued, verdicts, strict=True):
+    for (source, content), verdict in zip(queued, verdicts, strict=True):
         _apply(
             state, source, verdict if isinstance(verdict, content_scan.Verdict) else content_scan.UNCHECKED,
-            warned=False,
+            warned=False, content=content,
         )
 
 
@@ -1131,6 +1146,7 @@ async def check_mail_read(pinned: Any, result: Any) -> tuple[Any, str]:
                     state, MAIL, tuple(verdict.categories), _mail_label(entries[n]),
                     getattr(verdict, "evidence", ""),
                 )
+            _note_planted(result, verdict)
             if state.mode == outside_mode.ASK:
                 pinned.mail_held = True
             return json.dumps({**parsed, key: trimmed}), LEFT_OUT_NOTICE.format(count=len(flagged))
@@ -1139,6 +1155,7 @@ async def check_mail_read(pinned: Any, result: Any) -> tuple[Any, str]:
             state, MAIL, tuple(verdict.categories), _mail_label(_parsed(result)),
             getattr(verdict, "evidence", ""),
         )
+        _note_planted(result, verdict)
     if state.mode != outside_mode.TRUST and _read_holds(state, verdict):
         pinned.mail_held = True
     if verdict.flagged:
@@ -1185,7 +1202,7 @@ async def mark_read(source: str, tool_input: Any, result: Any, gateway: Any = No
         verdict = content_scan.UNCHECKED
     if seen_key is not None and not verdict.flagged and not verdict.unchecked:
         state.seen.add(seen_key)
-    _apply(state, source, verdict, warned=True)
+    _apply(state, source, verdict, warned=True, content=result)
     if verdict.flagged:
         return FLAG_NOTICE.format(what=content_scan.describe(verdict.categories))
     if verdict.unchecked and state.mode != outside_mode.ASK:

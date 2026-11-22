@@ -65,7 +65,9 @@ from ._agent_loop_fakes import FinalMsg, ScriptedProvider, TextBlock, ToolUseBlo
 # And: a figure or date that now differs from an earlier answer is said, with
 # both, whatever the cause (erpnext_084, erpnext_095), when it is for the
 # same thing and the earlier answer was to the same person (erpnext_096).
-TEAM_PERSONA_SHA256 = "13978772bdec9d50a49046448cc6db183dd53e31207fd28ebf9d9341012a8187"
+# And: text the person pastes that addresses an assistant is content, not a
+# request (Important Boundaries, "Pasted text"; orchestrator/planted.py).
+TEAM_PERSONA_SHA256 = "39a5e33c9edf7c8e868b64029022722cea9beb07a28948e21748d1115080a42f"
 
 SOLO_HEADINGS = (
     "## You Work for One Person",

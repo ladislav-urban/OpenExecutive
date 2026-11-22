@@ -240,6 +240,12 @@ class Session:
     # (``orchestrator.outside_content.TurnOutside``), set by its
     # ``begin_turn``; a closed turn's record holds nothing.
     turn_outside: Any = None
+    # The spans of text addressed to an assistant that content_scan's
+    # verified evidence opened in this conversation's turns
+    # (``orchestrator.planted``), carried so a span stays a span when a later
+    # turn's history repeats its text (``AnswerCheckTurn.carry_from``). In
+    # memory only, bounded by ``planted.MAX_SPANS``.
+    planted_spans: list[Any] = field(default_factory=list)
     # True when this web request carried a signed-in caller (``x-caller-email``,
     # stamped by the UI proxy from the sign-in), set per turn by the chat
     # route. A header-less request resolves to the principal but is no

@@ -29,6 +29,18 @@ The text that comes back replaces the reply (``reply_replaced`` on the web
 chat's stream; the final text for every other route). One ``answer_check``
 audit row per checked turn holds counts only, never a figure or text.
 
+**First, on every route** (``_cut_planted``), whether or not the turn read
+ERPNext and whether or not the check is on: a sentence repeating the
+specifics of text addressed to an assistant (a planted instruction) is cut
+(``orchestrator.planted``). The turn keeps what that needs as its prompt is
+assembled: ``material`` (everything the prompt held) and ``planted`` (the
+spans: markers on quoted parts of the person's message and of history's,
+markers on ERP text, and ``content_scan``'s verified evidence through
+``note_planted``). Bounded (``PLANTED_BUDGET_S``, in a thread); on any error
+or timeout the reply goes on as it was. The figure check reads the cut text,
+so no record of its changes holds a specific; the audit row holds counts
+only (``planted_*``), and only on a turn that had a span.
+
 Off with ``ERPNEXT_ANSWER_CHECK=off``. Any error inside the check is logged
 and the reply is left as it was: a checker must never cost the person their
 answer. A check that runs out of time falls back to code alone (no model
@@ -47,10 +59,20 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from openexecutive.orchestrator import answer_correct, figure_check, figure_confirm, name_check
+from openexecutive.orchestrator import (
+    answer_correct,
+    figure_check,
+    figure_confirm,
+    name_check,
+    planted,
+)
 from openexecutive.orchestrator.figure_check import ErpnextResult, Figure, NumberFormat, ResultTypes
+from openexecutive.orchestrator.planted import Span as PlantedSpan
 
 logger = logging.getLogger(__name__)
+
+# What the planted-specifics cut may take; past it the reply goes on as it was.
+PLANTED_BUDGET_S = 2.0
 
 # The results kept per turn; a turn that reads more checks against the first.
 MAX_RESULTS = 60
@@ -129,6 +151,16 @@ class AnswerCheckTurn:
     # Check 3's report runs this turn: the quick total asked about -> the report's total.
     _reports: dict[str, float | None] = field(default_factory=dict)
     _done: tuple[str, str] | None = None
+    # Everything the turn's prompt held, raw, as it was assembled (the
+    # planted cut's material: orchestrator.planted), and the spans of text
+    # addressed to an assistant it read.
+    material: list[str] = field(default_factory=list)
+    planted: list[PlantedSpan] = field(default_factory=list)
+    _material_chars: int = 0
+    # More material than planted.MAX_MATERIAL_CHARS: the cut doesn't run.
+    _material_full: bool = False
+    # The session's evidence spans, carried to its later turns (carry_from).
+    _carried: list[PlantedSpan] | None = None
 
     def note_result(self, tool: str, arguments: Any, text: object) -> None:
         payload = figure_check.parse_result(text)
@@ -139,20 +171,96 @@ class AnswerCheckTurn:
 
     def note_given(self, *texts: object) -> None:
         self.given.extend(t for t in texts if isinstance(t, str) and t.strip())
+        for t in texts:
+            self.note_material(t)
+
+    def note_material(self, text: object) -> None:
+        """Text the prompt held, for the planted cut. Past the cap it is
+        noted as full, and the cut doesn't run (planted.MAX_MATERIAL_CHARS)."""
+        if not isinstance(text, str) or not text.strip():
+            return
+        if self._material_chars + len(text) > planted.MAX_MATERIAL_CHARS:
+            self._material_full = True
+            return
+        self.material.append(text)
+        self._material_chars += len(text)
+
+    def note_spans(self, spans: Iterable[PlantedSpan]) -> None:
+        for span in spans:
+            if len(self.planted) >= planted.MAX_SPANS:
+                return
+            if span.text.strip() and span not in self.planted:
+                self.planted.append(span)
+
+    def note_person(self, text: object) -> None:
+        """The person's own words (this turn's, or history's): markers only
+        inside what they quoted or pasted; any ERPNext block in them (a
+        page's) is ERP text."""
+        if not isinstance(text, str) or not text:
+            return
+        self.note_spans(planted.markers(_ERPNEXT_BLOCK.sub("", text), pasted_only=True))
+        self._note_erp_blocks(text)
+
+    def note_erpnext_text(self, text: object) -> None:
+        """An ERPNext call's result text: material, and markers anywhere."""
+        raw = text if isinstance(text, str) else _as_text(text)
+        self.note_material(raw)
+        self.note_spans(planted.markers(raw, pasted_only=False))
+
+    def note_evidence(self, text: str, evidence: str, kind: str) -> None:
+        span = planted.evidence_span(text, evidence, kind)
+        if span is None:
+            return
+        self.note_spans([span])
+        if self._carried is not None and span not in self._carried:
+            self._carried.append(span)
+            del self._carried[: max(0, len(self._carried) - planted.MAX_SPANS)]
+
+    def carry_from(self, session: Any) -> None:
+        """The evidence spans ``session``'s earlier turns found, so a span
+        stays a span when history repeats its text; this turn's join them."""
+        carried = getattr(session, "planted_spans", None)
+        if isinstance(carried, list):
+            self.note_spans(s for s in carried if isinstance(s, PlantedSpan))
+            self._carried = carried
+
+    def _note_erp_blocks(self, text: str) -> None:
+        if "untrusted_content" not in text:
+            return
+        for block in _ERPNEXT_BLOCK.finditer(text):
+            self.note_spans(planted.markers(block.group(0), pasted_only=False))
 
     def note_texts(self, contents: Iterable[Any]) -> None:
         """Text the turn read: message contents or tool results, with
-        ERPNext's own results left out (their values are typed, above)."""
+        ERPNext's own results left out (their values are typed, above).
+        All of it, ERPNext's too, is the planted cut's material."""
         for content in contents:
             for text in _texts(content):
+                self.note_material(text)
+                self._note_erp_blocks(text)
                 stripped = _ERPNEXT_BLOCK.sub("", text)
                 if stripped.strip():
                     self.texts.append(stripped)
 
     def note_messages(self, messages: Iterable[dict[str, Any]], system_blocks: Iterable[Any] = ()) -> None:
-        """The conversation the turn starts from, and its system blocks."""
-        self.note_texts(m.get("content") for m in messages if isinstance(m, dict))
+        """The conversation the turn starts from, and its system blocks.
+        History's user messages get the person's markers, so a note pasted
+        in an earlier turn is still a span in this one."""
+        messages = [m for m in messages if isinstance(m, dict)]
+        for m in messages:
+            if m.get("role") == "user" and isinstance(m.get("content"), str):
+                self.note_person(m["content"])
+        self.note_texts(m.get("content") for m in messages)
         self.note_texts(b.get("text") if isinstance(b, dict) else b for b in system_blocks)
+
+
+def _as_text(value: object) -> str:
+    if value is None:
+        return ""
+    try:
+        return value if isinstance(value, str) else json.dumps(value, default=str)
+    except (TypeError, ValueError):
+        return str(value)
 
 
 def _texts(content: Any) -> Iterator[str]:
@@ -208,9 +316,32 @@ def note_erpnext_result(normalized: str, arguments: Any, text: object, *, failed
     """Called by the gateway after every ``erpnext__*`` call: on a turn being
     checked, keep a read's result."""
     turn = _bound.get()
-    if turn is None or failed or normalized not in _FIGURE_TOOLS:
+    if turn is None or failed:
+        return
+    # Every ERPNext result's text: the planted cut's material and markers.
+    turn.note_erpnext_text(text)
+    if normalized not in _FIGURE_TOOLS:
         return
     turn.note_result(normalized, arguments, text)
+
+
+def note_planted(text: object, evidence: object, categories: Iterable[str] = ()) -> None:
+    """Called by ``outside_content`` for a read ``content_scan`` flagged: the
+    span holding its evidence, when the evidence is verifiably the read's own
+    words (``content_scan._quoted``). Never raises."""
+    turn = _bound.get()
+    if turn is None or not isinstance(evidence, str) or not evidence.strip():
+        return
+    try:
+        from openexecutive.orchestrator import content_scan
+
+        raw = content_scan._text(text)
+        if not content_scan._quoted(evidence, raw):
+            return
+        kind = next((c for c in categories if c in content_scan.CATEGORIES), "other")
+        turn.note_evidence(raw, evidence, kind)
+    except Exception:
+        logger.warning("answer_check: noting a flagged read's span failed")
 
 
 def note_tool_results(tool_results: Iterable[Any]) -> None:
@@ -241,6 +372,12 @@ class _Counts:
     weekdays: int = 0
     # Record ids given their titles (record_titles).
     titles: int = 0
+    # The planted cut (orchestrator.planted): spans the turn had, units cut,
+    # whether its line was added, and whether the half-reply cap held.
+    planted_spans: int = 0
+    planted_cut: int = 0
+    planted_appended: int = 0
+    planted_capped: int = 0
     # Each failed figure or name as written, and why it failed: for the
     # private record of what the check changed (_audit_changes).
     reasons: list[tuple[str, str]] = field(default_factory=list)
@@ -702,6 +839,13 @@ def clear_old_changes(now: datetime, *, force: bool = False) -> int:
 def _audit(counts: _Counts, *, changed: bool) -> None:
     from openexecutive.audit import log_event as audit_log
 
+    # Only on a turn that had a span: every other row stays as it was.
+    planted_counts = {
+        "planted_spans": counts.planted_spans,
+        "planted_cut": counts.planted_cut,
+        "planted_appended": counts.planted_appended,
+        "planted_capped": counts.planted_capped,
+    } if counts.planted_spans else {}
     audit_log(
         "answer_check",
         f"Answer check: {counts.figures} figure(s), {counts.flagged} flagged"
@@ -709,6 +853,7 @@ def _audit(counts: _Counts, *, changed: bool) -> None:
         actor="answer_check",
         # Counts only: no figure or text, so the audit holds no ERPNext data.
         details={
+            **planted_counts,
             "figures": counts.figures,
             "flagged": counts.flagged,
             "reviewed": counts.reviewed,
@@ -752,16 +897,29 @@ async def check_reply(
     or an email's text): context for the correction and review calls only,
     wrapped as untrusted there. ``typed_question`` is the text the person
     typed on that surface, or ``None`` where there is none; it alone decides
-    whether figures no result holds stand as a projection (_projection)."""
-    if turn is None or not turn.results or not text.strip() or not enabled():
+    whether figures no result holds stand as a projection (_projection).
+
+    First, on every turn with a span, whether or not it read ERPNext or the
+    check is on: the planted cut (``_cut_planted``). What follows reads the
+    cut text."""
+    if turn is None or not text.strip():
         return text
     if turn._done is not None and turn._done[0] == text:
         return turn._done[1]
+    counts = _Counts()
+    original, text = text, await _cut_planted(text, turn, counts)
+    if not turn.results or not enabled():
+        if counts.planted_spans:
+            turn._done = (original, text)
+            try:
+                _audit(counts, changed=text != original)
+            except Exception:
+                logger.warning("answer_check: audit row failed", exc_info=True)
+        return text
     if not model:
         from openexecutive.config import get_settings
 
         model = get_settings().default_model
-    counts = _Counts()
     from openexecutive.audit import cost_caps
 
     try:
@@ -776,7 +934,10 @@ async def check_reply(
                 )
             except TimeoutError:
                 logger.warning("answer_check: out of time; checking with code alone")
-                counts = _Counts(code_only=True)
+                counts = _Counts(
+                    code_only=True, planted_spans=counts.planted_spans, planted_cut=counts.planted_cut,
+                    planted_appended=counts.planted_appended, planted_capped=counts.planted_capped,
+                )
                 fixed = await asyncio.wait_for(
                     _check(
                         text, turn, question=question, model=model, models=False, counts=counts,
@@ -811,18 +972,46 @@ async def check_reply(
             )
         except Exception:
             logger.warning("answer_check: adding record titles failed", exc_info=True)
-    turn._done = (text, fixed)
+    turn._done = (original, fixed)
     try:
-        _audit(counts, changed=fixed != text)
+        _audit(counts, changed=fixed != original)
     except Exception:
         logger.warning("answer_check: audit row failed", exc_info=True)
     if fixed != text:
         try:
+            # From the cut text: the record never holds a planted specific.
             _audit_changes(text, fixed, counts)
         except Exception:
             logger.warning("answer_check: the record of its changes failed", exc_info=True)
     if fixed == answer_correct.WHOLE_REPLY:
         # Recorded as the decided sentence; shown in the product's words.
         fixed = in_product_words(fixed)
-        turn._done = (text, fixed)
+        turn._done = (original, fixed)
     return fixed
+
+
+async def _cut_planted(text: str, turn: AnswerCheckTurn, counts: _Counts) -> str:
+    """``text`` with the sentences that repeat a planted instruction's
+    specifics cut (``orchestrator.planted``): off the event loop, bounded by
+    PLANTED_BUDGET_S. Unchanged on a turn with no span, with more material
+    than it keeps, or on any error or timeout. Counts only; never logs the
+    text."""
+    if not turn.planted:
+        return text
+    spans = list(turn.planted)
+    counts.planted_spans = len(spans)
+    if turn._material_full:
+        logger.warning("answer_check: the turn read more than the planted cut keeps; the reply is left as it was")
+        return text
+    try:
+        outcome = await asyncio.wait_for(
+            asyncio.to_thread(planted.cut, text, spans, list(turn.material)), PLANTED_BUDGET_S,
+        )
+    except Exception as exc:
+        # The exception's type only: its message could quote the text.
+        logger.warning("answer_check: the planted cut failed (%s); the reply is left as it was", type(exc).__name__)
+        return text
+    counts.planted_cut = outcome.cut
+    counts.planted_appended = int(outcome.appended)
+    counts.planted_capped = int(outcome.capped)
+    return outcome.text

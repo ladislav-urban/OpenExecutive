@@ -1774,6 +1774,10 @@ class Executive:
             check_turn = answer_check.current()
             if check_turn is not None:
                 check_turn.note_given(memory_text or user_message, page_context_block)
+                # The planted cut's spans: what the person quoted or pasted,
+                # and the evidence spans earlier turns found (answer_check).
+                check_turn.note_person(memory_text or user_message)
+                check_turn.carry_from(session)
                 check_turn.note_messages(messages, system_blocks)
             consulted: list[str] = []
             turn_calls: list[tuple[str, str]] = []
@@ -2245,6 +2249,8 @@ class Executive:
         check_turn = answer_check.current()
         if check_turn is not None:
             check_turn.note_given(memory_text or user_message, page_context_block)
+            check_turn.note_person(memory_text or user_message)
+            check_turn.carry_from(session)
             check_turn.note_messages(messages, system_blocks)
         turn_calls: list[tuple[str, str]] = []
         try:
