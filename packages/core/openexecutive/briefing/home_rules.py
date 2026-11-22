@@ -310,6 +310,20 @@ def _discuss_prompt(proposal: Any, *, is_artifact: bool, is_monitoring: bool, is
     return f"Tell me about this proposal:\n\n{text}{suggested}{primer}"
 
 
+def _ask_why_prompt(proposal: Any) -> str:
+    """The chat seed for Ask why on an ERP alert that came with what moved:
+    the person's own question about it, answered with the tools as any chat
+    turn is. It adds no reach, and the evidence itself stays out of it."""
+    return (
+        f"Why did this happen? {proposal.headline}\n\n"
+        f"[Discuss mode — alert_id={proposal.alert_id}] This is an ERP alert, not a "
+        "proposal to approve. Explain what caused it from the ERP's own records, "
+        "starting with what moved most. Answer conversationally. Only if I explicitly "
+        "ask you to act should you do more than explain; do not ack or dismiss the "
+        "alert yourself."
+    )
+
+
 def _discuss_memory(proposal: Any, *, is_artifact: bool, is_monitoring: bool, is_decision: bool) -> str:
     if is_artifact:
         action = "Let's discuss this flagged artifact"
@@ -435,10 +449,18 @@ def card_actions(
         primary = rerun or nudge or workflow or approve
 
     kind = {"is_artifact": is_artifact, "is_monitoring": is_monitoring, "is_decision": is_decision}
-    discuss = CardAction(
-        key="discuss", label="Discuss",
-        prompt=_discuss_prompt(proposal, **kind), memory_text=_discuss_memory(proposal, **kind),
-    )
+    # An ERP alert that came with what moved (proposal.evidence) asks why
+    # in place of Discuss: the same chat handoff, its own question.
+    if getattr(proposal, "evidence", None):
+        discuss = CardAction(
+            key="discuss", label="Ask why",
+            prompt=_ask_why_prompt(proposal), memory_text=memory_line("Why did this happen", proposal.headline),
+        )
+    else:
+        discuss = CardAction(
+            key="discuss", label="Discuss",
+            prompt=_discuss_prompt(proposal, **kind), memory_text=_discuss_memory(proposal, **kind),
+        )
     # Not on a drafted document, which lives in the gallery rather than the queue.
     snooze_actions = [] if is_artifact else [
         CardAction(key="snooze", label=c.label, until=c.until, short=c.short) for c in snoozes

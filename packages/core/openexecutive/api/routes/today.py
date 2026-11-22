@@ -201,6 +201,24 @@ class ErpRecord(BaseModel):
     name: str
 
 
+class EvidenceColumn(BaseModel):
+    key: str
+    label: str
+    type: Literal["text", "money", "number", "percent", "date", "doc"]
+
+
+class EvidenceTable(BaseModel):
+    """One "What moved" table on an ERP alert's card
+    (``erpnext_evidence.evidence_for``): ERPNext's records behind the alert,
+    shown as text, never read by a model. A ``doc`` cell is
+    ``{"doctype", "name"}``; a ``percent`` cell is already in points."""
+
+    heading: str
+    currency: str | None = None
+    columns: list[EvidenceColumn]
+    rows: list[dict[str, Any]]
+
+
 class ProposalItem(BaseModel):
     alert_id: int
     headline: str
@@ -276,6 +294,9 @@ class ProposalItem(BaseModel):
     # An ERP alert's document, for Open (action ``open_record``); None on
     # every other card, and on a rule that names a report, not a document.
     record: ErpRecord | None = None
+    # What moved: the records behind an ERP alert, as ERPNext sent them; None
+    # on every other card and on an alert that came without any.
+    evidence: list[EvidenceTable] | None = None
 
     # Approvals one request held together (the same chat turn asking for the
     # same kind of step, e.g. saving four files): every card of the request
@@ -289,6 +310,15 @@ def _erp_record(alert: Alert) -> ErpRecord | None:
 
     found = record_for(alert)
     return ErpRecord(**found) if found else None
+
+
+def _erp_evidence(alert: Alert) -> list[EvidenceTable] | None:
+    if alert.source != "erpnext":
+        return None
+    from openexecutive.integrations.erpnext_evidence import evidence_for
+
+    found = evidence_for(alert)
+    return [EvidenceTable(**table) for table in found] if found else None
 
 
 def _proposal_body(alert: Alert) -> str:
@@ -1246,6 +1276,7 @@ def _build_today(
             artifact_format=alert.artifact_format if alert.source == "artifact" else None,
             artifact_url=alert.artifact_url if alert.source == "artifact" else None,
             record=_erp_record(alert),
+            evidence=_erp_evidence(alert),
         ))
 
     # Action items first (sharpest by score), monitoring noise after; ties

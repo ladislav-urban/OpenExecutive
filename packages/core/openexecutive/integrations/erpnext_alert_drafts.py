@@ -49,6 +49,7 @@ import json
 import logging
 import re
 import sqlite3
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -170,7 +171,14 @@ def remember(kind: str, key: str, raw: Any, *, db_path: Path | None = None) -> b
 
 def _ref_of(alert: Any) -> tuple[str, str, str] | None:
     """``(ref, kind, key)`` of the event ``alert`` was raised from, when it
-    is an ERPNext event's alert as ``erpnext_events`` raises it; else None."""
+    is an ERPNext event's alert of a kind that may suggest a draft; else None."""
+    return event_ref(alert, SUGGESTING)
+
+
+def event_ref(alert: Any, kinds: Iterable[str]) -> tuple[str, str, str] | None:
+    """``(ref, kind, key)`` of the event ``alert`` was raised from, when it
+    is an ERPNext event's alert of one of ``kinds`` as ``erpnext_events``
+    raises it; else None (``erpnext_evidence`` reads its evidence by it)."""
     from openexecutive.alerts.models import is_private_alert
 
     dedup_key = getattr(alert, "dedup_key", "") or ""
@@ -182,7 +190,7 @@ def _ref_of(alert: Any) -> tuple[str, str, str] | None:
     # reading is the event's.
     unnamed = _NAMED_SUFFIX_RE.sub("", dedup_key, count=1)
     for candidate in dict.fromkeys((unnamed, dedup_key)):
-        for kind in SUGGESTING:
+        for kind in kinds:
             prefix = f"private:erpnext:{kind}:"
             if candidate.startswith(prefix) and len(candidate) > len(prefix):
                 ref = candidate[len("private:"):]

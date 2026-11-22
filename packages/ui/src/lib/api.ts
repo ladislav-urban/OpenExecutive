@@ -5785,6 +5785,20 @@ export interface ProposalItem {
   // An ERP alert's document (integrations.erpnext_events.record_for), which
   // a host opens for the `open_record` action; null on every other card.
   record?: { doctype: string; name: string } | null;
+  // What moved: the records behind an ERP alert, as ERPNext sent them
+  // (integrations/erpnext_evidence.py). Every cell is shown as text; null on
+  // every other card.
+  evidence?: EvidenceTable[] | null;
+}
+
+export type EvidenceCell = string | number | { doctype: string; name: string } | null;
+
+export interface EvidenceTable {
+  heading: string;
+  // The table's money cells are in this currency; a bare number when null.
+  currency: string | null;
+  columns: { key: string; label: string; type: "text" | "money" | "number" | "percent" | "date" | "doc" }[];
+  rows: Record<string, EvidenceCell>[];
 }
 
 export type HomeLane = "needs_you" | "team" | "monitoring";

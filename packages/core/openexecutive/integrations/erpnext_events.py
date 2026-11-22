@@ -28,6 +28,11 @@ does. Fields are length-capped and the kinds are a fixed list.
 carry ``suggest``, the draft ERPNext's own fields make for it. It never
 reaches triage: ``erpnext_alert_drafts.remember`` keeps a well-formed one by
 the alert's ref, for the principal's "Prepare" button.
+
+**What moved** (finance extras): any event may carry ``evidence``, the
+records behind it in a fixed shape. It never reaches triage either:
+``erpnext_evidence.remember`` keeps a well-formed one by the alert's ref, for
+the alert's card, and drops the rest; the event is kept either way.
 """
 from __future__ import annotations
 
@@ -173,6 +178,9 @@ def parse_events(data: Any) -> list[dict[str, Any]]:
         # erpnext_alert_drafts.remember before it is stored.
         events.append({
             "kind": kind, "key": key, "title": title, "text": text, "suggest": raw.get("suggest"),
+            # The records behind it, if any: checked by erpnext_evidence.remember
+            # and never part of the text triage reads.
+            "evidence": raw.get("evidence"),
             "for_users": _for_users(raw.get("for_users")) if kind in NAMED_KINDS else [],
         })
     return events
@@ -236,7 +244,7 @@ def _schedule(event: dict[str, Any]) -> None:
     # One a month per rule and document (oe_connector resends at most
     # monthly), so a document can raise again after its alert is dismissed;
     # dedup_hint still keeps one open alert per document.
-    external_id = f"{ref}:{time.strftime('%Y-%m')}"
+    external_id = f"{ref}:{event.get('month') or time.strftime('%Y-%m')}"
     # The text names customers and suppliers in their own words (a web-form
     # sign-up names itself), so it reaches triage as untrusted content.
     details = wrap_untrusted(event["text"] or event["title"], source="erpnext", author="erpnext_alert")
@@ -263,7 +271,9 @@ def _schedule(event: dict[str, Any]) -> None:
                 # Computed as the service user: the principal's alone, and,
                 # for a kind that names its readers, theirs too.
                 private=True,
-                named_person_ids=named_person_ids(event.get("for_users") or []),
+                named_person_ids=(
+                    event["named_ids"] if "named_ids" in event else named_person_ids(event.get("for_users") or [])
+                ),
             )
         )
 
@@ -327,5 +337,18 @@ async def erpnext_events(request: Request) -> JSONResponse:
             from openexecutive.integrations.erpnext_alert_drafts import remember
 
             remember(event["kind"], event["key"], event["suggest"])
+        # Worked out once, so the alert and its evidence name the same month
+        # and the same readers.
+        event["month"] = time.strftime("%Y-%m")
+        event["named_ids"] = named_person_ids(event.get("for_users") or [])
+        from openexecutive.integrations import erpnext_evidence
+
+        try:
+            erpnext_evidence.remember(
+                event["kind"], event["key"], event["evidence"], readers=event["named_ids"]
+            )
+        except Exception:
+            # Evidence is extra: the event is raised whatever happens to it.
+            logger.exception("erpnext events: couldn't keep an event's evidence")
         _schedule(event)
     return JSONResponse({"accepted": len(events)})
