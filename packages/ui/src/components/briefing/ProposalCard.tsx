@@ -17,6 +17,7 @@ import CardAsk from "./CardAsk";
 import HeldActionCard from "./HeldActionCard";
 import LeadTrainingCard from "./LeadTrainingCard";
 import { Chip, TONE_TEXT, type ContinueHandler } from "./shared";
+import WhatMoved from "./WhatMoved";
 
 // A proposal body longer than about half this (chars) is clamped to two
 // lines under the headline while the card is closed, so the "Needs you"
@@ -435,6 +436,9 @@ export default function ProposalCard({
       {/* An ERPNext alert's suggested draft (a restock, a follow-up); renders
           nothing unless GET /erpnext/alert-drafts listed this alert. */}
       <ErpnextAlertDraftButton alertId={proposal.alert_id} />
+
+      {/* An ERP alert's records behind it, as ERPNext sent them. */}
+      {proposal.evidence && proposal.evidence.length > 0 && <WhatMoved tables={proposal.evidence} />}
 
       {expanded && (
         <div className="mt-3 space-y-2.5">

@@ -445,3 +445,19 @@ def test_a_demo_person_gets_open_beside_discuss_never_as_primary() -> None:
     )
     assert keys(actions) == ["discuss", "open_record"]
     assert not any(a.primary for a in actions)
+
+
+# An ERP alert that came with what moved (proposal.evidence): Ask why.
+
+def test_an_erp_alert_with_what_moved_asks_why_in_place_of_discuss() -> None:
+    table = SimpleNamespace(heading="Largest entries", currency="USD", columns=[], rows=[])
+    actions = offered(proposal(alert_id=42, headline="Marketing is over budget", evidence=[table]))
+    (ask,) = [a for a in actions if a.key == "discuss"]
+    assert ask.label == "Ask why"
+    assert ask.prompt is not None and ask.prompt.startswith("Why did this happen? Marketing is over budget")
+    assert "alert_id=42" in ask.prompt and "do not ack or dismiss" in ask.prompt
+    # The records themselves stay out of the chat seed.
+    assert "Largest entries" not in ask.prompt
+    assert ask.memory_text == 'Why did this happen.\n"Marketing is over budget"'
+    assert [a.label for a in offered(proposal()) if a.key == "discuss"] == ["Discuss"]
+    assert [a.label for a in offered(proposal(evidence=None)) if a.key == "discuss"] == ["Discuss"]
