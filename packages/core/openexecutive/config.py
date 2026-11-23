@@ -51,8 +51,12 @@ _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # header values its servers can ever send back.
 _TELEGRAM_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{1,256}")
 
-# ERPNEXT_WATCH_QUIET_HOURS: two 24-hour times, "HH:MM-HH:MM".
-_QUIET_HOURS_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d")
+# ERPNEXT_WATCH_QUIET_HOURS: two 24-hour times, "HH:MM-HH:MM", ASCII digits
+# only (time.fromisoformat, which reads it on every tick, takes no other).
+_QUIET_HOURS_RE = re.compile(r"(?:[01][0-9]|2[0-3]):[0-5][0-9]-(?:[01][0-9]|2[0-3]):[0-5][0-9]")
+# The longest quiet window: long enough for a nightly reset, short enough
+# that no slot is held for most of a day.
+QUIET_HOURS_MAX_MINUTES = 4 * 60
 
 
 def _blank_or_comment(v: Any) -> bool:
@@ -264,15 +268,22 @@ class Settings(BaseSettings):
     @field_validator("erpnext_watch_quiet_hours", mode="before")
     @classmethod
     def _parse_watch_quiet_hours(cls, v: Any) -> Any:
-        """Reject at boot a window that isn't ``HH:MM-HH:MM`` with two
-        different times, rather than run every job inside it unnoticed."""
+        """Reject at boot a window that isn't ``HH:MM-HH:MM``, ends before it
+        starts or at its start (one crossing midnight, or the two times
+        swapped, would hold a slot past its day, which then never runs), or
+        is longer than ``QUIET_HOURS_MAX_MINUTES``: so a slot held by it
+        always runs when it ends, the same day."""
+        from datetime import time
+
         if _blank_or_comment(v):
             return ""
         if not isinstance(v, str) or not _QUIET_HOURS_RE.fullmatch(v.strip()):
             raise ValueError("ERPNEXT_WATCH_QUIET_HOURS must be HH:MM-HH:MM, e.g. 07:30-09:30")
-        start, end = v.strip().split("-")
-        if start == end:
-            raise ValueError("ERPNEXT_WATCH_QUIET_HOURS must start and end at different times")
+        start, end = (time.fromisoformat(part) for part in v.strip().split("-"))
+        if end <= start:
+            raise ValueError("ERPNEXT_WATCH_QUIET_HOURS must end after it starts, on the same day")
+        if (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute) > QUIET_HOURS_MAX_MINUTES:
+            raise ValueError(f"ERPNEXT_WATCH_QUIET_HOURS may last at most {QUIET_HOURS_MAX_MINUTES // 60} hours")
         return v.strip()
 
     @field_validator("anthropic_workspace_id", mode="before")
@@ -1037,12 +1048,11 @@ class Settings(BaseSettings):
     # `watch_jobs` says. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
     erpnext_watch_jobs_enabled: bool = Field(False, alias="ERPNEXT_WATCH_JOBS_ENABLED")
     # Hours no scheduled watch job starts, "HH:MM-HH:MM" in the company's
-    # time zone (the one the jobs' schedules use), end not included; it may
-    # cross midnight. A slot that falls due inside them runs once they end,
-    # if that is still the same day (one due before midnight in a window
-    # crossing it is missed). Run once now isn't held. For a site whose
-    # ERPNext is unavailable at known hours (a nightly demo reset), where a
-    # read would fail. Empty (the default): none.
+    # time zone (the one the jobs' schedules use), end not included, within
+    # one day and at most 4 hours (refused at boot otherwise). A slot that
+    # falls due inside them runs once they end. Run once now isn't held. For
+    # a site whose ERPNext is unavailable at known hours (a nightly demo
+    # reset), where a read would fail. Empty (the default): none.
     erpnext_watch_quiet_hours: str = Field("", alias="ERPNEXT_WATCH_QUIET_HOURS")
     # The payment-checks job's block card (integrations/erpnext_block.py):
     # ERPNext's own Block Invoice on a submitted supplier invoice that likely

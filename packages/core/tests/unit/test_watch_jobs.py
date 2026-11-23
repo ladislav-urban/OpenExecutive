@@ -882,6 +882,9 @@ def test_quiet_hours_hold_a_once_a_day_job_until_they_end(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("ERPNEXT_WATCH_QUIET_HOURS", "06:30-07:30")
+    logged: list[str] = []
+    monkeypatch.setattr(runner.logger, "info", lambda msg, *a, **_k: logged.append(msg % a if a else msg))
+    monkeypatch.setattr(runner, "_quiet", False)
     erp.replies.append(_ar(("Acme Retail", 10.0)))
     assert _tick(datetime(2026, 11, 10, 7, 0, tzinfo=UTC)) == 0
     assert _tick(datetime(2026, 11, 10, 7, 29, 59, tzinfo=UTC)) == 0
@@ -889,6 +892,10 @@ def test_quiet_hours_hold_a_once_a_day_job_until_they_end(
     # The window's end isn't in it: the day's run starts then.
     assert _tick(datetime(2026, 11, 10, 7, 30, tzinfo=UTC)) == 1
     assert _run_row("example")["status"] == "done"
+    # One line as it began and one as it ended.
+    assert [m for m in logged if "quiet hours" in m] == [
+        "watch: quiet hours began at 07:00", "watch: quiet hours ended at 07:30",
+    ]
 
 
 def test_quiet_hours_move_a_slot_to_their_end_and_keep_the_others(
@@ -917,7 +924,7 @@ def test_quiet_hours_move_a_slot_to_their_end_and_keep_the_others(
 
 @pytest.mark.parametrize(("window", "inside", "outside"), [
     ("07:30-09:30", [time(7, 30), time(9, 29, 59)], [time(7, 29), time(9, 30), time(23, 0)]),
-    ("23:00-01:00", [time(23, 0), time(0, 0), time(0, 59)], [time(22, 59), time(1, 0), time(12, 0)]),
+    ("20:00-23:59", [time(20, 0), time(23, 58, 59)], [time(19, 59), time(23, 59), time(0, 0)]),
     ("", [], [time(0, 0), time(8, 0)]),
 ])
 def test_in_quiet_hours(
@@ -928,7 +935,15 @@ def test_in_quiet_hours(
     assert not any(watch_settings.in_quiet_hours(t) for t in outside)
 
 
-@pytest.mark.parametrize("bad", ["7:30-9:30", "07:30", "07:30-24:00", "07:30-07:30", "07:30 - 09:30", "x"])
+@pytest.mark.parametrize("bad", [
+    "7:30-9:30", "07:30", "07:30-24:00", "07:30-07:30", "07:30 - 09:30", "x",
+    # Swapped, or across midnight: a held slot would pass its day and never run.
+    "09:30-07:30", "23:00-01:00", "00:01-00:00",
+    # Longer than four hours.
+    "06:00-10:01", "00:00-23:59",
+    # A digit time.fromisoformat wouldn't read on every tick.
+    "0٧:30-09:30",
+])
 def test_a_quiet_hours_setting_not_in_its_shape_is_refused_at_boot(
     bad: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:

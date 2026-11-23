@@ -619,12 +619,17 @@ def _take_failure_notice(job_id: str, day: str, *, path: Path | None) -> bool:
 # --------------------------------------------------------------------------- #
 
 
+# Whether the last tick was inside ERPNEXT_WATCH_QUIET_HOURS (for its log lines).
+_quiet = False
+
+
 def maybe_run(now: datetime) -> int:
     """Start each job that is due today and not yet claimed, each in its own
     task. Returns how many started. Never raises. Inside
     ``ERPNEXT_WATCH_QUIET_HOURS`` none starts: a slot due then is still due
-    after them, and ``claim`` takes the day's latest due slot, so it runs at
-    the first tick once they end."""
+    after them (they end the same day, as config checks at boot), and
+    ``claim`` takes the day's latest due slot, so it runs at the first tick
+    once they end; a stale run is retaken then too."""
     try:
         if not master_on():
             return 0
@@ -632,7 +637,14 @@ def maybe_run(now: datetime) -> int:
         from openexecutive.memory.workspace_settings import get_user_timezone
 
         local = now.astimezone(get_user_timezone())
-        if in_quiet_hours(local.time()):
+        quiet = in_quiet_hours(local.time())
+        global _quiet
+        if quiet != _quiet:
+            # Once as the window opens and once as it ends, as the
+            # scheduler's other holds log, so a held start is never silent.
+            logger.info("watch: quiet hours %s at %s", "began" if quiet else "ended", local.strftime("%H:%M"))
+            _quiet = quiet
+        if quiet:
             return 0
         day = local.date().isoformat()
         started = 0
