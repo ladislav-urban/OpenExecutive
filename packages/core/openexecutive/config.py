@@ -282,6 +282,10 @@ class Settings(BaseSettings):
         start, end = (time.fromisoformat(part) for part in v.strip().split("-"))
         if end <= start:
             raise ValueError("ERPNEXT_WATCH_QUIET_HOURS must end after it starts, on the same day")
+        if end > time(23, 0):
+            # A slot held to the day's last minute could be stepped over by
+            # one slow tick and never run.
+            raise ValueError("ERPNEXT_WATCH_QUIET_HOURS must end by 23:00")
         if (end.hour * 60 + end.minute) - (start.hour * 60 + start.minute) > QUIET_HOURS_MAX_MINUTES:
             raise ValueError(f"ERPNEXT_WATCH_QUIET_HOURS may last at most {QUIET_HOURS_MAX_MINUTES // 60} hours")
         return v.strip()

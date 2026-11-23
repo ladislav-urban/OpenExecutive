@@ -924,7 +924,7 @@ def test_quiet_hours_move_a_slot_to_their_end_and_keep_the_others(
 
 @pytest.mark.parametrize(("window", "inside", "outside"), [
     ("07:30-09:30", [time(7, 30), time(9, 29, 59)], [time(7, 29), time(9, 30), time(23, 0)]),
-    ("20:00-23:59", [time(20, 0), time(23, 58, 59)], [time(19, 59), time(23, 59), time(0, 0)]),
+    ("19:00-23:00", [time(19, 0), time(22, 59, 59)], [time(18, 59), time(23, 0), time(0, 0)]),
     ("", [], [time(0, 0), time(8, 0)]),
 ])
 def test_in_quiet_hours(
@@ -941,6 +941,8 @@ def test_in_quiet_hours(
     "09:30-07:30", "23:00-01:00", "00:01-00:00",
     # Longer than four hours.
     "06:00-10:01", "00:00-23:59",
+    # Ending after 23:00: one slow tick could step over the release.
+    "20:00-23:59",
     # A digit time.fromisoformat wouldn't read on every tick.
     "0٧:30-09:30",
 ])

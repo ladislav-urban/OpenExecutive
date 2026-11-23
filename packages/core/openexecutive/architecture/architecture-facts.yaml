@@ -12402,7 +12402,8 @@ watch:
     it. config._parse_watch_quiet_hours refuses at boot another shape (ASCII
     digits only, as time.fromisoformat reads), an end at or before the start
     (swapped, or crossing midnight: a held slot would pass its day and never
-    run, with no row) and more than QUIET_HOURS_MAX_MINUTES (4 h), so no
+    run, with no row), an end after 23:00 (a slow tick could step over the
+    day's last minute) and more than QUIET_HOURS_MAX_MINUTES (4 h), so no
     slot is lost and none is held most of a day (security review). Why: on
     a demo site invoice capture's 09:00 slot fell inside the nightly demo
     reset and failed with ERPNext's error mid-rebuild (Nov 23, 2026); an
