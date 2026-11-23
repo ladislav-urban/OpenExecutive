@@ -259,7 +259,7 @@ def test_an_event_dropped_for_its_key_is_logged(site: SimpleNamespace, caplog: p
     bad = {"kind": "valuation_jump", "key": "Acme:CABLE#1:Stores", "title": "CABLE#1 valuation rose 30%", "text": ""}
     with caplog.at_level(logging.WARNING, logger="openexecutive.integrations.erpnext_events"):
         assert _post(site, {"events": [bad]}).json() == {"accepted": 0}
-    assert any("kind=valuation_jump" in r.getMessage() for r in caplog.records)
+    assert any("kind='valuation_jump'" in r.getMessage() for r in caplog.records)
     assert not any("CABLE" in r.getMessage() for r in caplog.records)
 
 

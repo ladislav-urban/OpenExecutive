@@ -198,7 +198,7 @@ def parse_events(data: Any) -> list[dict[str, Any]]:
         if kind not in KINDS or not isinstance(key, str) or not _KEY_RE.fullmatch(key) or not title:
             # Logged by kind only: a key built from names (an item, a warehouse)
             # that isn't in the shape would otherwise vanish without a trace.
-            logger.warning("erpnext events: dropped an event not in the shape kind=%.40s", kind)
+            logger.warning("erpnext events: dropped an event not in the shape kind=%s", repr(kind)[:40])
             continue
         if kind == "overnight_postings":
             if not _OVERNIGHT_KEY_RE.fullmatch(key) or not _OVERNIGHT_TITLE_RE.fullmatch(title):
