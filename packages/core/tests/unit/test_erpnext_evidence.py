@@ -315,3 +315,63 @@ def test_the_overnight_event_keeps_its_evidence_out_of_triage(alerts_db: Path, s
     assert "ran overnight" not in event.body and "Overnight: 1 failed, 1 to check" in event.body
     shown = evidence.evidence_for(_alert(OVERNIGHT["kind"], OVERNIGHT["key"]))
     assert shown == OVERNIGHT["evidence"]
+
+
+# purchase_price_rise and valuation_jump as oe_connector's movements.py builds them.
+PRICE_RISE = {
+    "kind": "purchase_price_rise",
+    "key": "ACC-PINV-2026-00041",
+    "title": "ACC-PINV-2026-00041: DEMO-CBL-100 18% above its usual price",
+    "text": "Purchase invoice ACC-PINV-2026-00041 from Bolt Supply prices 1 item(s) at least 10% above their average.",
+    "evidence": [{
+        "heading": "Above their usual price (the 90 days before)",
+        "currency": "USD",
+        "columns": [
+            {"key": "item", "label": "Item", "type": "text"},
+            {"key": "rate", "label": "Rate now", "type": "money"},
+            {"key": "usual", "label": "Usual rate", "type": "money"},
+            {"key": "rise", "label": "Above usual", "type": "percent"},
+            {"key": "lines", "label": "Lines before", "type": "number"},
+            {"key": "same_supplier", "label": "Same supplier", "type": "text"},
+        ],
+        "rows": [{"item": "DEMO-CBL-100", "rate": 41.3, "usual": 35.0, "rise": 18.0, "lines": 6,
+                  "same_supplier": "no, last from Orion Switchgear"}],
+    }],
+}
+VALUATION_JUMP = {
+    "kind": "valuation_jump",
+    "key": "valuation_jump:0123456789abcdef01234567",
+    "title": "DEMO-PNL-12 valuation rose 35% in Stores - ACD",
+    "text": "The valuation rate of DEMO-PNL-12 in Stores - ACD moved from $112.00 to $151.20 on 2026-11-22.",
+    "evidence": [{
+        "heading": "The entries that moved it",
+        "currency": "USD",
+        "columns": [
+            {"key": "document", "label": "Document", "type": "doc"},
+            {"key": "qty", "label": "Quantity", "type": "number"},
+            {"key": "incoming_rate", "label": "Incoming rate", "type": "money"},
+            {"key": "valuation_rate", "label": "Valuation after", "type": "money"},
+        ],
+        "rows": [{"document": {"doctype": "Purchase Receipt", "name": "MAT-PRE-2026-00019"}, "qty": 20.0,
+                  "incoming_rate": 1120.0, "valuation_rate": 151.2}],
+    }],
+}
+
+
+@pytest.mark.parametrize("event", [PRICE_RISE, VALUATION_JUMP])
+def test_a_movement_events_evidence_is_kept_out_of_triage_and_shown(
+    alerts_db: Path, site: SimpleNamespace, event: dict[str, Any],
+) -> None:
+    assert _post(site, {"events": [event]}).json() == {"accepted": 1}
+    (scheduled,) = site.scheduled
+    assert scheduled.private is True
+    assert "Usual rate" not in scheduled.body and "Valuation after" not in scheduled.body
+    assert evidence.evidence_for(_alert(event["kind"], event["key"])) == event["evidence"]
+
+
+def test_a_price_rise_opens_its_invoice_and_a_valuation_jump_opens_nothing(alerts_db: Path) -> None:
+    from openexecutive.integrations.erpnext_events import record_for
+
+    rise = _alert(PRICE_RISE["kind"], PRICE_RISE["key"])
+    assert record_for(rise) == {"doctype": "Purchase Invoice", "name": "ACC-PINV-2026-00041"}
+    assert record_for(_alert(VALUATION_JUMP["kind"], VALUATION_JUMP["key"])) is None

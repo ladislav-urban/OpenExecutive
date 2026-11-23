@@ -1,0 +1,64 @@
+{
+ "about": "Shared cases for the valuation_jump alert's key (oe_connector/movements.py, valuation_key). The key is \"valuation_jump:\" plus the first 24 hex characters of the SHA-256 of the UTF-8 bytes of json.dumps([company, item_code, warehouse], ensure_ascii=False, separators=(\",\", \":\")): fixed at 39 characters, so never cut, unambiguous whatever the names hold, and always inside OpenExecutive's key charset. The title and evidence name the item and warehouse; the key only de-duplicates. OpenExecutive accepts a valuation_jump event only when its key fullmatches key_pattern, and drops any other (ladislav-urban/OpenExecutive#294, piece 3); it never recomputes the hash. This file is byte-identical in both repositories: a change lands in both together. oe_connector checks valuation_key gives every produced key exactly and that each fullmatches key_pattern; OpenExecutive checks its pattern equals key_pattern, accepts every produced key and drops every rejected one.",
+ "key_pattern": "valuation_jump:[0-9a-f]{24}",
+ "produced": [
+  {
+   "company": "Aurora",
+   "item_code": "REEL",
+   "warehouse": "Stores",
+   "key": "valuation_jump:09108a0b14e6505a6ef485da"
+  },
+  {
+   "company": "Acme Ltd",
+   "item_code": "BOLT-M8",
+   "warehouse": "Stores - AL",
+   "key": "valuation_jump:8bf1b2525e2a2e57b448945c"
+  },
+  {
+   "company": "A:B",
+   "item_code": "C",
+   "warehouse": "D",
+   "key": "valuation_jump:cc02239d5d596d6a44616be9"
+  },
+  {
+   "company": "A",
+   "item_code": "B:C",
+   "warehouse": "D",
+   "key": "valuation_jump:e9d8d17e1c5e7f6c75fd2727"
+  },
+  {
+   "company": "Acme Ltd",
+   "item_code": "PART#12 [old]!",
+   "warehouse": "Main; \"Bay\" ?",
+   "key": "valuation_jump:25115467e56cb307d2212274"
+  },
+  {
+   "company": "Société Générale",
+   "item_code": "Écrou ø8 – 黑",
+   "warehouse": "Entrepôt - SG",
+   "key": "valuation_jump:20dfbc3a15b2bf3b2edb4c27"
+  },
+  {
+   "company": "Acme Ltd",
+   "item_code": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+   "warehouse": "WWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWWW",
+   "key": "valuation_jump:d1effc0938a71ac8b8197712"
+  },
+  {
+   "company": "Acme Ltd",
+   "item_code": "",
+   "warehouse": "Stores - AL",
+   "key": "valuation_jump:06553928b29d4e5eed903a4b"
+  }
+ ],
+ "rejected": [
+  "Aurora:REEL:Stores",
+  "valuation_jump:09108A0B14E6505A6EF485DA",
+  "valuation_jump:09108a0b14e6505a6ef485d",
+  "valuation_jump:09108a0b14e6505a6ef485da0",
+  "valuation_jump:Aurora:REEL:Stores",
+  "valuation_jump:",
+  " valuation_jump:09108a0b14e6505a6ef485da",
+  ""
+ ]
+}

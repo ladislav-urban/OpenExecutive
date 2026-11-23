@@ -83,6 +83,17 @@ PAYLOADS: dict[str, dict[str, Any]] = {
         "title": "Overnight: 1 failed, 1 to check",
         "text": "ERPNext's scheduled jobs ran overnight; one failed and one result looks wrong.",
     },
+    "purchase_price_rise": {
+        "key": "ACC-PINV-2026-00041",
+        "title": "ACC-PINV-2026-00041: DEMO-CBL-100 18% above its usual price",
+        "text": "Purchase invoice ACC-PINV-2026-00041 from Bolt Supply prices 1 item(s) at least 10% above "
+                "their average: DEMO-CBL-100 at $41.30 a unit against $35.00.",
+    },
+    "valuation_jump": {
+        "key": "valuation_jump:0123456789abcdef01234567",
+        "title": "DEMO-PNL-12 valuation rose 35% in Stores - AC",
+        "text": "The valuation rate of DEMO-PNL-12 in Stores - AC moved from $112.00 to $151.20 on 2026-11-22.",
+    },
 }
 
 

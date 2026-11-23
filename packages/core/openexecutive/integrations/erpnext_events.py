@@ -78,6 +78,12 @@ KINDS: dict[str, str] = {
     "overnight_postings": (
         "ERPNext's unattended overnight postings, where a scheduled job failed or a result looks wrong"
     ),
+    # A submitted purchase invoice pricing items well above their average on
+    # the company's purchase invoices of the months before; keyed by it.
+    "purchase_price_rise": "a purchase invoice pricing items well above what they usually cost",
+    # Yesterday's valuation rate of an item in a warehouse moving well up or
+    # down; keyed by a hash of company, item and warehouse, once a month.
+    "valuation_jump": "an item's valuation rate in a warehouse moving sharply in one day",
 }
 # The kinds whose event may name who it is for (``for_users``): the ERPNext
 # users oe_connector checked can read everything the text says. Each is
@@ -105,6 +111,10 @@ _MAX_TEXT = 1500
 # dropped and the title stands for it, so nothing from a log can reach triage
 # or the alert even if the site's rule ever sent it.
 _OVERNIGHT_KEY_RE = re.compile(r"overnight:\d{4}-\d{2}-\d{2}")
+# valuation_jump is keyed by a hash of its company, item and warehouse
+# (oe_connector's movements.py), so names with colons or odd characters
+# neither collide nor fall outside _KEY_RE; any other key is dropped.
+_VALUATION_KEY_RE = re.compile(r"valuation_jump:[0-9a-f]{24}")
 _OVERNIGHT_TITLE_RE = re.compile(r"Overnight: (?:\d{1,4} failed(?:, \d{1,4} to check)?|\d{1,4} to check)")
 
 _ledger = JtiLedger()
@@ -137,6 +147,7 @@ def _record_name(kind: str, key: str) -> str:
 RECORD_DOCTYPES: dict[str, str] = {
     "overdue_receivable": "Sales Invoice",
     "large_purchase_invoice": "Purchase Invoice",
+    "purchase_price_rise": "Purchase Invoice",
     "stock_below_reorder": "Item",
     "stalled_repost": "Repost Item Valuation",
 }
@@ -185,12 +196,18 @@ def parse_events(data: Any) -> list[dict[str, Any]]:
         kind, key = raw.get("kind"), raw.get("key")
         title, text = _text(raw.get("title"), _MAX_TITLE), _text(raw.get("text"), _MAX_TEXT)
         if kind not in KINDS or not isinstance(key, str) or not _KEY_RE.fullmatch(key) or not title:
+            # Logged by kind only: a key built from names (an item, a warehouse)
+            # that isn't in the shape would otherwise vanish without a trace.
+            logger.warning("erpnext events: dropped an event not in the shape kind=%s", repr(kind)[:40])
             continue
         if kind == "overnight_postings":
             if not _OVERNIGHT_KEY_RE.fullmatch(key) or not _OVERNIGHT_TITLE_RE.fullmatch(title):
                 logger.warning("erpnext events: an overnight_postings event not in its fixed shape was dropped")
                 continue
             text = ""
+        if kind == "valuation_jump" and not _VALUATION_KEY_RE.fullmatch(key):
+            logger.warning("erpnext events: a valuation_jump event not keyed by its hash was dropped")
+            continue
         # The draft it suggests, if any: kept as sent, checked by
         # erpnext_alert_drafts.remember before it is stored.
         events.append({

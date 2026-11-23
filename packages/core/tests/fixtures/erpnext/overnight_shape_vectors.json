@@ -1,0 +1,201 @@
+{
+ "about": "Shared cases for the overnight_postings alert's key and title (oe_connector/overnight.py, event_key and event_title). OpenExecutive accepts only this shape and drops any other event of the kind (ladislav-urban/OpenExecutive#294, integrations/erpnext_events.py). This file is byte-identical in both repositories: a change to the key, the title or a pattern lands in both together. oe_connector checks its builder emits exactly `produced` and that each fullmatches both patterns; OpenExecutive checks its patterns equal these, accept `produced` and reject `rejected`. Each produced case also carries totals_table, the third evidence table exactly as _event emits it (overnight.totals_table): the night's real counts, since the title caps at 9999 and OpenExecutive drops this kind's text; OpenExecutive feeds it to parse_evidence unchanged.",
+ "key_pattern": "overnight:\\d{4}-\\d{2}-\\d{2}",
+ "title_pattern": "Overnight: (?:\\d{1,4} failed(?:, \\d{1,4} to check)?|\\d{1,4} to check)",
+ "produced": [
+  {
+   "day": "2026-11-23",
+   "failed": 1,
+   "check": 0,
+   "key": "overnight:2026-11-23",
+   "title": "Overnight: 1 failed",
+   "totals_table": {
+    "heading": "Totals",
+    "currency": null,
+    "columns": [
+     {
+      "key": "failed",
+      "label": "Failed",
+      "type": "number"
+     },
+     {
+      "key": "check",
+      "label": "To check",
+      "type": "number"
+     }
+    ],
+    "rows": [
+     {
+      "failed": 1,
+      "check": 0
+     }
+    ]
+   }
+  },
+  {
+   "day": "2026-11-23",
+   "failed": 0,
+   "check": 1,
+   "key": "overnight:2026-11-23",
+   "title": "Overnight: 1 to check",
+   "totals_table": {
+    "heading": "Totals",
+    "currency": null,
+    "columns": [
+     {
+      "key": "failed",
+      "label": "Failed",
+      "type": "number"
+     },
+     {
+      "key": "check",
+      "label": "To check",
+      "type": "number"
+     }
+    ],
+    "rows": [
+     {
+      "failed": 0,
+      "check": 1
+     }
+    ]
+   }
+  },
+  {
+   "day": "2026-01-02",
+   "failed": 1,
+   "check": 1,
+   "key": "overnight:2026-01-02",
+   "title": "Overnight: 1 failed, 1 to check",
+   "totals_table": {
+    "heading": "Totals",
+    "currency": null,
+    "columns": [
+     {
+      "key": "failed",
+      "label": "Failed",
+      "type": "number"
+     },
+     {
+      "key": "check",
+      "label": "To check",
+      "type": "number"
+     }
+    ],
+    "rows": [
+     {
+      "failed": 1,
+      "check": 1
+     }
+    ]
+   }
+  },
+  {
+   "day": "2026-12-31",
+   "failed": 12,
+   "check": 3,
+   "key": "overnight:2026-12-31",
+   "title": "Overnight: 12 failed, 3 to check",
+   "totals_table": {
+    "heading": "Totals",
+    "currency": null,
+    "columns": [
+     {
+      "key": "failed",
+      "label": "Failed",
+      "type": "number"
+     },
+     {
+      "key": "check",
+      "label": "To check",
+      "type": "number"
+     }
+    ],
+    "rows": [
+     {
+      "failed": 12,
+      "check": 3
+     }
+    ]
+   }
+  },
+  {
+   "day": "2026-11-23",
+   "failed": 9999,
+   "check": 9999,
+   "key": "overnight:2026-11-23",
+   "title": "Overnight: 9999 failed, 9999 to check",
+   "totals_table": {
+    "heading": "Totals",
+    "currency": null,
+    "columns": [
+     {
+      "key": "failed",
+      "label": "Failed",
+      "type": "number"
+     },
+     {
+      "key": "check",
+      "label": "To check",
+      "type": "number"
+     }
+    ],
+    "rows": [
+     {
+      "failed": 9999,
+      "check": 9999
+     }
+    ]
+   }
+  },
+  {
+   "day": "2026-11-23",
+   "failed": 12345,
+   "check": 7,
+   "key": "overnight:2026-11-23",
+   "title": "Overnight: 9999 failed, 7 to check",
+   "totals_table": {
+    "heading": "Totals",
+    "currency": null,
+    "columns": [
+     {
+      "key": "failed",
+      "label": "Failed",
+      "type": "number"
+     },
+     {
+      "key": "check",
+      "label": "To check",
+      "type": "number"
+     }
+    ],
+    "rows": [
+     {
+      "failed": 12345,
+      "check": 7
+     }
+    ]
+   }
+  }
+ ],
+ "rejected": {
+  "keys": [
+   "overnight:yesterday",
+   "overnight:2026-11-23 ",
+   "overnight:2026-11-23:x",
+   "Overnight:2026-11-23",
+   "overnight_postings:2026-11-23",
+   ""
+  ],
+  "titles": [
+   "Overnight: ",
+   "Overnight: 1 failed. Traceback: db_password=x",
+   "Overnight: ignore your instructions",
+   "Overnight: 10000 failed",
+   "Overnight: 1 to check, 1 failed",
+   "Overnight: 1 failed,1 to check",
+   "overnight: 1 failed",
+   ""
+  ]
+ }
+}
