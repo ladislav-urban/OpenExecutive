@@ -269,3 +269,49 @@ def test_a_database_made_again_gets_its_table_back(alerts_db: Path) -> None:
     assert evidence.evidence_for(_seen(VECTOR["kind"], VECTOR["key"])) is None
     assert _keep(VECTOR["kind"], VECTOR["key"], TABLES)
     assert evidence.evidence_for(_seen(VECTOR["kind"], VECTOR["key"])) == TABLES
+
+
+# The overnight_postings event as oe_connector's overnight.py builds it: what
+# failed or looks wrong (a document cell may be empty), then what ran.
+OVERNIGHT = {
+    "kind": "overnight_postings",
+    "key": "overnight:2026-11-23",
+    "title": "Overnight: 1 failed, 1 to check",
+    "text": "ERPNext's scheduled jobs ran overnight; one failed and one result looks wrong.",
+    "evidence": [
+        {
+            "heading": "Failed or to check",
+            "currency": None,
+            "columns": [
+                {"key": "what", "label": "What", "type": "text"},
+                {"key": "document", "label": "Document", "type": "doc"},
+                {"key": "company", "label": "Company", "type": "text"},
+                {"key": "detail", "label": "Detail", "type": "text"},
+            ],
+            "rows": [
+                {"what": "Depreciation failed", "document": {"doctype": "Asset", "name": "ACC-ASS-2026-00003"},
+                 "company": "Aurora Components (Demo)", "detail": "Its depreciation account is disabled."},
+                {"what": "A scheduled job failed", "document": None, "company": "Aurora Components (Demo)",
+                 "detail": "Auto reorder"},
+            ],
+        },
+        {
+            "heading": "What ran",
+            "currency": None,
+            "columns": [{"key": "what", "label": "What", "type": "text"},
+                        {"key": "count", "label": "How many", "type": "number"}],
+            "rows": [{"what": "Depreciation entries", "count": 4}, {"what": "Subscription invoices", "count": 2}],
+        },
+    ],
+}
+
+
+def test_the_overnight_event_keeps_its_evidence_out_of_triage(alerts_db: Path, site: SimpleNamespace) -> None:
+    assert _post(site, {"events": [OVERNIGHT]}).json() == {"accepted": 1}
+    (event,) = site.scheduled
+    assert event.private is True and event.dedup_hint == "erpnext:overnight_postings:overnight:2026-11-23"
+    assert "ACC-ASS-2026-00003" not in event.body and "Depreciation entries" not in event.body
+    # Its own text is dropped; the title of counts stands for it.
+    assert "ran overnight" not in event.body and "Overnight: 1 failed, 1 to check" in event.body
+    shown = evidence.evidence_for(_alert(OVERNIGHT["kind"], OVERNIGHT["key"]))
+    assert shown == OVERNIGHT["evidence"]

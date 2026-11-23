@@ -78,6 +78,11 @@ PAYLOADS: dict[str, dict[str, Any]] = {
         "text": "Acme's open balance plus SO-0001 is 2,000.00 EUR over the limit.",
         "for_users": ["sara@example.com"],
     },
+    "overnight_postings": {
+        "key": "overnight:2026-11-23",
+        "title": "Overnight: 1 failed, 1 to check",
+        "text": "ERPNext's scheduled jobs ran overnight; one failed and one result looks wrong.",
+    },
 }
 
 
