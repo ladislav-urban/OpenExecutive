@@ -29,7 +29,7 @@ import logging
 import sqlite3
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -723,6 +723,20 @@ def master_on() -> bool:
     from openexecutive.config import get_settings
 
     return bool(get_settings().erpnext_watch_jobs_enabled)
+
+
+def in_quiet_hours(now: time) -> bool:
+    """Whether ``now`` (the company's local time) is inside
+    ``ERPNEXT_WATCH_QUIET_HOURS``: from its start, up to but not including its
+    end, across midnight when the end comes first. Unset: never."""
+    from openexecutive.config import get_settings
+
+    window = get_settings().erpnext_watch_quiet_hours
+    if not window:
+        return False
+    start, end = (time.fromisoformat(part) for part in window.split("-"))
+    at = now.replace(second=0, microsecond=0, tzinfo=None)
+    return start <= at < end if start < end else at >= start or at < end
 
 
 def job_enabled(job_id: str, *, path: Path | None = None) -> bool:

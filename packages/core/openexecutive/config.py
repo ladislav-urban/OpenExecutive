@@ -51,6 +51,9 @@ _WORKSPACE_ID_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 # header values its servers can ever send back.
 _TELEGRAM_SECRET_RE = re.compile(r"[A-Za-z0-9_-]{1,256}")
 
+# ERPNEXT_WATCH_QUIET_HOURS: two 24-hour times, "HH:MM-HH:MM".
+_QUIET_HOURS_RE = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d-(?:[01]\d|2[0-3]):[0-5]\d")
+
 
 def _blank_or_comment(v: Any) -> bool:
     """True for unset, '', or a dotenv inline-comment captured as the value.
@@ -257,6 +260,20 @@ class Settings(BaseSettings):
     # Audio sent to the speech server per UTC day, in MB (0 = no limit). The
     # servers bill by length, which a file can misstate; bytes it can't.
     transcription_max_mb_per_day: int = Field(200, alias="TRANSCRIPTION_MAX_MB_PER_DAY")
+
+    @field_validator("erpnext_watch_quiet_hours", mode="before")
+    @classmethod
+    def _parse_watch_quiet_hours(cls, v: Any) -> Any:
+        """Reject at boot a window that isn't ``HH:MM-HH:MM`` with two
+        different times, rather than run every job inside it unnoticed."""
+        if _blank_or_comment(v):
+            return ""
+        if not isinstance(v, str) or not _QUIET_HOURS_RE.fullmatch(v.strip()):
+            raise ValueError("ERPNEXT_WATCH_QUIET_HOURS must be HH:MM-HH:MM, e.g. 07:30-09:30")
+        start, end = v.strip().split("-")
+        if start == end:
+            raise ValueError("ERPNEXT_WATCH_QUIET_HOURS must start and end at different times")
+        return v.strip()
 
     @field_validator("anthropic_workspace_id", mode="before")
     @classmethod
@@ -1019,6 +1036,14 @@ class Settings(BaseSettings):
     # ERPNext jobs defined in code. Off, no job runs whatever its row in
     # `watch_jobs` says. Needs ERPNEXT_CALLER_PRIVATE_KEY; off by default.
     erpnext_watch_jobs_enabled: bool = Field(False, alias="ERPNEXT_WATCH_JOBS_ENABLED")
+    # Hours no scheduled watch job starts, "HH:MM-HH:MM" in the company's
+    # time zone (the one the jobs' schedules use), end not included; it may
+    # cross midnight. A slot that falls due inside them runs once they end,
+    # if that is still the same day (one due before midnight in a window
+    # crossing it is missed). Run once now isn't held. For a site whose
+    # ERPNext is unavailable at known hours (a nightly demo reset), where a
+    # read would fail. Empty (the default): none.
+    erpnext_watch_quiet_hours: str = Field("", alias="ERPNEXT_WATCH_QUIET_HOURS")
     # The payment-checks job's block card (integrations/erpnext_block.py):
     # ERPNext's own Block Invoice on a submitted supplier invoice that likely
     # repeats another, approved by the job's reviewer. The one card that

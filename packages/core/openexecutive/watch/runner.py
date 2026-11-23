@@ -93,6 +93,7 @@ from openexecutive.watch.settings import (
     connect,
     effective_settings,
     get_row,
+    in_quiet_hours,
     job_enabled,
     master_on,
     take_day,
@@ -620,7 +621,10 @@ def _take_failure_notice(job_id: str, day: str, *, path: Path | None) -> bool:
 
 def maybe_run(now: datetime) -> int:
     """Start each job that is due today and not yet claimed, each in its own
-    task. Returns how many started. Never raises."""
+    task. Returns how many started. Never raises. Inside
+    ``ERPNEXT_WATCH_QUIET_HOURS`` none starts: a slot due then is still due
+    after them, and ``claim`` takes the day's latest due slot, so it runs at
+    the first tick once they end."""
     try:
         if not master_on():
             return 0
@@ -628,6 +632,8 @@ def maybe_run(now: datetime) -> int:
         from openexecutive.memory.workspace_settings import get_user_timezone
 
         local = now.astimezone(get_user_timezone())
+        if in_quiet_hours(local.time()):
+            return 0
         day = local.date().isoformat()
         started = 0
         for job in list(registry.JOBS.values()):
