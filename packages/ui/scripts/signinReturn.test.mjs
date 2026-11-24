@@ -6,12 +6,17 @@ import test from "node:test";
 
 import {
   FAILED_PARAM,
+  REPLACE_COOKIE,
+  RETURN_COOKIE,
   failedTarget,
+  replaceMark,
+  replaceMarked,
   hintOf,
   loginHint,
   otherPerson,
   ownNavigation,
   returnTarget,
+  signInPass,
   signOutTarget,
 } from "../src/lib/signinReturn.ts";
 
@@ -84,7 +89,8 @@ test("the routes check `to` both ways and never trust the hop", () => {
   const back = read("../src/app/signin/return/route.ts");
   assert.match(sso, /const to = returnTarget\(params\.get\("to"\), HOST_ORIGINS\.origins\);/);
   assert.match(back, /returnTarget\(new URL\(request\.url\)\.searchParams\.get\("to"\), HOST_ORIGINS\.origins\)/);
-  assert.match(sso, /httpOnly: true/);
+  // The cookies /signin/sso sets (signInPass): HttpOnly, both of them.
+  assert.equal(read("../src/lib/signinReturn.ts").match(/httpOnly: true/g)?.length, 2);
   assert.match(read("../src/app/signin/page.tsx"), /redirect\("\/signin\/sso\?failed=1"\)/);
 });
 
@@ -152,11 +158,93 @@ test("the sign-in takes hint or login_hint, and replaces only someone else's ses
   assert.equal(otherPerson(" B@Example.com ", "b@example.com"), false);
   // No hint: whoever is signed in stays, as before.
   assert.equal(otherPerson("a@example.com", undefined), false);
+});
+
+// signInPass (what /signin/sso does once `to` is checked) with Auth.js's
+// actions replaced by a log; the real ones run in signinSsoReplace.test.mjs.
+const KEY = "k".repeat(32);
+const T = Date.UTC(2026, 10, 24, 12);
+async function pass({ session, hint = "a@example.com", ownTab = true, cookies = {}, secret = KEY, now = T }) {
+  const log = [];
+  const set = new Map();
+  const straightBack = await signInPass({
+    to: "https://erp.example.com/desk/dynocortex-home",
+    hint,
+    session,
+    ownTab,
+    secure: true,
+    secret,
+    now,
+    cookies: {
+      get: (name) => (set.has(name) ? { value: set.get(name) } : name in cookies ? { value: cookies[name] } : undefined),
+      set: (name, value) => set.set(name, value),
+    },
+    signOut: async (back) => log.push(["signOut", back]),
+    signIn: async (back) => log.push(["signIn", back]),
+  });
+  return { straightBack, log, set };
+}
+const DESK_PAGE = "https://erp.example.com/desk/dynocortex-home";
+const BACK = `/signin/return?to=${encodeURIComponent(DESK_PAGE)}`;
+
+test("signInPass ends someone else's session only from the person's own tab, then signs in", async () => {
+  // No session: the sign-in starts, remembering `to`; nobody is signed out.
+  let r = await pass({ session: null });
+  assert.deepEqual(r.log, [["signIn", BACK]]);
+  assert.equal(r.straightBack, null);
+  assert.equal(r.set.get(RETURN_COOKIE), DESK_PAGE);
+  assert.equal(r.set.has(REPLACE_COOKIE), false);
+  // Already the host's user, or no hint: straight back, nothing else.
+  // ("" stands for no hint here: hintOf gives undefined, which `pass` would default.)
+  for (const [email, hint] of [["A@Example.com", "a@example.com"], ["b@example.com", ""]]) {
+    r = await pass({ session: { email }, hint });
+    assert.deepEqual([r.straightBack, r.log, r.set.size], [DESK_PAGE, [], 0], `${email} ${hint}`);
+  }
+  // Someone else, but not the person's own tab (an image, a frame, a prefetch): kept.
+  r = await pass({ session: { email: "b@example.com" }, ownTab: false });
+  assert.deepEqual([r.straightBack, r.log, r.set.size], [DESK_PAGE, [], 0]);
+  // Someone else from the person's own tab: marked, signed out, then signed in,
+  // both with the same way back.
+  const B = { email: "b@example.com" };
+  r = await pass({ session: B });
+  assert.deepEqual(r.log, [["signOut", BACK], ["signIn", BACK]]);
+  const mark = r.set.get(REPLACE_COOKIE);
+  assert.equal(await replaceMarked(mark, KEY, "a@example.com", "b@example.com", T), true);
+  assert.doesNotMatch(mark, /@/, "the value names no one in the clear");
+  // That mark, within the minute, with B found again: kept, straight back.
+  r = await pass({ session: B, cookies: { [REPLACE_COOKIE]: mark }, now: T + 59_000 });
+  assert.deepEqual([r.straightBack, r.log, r.set.size], [DESK_PAGE, [], 0]);
+});
+
+test("signInPass honours only its own signed mark, in its minute, for that host user and person", async () => {
+  const B = { email: "b@example.com" };
+  const replaced = [["signOut", BACK], ["signIn", BACK]];
+  const fresh = await replaceMark(KEY, "a@example.com", "b@example.com", T);
+  for (const [why, cookies, opts] of [
+    ["planted in the clear", { [REPLACE_COOKIE]: "a@example.com" }, {}],
+    ["planted, any shape", { [REPLACE_COOKIE]: `${T + 30_000}.${"A".repeat(43)}` }, {}],
+    ["past its minute", { [REPLACE_COOKIE]: fresh }, { now: T + 60_000 }],
+    ["dated too far ahead", { [REPLACE_COOKIE]: await replaceMark(KEY, "a@example.com", "b@example.com", T + 3_600_000) }, {}],
+    ["for another host user", { [REPLACE_COOKIE]: await replaceMark(KEY, "c@example.com", "b@example.com", T) }, {}],
+    ["for another person's session", { [REPLACE_COOKIE]: await replaceMark(KEY, "a@example.com", "d@example.com", T) }, {}],
+    ["signed with another key", { [REPLACE_COOKIE]: await replaceMark("x".repeat(32), "a@example.com", "b@example.com", T) }, {}],
+  ]) {
+    const r = await pass({ session: B, cookies, ...opts });
+    assert.deepEqual(r.log, replaced, why);
+  }
+  // Without a secret no mark is set or honoured: every pass replaces, as before.
+  const r = await pass({ session: B, cookies: { [REPLACE_COOKIE]: fresh }, secret: null });
+  assert.deepEqual(r.log, replaced);
+  assert.equal(r.set.has(REPLACE_COOKIE), false);
+  // The email's case and spaces don't matter, as with otherPerson.
+  assert.equal(await replaceMarked(fresh, KEY, "a@example.com", " B@Example.com ", T + 1), true);
+});
+
+test("/signin/sso decides only through signInPass, with the session the middleware accepts", () => {
   const sso = read("../src/app/signin/sso/route.ts");
-  assert.match(
-    sso,
-    /if \(!otherPerson\(session\.user\?\.email, hint\) \|\| !ownNavigation\(request\.headers\)\) return Response\.redirect\(to\);\r?\n(?:\s*\/\/[^\n]*\n)+\s*await signOut\(\{ redirect: false, redirectTo: back \}\);/,
-  );
+  assert.match(sso, /session && \(await sessionStillAllowed\(session, \(await headers\(\)\)\.get\("host"\)\)\) \? session : null/);
+  assert.match(sso, /session: live \? \{ email: live\.user\?\.email \} : null,/);
+  assert.doesNotMatch(sso, /otherPerson\(|get\(REPLACE_COOKIE|await signOut\(/, "the rules live in signInPass");
 });
 
 test("only the person's own tab, opened same-site or from the address bar, may end a session", () => {
