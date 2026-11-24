@@ -5,14 +5,12 @@ import { HOST_ORIGINS } from "@/lib/hostConfig";
 import { OIDC_PROVIDER_ID } from "@/lib/oidc";
 import {
   RETURN_COOKIE,
-  RETURN_COOKIE_MAX_AGE_S,
   RETURN_COOKIE_PATH,
   failedTarget,
   hintOf,
-  otherPerson,
   ownNavigation,
-  returnPath,
   returnTarget,
+  signInPass,
 } from "@/lib/signinReturn";
 
 // A host origin's page signs in to this app and comes straight back, top
@@ -26,12 +24,16 @@ import {
 //   middleware still accepts: straight back to `to`.
 // - Signed in as someone else (54.a, Nov 5, 2026: the session outlived the
 //   provider session it came from, and the desk showed A's assistant beside
-//   B's desk): that session is ended here, and the sign-in below runs.
+//   B's desk): that session is ended here, and the sign-in below runs. At most
+//   once a minute for the same host user (REPLACE_COOKIE): a provider that
+//   still answers as the other person sends the tab back to the host's page,
+//   signed in as that person, rather than round again.
 // - Otherwise the identity provider's sign-in starts at once (OIDC only), with
 //   the host's user as `login_hint`. It returns through /signin/return, which
 //   checks `to` again. A cookie remembers `to` for ten minutes, so that a
 //   provider's refusal, which Auth.js sends to /signin, can come back here as
 //   `?failed=1` and return to the host's page with `oe_signin=failed`.
+// The steps after `to` is checked are signInPass (lib/signinReturn.ts).
 //
 // Session-free (lib/middlewarePaths.ts): it is how someone without a session
 // gets one. It starts a sign-in for whoever is at the browser, and returns
@@ -58,35 +60,19 @@ export async function GET(request: Request): Promise<Response> {
   if (!to || !OIDC) return home(request);
 
   const hint = hintOf(params);
-  const back = returnPath(to);
   const session = await auth();
-  if (session && (await sessionStillAllowed(session, (await headers()).get("host")))) {
-    // Ended only when the person's own tab opened this (ownNavigation): an
-    // image or a frame pointed here can't sign anyone out.
-    if (!otherPerson(session.user?.email, hint) || !ownNavigation(request.headers)) return Response.redirect(to);
-    // Someone else's session at this browser: its cookie goes before the
-    // host's user signs in, so a failed sign-in can't leave it in place.
-    // signOut saves its own callback URL in Auth.js's callback-url cookie (by
-    // default this app's Home, from the host's Referer). signIn below writes
-    // that cookie only when the browser's copy differs from `back`, and after
-    // an earlier sign-in from the same host page it doesn't. signOut's Home
-    // then stood, and the provider's callback left the tab there. Given
-    // `back` too, the cookie ends as `back` either way.
-    await signOut({ redirect: false, redirectTo: back });
-  }
-
-  jar.set(RETURN_COOKIE, to, {
-    httpOnly: true,
-    sameSite: "lax",
+  const live = session && (await sessionStillAllowed(session, (await headers()).get("host"))) ? session : null;
+  const straightBack = await signInPass({
+    to,
+    hint,
+    session: live ? { email: live.user?.email } : null,
+    ownTab: ownNavigation(request.headers),
     secure: new URL(request.url).protocol === "https:",
-    path: RETURN_COOKIE_PATH,
-    maxAge: RETURN_COOKIE_MAX_AGE_S,
+    cookies: jar,
+    signOut: (back) => signOut({ redirect: false, redirectTo: back }),
+    // Throws Next's redirect to the provider, with Auth.js's state and PKCE cookies.
+    signIn: (back) => signIn(OIDC_PROVIDER_ID, { redirectTo: back }, hint ? { login_hint: hint } : undefined),
   });
-  // Throws Next's redirect to the provider, with Auth.js's state and PKCE cookies.
-  await signIn(
-    OIDC_PROVIDER_ID,
-    { redirectTo: back },
-    hint ? { login_hint: hint } : undefined,
-  );
+  if (straightBack) return Response.redirect(straightBack);
   return home(request);
 }

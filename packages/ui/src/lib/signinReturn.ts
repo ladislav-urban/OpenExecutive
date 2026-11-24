@@ -28,6 +28,16 @@ export const RETURN_COOKIE_MAX_AGE_S = 600;
 // Sent only to /signin and below: the sign-in page and these two routes.
 export const RETURN_COOKIE_PATH = "/signin";
 
+// The cookie /signin/sso leaves when it ends someone else's session for the
+// host's user (a replace pass): for a minute, a second pass for the same host
+// user keeps the session it finds and goes straight back to the host's page,
+// which then says who is signed in. The host's page marks a replace as tried
+// too, but in its own browser storage, which can be blocked or cleared; this
+// one is the server's own, so a provider that keeps answering as the other
+// person can't send the tab round and round. Same path as RETURN_COOKIE.
+export const REPLACE_COOKIE = "oe_signin_replaced";
+export const REPLACE_COOKIE_MAX_AGE_S = 60;
+
 // What the host's page finds on its own address when signing in failed.
 export const FAILED_PARAM = "oe_signin";
 export const FAILED_VALUE = "failed";
@@ -117,6 +127,81 @@ export function otherPerson(email: string | null | undefined, hint: string | und
  */
 export function returnPath(to: string): string {
   return `/signin/return?to=${encodeURIComponent(to)}`;
+}
+
+/** The request cookies /signin/sso reads and the ones it sets, as Next's cookies() has them. */
+export interface PassCookies {
+  get(name: string): { value: string } | undefined;
+  set(
+    name: string,
+    value: string,
+    options: { httpOnly: boolean; sameSite: "lax"; secure: boolean; path: string; maxAge: number },
+  ): unknown;
+}
+
+export interface SignInPass {
+  /** The host page, already checked by returnTarget. */
+  to: string;
+  /** The host's user (hintOf), if the host named one. */
+  hint: string | undefined;
+  /** This app's session, when it has one the middleware still accepts. */
+  session: { email: string | null | undefined } | null;
+  /** ownNavigation(request.headers). */
+  ownTab: boolean;
+  /** Whether the request came over https (the cookies' Secure flag). */
+  secure: boolean;
+  cookies: PassCookies;
+  /** Auth.js's signOut, without a redirect, saving `back` as its callback URL. */
+  signOut(back: string): Promise<unknown>;
+  /** Auth.js's signIn with the provider, returning through `back`; it throws Next's redirect. */
+  signIn(back: string): Promise<unknown>;
+}
+
+/**
+ * /signin/sso once `to` is checked: the page to send the tab to without
+ * signing in, or null after starting the provider's sign-in.
+ *
+ * - Signed in as the host's user (or with no hint): straight back to `to`.
+ * - Signed in as someone else: that session is ended, but only when the
+ *   person's own tab opened this (an image or a frame pointed here can't sign
+ *   anyone out), and only once a minute for the same host user (REPLACE_COOKIE).
+ *   Otherwise the tab goes back to `to` with the session as it is.
+ * - Then the sign-in starts, remembering `to` in RETURN_COOKIE.
+ */
+export async function signInPass(pass: SignInPass): Promise<string | null> {
+  const { to, hint, session, cookies } = pass;
+  const back = returnPath(to);
+  if (session) {
+    if (!otherPerson(session.email, hint) || !pass.ownTab) return to;
+    // A replace pass for this host user ran within the minute and came back as
+    // someone else again: keep that session and let the host's page say so.
+    if (hint && cookies.get(REPLACE_COOKIE)?.value === hint) return to;
+    cookies.set(REPLACE_COOKIE, hint ?? "", {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: pass.secure,
+      path: RETURN_COOKIE_PATH,
+      maxAge: REPLACE_COOKIE_MAX_AGE_S,
+    });
+    // Someone else's session at this browser: its cookie goes before the
+    // host's user signs in, so a failed sign-in can't leave it in place.
+    // signOut saves its own callback URL in Auth.js's callback-url cookie (by
+    // default this app's Home, from the host's Referer). signIn below writes
+    // that cookie only when the browser's copy differs from `back`, and after
+    // an earlier sign-in from the same host page it doesn't. signOut's Home
+    // then stood, and the provider's callback left the tab there. Given
+    // `back` too, the cookie ends as `back` either way.
+    await pass.signOut(back);
+  }
+  cookies.set(RETURN_COOKIE, to, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: pass.secure,
+    path: RETURN_COOKIE_PATH,
+    maxAge: RETURN_COOKIE_MAX_AGE_S,
+  });
+  await pass.signIn(back);
+  return null;
 }
 
 /** `to` with the failed mark added, for the host's page to show why. */

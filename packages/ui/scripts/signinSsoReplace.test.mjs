@@ -8,13 +8,26 @@
 // runs next-auth's real signOut and signIn (next-auth/lib/actions.js) and
 // @auth/core's real callback, with next/headers and next/navigation replaced by
 // a request's headers and a cookie jar that keeps the last value set per name,
-// as Next's does. The provider is faked over fetch and answers as B.
+// as Next's does. The provider is faked over fetch and answers as B. The steps
+// /signin/sso takes are lib/signinReturn.ts's signInPass, run here as they are.
+//
+// A provider that keeps answering as B could send the tab round again: the
+// desk marks a replace as tried in its own storage, and this app keeps its own
+// mark for a minute (REPLACE_COOKIE), checked here on a clock the test moves.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { register } from "node:module";
 import test from "node:test";
 
-import { returnPath, returnTarget } from "../src/lib/signinReturn.ts";
+import {
+  REPLACE_COOKIE,
+  REPLACE_COOKIE_MAX_AGE_S,
+  RETURN_COOKIE_PATH,
+  otherPerson,
+  returnPath,
+  returnTarget,
+  signInPass,
+} from "../src/lib/signinReturn.ts";
 
 // next-auth imports next/headers and next/navigation, which work only inside a
 // Next request. These stand-ins read the request this test sets up.
@@ -38,7 +51,7 @@ register(
 );
 const { signIn, signOut } = await import(new URL("../node_modules/next-auth/lib/actions.js", import.meta.url).href);
 const { Auth } = await import("@auth/core");
-const { encode } = await import("@auth/core/jwt");
+const { decode, encode } = await import("@auth/core/jwt");
 
 const APP = "https://oe.example.com";
 const ISSUER = "https://sso.example.com/realms/company";
@@ -99,47 +112,70 @@ globalThis.fetch = async (input) => {
   throw new Error(`unexpected fetch ${url.href}`);
 };
 
+// The browser's clock, moved by the tests; cookies expire by it.
+let now = Date.now();
+
 /**
  * The browser's cookies for this app, as they appear on the wire: Next and
  * Auth.js send a value URL-encoded and Auth.js decodes what comes back, so a
- * value read here is decoded the same way.
+ * value read here is decoded the same way. A cookie past its Max-Age is
+ * neither sent nor read.
  */
 class Browser {
   constructor(cookies) {
-    this.wire = new Map(Object.entries(cookies).map(([name, value]) => [name, encodeURIComponent(value)]));
+    this.wire = new Map(Object.entries(cookies).map(([name, value]) => [name, { raw: encodeURIComponent(value) }]));
+  }
+  live() {
+    return [...this.wire].filter(([, c]) => c.expiresAt === undefined || c.expiresAt > now);
   }
   get(name) {
-    const raw = this.wire.get(name);
-    return raw === undefined ? undefined : decodeURIComponent(raw);
+    const found = this.live().find(([n]) => n === name);
+    return found ? decodeURIComponent(found[1].raw) : undefined;
   }
   header() {
-    return [...this.wire].map(([name, raw]) => `${name}=${raw}`).join("; ");
+    return this.live()
+      .map(([name, c]) => `${name}=${c.raw}`)
+      .join("; ");
   }
   /** A Set-Cookie as written on the wire (`raw` already encoded). */
   takeRaw(name, raw, maxAge) {
     if (maxAge === 0 || raw === "") this.wire.delete(name);
-    else this.wire.set(name, raw);
+    else this.wire.set(name, { raw, expiresAt: maxAge === undefined ? undefined : now + maxAge * 1000 });
   }
   /** What Next's cookies().set sends: the value encoded, as its ResponseCookies does. */
   take(name, value, options = {}) {
-    const gone = options.maxAge === 0 || (options.expires && new Date(options.expires).getTime() <= Date.now());
-    this.takeRaw(name, gone ? "" : encodeURIComponent(value), undefined);
+    const gone = options.maxAge === 0 || (options.expires && new Date(options.expires).getTime() <= now);
+    this.takeRaw(name, gone ? "" : encodeURIComponent(value), options.maxAge);
   }
 }
 
-/** Next's cookies() in a route handler: what was set last for a name is what's sent. */
+/**
+ * Next's cookies() in a route handler: get reads what this request set, else
+ * the request's own cookies; what was set last for a name is what's sent.
+ */
 class Jar {
-  constructor() {
+  constructor(browser) {
+    this.browser = browser;
     this.sent = new Map();
+  }
+  get(name) {
+    if (this.sent.has(name)) return { value: this.sent.get(name).value };
+    const value = this.browser.get(name);
+    return value === undefined ? undefined : { value };
   }
   set(name, value, options) {
     this.sent.set(name, { value, options });
   }
 }
 
-/** The replace pass as /signin/sso runs it, `signOutTo` given to signOut. */
-async function replacePass(browser, signOutTo) {
-  const jar = new Jar();
+/**
+ * One GET /signin/sso?to=<desk>&hint=<hint> from the desk tab, through
+ * signInPass with next-auth's real signOut and signIn. `legacy` gives signOut
+ * no redirectTo, as before the fix. Says where the tab goes, how many
+ * sign-outs ran, and what was set on the cookies.
+ */
+async function ssoPass(browser, { legacy = false, hint = A } = {}) {
+  const jar = new Jar(browser);
   const headers = new Headers({
     host: "oe.example.com",
     "x-forwarded-proto": "https",
@@ -148,19 +184,33 @@ async function replacePass(browser, signOutTo) {
     referer: "https://erp.example.com/",
   });
   globalThis.__ssoTest = { headers, jar };
-  const back = returnPath(DESK);
-  await signOut({ redirect: false, ...(signOutTo === undefined ? {} : { redirectTo: signOutTo(back) }) }, config);
+  // auth(): the session cookie, decoded as Auth.js does.
+  const token = browser.get(SESSION);
+  const claims = token ? await decode({ token, secret: SECRET, salt: SESSION }) : null;
+  let signOuts = 0;
   let provider;
+  let straightBack;
   try {
-    await signIn("oidc", { redirectTo: back }, { login_hint: A }, config);
+    straightBack = await signInPass({
+      to: DESK,
+      hint,
+      session: claims ? { email: claims.email } : null,
+      ownTab: true,
+      secure: true,
+      cookies: jar,
+      signOut: (back) => {
+        signOuts += 1;
+        return signOut({ redirect: false, ...(legacy ? {} : { redirectTo: back }) }, config);
+      },
+      signIn: (back) => signIn("oidc", { redirectTo: back }, { login_hint: hint }, config),
+    });
   } catch (error) {
     provider = new URL(error.url);
+    assert.equal(provider.origin + provider.pathname, `${ISSUER}/protocol/openid-connect/auth`);
+    assert.equal(provider.searchParams.get("login_hint"), hint);
   }
-  assert.ok(provider, "signIn redirects to the provider");
-  assert.equal(provider.origin + provider.pathname, `${ISSUER}/protocol/openid-connect/auth`);
-  assert.equal(provider.searchParams.get("login_hint"), A);
   for (const [name, { value, options }] of jar.sent) browser.take(name, value, options);
-  return provider;
+  return { straightBack, provider, signOuts, sent: jar.sent };
 }
 
 /** The provider answers as B; Auth.js's callback says where the tab goes next. */
@@ -184,35 +234,104 @@ async function signedInAsB(left) {
 
 const BACK_URL = `${APP}${returnPath(DESK)}`;
 
+/** A replace pass that the provider answers as B: the page the tab ends on. */
+async function replacedAsB(browser) {
+  const { provider, signOuts } = await ssoPass(browser);
+  assert.ok(provider, "the sign-in started");
+  assert.equal(signOuts, 1);
+  const next = await callback(browser, provider);
+  assert.equal(next, BACK_URL);
+  return returnTarget(new URL(next).searchParams.get("to"), HOSTS);
+}
+
 test("the cause: signOut's own callback URL stood when the browser already held the sign-in's", async () => {
+  now = Date.now();
   // B signed in earlier from the same desk page, so the browser kept that way back.
   const browser = await signedInAsB(BACK_URL);
-  const provider = await replacePass(browser, undefined);
+  const { provider } = await ssoPass(browser, { legacy: true });
   assert.equal(browser.get(CALLBACK_URL), APP, "signOut saved Home; signIn saw nothing to change");
   assert.equal(await callback(browser, provider), APP, "so the tab landed on Home");
 });
 
 test("a replace pass that comes back as the same other person returns to the desk page", async () => {
+  now = Date.now();
   for (const left of [BACK_URL, undefined, `${APP}/somewhere-else`]) {
     const browser = await signedInAsB(left);
-    const provider = await replacePass(browser, (back) => back);
+    const { provider } = await ssoPass(browser);
     assert.equal(browser.get(CALLBACK_URL), BACK_URL, String(left));
     const next = await callback(browser, provider);
     assert.equal(next, BACK_URL, String(left));
     assert.ok(browser.get(SESSION), "signed in, as B");
     // /signin/return checks `to` again and sends the tab to the desk page itself,
-    // unmarked: not failed, and not another /signin/sso, so nothing goes round
-    // again here. The desk sees B beside A and shows its warning.
+    // unmarked: not failed, and not another /signin/sso. The desk sees B beside
+    // A and shows its warning.
     const to = returnTarget(new URL(next).searchParams.get("to"), HOSTS);
     assert.equal(to, DESK, String(left));
   }
 });
 
-test("/signin/sso gives signOut and signIn the same way back", () => {
+test("the replace pass leaves its mark for a minute, HttpOnly, on /signin only", async () => {
+  now = Date.now();
+  const browser = await signedInAsB(BACK_URL);
+  const { sent } = await ssoPass(browser);
+  const mark = sent.get(REPLACE_COOKIE);
+  assert.equal(mark.value, A, "for this host user");
+  assert.deepEqual(mark.options, {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: true,
+    path: RETURN_COOKIE_PATH,
+    maxAge: REPLACE_COOKIE_MAX_AGE_S,
+  });
+  assert.equal(REPLACE_COOKIE_MAX_AGE_S, 60);
+});
+
+test("a second replace pass within the minute keeps the session and goes back to the desk, not Home", async () => {
+  now = Date.now();
+  const browser = await signedInAsB(BACK_URL);
+  assert.equal(await replacedAsB(browser), DESK);
+  const session = browser.get(SESSION);
+  // The desk's own mark was lost (blocked storage), so it sends the tab again.
+  now += 30_000;
+  const again = await ssoPass(browser);
+  assert.equal(again.signOuts, 0, "no second sign-out");
+  assert.equal(again.provider, undefined, "no second trip to the provider");
+  assert.equal(again.straightBack, DESK, "straight back to the desk page");
+  assert.equal(browser.get(SESSION), session, "B's session kept as it was");
+  // So the desk finds B signed in beside its own A, and shows its warning.
+  const claims = await decode({ token: browser.get(SESSION), secret: SECRET, salt: SESSION });
+  assert.equal(otherPerson(claims.email, A), true);
+});
+
+test("the mark expires: a pass after the minute signs out and starts the sign-in again", async () => {
+  now = Date.now();
+  const browser = await signedInAsB(BACK_URL);
+  assert.equal(await replacedAsB(browser), DESK);
+  now += (REPLACE_COOKIE_MAX_AGE_S - 1) * 1000;
+  assert.equal(browser.get(REPLACE_COOKIE), A, "still there just inside the minute");
+  now += 2000;
+  assert.equal(browser.get(REPLACE_COOKIE), undefined, "gone after it");
+  assert.doesNotMatch(browser.header(), new RegExp(REPLACE_COOKIE), "and no longer sent");
+  assert.equal(await replacedAsB(browser), DESK, "a full replace pass again");
+});
+
+test("the mark is per host user: another desk user within the minute is still signed in for", async () => {
+  now = Date.now();
+  const browser = await signedInAsB(BACK_URL);
+  assert.equal(await replacedAsB(browser), DESK);
+  now += 10_000;
+  const other = await ssoPass(browser, { hint: "c@example.com" });
+  assert.equal(other.signOuts, 1);
+  assert.ok(other.provider, "the sign-in started for c");
+});
+
+test("/signin/sso runs signInPass, giving signOut and signIn the same way back", () => {
   const route = readFileSync(new URL("../src/app/signin/sso/route.ts", import.meta.url), "utf8");
-  assert.match(route, /const back = returnPath\(to\);/);
-  assert.match(route, /await signOut\(\{ redirect: false, redirectTo: back \}\);/);
-  assert.match(route, /\{ redirectTo: back \},/);
+  assert.match(route, /const straightBack = await signInPass\(\{/);
+  assert.match(route, /signOut: \(back\) => signOut\(\{ redirect: false, redirectTo: back \}\),/);
+  assert.match(route, /signIn: \(back\) => signIn\(OIDC_PROVIDER_ID, \{ redirectTo: back \}, /);
+  assert.match(route, /ownTab: ownNavigation\(request\.headers\),/);
+  assert.match(route, /sessionStillAllowed\(session, /);
   assert.doesNotMatch(route, /encodeURIComponent/, "the path is built in one place, lib/signinReturn.ts");
 });
 
