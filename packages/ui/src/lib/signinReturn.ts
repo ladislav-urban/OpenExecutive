@@ -110,6 +110,15 @@ export function otherPerson(email: string | null | undefined, hint: string | und
   return Boolean(hint) && (typeof email !== "string" || email.trim().toLowerCase() !== hint);
 }
 
+/**
+ * Where the provider's callback sends the tab after /signin/sso: this app's
+ * /signin/return, carrying `to` (checked again there). /signin/sso gives it to
+ * both Auth.js's signOut and signIn (see there for why both).
+ */
+export function returnPath(to: string): string {
+  return `/signin/return?to=${encodeURIComponent(to)}`;
+}
+
 /** `to` with the failed mark added, for the host's page to show why. */
 export function failedTarget(to: string): string {
   const url = new URL(to);

@@ -155,7 +155,7 @@ test("the sign-in takes hint or login_hint, and replaces only someone else's ses
   const sso = read("../src/app/signin/sso/route.ts");
   assert.match(
     sso,
-    /if \(!otherPerson\(session\.user\?\.email, hint\) \|\| !ownNavigation\(request\.headers\)\) return Response\.redirect\(to\);\n\s*\/\/[^\n]*\n[^\n]*\n\s*await signOut\(\{ redirect: false \}\);/,
+    /if \(!otherPerson\(session\.user\?\.email, hint\) \|\| !ownNavigation\(request\.headers\)\) return Response\.redirect\(to\);\r?\n(?:\s*\/\/[^\n]*\n)+\s*await signOut\(\{ redirect: false, redirectTo: back \}\);/,
   );
 });
 
