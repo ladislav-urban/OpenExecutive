@@ -751,6 +751,11 @@ parent window, and every `init` field is validated. In a frame:
     below runs (`pieces.signIn.replacesOtherUser`; 54.a). Otherwise the SSO sign-in starts
     at once, with `hint` (or `login_hint`) as the provider's `login_hint` when it is a
     plain email. With the provider's session still open there is nothing to type.
+  - If the provider still answers as the other person, the tab comes back to `to` signed
+    in as them, and the host's page says so. For a minute after ending a session for a
+    host user, a second pass for that same user keeps the session it finds and goes
+    straight back (a 60-second http-only cookie on `/signin`, `oe_signin_replaced`), so
+    the tab can't go round again even when the host's own mark is lost.
   - The way back, `/signin/return`, checks `to` again and needs the new session.
   - A sign-in the provider refuses comes back to `to` with `oe_signin=failed`, so the host
     can say why: a ten-minute http-only cookie on `/signin` remembers `to`, and `/signin`
