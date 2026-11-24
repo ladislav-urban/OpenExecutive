@@ -9,6 +9,8 @@ import {
   REPLACE_COOKIE,
   RETURN_COOKIE,
   failedTarget,
+  replaceMark,
+  replaceMarked,
   hintOf,
   loginHint,
   otherPerson,
@@ -160,7 +162,9 @@ test("the sign-in takes hint or login_hint, and replaces only someone else's ses
 
 // signInPass (what /signin/sso does once `to` is checked) with Auth.js's
 // actions replaced by a log; the real ones run in signinSsoReplace.test.mjs.
-async function pass({ session, hint = "a@example.com", ownTab = true, cookies = {} }) {
+const KEY = "k".repeat(32);
+const T = Date.UTC(2026, 10, 24, 12);
+async function pass({ session, hint = "a@example.com", ownTab = true, cookies = {}, secret = KEY, now = T }) {
   const log = [];
   const set = new Map();
   const straightBack = await signInPass({
@@ -169,6 +173,8 @@ async function pass({ session, hint = "a@example.com", ownTab = true, cookies = 
     session,
     ownTab,
     secure: true,
+    secret,
+    now,
     cookies: {
       get: (name) => (set.has(name) ? { value: set.get(name) } : name in cookies ? { value: cookies[name] } : undefined),
       set: (name, value) => set.set(name, value),
@@ -199,15 +205,39 @@ test("signInPass ends someone else's session only from the person's own tab, the
   assert.deepEqual([r.straightBack, r.log, r.set.size], [DESK_PAGE, [], 0]);
   // Someone else from the person's own tab: marked, signed out, then signed in,
   // both with the same way back.
-  r = await pass({ session: { email: "b@example.com" } });
+  const B = { email: "b@example.com" };
+  r = await pass({ session: B });
   assert.deepEqual(r.log, [["signOut", BACK], ["signIn", BACK]]);
-  assert.equal(r.set.get(REPLACE_COOKIE), "a@example.com");
-  // Marked for this host user within the minute: kept, straight back.
-  r = await pass({ session: { email: "b@example.com" }, cookies: { [REPLACE_COOKIE]: "a@example.com" } });
+  const mark = r.set.get(REPLACE_COOKIE);
+  assert.equal(await replaceMarked(mark, KEY, "a@example.com", "b@example.com", T), true);
+  assert.doesNotMatch(mark, /@/, "the value names no one in the clear");
+  // That mark, within the minute, with B found again: kept, straight back.
+  r = await pass({ session: B, cookies: { [REPLACE_COOKIE]: mark }, now: T + 59_000 });
   assert.deepEqual([r.straightBack, r.log, r.set.size], [DESK_PAGE, [], 0]);
-  // Marked for another host user: this one is still signed in for.
-  r = await pass({ session: { email: "b@example.com" }, cookies: { [REPLACE_COOKIE]: "c@example.com" } });
-  assert.deepEqual(r.log, [["signOut", BACK], ["signIn", BACK]]);
+});
+
+test("signInPass honours only its own signed mark, in its minute, for that host user and person", async () => {
+  const B = { email: "b@example.com" };
+  const replaced = [["signOut", BACK], ["signIn", BACK]];
+  const fresh = await replaceMark(KEY, "a@example.com", "b@example.com", T);
+  for (const [why, cookies, opts] of [
+    ["planted in the clear", { [REPLACE_COOKIE]: "a@example.com" }, {}],
+    ["planted, any shape", { [REPLACE_COOKIE]: `${T + 30_000}.${"A".repeat(43)}` }, {}],
+    ["past its minute", { [REPLACE_COOKIE]: fresh }, { now: T + 60_000 }],
+    ["dated too far ahead", { [REPLACE_COOKIE]: await replaceMark(KEY, "a@example.com", "b@example.com", T + 3_600_000) }, {}],
+    ["for another host user", { [REPLACE_COOKIE]: await replaceMark(KEY, "c@example.com", "b@example.com", T) }, {}],
+    ["for another person's session", { [REPLACE_COOKIE]: await replaceMark(KEY, "a@example.com", "d@example.com", T) }, {}],
+    ["signed with another key", { [REPLACE_COOKIE]: await replaceMark("x".repeat(32), "a@example.com", "b@example.com", T) }, {}],
+  ]) {
+    const r = await pass({ session: B, cookies, ...opts });
+    assert.deepEqual(r.log, replaced, why);
+  }
+  // Without a secret no mark is set or honoured: every pass replaces, as before.
+  const r = await pass({ session: B, cookies: { [REPLACE_COOKIE]: fresh }, secret: null });
+  assert.deepEqual(r.log, replaced);
+  assert.equal(r.set.has(REPLACE_COOKIE), false);
+  // The email's case and spaces don't matter, as with otherPerson.
+  assert.equal(await replaceMarked(fresh, KEY, "a@example.com", " B@Example.com ", T + 1), true);
 });
 
 test("/signin/sso decides only through signInPass, with the session the middleware accepts", () => {

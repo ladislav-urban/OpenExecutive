@@ -24,6 +24,7 @@ import {
   REPLACE_COOKIE_MAX_AGE_S,
   RETURN_COOKIE_PATH,
   otherPerson,
+  replaceMarked,
   returnPath,
   returnTarget,
   signInPass,
@@ -198,6 +199,8 @@ async function ssoPass(browser, { legacy = false, hint = A } = {}) {
       ownTab: true,
       secure: true,
       cookies: jar,
+      secret: SECRET,
+      now,
       signOut: (back) => {
         signOuts += 1;
         return signOut({ redirect: false, ...(legacy ? {} : { redirectTo: back }) }, config);
@@ -275,7 +278,7 @@ test("the replace pass leaves its mark for a minute, HttpOnly, on /signin only",
   const browser = await signedInAsB(BACK_URL);
   const { sent } = await ssoPass(browser);
   const mark = sent.get(REPLACE_COOKIE);
-  assert.equal(mark.value, A, "for this host user");
+  assert.equal(await replaceMarked(mark.value, SECRET, A, B, now), true, "signed, for this host user and B");
   assert.deepEqual(mark.options, {
     httpOnly: true,
     sameSite: "lax",
@@ -308,7 +311,7 @@ test("the mark expires: a pass after the minute signs out and starts the sign-in
   const browser = await signedInAsB(BACK_URL);
   assert.equal(await replacedAsB(browser), DESK);
   now += (REPLACE_COOKIE_MAX_AGE_S - 1) * 1000;
-  assert.equal(browser.get(REPLACE_COOKIE), A, "still there just inside the minute");
+  assert.ok(browser.get(REPLACE_COOKIE), "still there just inside the minute");
   now += 2000;
   assert.equal(browser.get(REPLACE_COOKIE), undefined, "gone after it");
   assert.doesNotMatch(browser.header(), new RegExp(REPLACE_COOKIE), "and no longer sent");
@@ -323,6 +326,13 @@ test("the mark is per host user: another desk user within the minute is still si
   const other = await ssoPass(browser, { hint: "c@example.com" });
   assert.equal(other.signOuts, 1);
   assert.ok(other.provider, "the sign-in started for c");
+});
+
+test("a mark planted by another host, for a year, doesn't keep the session", async () => {
+  now = Date.now();
+  const browser = await signedInAsB(BACK_URL);
+  browser.takeRaw(REPLACE_COOKIE, encodeURIComponent(A), 365 * 24 * 3600);
+  assert.equal(await replacedAsB(browser), DESK, "a full replace pass, as without it");
 });
 
 test("/signin/sso runs signInPass, giving signOut and signIn the same way back", () => {

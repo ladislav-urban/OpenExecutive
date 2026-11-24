@@ -33,10 +33,78 @@ export const RETURN_COOKIE_PATH = "/signin";
 // user keeps the session it finds and goes straight back to the host's page,
 // which then says who is signed in. The host's page marks a replace as tried
 // too, but in its own browser storage, which can be blocked or cleared; this
-// one is the server's own, so a provider that keeps answering as the other
-// person can't send the tab round and round. Same path as RETURN_COOKIE.
+// one is the server's, so a provider that keeps answering as the other person
+// can't send the tab round and round. Same path as RETURN_COOKIE.
+//
+// A sibling host under the same site can set a cookie of this name too (with
+// Domain= and any lifetime), and a mark it planted must not keep a wrong
+// session in place. So the value is signed with the app's secret and carries
+// its own expiry, checked here, and it names both the host user and the
+// person whose session was ended: replaceMark / replaceMarked below.
 export const REPLACE_COOKIE = "oe_signin_replaced";
 export const REPLACE_COOKIE_MAX_AGE_S = 60;
+
+const MARK_ENCODER = new TextEncoder();
+
+function base64url(bytes: Uint8Array): string {
+  let text = "";
+  for (const byte of bytes) text += String.fromCharCode(byte);
+  return btoa(text).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function fromBase64url(text: string): Uint8Array<ArrayBuffer> | null {
+  if (!/^[A-Za-z0-9_-]{43}$/.test(text)) return null;
+  const binary = atob(text.replace(/-/g, "+").replace(/_/g, "/") + "=");
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+function markKey(secret: string): Promise<CryptoKey> {
+  return crypto.subtle.importKey("raw", MARK_ENCODER.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, [
+    "sign",
+    "verify",
+  ]);
+}
+
+function markData(hint: string, person: string | null | undefined, expires: number): Uint8Array<ArrayBuffer> {
+  const who = typeof person === "string" ? person.trim().toLowerCase() : "";
+  return MARK_ENCODER.encode(`${REPLACE_COOKIE}\n${hint}\n${who}\n${expires}`);
+}
+
+/** The mark's value: `<expiry, ms>.<HMAC-SHA256 of the cookie name, hint, person and expiry>`. */
+export async function replaceMark(
+  secret: string,
+  hint: string,
+  person: string | null | undefined,
+  now: number,
+): Promise<string> {
+  const expires = now + REPLACE_COOKIE_MAX_AGE_S * 1000;
+  const mac = await crypto.subtle.sign("HMAC", await markKey(secret), markData(hint, person, expires));
+  return `${expires}.${base64url(new Uint8Array(mac))}`;
+}
+
+/**
+ * Whether `value` is a mark this app set, within its minute, for this host
+ * user and this person's session. Anything else (planted, stale, for someone
+ * else, or no secret to check it with) is no mark.
+ */
+export async function replaceMarked(
+  value: string | undefined,
+  secret: string | undefined,
+  hint: string,
+  person: string | null | undefined,
+  now: number,
+): Promise<boolean> {
+  if (!value || !secret) return false;
+  const match = /^(\d{13,16})\.([A-Za-z0-9_-]+)$/.exec(value);
+  if (!match) return false;
+  const expires = Number(match[1]);
+  if (!(expires > now && expires <= now + REPLACE_COOKIE_MAX_AGE_S * 1000)) return false;
+  const mac = fromBase64url(match[2]);
+  if (!mac) return false;
+  return crypto.subtle.verify("HMAC", await markKey(secret), mac, markData(hint, person, expires));
+}
 
 // What the host's page finds on its own address when signing in failed.
 export const FAILED_PARAM = "oe_signin";
@@ -151,6 +219,10 @@ export interface SignInPass {
   /** Whether the request came over https (the cookies' Secure flag). */
   secure: boolean;
   cookies: PassCookies;
+  /** The key REPLACE_COOKIE is signed with (the app's Auth.js secret); without it, no mark is set or honoured. */
+  secret: string | undefined;
+  /** The time now, in ms. */
+  now: number;
   /** Auth.js's signOut, without a redirect, saving `back` as its callback URL. */
   signOut(back: string): Promise<unknown>;
   /** Auth.js's signIn with the provider, returning through `back`; it throws Next's redirect. */
@@ -164,7 +236,8 @@ export interface SignInPass {
  * - Signed in as the host's user (or with no hint): straight back to `to`.
  * - Signed in as someone else: that session is ended, but only when the
  *   person's own tab opened this (an image or a frame pointed here can't sign
- *   anyone out), and only once a minute for the same host user (REPLACE_COOKIE).
+ *   anyone out), and only once a minute for the same host user and person
+ *   (REPLACE_COOKIE, signed).
  *   Otherwise the tab goes back to `to` with the session as it is.
  * - Then the sign-in starts, remembering `to` in RETURN_COOKIE.
  */
@@ -172,17 +245,21 @@ export async function signInPass(pass: SignInPass): Promise<string | null> {
   const { to, hint, session, cookies } = pass;
   const back = returnPath(to);
   if (session) {
-    if (!otherPerson(session.email, hint) || !pass.ownTab) return to;
-    // A replace pass for this host user ran within the minute and came back as
-    // someone else again: keep that session and let the host's page say so.
-    if (hint && cookies.get(REPLACE_COOKIE)?.value === hint) return to;
-    cookies.set(REPLACE_COOKIE, hint ?? "", {
-      httpOnly: true,
-      sameSite: "lax",
-      secure: pass.secure,
-      path: RETURN_COOKIE_PATH,
-      maxAge: REPLACE_COOKIE_MAX_AGE_S,
-    });
+    if (!hint || !otherPerson(session.email, hint) || !pass.ownTab) return to;
+    // A replace pass for this host user ended this same person's session within
+    // the minute, and the provider answered as them again: keep that session
+    // and let the host's page say so.
+    const marked = cookies.get(REPLACE_COOKIE)?.value;
+    if (await replaceMarked(marked, pass.secret, hint, session.email, pass.now)) return to;
+    if (pass.secret) {
+      cookies.set(REPLACE_COOKIE, await replaceMark(pass.secret, hint, session.email, pass.now), {
+        httpOnly: true,
+        sameSite: "lax",
+        secure: pass.secure,
+        path: RETURN_COOKIE_PATH,
+        maxAge: REPLACE_COOKIE_MAX_AGE_S,
+      });
+    }
     // Someone else's session at this browser: its cookie goes before the
     // host's user signs in, so a failed sign-in can't leave it in place.
     // signOut saves its own callback URL in Auth.js's callback-url cookie (by
