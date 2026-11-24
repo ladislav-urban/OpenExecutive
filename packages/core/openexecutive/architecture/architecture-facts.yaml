@@ -11183,7 +11183,7 @@ integrations:
     [a-z][a-z0-9_]{0,39} (never a name a JavaScript object already has, as
     the page reads a row by key), label <=40, type text / money / number /
     percent / date / doc} and MAX_ROWS 10 rows, cells <=140 characters, a
-    doc cell {doctype, name}, numbers finite and below 1e15, dates
+    doc cell {doctype, name}, numbers finite with magnitude at most 1e15, dates
     YYYY-MM-DD. Shared vectors fix the shape on both sides:
     tests/fixtures/erpnext/alert_evidence_vector.json,
     overnight_shape_vectors.json and valuation_key_vectors.json, byte copies
@@ -11203,8 +11203,9 @@ integrations:
     evidence (or with evidence not in the shape) deletes its row; rows past
     KEEP_FOR 62 days are pruned on write and not read. evidence_for(alert)
     binds the read to that event's own alert
-    (erpnext_alert_drafts.event_ref: private, source erpnext, external_id
-    <ref>:<YYYY-MM>, the :named: suffix giving the readers), so a demo
+    (erpnext_alert_drafts.event_ref: private, source erpnext, dedup_key
+    private:<ref> with its :named: suffix giving the readers, and
+    external_id <ref>:<YYYY-MM> deciding which reading is the event's), so a demo
     bundle's alerts (not private) never show any. _run makes the table once
     per database path (_READY) and once more on 'no such table' (a database
     made again). Why keyed by readers (security review, Nov 2026): keyed by
