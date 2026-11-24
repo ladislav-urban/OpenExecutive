@@ -877,6 +877,87 @@ def test_a_day_whose_hour_daylight_saving_skipped_still_runs(
     assert _run_row("dst-check", "2026-03-08")["status"] == "done"
 
 
+def test_quiet_hours_hold_a_once_a_day_job_until_they_end(
+    example: WatchJob, erp: FakeErpnext, triage: list[Any], model: SimpleNamespace,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ERPNEXT_WATCH_QUIET_HOURS", "06:30-07:30")
+    logged: list[str] = []
+    monkeypatch.setattr(runner.logger, "info", lambda msg, *a, **_k: logged.append(msg % a if a else msg))
+    monkeypatch.setattr(runner, "_quiet", False)
+    erp.replies.append(_ar(("Acme Retail", 10.0)))
+    assert _tick(datetime(2026, 11, 10, 7, 0, tzinfo=UTC)) == 0
+    assert _tick(datetime(2026, 11, 10, 7, 29, 59, tzinfo=UTC)) == 0
+    assert erp.calls == []
+    # The window's end isn't in it: the day's run starts then.
+    assert _tick(datetime(2026, 11, 10, 7, 30, tzinfo=UTC)) == 1
+    assert _run_row("example")["status"] == "done"
+    # One line as it began and one as it ended.
+    assert [m for m in logged if "quiet hours" in m] == [
+        "watch: quiet hours began at 07:00", "watch: quiet hours ended at 07:30",
+    ]
+
+
+def test_quiet_hours_move_a_slot_to_their_end_and_keep_the_others(
+    erp: FakeErpnext, roster: SimpleNamespace, triage: list[Any], monkeypatch: pytest.MonkeyPatch,  # noqa: F811
+) -> None:
+    base = _job("slotted", specs=1, cap=3)
+    job = WatchJob(id=base.id, title=base.title, reads=base.reads, build=base.build, schedule=time(8, 0),
+                   slots=(time(8, 0), time(9, 0), time(11, 0)), card_cap_day=3,
+                   default_settings=base.default_settings)
+    monkeypatch.setitem(registry._JOBS, job.id, job)
+    monkeypatch.setenv("ERPNEXT_WATCH_JOBS_ENABLED", "true")
+    monkeypatch.setenv("ERPNEXT_WATCH_QUIET_HOURS", "08:30-09:30")
+    _enable(job, roster.principal)
+    erp.replies.extend([_ar(("Acme Retail", 10.0), acting=None)] * 3)
+    assert _tick(datetime(2026, 11, 10, 8, 0, tzinfo=UTC)) == 1
+    assert _tick(datetime(2026, 11, 10, 9, 0, tzinfo=UTC)) == 0
+    assert _tick(datetime(2026, 11, 10, 9, 30, tzinfo=UTC)) == 1
+    assert _tick(datetime(2026, 11, 10, 11, 0, tzinfo=UTC)) == 1
+    conn = watch_settings.connect()
+    try:
+        rows = dict(conn.execute("SELECT slot, status FROM watch_runs WHERE job = 'slotted'").fetchall())
+    finally:
+        conn.close()
+    assert rows == {"08:00": "done", "09:00": "done", "11:00": "done"}
+
+
+@pytest.mark.parametrize(("window", "inside", "outside"), [
+    ("07:30-09:30", [time(7, 30), time(9, 29, 59)], [time(7, 29), time(9, 30), time(23, 0)]),
+    ("19:00-23:00", [time(19, 0), time(22, 59, 59)], [time(18, 59), time(23, 0), time(0, 0)]),
+    ("", [], [time(0, 0), time(8, 0)]),
+])
+def test_in_quiet_hours(
+    window: str, inside: list[time], outside: list[time], monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ERPNEXT_WATCH_QUIET_HOURS", window)
+    assert all(watch_settings.in_quiet_hours(t) for t in inside)
+    assert not any(watch_settings.in_quiet_hours(t) for t in outside)
+
+
+@pytest.mark.parametrize("bad", [
+    "7:30-9:30", "07:30", "07:30-24:00", "07:30-07:30", "07:30 - 09:30", "x",
+    # Swapped, or across midnight: a held slot would pass its day and never run.
+    "09:30-07:30", "23:00-01:00", "00:01-00:00",
+    # Longer than four hours.
+    "06:00-10:01", "00:00-23:59",
+    # Ending after 23:00: one slow tick could step over the release.
+    "20:00-23:59",
+    # A digit time.fromisoformat wouldn't read on every tick.
+    "0٧:30-09:30",
+])
+def test_a_quiet_hours_setting_not_in_its_shape_is_refused_at_boot(
+    bad: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pydantic import ValidationError
+
+    from openexecutive.config import Settings
+
+    monkeypatch.setenv("ERPNEXT_WATCH_QUIET_HOURS", bad)
+    with pytest.raises(ValidationError, match="ERPNEXT_WATCH_QUIET_HOURS"):
+        Settings()
+
+
 def test_one_task_per_job_run(
     example: WatchJob, erp: FakeErpnext, roster: SimpleNamespace, triage: list[Any], model: SimpleNamespace,  # noqa: F811
     monkeypatch: pytest.MonkeyPatch,
