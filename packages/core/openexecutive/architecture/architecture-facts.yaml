@@ -11158,10 +11158,68 @@ integrations:
     push, a department or anyone's brief, digest or reflection. The pipeline
     strips any named: tag the triage model writes, so only the event's own
     list names anyone. No match: private to the principal, as before.
-    erpnext_events.KINDS lists all seven; oe_connector
+    Finance extras (A13, owner-approved Nov 17, 2026) add three kinds.
+    overnight_postings: one a day per site, only when one of ERPNext's own
+    scheduled jobs failed overnight or a result looks wrong; key
+    overnight:YYYY-MM-DD (_OVERNIGHT_KEY_RE) and title 'Overnight: N failed,
+    M to check' (_OVERNIGHT_TITLE_RE: counts only), else dropped; its text
+    is dropped (""), so what it found comes only as evidence.
+    purchase_price_rise: a submitted Purchase Invoice pricing items well
+    above their average on the company's purchase invoices of the months
+    before; keyed by the invoice, RECORD_DOCTYPES Purchase Invoice for Open.
+    valuation_jump: yesterday's valuation rate of an item in a warehouse
+    moving well up or down, once a month; key valuation_jump:<24 hex>
+    (_VALUATION_KEY_RE, a hash of company, item and warehouse, so no name is
+    in the key), else dropped. A dropped event is logged by kind only
+    (repr(kind)[:40]), never its key. erpnext_events.KINDS lists all ten;
+    oe_connector
     holds a kind back until it is listed there, because a kind OpenExecutive
     does not know is skipped yet the request is still accepted, so the event
     would be marked sent and lost for the month.
+
+    What moved (A13; integrations/erpnext_evidence.py). Any event may carry
+    evidence: at most MAX_TABLES 3 tables of {heading <=120, currency
+    [A-Z]{3} or null, columns, rows}, at most MAX_COLUMNS 6 columns {key
+    [a-z][a-z0-9_]{0,39} (never a name a JavaScript object already has, as
+    the page reads a row by key), label <=40, type text / money / number /
+    percent / date / doc} and MAX_ROWS 10 rows, cells <=140 characters, a
+    doc cell {doctype, name}, numbers finite and below 1e15, dates
+    YYYY-MM-DD. Shared vectors fix the shape on both sides:
+    tests/fixtures/erpnext/alert_evidence_vector.json,
+    overnight_shape_vectors.json and valuation_key_vectors.json, byte copies
+    of oe_connector's. parse_evidence is all or nothing and never raises:
+    evidence not in the shape, over a cap, over MAX_STORED_BYTES (64 KB as
+    stored JSON), or holding control (Cc), lone-surrogate (Cs) or direction
+    characters is dropped whole and the event kept; whitespace runs fold to
+    one space. It never reaches triage or any model call. The route works
+    out each event's month and named_person_ids once (so the alert and its
+    evidence agree) and calls remember(kind, key, raw, readers=...) in a
+    try/except before _schedule, after the signature check. The row
+    (erpnext_alert_evidence: alert PK, kind, evidence, received_at, indexed
+    on received_at) is keyed alert_identity(ref, sorted readers) =
+    <ref>#<named ids>, the readers the event's alert has, never the month:
+    next month's event for the same readers may fold into this month's open
+    alert, and its evidence must replace this month's. An event without
+    evidence (or with evidence not in the shape) deletes its row; rows past
+    KEEP_FOR 62 days are pruned on write and not read. evidence_for(alert)
+    binds the read to that event's own alert
+    (erpnext_alert_drafts.event_ref: private, source erpnext, external_id
+    <ref>:<YYYY-MM>, the :named: suffix giving the readers), so a demo
+    bundle's alerts (not private) never show any. _run makes the table once
+    per database path (_READY) and once more on 'no such table' (a database
+    made again). Why keyed by readers (security review, Nov 2026): keyed by
+    ref alone, figures sent for a credit hold's named people would have
+    shown on the principal's card of another reader set. GET /today's
+    ProposalItem carries evidence (EvidenceTable: heading, currency,
+    columns, rows) from today._erp_evidence beside record; the UI's
+    WhatMoved renders every cell as text (lib/evidenceCells.ts: money in the
+    table's currency, percent already in points). home_rules relabels
+    Discuss 'Ask why' on a card with evidence: _ask_why_prompt seeds 'Why
+    did this happen? <headline>' with the [Discuss mode — alert_id=N]
+    primer, asks for the cause from the ERP's own records starting with what
+    moved most, and never to ack or dismiss the alert; memory line 'Why did
+    this happen'. It adds no reach (the turn reads ERPNext as that person),
+    and the evidence stays out of the seed.
 
     Update and comment cards (phase 0's S3; integrations/erpnext_changes.py;
     oe_connector's draft_update and draft_comment). propose_erpnext_draft
