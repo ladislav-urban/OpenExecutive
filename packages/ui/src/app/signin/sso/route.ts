@@ -11,6 +11,7 @@ import {
   hintOf,
   otherPerson,
   ownNavigation,
+  returnPath,
   returnTarget,
 } from "@/lib/signinReturn";
 
@@ -57,6 +58,7 @@ export async function GET(request: Request): Promise<Response> {
   if (!to || !OIDC) return home(request);
 
   const hint = hintOf(params);
+  const back = returnPath(to);
   const session = await auth();
   if (session && (await sessionStillAllowed(session, (await headers()).get("host")))) {
     // Ended only when the person's own tab opened this (ownNavigation): an
@@ -64,7 +66,13 @@ export async function GET(request: Request): Promise<Response> {
     if (!otherPerson(session.user?.email, hint) || !ownNavigation(request.headers)) return Response.redirect(to);
     // Someone else's session at this browser: its cookie goes before the
     // host's user signs in, so a failed sign-in can't leave it in place.
-    await signOut({ redirect: false });
+    // signOut saves its own callback URL in Auth.js's callback-url cookie (by
+    // default this app's Home, from the host's Referer). signIn below writes
+    // that cookie only when the browser's copy differs from `back`, and after
+    // an earlier sign-in from the same host page it doesn't. signOut's Home
+    // then stood, and the provider's callback left the tab there. Given
+    // `back` too, the cookie ends as `back` either way.
+    await signOut({ redirect: false, redirectTo: back });
   }
 
   jar.set(RETURN_COOKIE, to, {
@@ -77,7 +85,7 @@ export async function GET(request: Request): Promise<Response> {
   // Throws Next's redirect to the provider, with Auth.js's state and PKCE cookies.
   await signIn(
     OIDC_PROVIDER_ID,
-    { redirectTo: `/signin/return?to=${encodeURIComponent(to)}` },
+    { redirectTo: back },
     hint ? { login_hint: hint } : undefined,
   );
   return home(request);
