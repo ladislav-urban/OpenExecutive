@@ -69,7 +69,8 @@ function markKey(secret: string): Promise<CryptoKey> {
 
 function markData(hint: string, person: string | null | undefined, expires: number): Uint8Array<ArrayBuffer> {
   const who = typeof person === "string" ? person.trim().toLowerCase() : "";
-  return MARK_ENCODER.encode(`${REPLACE_COOKIE}\n${hint}\n${who}\n${expires}`);
+  // JSON keeps the fields apart whatever they hold.
+  return MARK_ENCODER.encode(JSON.stringify([REPLACE_COOKIE, hint, who, expires]));
 }
 
 /** The mark's value: `<expiry, ms>.<HMAC-SHA256 of the cookie name, hint, person and expiry>`. */

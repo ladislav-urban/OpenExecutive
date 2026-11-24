@@ -71,7 +71,13 @@ export async function GET(request: Request): Promise<Response> {
     cookies: jar,
     // The replace mark's key: the secret Auth.js signs sessions with (any of
     // the rotation slots will do for a mark that lives a minute).
-    secret: [process.env.AUTH_SECRET, process.env.AUTH_SECRET_1, process.env.AUTH_SECRET_2, process.env.AUTH_SECRET_3]
+    secret: [
+      process.env.AUTH_SECRET,
+      process.env.AUTH_SECRET_1,
+      process.env.AUTH_SECRET_2,
+      process.env.AUTH_SECRET_3,
+      process.env.NEXTAUTH_SECRET,
+    ]
       .map((s) => s?.trim())
       .find((s) => Boolean(s)),
     now: Date.now(),
