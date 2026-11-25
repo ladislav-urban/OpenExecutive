@@ -64,13 +64,9 @@ def _on_callers_home(alert: Alert, request: Request) -> bool:
         return False
     if caller is None:
         return False
-    from openexecutive.alerts.models import named_for
-
     instance_id = _parse_decision_instance_id(alert.topic_tags or [])
     instances = _decision_instances([instance_id] if instance_id is not None else [])
-    return _card_for_caller(
-        alert.routed_to_person_id, instance_id, caller, instances, named=named_for(alert, caller)
-    )
+    return _card_for_caller(alert.routed_to_person_id, instance_id, caller, instances)
 
 
 def _caller_viewer(request: Request) -> object:
