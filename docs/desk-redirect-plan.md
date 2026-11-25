@@ -1,6 +1,8 @@
 # Plan: send a direct visit to the same screen in the host's desk
 
-Status: plan only, for security review. Nothing here is built yet.
+Status: built (`src/lib/deskRedirect.ts`, `src/middleware.ts`, tests in
+`scripts/deskRedirect.test.mjs`). To set it up, see `docs/deployment.md`, "Sending
+direct visits to the desk".
 
 ## Goal
 
@@ -105,11 +107,12 @@ history, and it puts the framed page's URL in its frame. So a query is never
 forwarded whole.
 
 - **Forwarded (allowlist, default deny):** only keys known to be screen state:
-  `browse`, `designer`, `edit`, `event_type`, `find`, `for`, `mode`, `new`, `q`,
+  `add`, `browse`, `designer`, `edit`, `event_type`, `find`, `for`, `mode`, `new`, `q`,
   `saved`, `section`, `session` (a chat's id), `status`, `tab`, `view`.
   - These are the keys this app's pages read from their query today, minus the
     held-back ones below.
-  - Each value is capped in length.
+  - Each value is capped at 200 characters (`q` and `find` are free text that
+    reaches the desk's logs); a longer one keeps the link here.
   - Every other key is dropped, including `embed` and `standalone`.
 - **Held back: the link isn't redirected at all.** It opens here, as today, so
   none of it reaches the desk. That applies when the query holds:
@@ -134,7 +137,9 @@ At startup it must pass `lib/embed.ts`'s `parseReturnBase`, the check a host's
 `returnBase` already passes:
 - https or http;
 - no user or password;
-- a plain `/desk/…` or `/app/…` path;
+- the route of one desk page, `/desk/<page>` or `/app/<page>`, not `/desk` or
+  `/app` alone;
+- https, except on localhost;
 - no query, no fragment, no encoded separator.
 
 Its origin must also be one of `OE_HOST_ORIGINS`. If it fails, the server logs
@@ -164,6 +169,9 @@ The redirect itself:
   - The path is the request's own pathname. It's checked as
     `lib/signinReturn.ts` checks a return target: it starts with one `/`, has no
     `//`, no `..` segment and no encoded `.`, `/` or `\`.
+  - The stand-alone test also runs on the path decoded once and lower-cased, so
+    `/sign%69n` or `/Cards/7` stays here. A path that still holds an escape
+    after that, or decodes to `?`, `#`, NUL or `\`, isn't redirected.
   - Anything else isn't redirected. The page loads as today.
 - **Length limit:** path and query are capped, to fit the desk's own limits
   (oe_connector `embed.frame_src`). A longer one isn't redirected.
