@@ -213,15 +213,18 @@ export function frameActionFor(
 /**
  * Where a browser that can't tell the frame is seen answers `action`: the
  * card's own page, or else the page that asked (`pathname` + `search`), in
- * both cases without `embed`, so it opens as this app's own page.
+ * both cases without `embed`, so it opens as this app's own page. The page
+ * that asked also gets `standalone=1` (lib/deskRedirect.ts's STANDALONE_PARAM),
+ * so a direct visit isn't sent back into the desk's frame; a card's page
+ * stands alone anyway.
  */
 export function ownPageFor(action: CardAction, pathname: string, search: string): string {
   if (action.page) return action.page;
   const params = new URLSearchParams(search);
   params.delete("embed");
-  const query = params.toString();
+  params.set("standalone", "1");
   const path = pathname.startsWith("/") && !pathname.startsWith("//") ? pathname : "/";
-  return query ? `${path}?${query}` : path;
+  return `${path}?${params.toString()}`;
 }
 
 export class CardActionNotConfirmed extends Error {
