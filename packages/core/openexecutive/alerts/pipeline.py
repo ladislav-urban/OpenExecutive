@@ -256,12 +256,17 @@ async def evaluate_and_dispatch(
         # One team member's alert never folds into another's card.
         dedup_key = f"raised_by:{(event.from_ or event.raised_by).lower()}:{dedup_key}"
     from openexecutive.alerts.models import NAMED_TAG_PREFIX
+    from openexecutive.memory.decision_ledger import DECISION_INSTANCE_TAG_PREFIX
 
-    # Only the event's own list names people (models.named_people): a tag
-    # the triage model wrote is never one.
+    # Tags only code writes, never the triage model:
+    # - Only the event's own list names people (models.named_people).
+    # - A card's decision_instance tag links it to its ledger row; only the
+    #   code that writes that row adds it, with store.insert_alert directly
+    #   (calendar_tools, department_gate, take_the_lead), never through here.
+    code_only = (NAMED_TAG_PREFIX, DECISION_INSTANCE_TAG_PREFIX)
     topic_tags = [
         t for t in _with_department_tag(decision.topic_tags, event.department or event.channel)
-        if not str(t).lower().startswith(NAMED_TAG_PREFIX)
+        if not str(t).strip().lower().startswith(code_only)
     ]
     routed_to = _person_id_from_event(event)
     named = [i for i in dict.fromkeys(event.named_person_ids) if isinstance(i, int) and not isinstance(i, bool)]

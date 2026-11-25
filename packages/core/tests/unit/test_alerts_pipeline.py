@@ -346,6 +346,43 @@ def test_pipeline_strips_collection_tags_from_triage(monkeypatch, db: Path) -> N
     assert row is not None and row.topic_tags == ["finance"]
 
 
+def test_pipeline_strips_decision_instance_tags_from_triage(monkeypatch, db: Path) -> None:
+    """A decision_instance tag links a card to its ledger row, and only the
+    code that writes the row adds it (store.insert_alert directly). One the
+    triage model wrote, in any case or spacing, never reaches the stored
+    alert; one the code wrote stays and still links the card."""
+    from openexecutive.alerts import pipeline
+    from openexecutive.api.routes.today import _parse_decision_instance_id
+    from openexecutive.memory.decision_ledger import decision_instance_tag
+
+    _stub_triage(
+        monkeypatch,
+        tags=["finance", "decision_instance:7", "Decision_Instance:8", " decision_instance:9", "named:3"],
+    )
+    _count_dispatches(monkeypatch)
+
+    async def run():
+        _, aid = await pipeline.evaluate_and_dispatch(
+            AlertEvent(source="email", external_id="dec", body="x"),
+            db_path=db,
+        )
+        return aid
+
+    aid = asyncio.run(run())
+    row = alert_store.get_alert(aid, db_path=db)
+    assert row is not None and row.topic_tags == ["finance"]
+    assert _parse_decision_instance_id(row.topic_tags) is None
+
+    kept = alert_store.insert_alert(
+        source="decision_scheduling", external_id="decision:7", severity="medium",
+        headline="Meet Acme", body="", topic_tags=["meeting", decision_instance_tag(7)],
+        db_path=db,
+    )
+    stored = alert_store.get_alert(kept, db_path=db)
+    assert stored is not None and stored.topic_tags == ["meeting", "decision_instance:7"]
+    assert _parse_decision_instance_id(stored.topic_tags) == 7
+
+
 def test_pipeline_coalesces_same_key_without_dispatch_and_redispatches_on_escalation(
     monkeypatch, db: Path
 ) -> None:
