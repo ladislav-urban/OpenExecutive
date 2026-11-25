@@ -61,13 +61,23 @@ jobs:
           # What the web app's checks read: the web app, this workflow, and
           # the Python files its parity tests parse (see CLAUDE.md -> UI lint).
           uiread='^(packages/ui/|\.github/workflows/ci\.yml$|packages/core/openexecutive/api/main\.py$|packages/core/openexecutive/utils/deployment\.py$)'
+          # --no-renames: a move lists its old path too, so moving code into
+          # docs/ (or out of the web app) can't pass as prose. Matches are
+          # counted with grep -c, which reads every line, rather than by
+          # negating a `grep -q` pipeline, which fails open under pipefail
+          # (an early-exiting grep -q SIGPIPEs the writer, and `!` turns that
+          # into "nothing matched").
+          # hits LIST RE / misses LIST RE: how many lines of LIST do / don't match RE.
+          hits() { printf '%s\n' "$1" | grep -cE "$2" || true; }
+          misses() { printf '%s\n' "$1" | grep -cvE "$2" || true; }
           if [ "$EVENT" = pull_request ]; then
-            files=$(git diff --name-only "origin/$BASE_REF"...HEAD)
+            files=$(git diff --no-renames --name-only "origin/$BASE_REF"...HEAD)
             # Python suites skip when every change is inside the web app or
             # is prose.
-            if ! echo "$files" | grep -vE '^packages/ui/' | grep -qvE "$prose"; then python=false; fi
+            outside_ui=$(printf '%s\n' "$files" | grep -vE '^packages/ui/' || true)
+            if [ -n "$files" ] && { [ -z "$outside_ui" ] || [ "$(misses "$outside_ui" "$prose")" = 0 ]; }; then python=false; fi
             # The web app's checks only run when something they read changed.
-            if ! echo "$files" | grep -qE "$uiread"; then ui=false; fi
+            if [ "$(hits "$files" "$uiread")" = 0 ]; then ui=false; fi
           elif [ "$EVENT" = push ] && echo "$BEFORE" | grep -qE '^[0-9a-f]{40}$' \
                && ! echo "$BEFORE" | grep -qE '^0+$' \
                && git merge-base --is-ancestor "$BEFORE" HEAD 2>/dev/null; then
@@ -79,11 +89,11 @@ jobs:
             # cancelled by a later one that skips would never be tested on
             # main. A new branch, a force push, an unknown base, or no answer
             # from the API runs everything.
-            files=$(git diff --name-only "$BEFORE" HEAD)
+            files=$(git diff --no-renames --name-only "$BEFORE" HEAD)
             py_skip=false; ui_skip=false
             if [ -n "$files" ]; then
-              if ! echo "$files" | grep -qvE "$prose"; then py_skip=true; fi
-              if ! echo "$files" | grep -qE "$uiread"; then ui_skip=true; fi
+              if [ "$(misses "$files" "$prose")" = 0 ]; then py_skip=true; fi
+              if [ "$(hits "$files" "$uiread")" = 0 ]; then ui_skip=true; fi
             fi
             if { [ "$py_skip" = true ] || [ "$ui_skip" = true ]; } && command -v gh >/dev/null; then
               passed=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$BEFORE&event=push&branch=main&status=success" \
