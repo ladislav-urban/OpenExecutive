@@ -2897,13 +2897,18 @@ def _empty_for_no_one(response: TodayResponse, request: Request, caller: int | N
 
 def _card_for_caller(
     routed_to: int | None, decision_instance_id: int | None, caller: int | None,
-    instances: dict[int, Any],
+    instances: dict[int, Any], *, named: bool = False,
 ) -> bool:
-    """Whether a card belongs on a non-principal's Home: a card backed by a
-    decision only when it is for them (`decisions.card_is_for`: its approver,
-    the person it was routed to, or the owner of the conversation it came
-    from), the rule GET /decisions/{id} applies; any other card when it is
-    routed to them or to no one (the shared board). Fails closed."""
+    """Whether a card belongs on a non-principal's Home: a card whose private
+    alert names them (``named``, `alerts.models.named_for`: an ERPNext credit
+    hold for the people oe_connector checked), though it is routed to the
+    principal; a card backed by a decision only when it is for them
+    (`decisions.card_is_for`: its approver, the person it was routed to, or
+    the owner of the conversation it came from), the rule GET /decisions/{id}
+    applies; any other card when it is routed to them or to no one (the
+    shared board). Fails closed."""
+    if named and caller is not None:
+        return True
     if decision_instance_id is not None:
         from openexecutive.api.routes.decisions import card_is_for
 
@@ -2940,13 +2945,40 @@ def _cards_for_caller(response: TodayResponse, caller: int | None, *, principal:
         return
     ids = [p.decision_instance_id for p in proposals if p.decision_instance_id is not None]
     instances = _decision_instances(ids)
+    named = _named_for_caller(proposals, caller)
     response.proposals = [
         p for p in proposals
-        if _card_for_caller(p.routed_to_person_id, p.decision_instance_id, caller, instances)
+        if _card_for_caller(
+            p.routed_to_person_id, p.decision_instance_id, caller, instances, named=p.alert_id in named
+        )
     ]
     handled = getattr(response, "handled_overnight", None)
     if handled:
         response.handled_overnight = _handled_for_caller(handled, caller)
+
+
+def _named_for_caller(proposals: list[Any], caller: int | None) -> set[int]:
+    """The ids of the cards whose alert names ``caller`` (`alerts.models.named_for`),
+    read back from the store: a card's own tags only pick which to read, and the
+    stored alert's source and privacy decide. Fails closed."""
+    from openexecutive.alerts.models import NAMED_TAG_PREFIX, named_for
+    from openexecutive.alerts.store import get_alert
+
+    if caller is None:
+        return set()
+    tag = f"{NAMED_TAG_PREFIX}{caller}"
+    named: set[int] = set()
+    for p in proposals:
+        if tag not in (getattr(p, "topic_tags", None) or []):
+            continue
+        try:
+            alert = get_alert(p.alert_id)
+        except Exception:
+            logger.warning("today: reading a named card failed — it stays hidden", exc_info=True)
+            continue
+        if alert is not None and named_for(alert, caller):
+            named.add(p.alert_id)
+    return named
 
 
 def _handled_for_caller(rows: list[Any], caller: int | None) -> list[Any]:
@@ -2954,6 +2986,7 @@ def _handled_for_caller(rows: list[Any], caller: int | None) -> list[Any]:
     card their own Home would keep (`_card_for_caller`). A row about no card
     (a watch the review added or stopped) is the company's monitoring, the
     principal's to read. Fails closed."""
+    from openexecutive.alerts.models import named_for
     from openexecutive.alerts.store import get_alert
 
     if caller is None:
@@ -2972,7 +3005,9 @@ def _handled_for_caller(rows: list[Any], caller: int | None) -> list[Any]:
             continue
         instance_id = _parse_decision_instance_id(alert.topic_tags or [])
         instances = _decision_instances([instance_id] if instance_id is not None else [])
-        if _card_for_caller(alert.routed_to_person_id, instance_id, caller, instances):
+        if _card_for_caller(
+            alert.routed_to_person_id, instance_id, caller, instances, named=named_for(alert, caller)
+        ):
             kept.append(row)
     return kept
 
@@ -3047,9 +3082,13 @@ def needs_you_count(caller: int | None, *, principal: bool, now: datetime, all_c
         # The same cards their Home keeps (`_cards_for_caller`).
         tagged = {a.id: _parse_decision_instance_id(a.topic_tags or []) for a in alerts}
         instances = _decision_instances([i for i in tagged.values() if i is not None])
+        from openexecutive.alerts.models import named_for
+
         alerts = [
             a for a in alerts
-            if _card_for_caller(a.routed_to_person_id, tagged[a.id], caller, instances)
+            if _card_for_caller(
+                a.routed_to_person_id, tagged[a.id], caller, instances, named=named_for(a, caller)
+            )
         ]
     trust_by_slug = _watch_trust_by_slug(alerts)
     mine = 0
