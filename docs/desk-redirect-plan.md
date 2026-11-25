@@ -160,8 +160,8 @@ The redirect itself:
 
 ## Rollout
 
-- Ships in W6 or later, off by default. The operator sets `OE_DESK_BASE` on the
-  pilot in a deploy window.
+- Off by default. An operator turns it on by setting `OE_DESK_BASE` in a deploy
+  window.
 - To roll back, unset it and restart.
 - **Day-of check:**
   - a typed address of a page opens it in the desk;
