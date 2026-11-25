@@ -91,6 +91,16 @@ test("each page that stands alone stays here", () => {
     assert.ok(visit(path), path);
   }
   assert.ok(STANDALONE_PATH.test("/signin/return"));
+  // Encoded or in another case, a stand-alone path still stands alone.
+  for (const path of ["/sign%69n", "/Signin", "/SIGNIN/SSO", "/c%61rds/7", "/Cards/alert/3", "/chats/sh%61red/abc", "/ap%69/auth/signin", "/Embed/approve/3", "/signout/ss%6F"]) {
+    assert.equal(visit(path), null, path);
+  }
+  // An escape that survives one decoding, or decodes to a query, fragment,
+  // NUL or backslash, isn't a plain path.
+  for (const path of ["/jobs%3Fx", "/jobs%23x", "/jobs%00", "/jobs%255c", "/jobs%2520", "/a%2", "/%E0%A4%A"]) {
+    assert.equal(visit(path), null, path);
+  }
+  assert.equal(visit("/people/J%C3%BCrgen"), `${BASE}/people/J%C3%BCrgen`);
 });
 
 test("standalone=1 keeps any page here", () => {
@@ -159,6 +169,12 @@ test("OE_DESK_BASE: a desk route on a host origin, or off", () => {
     assert.ok(parsed.error, bad);
   }
   assert.equal(parseDeskBase(BASE, [], parseReturnBase).base, null);
+  // A desk page, not the whole route space; https except on this machine.
+  for (const bad of ["https://erp.example.com/desk", "https://erp.example.com/app", "https://erp.example.com/desk/", "http://erp.example.com/desk/x"]) {
+    assert.equal(parseDeskBase(bad, [...origins, "http://erp.example.com"], parseReturnBase).base, null, bad);
+  }
+  assert.equal(parseDeskBase("https://erp.example.com/app/x", origins, parseReturnBase).base, "https://erp.example.com/app/x");
+  assert.equal(parseDeskBase("http://localhost:8080/desk/x", ["http://localhost:8080"], parseReturnBase).base, "http://localhost:8080/desk/x");
 });
 
 // Every page and route handler under src/app, as the path it serves.

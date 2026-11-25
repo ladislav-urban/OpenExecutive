@@ -93,8 +93,15 @@ export function parseDeskBase(
 ): { base: string | null; error: string | null } {
   if (value === undefined || value.trim() === "") return { base: null, error: null };
   const base = parseReturnBase(value.trim());
-  if (!base) return { base: null, error: "OE_DESK_BASE isn't a desk route (https://host/desk/<page>)" };
-  if (!hostOrigins.includes(new URL(base).origin)) {
+  const url = base ? new URL(base) : null;
+  // A page of the desk, not the desk's whole route space (`/app` alone would
+  // send `/user/new` here to the desk's own `/app/user/new`); https, except on
+  // this machine.
+  const local = url !== null && ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (!base || !url || !/^\/(?:desk|app)\/[^/]+/.test(url.pathname) || (url.protocol !== "https:" && !local)) {
+    return { base: null, error: "OE_DESK_BASE isn't a desk page's route (https://host/desk/<page>)" };
+  }
+  if (!hostOrigins.includes(url.origin)) {
     return { base: null, error: "OE_DESK_BASE's origin isn't one of OE_HOST_ORIGINS" };
   }
   return { base, error: null };
@@ -135,7 +142,19 @@ export function deskTarget(
   const path = request.pathname;
   if (path.length > MAX_PATH_CHARS || !PAGE_PATH_RE.test(path)) return null;
   if (path.includes("//") || /(?:^|\/)\.\.?(?:\/|$)/.test(path) || ENCODED_SEPARATOR_RE.test(path)) return null;
-  if (STANDALONE_PATH.test(path) || FILE_RE.test(path)) return null;
+  // Decoded once and case-folded before the stand-alone test, so `/sign%69n`
+  // or `/Cards/7` stays here like the page it may be. A path that still holds
+  // an escape after that, or decodes to a query, fragment, NUL or backslash,
+  // isn't plain: it stays here too.
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(path);
+  } catch {
+    return null;
+  }
+  if (/[%?#\\\0]/.test(decoded) || decoded.includes("//")) return null;
+  const folded = decoded.toLowerCase();
+  if (STANDALONE_PATH.test(path) || STANDALONE_PATH.test(folded) || FILE_RE.test(decoded)) return null;
   const search = request.search.startsWith("?") ? request.search.slice(1) : request.search;
   if (search.length > MAX_QUERY_CHARS) return null;
   const params = new URLSearchParams(search);

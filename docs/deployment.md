@@ -270,8 +270,9 @@ that frames its pages, on one of the `OE_HOST_ORIGINS`:
 OE_DESK_BASE=https://erp.example.com/desk/<page>
 ```
 
-The UI checks it at startup: an http(s) desk route (`/desk/…` or `/app/…`) with no
-query, fragment, user info or encoded separator, on a listed host origin. Otherwise it
+The UI checks it at startup: an https route of one desk page (`/desk/<page>` or
+`/app/<page>`; http only on localhost) with no query, fragment, user info or encoded
+separator, on a listed host origin. Otherwise it
 logs why and redirects nothing.
 
 With it set, a top-level page load (`Sec-Fetch-Dest: document`, a GET or HEAD, no
