@@ -122,7 +122,7 @@ test("without v2, each action is answered on this app's own page, top level", ()
   assert.match(change.what, /^Make this change in Northwind, as you\. \(POST \/executive\/pause\/%7Bproduct%7D\)$/);
   assert.equal(frameActionFor("POST", "/api/backend/executive/pause", "{}", CALLS, "Northwind").what, "Pause or resume Northwind. (POST /executive/pause)");
   const send = frameActionFor("POST", "/api/backend/chat", '{"message":"hi"}', CALLS);
-  assert.equal(ownPageFor(send, "/chats/abc", "?embed=1&tab=2"), "/chats/abc?tab=2");
-  assert.equal(ownPageFor(send, "/chats/abc", "?embed=1"), "/chats/abc");
-  assert.equal(ownPageFor(send, "//evil.example/x", ""), "/");
+  assert.equal(ownPageFor(send, "/chats/abc", "?embed=1&tab=2"), "/chats/abc?tab=2&standalone=1");
+  assert.equal(ownPageFor(send, "/chats/abc", "?embed=1"), "/chats/abc?standalone=1");
+  assert.equal(ownPageFor(send, "//evil.example/x", ""), "/?standalone=1");
 });

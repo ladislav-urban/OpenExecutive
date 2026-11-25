@@ -196,6 +196,7 @@ scan runs about once a week on a demo instead of after every reset.
 | `BACKEND_ALLOWED_ORIGINS` | Comma-separated UI origins allowed through CORS, e.g. `https://exec.example.com`. With `OE_PUBLIC_DEPLOYMENT` set these are the only ones: the `localhost:3000` origins `make dev` uses are dropped. |
 | `OE_PRODUCT_NAME` (UI and API) | Optional. What the app calls itself: on the UI's own pages (the browser tab, `/signin`, a card's page opened from a host's frame), and on the API in what the Executive tells someone to do "in <product> itself", e.g. the host product's name when Open Executive runs inside it. Set it on both. Unset: Open Executive. |
 | `OE_HOST_ORIGINS` (UI) | Optional. Origins of other apps that may frame the UI and call its short host list from their pages, e.g. `https://erp.example.com`. Unset, only the UI frames itself. See [below](#showing-open-executive-inside-another-app-oe_host_origins). |
+| `OE_DESK_BASE` (UI) | Optional, needs `OE_HOST_ORIGINS`. The host's desk route that frames the UI's pages, e.g. `https://erp.example.com/desk/<page>`: a direct visit to a page then opens the same screen there. Unset, nothing is redirected. See [below](#sending-direct-visits-to-the-desk-oe_desk_base). |
 | `AUTH_SECRET`, `AUTH_GOOGLE_ID`, `AUTH_GOOGLE_SECRET`, `AUTH_OIDC_ISSUER`, `AUTH_OIDC_ID`, `AUTH_OIDC_SECRET`, `AUTH_URL`, `ALLOWED_EMAILS` | UI sign-in (Google and/or SSO). See [auth.md](auth.md). With SSO, register at the provider the back-channel logout URL `<UI origin>/api/auth/backchannel-logout` (session required on) and the post-logout redirect `<UI origin>/signin`, and let the provider reach the UI origin: signing out at the provider then signs out here too (auth.md, "Signing out (SSO)"). |
 
 Integrations (Slack, Discord, email, Google Workspace, Microsoft 365) are all
@@ -258,6 +259,39 @@ framing and every call from its pages at once (for ERPNext, see
 [Inside ERPNext's desk](#inside-erpnexts-desk-the-single-ui)). `make embed-outputs` writes the files a
 host app checks itself against (`embed-manifest.json`, `host-list.json`,
 `openapi.json`).
+
+### Sending direct visits to the desk (`OE_DESK_BASE`)
+
+When people use Open Executive inside a host's desk, a typed address or a link to one of
+its pages can open the same screen there instead. Set, on the **UI**, the desk route
+that frames its pages, on one of the `OE_HOST_ORIGINS`:
+
+```
+OE_DESK_BASE=https://erp.example.com/desk/<page>
+```
+
+The UI checks it at startup: an http(s) desk route (`/desk/…` or `/app/…`) with no
+query, fragment, user info or encoded separator, on a listed host origin. Otherwise it
+logs why and redirects nothing.
+
+With it set, a top-level page load (`Sec-Fetch-Dest: document`, a GET or HEAD, no
+prefetch) is answered with a `302` to `<desk base><path>`, `/` to the base itself
+(`src/lib/deskRedirect.ts`, `docs/desk-redirect-plan.md`):
+
+- **Not redirected:**
+  - the framed page and Next's own fetches;
+  - a browser that sends no fetch metadata;
+  - `/api/*`, sign-in and sign-out (`/signin`, `/signin/done`, `/signin/return`,
+    `/signin/sso`, `/signout/sso`);
+  - a card's page (`/cards/*`), `/embed/*`, a shared chat (`/chats/shared/*`);
+  - files at the root, such as `/icon.svg`;
+  - any link with `standalone=1`, which the frame's confirm fallback adds.
+- **Only screen-state query keys go along** (`FORWARDED_KEYS` there), and the others are
+  dropped. A link whose query holds a way back, a sign-in hint, someone's own words
+  (`prefill`, `draft`, `describe`) or a key that looks like a secret (`token`, `code`,
+  `state`, `key`, `sig`, …) isn't redirected at all.
+- **It isn't an access control:** every page keeps its own session check. Unset the
+  variable and restart the UI to turn it off.
 
 ---
 

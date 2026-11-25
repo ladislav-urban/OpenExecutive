@@ -1,7 +1,8 @@
 import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { contentSecurityPolicy, makeNonce } from "@/lib/csp";
-import { HOST_CALLS, HOST_ORIGINS } from "@/lib/hostConfig";
+import { deskTarget } from "@/lib/deskRedirect";
+import { DESK_BASE, HOST_CALLS, HOST_ORIGINS } from "@/lib/hostConfig";
 import { backendSegments, corsHeaders, frameAncestors, hostPreflight, judgeHostRequest } from "@/lib/hostOrigins";
 import { SESSION_FREE_PATH } from "@/lib/middlewarePaths";
 
@@ -11,12 +12,16 @@ import { SESSION_FREE_PATH } from "@/lib/middlewarePaths";
 //    preflight is answered here, before any session check (a preflight
 //    carries no cookie), and a call off the host list is refused with 403.
 //    Both with CORS for that exact origin, so the host's page can read why.
-// 2. The session check, except for Auth.js's own routes and exactly `/signin`
+// 2. With OE_DESK_BASE set, a direct, top-level visit to a page goes to the
+//    same screen in the host's desk (lib/deskRedirect.ts), before the session
+//    check: the desk signs the person in. The framed page, the pages that
+//    stand alone and a link carrying a held-back key stay here.
+// 3. The session check, except for Auth.js's own routes and exactly `/signin`
 //    (with optional trailing slash): the decision, and the response a refused
 //    request gets (JSON 401 for /api/*, a redirect to /signin for pages),
 //    live in the `authorized` callback in auth.ts. A host call refused there
 //    gets its 401 with CORS too, so a host's page can offer sign-in.
-// 3. Pages get the Content-Security-Policy (lib/csp.ts): a nonce per
+// 4. Pages get the Content-Security-Policy (lib/csp.ts): a nonce per
 //    request, which Next.js puts on its own scripts, and who may frame them.
 //
 // `auth` is called as-is, never wrapped as `auth((req) => …)`: when a wrapper
@@ -29,6 +34,8 @@ const FRAME_ANCESTORS = frameAncestors(HOST_ORIGINS.origins);
 // Written out literally: Next.js folds it at build time, so a production
 // build never allows eval.
 const DEV_SERVER = process.env.NODE_ENV !== "production";
+// What a direct visit's redirect turns on (lib/deskRedirect.ts, topLevelVisit).
+const DESK_VARY = "Sec-Fetch-Dest, Sec-Fetch-Mode, Sec-Purpose, Purpose";
 
 function json(status: number, body: unknown, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -83,6 +90,22 @@ export async function middleware(req: NextRequest, ev: NextFetchEvent): Promise<
     return response;
   }
 
+  const desk = deskTarget(
+    { method: req.method, pathname, search: req.nextUrl.search, headers: req.headers },
+    DESK_BASE,
+  );
+  if (desk) {
+    return new Response(null, {
+      status: 302,
+      headers: {
+        location: desk,
+        "cache-control": "no-store",
+        vary: DESK_VARY,
+        "referrer-policy": "same-origin",
+      },
+    });
+  }
+
   const csp = contentSecurityPolicy({
     nonce: makeNonce(),
     frameAncestors: FRAME_ANCESTORS,
@@ -109,6 +132,9 @@ export async function middleware(req: NextRequest, ev: NextFetchEvent): Promise<
     }
   }
   response.headers.set("Content-Security-Policy", csp);
+  // The same address is a redirect or the page, by fetch metadata alone: no
+  // cache in between may hand one the other's answer.
+  if (DESK_BASE) response.headers.append("vary", DESK_VARY);
   return response;
 }
 
