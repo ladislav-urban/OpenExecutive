@@ -12329,17 +12329,41 @@ watch:
   registry: |
     watch.registry: WatchJob(id, title, reads, build, schedule,
     card_cap_day, default_settings, reason_schema=None, ..., slots=(),
-    weekdays=all). id is oe_connector's
+    weekdays=all, runs_on=None, updates_notice=False). runs_on(settings,
+    day): whether the scheduled run is due that day besides weekdays (pure
+    code or this install's records, never a read; raising or not True keeps
+    it from starting that tick; a run started by hand ignores it; month-end's
+    calendar). A WatchRead with may_fail and no repeat that ERPNext refuses
+    or that times out gives {"unread": true} and the run goes on (that
+    includes the gateway's own call-time refusals, which come back as an
+    answer; the run's record keeps each one's code and refusal_record, and
+    logs it); its shape, the runner's own marker refusals, another job's
+    answer or no ERPNext still end it, and an unread read is left out of
+    cards.route's job-user check (it returned no data). A job's rules read
+    {"unread": true} as not read, never as no rows. updates_notice: an open
+    notice (unread or read) is rewritten in place and marked unread when what
+    it says changed (the preamble's day alone isn't a change), in one
+    statement (alerts.store.rewrite_open_alert) that leaves a notice dealt
+    with meanwhile alone, outside the day's notice cap and never held back by
+    a once job's told record. CardSpec.subject is used only when, cleaned and
+    at most 120 characters, it fully matches the job's subject_pattern (a
+    constant regex of code's words and digits), else the title and count.
+    id is oe_connector's
     watch.JOB_ID ([a-z0-9-]{1,40}), the key of oe_connector_watch_jobs and of
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same
-    slot names ($company, $date within 400 days, $party, $parties and
+    slot names ($company, $date within 400 days, $month_end such a date that
+    is its month's last day, every $month_end in one call the same date
+    (shape_mismatch's top level, oe_connector's watch._mismatch), $party,
+    $parties and
     $customers and $projects up to 50 (oe_connector's _slot_holds also
     checks each is a Supplier, Customer or Project the call's user may
     read; here, LIST_SLOTS and _slot_holds check names only), $int 1-500, $bank_line a Bank Transaction's name
     that oe_connector also checks is on an account listed for bank
     matching; LOCAL_SLOTS holds this side's own $bank_account, a value
-    oe_connector's listing holds as a literal, one read per account; the
+    oe_connector's listing holds as a literal, one read per account, and
+    $account, a GL account's name, the one slot a list may hold alone
+    (["$account"], General Ledger's account filter; LIST_LOCAL_SLOTS); the
     top-level `fields` a most; any other
     list the same length, element by element, so ["<=", "$date"] and
     ["in", "$parties"]; a literal only the same JSON type and value, true

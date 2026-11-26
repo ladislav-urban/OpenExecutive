@@ -156,7 +156,9 @@ def route(job: registry.WatchJob, row: Any, reads: Sequence[Mapping[str, Any]]) 
     from openexecutive.people.store import get_person
 
     principal = _principal_id()
-    made = [r for r in reads if not r.get("skipped")]
+    # A read skipped, or one that may fail and was refused (``unread``: no
+    # ERPNext data came back), says nothing about who the reads ran as.
+    made = [r for r in reads if not r.get("skipped") and r.get("unread") is not True]
     if not made:
         return Route(principal, reason="no_reads")
     if not all(r.get("as_job_user") is True for r in made):

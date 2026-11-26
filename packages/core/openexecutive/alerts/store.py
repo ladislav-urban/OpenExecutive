@@ -612,6 +612,28 @@ def update_alert_content(
         return cursor.rowcount > 0
 
 
+def rewrite_open_alert(
+    alert_id: int,
+    *,
+    headline: str,
+    body: str,
+    routed_to_person_id: int | None,
+    db_path: Path | None = None,
+) -> bool:
+    """Rewrite a still-open alert's headline, body and routing and mark it
+    unread, as one statement; nothing when it was dealt with since
+    (dismissed, archived). True when it was rewritten."""
+    if not _resolve_db_path(db_path).exists():
+        return False
+    with _get_conn(db_path) as conn:
+        cursor = conn.execute(
+            "UPDATE alerts SET headline = ?, body = ?, routed_to_person_id = ?, status = 'unread' "
+            "WHERE id = ? AND status IN ('unread', 'read')",
+            (headline[:200], body, routed_to_person_id, alert_id),
+        )
+        return cursor.rowcount > 0
+
+
 def set_review(
     alert_id: int,
     *,

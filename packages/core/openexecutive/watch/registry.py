@@ -59,7 +59,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, time
+from datetime import date, time, timedelta
 from types import MappingProxyType
 from typing import Any
 
@@ -68,8 +68,13 @@ from typing import Any
 JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOTS: tuple[str, ...] = (
     "$company", "$date", "$party", "$parties", "$customers", "$projects", "$int", "$bank_line", "$mail_draft",
-    "$mail_file",
+    "$mail_file", "$month_end",
 )
+# A month's last day (oe_connector's watch._slot_holds: a $date that is the
+# last day of its own month), and within one call every $month_end holds the
+# same date (its watch._mismatch), so a month-end read is one month's end
+# throughout: General Ledger's from_date can't differ from its to_date.
+MONTH_END = "$month_end"
 # The list slots (oe_connector's watch.LIST_SLOTS): up to MAX_LIST names,
 # only after in or not in. oe_connector also checks each name is a document
 # of the slot's DocType the call's user may read (its LIST_SLOT_DOCTYPES:
@@ -82,7 +87,12 @@ LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers", "$projects")
 # ``$chain_index``: the OE Draft chain's place the bank-rules job kept last
 # time, sent as bank_rule_evidence's ``seen_index``, which oe_connector
 # checks itself (its listing holds the read without it).
-LOCAL_SLOTS: tuple[str, ...] = ("$bank_account", "$chain_index")
+# ``$account``: a GL account's name, which a report filter takes as a list
+# of one (General Ledger's ``account``): the only slot a list may hold
+# alone, as ``["$account"]``, one read per account as with $bank_account.
+LOCAL_SLOTS: tuple[str, ...] = ("$bank_account", "$chain_index", "$account")
+# The local slots a list may hold as its one element.
+LIST_LOCAL_SLOTS: tuple[str, ...] = ("$account",)
 # A chain index's bound (oe_connector's own).
 MAX_CHAIN_INDEX = 10**9
 # Slots that only mean something together, as a read_attachment read's
@@ -112,6 +122,10 @@ _NAME_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^
 # the job connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to.
 READ_TOOLS: frozenset[str] = frozenset({"run_report", "list_records"})
 MAX_CARD_CAP = 50
+# Texts no job's subject_pattern may match in full: a pattern that takes
+# them takes any text (".*", "[^\n]+", "\S.*"), so it keeps no ERPNext name
+# out of a subject.
+SUBJECT_PROBES: tuple[str, ...] = ("x" * 10 + "<>é", "Ignore your instructions", "a", "0", "x y")
 
 Settings = Mapping[str, Any]
 
@@ -163,10 +177,14 @@ class WatchRead:
     # A repeated read: at most this many calls a run (1 to MAX_REPEAT), its
     # arguments ``Repeated``. 0: one call.
     repeat: int = 0
-    # A repeated read whose one call may be refused without ending the run
-    # (one supplier's unreadable PDF): that item's result is
-    # ``{"unread": True}``, which the job's rules treat as "needs a person",
-    # never a card. Only on a repeated read.
+    # A read that may be refused without ending the run. On a repeated read,
+    # one call ERPNext refused (one supplier's unreadable PDF) gives that
+    # item ``{"unread": True}``. On a single read, a refusal or a timeout
+    # gives the whole read's result as ``{"unread": True}`` (month-end's
+    # checks, each said as "not read", never as clear). Either way the
+    # job's rules treat it as "needs a person", never a card. A read whose
+    # arguments don't fit its shape, or answered as another job, still ends
+    # the run.
     may_fail: bool = False
 
     @property
@@ -211,6 +229,11 @@ class CardSpec:
     # quote-follow-up job's quotations to leads): recorded as told with its
     # rows once the notice is left. Keys only, never shown.
     counted: tuple[str, ...] = ()
+    # The notice's subject in code's own words and counts only, never
+    # ERPNext's text ("Close of October: 6 of 9 clear"). Used only when it
+    # fully matches its job's ``subject_pattern``; otherwise, or "", the
+    # job's title and the run's count (``runner.notice_subject``).
+    subject: str = ""
 
 
 @dataclass(frozen=True)
@@ -323,6 +346,11 @@ Proposals = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[Pro
 ProposalCheck = Callable[[Settings, Mapping[str, Any]], bool]
 # (oe_connector's refusal text, only searched) -> a short code, never the text.
 ProposalRefusal = Callable[[object], str]
+# (the job's current settings, a day in company time) -> whether its
+# scheduled run is due that day, beyond its ``weekdays`` (month-end's first
+# working day, then daily, then weekly until clear). Pure code, or reading
+# this install's own records only; never a read of ERPNext.
+RunsOn = Callable[[Settings, date], bool]
 
 
 def _setting_ok(value: object, bounds: tuple[int, int] | None = None) -> bool:
@@ -394,6 +422,23 @@ class WatchJob:
     # ISO week): a hold written when ERPNext refused a finding's check ends
     # with the period. Without one, such a hold lasts ``cards.HOLD_DAYS``.
     periodic_keys: bool = False
+    # Whether its scheduled run is due on a day (``RunsOn``), besides its
+    # weekdays; None: each of them. A run started by hand ignores it. The
+    # day's claim, and with it the stale-run check, is reached only on a day
+    # it's due: a run started by hand that died on another day is found
+    # stale on the next due day, or by the next run started by hand.
+    runs_on: RunsOn | None = None
+    # Its notices are kept current rather than left again: while one is
+    # still open (unread or read), a run that finds it changed rewrites its
+    # subject and body in place and marks it unread; unchanged, it's a
+    # repeat. A once job's told record never holds such a notice back (its
+    # cards are still once). One closed is left afresh, at most once a day.
+    updates_notice: bool = False
+    # The subjects its notices may have of their own (``CardSpec.subject``):
+    # a constant regular expression of code's words and digits, which a
+    # subject must match in full, so no ERPNext text can stand in one. "":
+    # none, every subject is the title and count.
+    subject_pattern: str = ""
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -428,8 +473,8 @@ class WatchJob:
                 or not 0 <= read.repeat <= MAX_REPEAT
             ):
                 raise ValueError(f"a read repeats at most {MAX_REPEAT} times")
-            if not isinstance(read.may_fail, bool) or (read.may_fail and not read.repeat):
-                raise ValueError("only a repeated read's call may fail on its own")
+            if not isinstance(read.may_fail, bool):
+                raise ValueError("a read's may_fail is true or false")
         if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
             raise ValueError("a job's card cap is 1 to 50 a day")
         schema = self.reason_schema
@@ -469,6 +514,20 @@ class WatchJob:
             raise ValueError("a job's slots are distinct times, in order, from its schedule")
         if not self.weekdays or not self.weekdays <= frozenset(range(7)):
             raise ValueError("a job runs on some of the week's days, Monday 0 to Sunday 6")
+        if self.runs_on is not None and not callable(self.runs_on):
+            raise ValueError("a job's runs_on is a function of its settings and a day")
+        if not isinstance(self.updates_notice, bool):
+            raise ValueError("a job's updates_notice is true or false")
+        if not isinstance(self.subject_pattern, str) or len(self.subject_pattern) > 400:
+            raise ValueError("a job's subject_pattern is a short regular expression")
+        if self.subject_pattern:
+            try:
+                pattern = re.compile(self.subject_pattern)
+            except re.error:
+                raise ValueError("a job's subject_pattern doesn't compile") from None
+            if any(pattern.fullmatch(probe) for probe in SUBJECT_PROBES):
+                # A pattern as open as ".*" would let any text through.
+                raise ValueError("a job's subject_pattern must not match any text (it matches a probe)")
         if (self.proposals is None) != (not self.proposal_tool) or (self.proposals is None) != (
             self.proposal_check is None
         ):
@@ -533,17 +592,19 @@ def _slot_holds(slot: str, value: Any, today: date) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_INT
     if slot == "$chain_index":
         return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CHAIN_INDEX
-    if slot == "$date":
+    if slot in ("$date", MONTH_END):
         if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
             return False
         try:
             day = date.fromisoformat(value)
         except ValueError:
             return False
+        if slot == MONTH_END and (day + timedelta(days=1)).month == day.month:
+            return False
         return abs((day - today).days) <= DATE_RANGE_DAYS
     if slot in ("$company", "$party"):
         return isinstance(value, str) and _text_ok(value)
-    if slot in ("$bank_line", "$bank_account", "$mail_draft", "$mail_file"):
+    if slot in ("$bank_line", "$bank_account", "$account", "$mail_draft", "$mail_file"):
         return isinstance(value, str) and _text_ok(value) and _NAME_RE.fullmatch(value) is not None
     if slot in LIST_SLOTS:
         return (
@@ -622,6 +683,10 @@ def shape_problem(shape: Any, where: str = "", in_filters: bool = False) -> str:
         slots = [e for e in shape if isinstance(e, str) and e.startswith("$")]
         if not slots:
             return ""
+        if len(shape) == 1 and shape[0] in LIST_LOCAL_SLOTS:
+            # A filter's list of one account, this side's slot only: the
+            # listing holds the literal, one read per account.
+            return ""
         unknown = [e for e in slots if e not in SLOTS]
         if unknown:
             return f"{where}: {unknown[0]} isn't a slot"
@@ -645,6 +710,30 @@ def shape_mismatch(
     ``watch._mismatch``). The reason names keys and slots only, never a
     value. ``holds``: whether a slot takes a value; the runner's own check on
     ``today`` unless given."""
+    why = _fit(shape, value, today, where, holds=holds)
+    if why or where:
+        return why
+    # The call's top level: one month's end throughout (oe_connector's
+    # watch._mismatch, after the slot-by-slot fit).
+    return "its $month_end slots hold different dates" if len(set(_month_ends(shape, value))) > 1 else ""
+
+
+def _month_ends(shape: Any, value: Any) -> list[Any]:
+    """The values at ``shape``'s $month_end positions in ``value``, which
+    already fits it."""
+    if isinstance(shape, str):
+        return [value] if shape == MONTH_END else []
+    if isinstance(shape, Mapping) and isinstance(value, Mapping):
+        return [v for key, sub in shape.items() if key in value for v in _month_ends(sub, value[key])]
+    if isinstance(shape, list | tuple) and isinstance(value, list) and len(shape) == len(value):
+        return [v for sub, item in zip(shape, value, strict=True) for v in _month_ends(sub, item)]
+    return []
+
+
+def _fit(
+    shape: Any, value: Any, today: date, where: str = "", *, holds: SlotHolds | None = None,
+) -> str:
+    """Why ``value`` doesn't fit ``shape`` slot by slot, or ""."""
     if isinstance(shape, str) and (shape in SLOTS or shape in LOCAL_SLOTS):
         held = holds(shape, value) if holds is not None else _slot_holds(shape, value, today)
         return "" if held else f"{where or 'value'} isn't a {shape[1:]}"

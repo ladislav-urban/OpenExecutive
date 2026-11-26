@@ -526,10 +526,12 @@ def test_the_mail_slots_stand_only_as_a_read_attachment_reads_name_and_file() ->
         assert registry.shape_problem(unsound), unsound
 
 
-def test_only_a_repeated_read_may_fail_on_its_own() -> None:
-    with pytest.raises(ValueError, match="repeated read"):
+def test_may_fail_is_a_plain_true_or_false() -> None:
+    # A single read may fail on its own too (month-end's checks); the flag
+    # itself is still checked.
+    with pytest.raises(ValueError, match="may_fail"):
         WatchJob(id="x-test", title="X", reads=(WatchRead("list_records", {"doctype": "Item"}, lambda s, d, p: None,
-                                                          "items", may_fail=True),),
+                                                          "items", may_fail=1),),  # type: ignore[arg-type]
                  build=lambda r, s, d: [], schedule=JOB.schedule, card_cap_day=1, default_settings={})
 
 

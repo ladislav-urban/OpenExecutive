@@ -1099,6 +1099,8 @@ own documentation.
 
 A watch job runs unattended on a schedule and leaves cards a person approves. Each one needs settings on both sides, and refuses everything until both agree.
 
+A notice "Some of this job's reads aren't listed on ERPNext's side" means the site's `oe_connector_watch_jobs` entry for that job no longer matches what the job reads. An account may have been added in ERPNext but never listed, for example. Until an ERPNext operator updates the entry from the job's `listing(...)`, those reads are refused and shown as not read, never as clear.
+
 **On the ERPNext site (an ERPNext operator, in `site_config.json`):**
 
 - **`oe_connector_watch_jobs["bank-matching"]`:** the job's reads, as `watch/jobs/bank_matching.py`'s `listing(accounts)` prints them, plus:

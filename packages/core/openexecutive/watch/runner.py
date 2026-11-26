@@ -114,6 +114,8 @@ MAX_ATTEMPTS = 2
 MAX_VALUE_CHARS = registry.DEFAULT_FACT_CHARS
 MAX_LABEL_CHARS = 40
 MAX_REASON_CHARS = 200
+# A finding's own subject (CardSpec.subject), cleaned.
+MAX_SUBJECT_CHARS = 120
 MAX_REASON_FINDINGS = 20
 # The reason call's output bound: one call for all a job's findings, or
 # one per finding (ReasonSchema.per_finding), a single short line.
@@ -153,6 +155,9 @@ REASONS: dict[str, str] = {
     "read_refused": "ERPNext refused the read",
     "bank_facts_off": "supplier bank checks are off in ERPNext's settings",
     "read_timeout": "ERPNext didn't answer in time",
+    # A may-fail read only (its run goes on): the read isn't listed on
+    # ERPNext's side for the job (_scope_refusal).
+    "read_not_listed": "the read isn't listed on ERPNext's side; update the watch listing",
     "read_failed": "the read couldn't be made",
     "acting_job_mismatch": "ERPNext answered the read for a different job",
     "rules_failed": "the job's rules couldn't use what ERPNext returned",
@@ -169,6 +174,46 @@ REASONS: dict[str, str] = {
 # Turned off between its claim and its reads: nothing to tell the principal,
 # who turned it off.
 _QUIET = frozenset({"watch-job-off"})
+# oe_connector's refusals of a read it doesn't list for the job (its
+# refusal_record template ids): the listing drifted, a setting to fix. One
+# name the job's user can't read ("arguments", why "unreadable_value") isn't
+# one: it's the value's, not the listing's.
+_SCOPE_TEMPLATES = frozenset({"job_not_listed", "tool_not_listed", "never_for_a_job", "arguments"})
+NOT_LISTED_LINE = (
+    "Some of this job's reads aren't listed on ERPNext's side, so they weren't read: {reads}. Update the watch "
+    "listing (oe_connector_watch_jobs) for this job; until then they are shown as not read, never as clear."
+)
+
+
+def _scope_refusal(refusal: Mapping[str, Any] | None) -> bool:
+    """Whether a refusal's record (``refusal_record``) says the read isn't
+    listed on ERPNext's side for this job."""
+    if not refusal or refusal.get("template") not in _SCOPE_TEMPLATES:
+        return False
+    return not (refusal.get("template") == "arguments" and refusal.get("why") == "unreadable_value")
+
+
+def _not_listed_notice(job: registry.WatchJob, today: date, labels: set[str]) -> registry.CardSpec:
+    """The principal's notice that some of the job's reads aren't listed on
+    ERPNext's side (their labels, code's words), once a week while it lasts."""
+    year, week, _ = today.isocalendar()
+    return registry.CardSpec(
+        key=f"not-listed:{job.id}:{year}-W{week:02d}",
+        summary="Some of this job's reads aren't listed on ERPNext's side",
+        notes=(NOT_LISTED_LINE.format(reads=", ".join(sorted(labels))),),
+        to_principal=True,
+    )
+
+
+# What a single read listed ``may_fail`` may end in without ending the run:
+# a refusal returned as the call's answer, or no answer in time. That covers
+# oe_connector's and ERPNext's refusals and the gateway's own call-time
+# refusals (a changed tool pin, a marker it won't honour), which come back
+# the same way; each is kept with the run's record by its code and
+# refusal_record, and the read is "not read", never clear. The runner's own
+# checks (a shape, the marker it sets, the job's identity) and ERPNext not
+# being connected still end the run.
+_MAY_FAIL_REASONS = frozenset({"read_refused", "read_timeout"})
 # What a failure notice says, whole, for a stop that needs an ERPNext
 # operator rather than a look at the job (code's words, never ERPNext's).
 FAIL_LINES: dict[str, str] = {
@@ -260,6 +305,10 @@ class RunOutcome:
     reasons_dropped: int = 0
     # Why a read was refused (refusal_record): ids, a hash and a length only.
     refusal: dict[str, Any] = field(default_factory=dict)
+    # Open notices an ``updates_notice`` job rewrote in place this run.
+    updated: int = 0
+    # May-fail reads refused as not listed on ERPNext's side (a count).
+    not_listed: int = 0
 
     def detail(self) -> dict[str, Any]:
         """What ``watch_runs.detail`` keeps: codes and counts only."""
@@ -278,6 +327,10 @@ class RunOutcome:
             out["reasons_dropped"] = self.reasons_dropped
         if self.refusal:
             out["refusal"] = dict(self.refusal)
+        if self.updated:
+            out["updated"] = self.updated
+        if self.not_listed:
+            out["not_listed"] = self.not_listed
         return out
 
 
@@ -623,6 +676,20 @@ def _take_failure_notice(job_id: str, day: str, *, path: Path | None) -> bool:
 _quiet = False
 
 
+def runs_today(job: registry.WatchJob, day: date) -> bool:
+    """Whether ``job``'s scheduled run is due on ``day`` (company time)
+    beyond its weekdays: its ``runs_on`` with its current settings, or True
+    for a job without one. A ``runs_on`` that raises keeps the job from
+    starting that tick (logged, its type only)."""
+    if job.runs_on is None:
+        return True
+    try:
+        return job.runs_on(effective_settings(job, get_row(job.id)), day) is True
+    except Exception as exc:
+        logger.warning("watch: job %s couldn't tell whether it runs today (%s)", job.id, type(exc).__name__)
+        return False
+
+
 def maybe_run(now: datetime) -> int:
     """Start each job that is due today and not yet claimed, each in its own
     task. Returns how many started. Never raises. Inside
@@ -650,7 +717,7 @@ def maybe_run(now: datetime) -> int:
         started = 0
         for job in list(registry.JOBS.values()):
             due = job.due_slots(local.time(), local.weekday())
-            if not due or not job_enabled(job.id):
+            if not due or not job_enabled(job.id) or not runs_today(job, local.date()):
                 continue
             running = _tasks.get(job.id)
             if running is not None and not running.done():
@@ -724,7 +791,9 @@ async def run_job(job: registry.WatchJob, day: str, *, slot: str = "", path: Pat
             outcome = RunOutcome("failed", error="run_failed")
             if _take_failure_notice(job.id, day, path=path):
                 _fail_notice(job, day, "run_failed", "")
-        outcome.as_job_user = [bool(r.get("as_job_user")) for r in reads if not r.get("skipped")]
+        outcome.as_job_user = [
+            bool(r.get("as_job_user")) for r in reads if not r.get("skipped") and r.get("unread") is not True
+        ]
         try:
             _finish(job.id, day, outcome, reads, path=path, slot=slot)
         except Exception:
@@ -939,6 +1008,8 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     users: set[str] = set()
     # Items of a may-fail read ERPNext refused, kept with the run's record.
     unread = 0
+    # The may-fail reads refused as not listed on ERPNext's side (their labels).
+    not_listed: set[str] = set()
     for read in job.reads:
         try:
             built = read.arguments(settings, today, tuple(results))
@@ -965,12 +1036,40 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
                     if not (read.may_fail and stopped.reason == "read_refused"):
                         raise
                     unread += 1
+                    if _scope_refusal(stopped.refusal):
+                        not_listed.add(read.label)
                     each.append({"unread": True})
             results.append({"each": each, "truncated": cut})
             continue
         truncated = isinstance(built, registry.Derived) and built.truncated
         arguments = built.arguments if isinstance(built, registry.Derived) else built
-        results.append(await _one_read(job, read, arguments, today, truncated, reads, users))
+        try:
+            results.append(await _one_read(job, read, arguments, today, truncated, reads, users))
+        except _Stop as stopped:
+            # A read that may fail on its own (month-end's checks): refused
+            # or timed out, it's "not read", never clear. Any other stop (a
+            # shape, another job's answer, no ERPNext) still ends the run.
+            if not (read.may_fail and stopped.reason in _MAY_FAIL_REASONS):
+                raise
+            unread += 1
+            # A refusal because the read isn't listed on ERPNext's side (the
+            # listing drifted, say an account added and never listed) is a
+            # setting to fix, not an outage: said as such, with no data.
+            reason = stopped.reason
+            if reason == "read_refused" and _scope_refusal(stopped.refusal):
+                reason = "read_not_listed"
+                not_listed.add(read.label)
+            # Why, in codes only (refusal_record: ids, a hash and a length),
+            # kept with the run's record and logged, never the text.
+            entry: dict[str, Any] = {"read": read.label, "unread": True, "error": reason}
+            if stopped.refusal:
+                entry["refusal"] = dict(stopped.refusal)
+            reads.append(entry)
+            logger.warning(
+                "watch: job %s read %s not read (%s)%s", job.id, read.label, reason,
+                "".join(f" {k}={v}" for k, v in sorted((stopped.refusal or {}).items())),
+            )
+            results.append({"unread": True})
     if len(users) > 1:
         # Not one job user across the run: none of its reads counts as one.
         for entry in reads:
@@ -1000,12 +1099,16 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # Bounded whatever the job's rules return: the reason step, the dedupe
     # reads and the audit's counts never see more.
     specs = specs[:MAX_FINDINGS]
+    if not_listed:
+        # The principal hears that the listing needs updating, whatever the
+        # job's own notice says of the read (its rules see only "not read").
+        specs.insert(0, _not_listed_notice(job, today, not_listed))
     notices = [s for s in specs if isinstance(s, registry.CardSpec)]
     drafts = [s for s in specs if isinstance(s, registry.DraftSpec)]
     # Who it goes to, from the database and oe_connector's own word, before
     # anything is checked as the reviewer.
     run_route = cards.route(job, row, reads)
-    outcome = RunOutcome("done", findings=len(specs), unread=unread)
+    outcome = RunOutcome("done", findings=len(specs), unread=unread, not_listed=len(not_listed))
     outcome.routed = "reviewer" if run_route.reviewer is not None else "principal"
     outcome.routed_principal = run_route.reason
     shown = _reasoned(notices)
@@ -1047,10 +1150,18 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # The principal's notices take their places first, so a morning's
     # findings never use up the day before a check kept from the reviewer.
     ordered = principal_first(notices)
-    told_before = told(job, [spec.key for spec in ordered]) if job.once and ordered else set()
+    # An updates_notice job's notice still open is rewritten, not skipped,
+    # and its told record never holds one back (its cards stay once).
+    updating = {
+        spec.key: found for spec in ordered
+        if (found := _open_notice(dedup_key(job.id, spec.key))) is not None
+    } if job.updates_notice else {}
+    told_before = (
+        told(job, [spec.key for spec in ordered]) if job.once and ordered and not job.updates_notice else set()
+    )
     due = [
         spec for spec in ordered
-        if not (
+        if spec.key in updating or not (
             _still_open(dedup_key(job.id, spec.key)) or _raised_today(dedup_key(job.id, spec.key), day)
             or spec.key in told_before
         )
@@ -1065,6 +1176,18 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         if spec not in due:
             outcome.repeats += 1
             continue
+        if spec.key in updating:
+            # Rewritten in place: no new notice, so no place in the day's cap.
+            changed = _update_notice(
+                job, day, spec, updating[spec.key], reason=reasons.get(spec.key, ""), found=_found(notices),
+                reasons=reasons, notes=tuple(made.lines) if spec is target else (),
+                to=_principal_id() if spec.to_principal else to,
+            )
+            if changed:
+                outcome.updated += 1
+            else:
+                outcome.repeats += 1
+            continue
         if take_day(job.id, day, "notices", 1, job.card_cap_day) == 0:
             outcome.capped = len(ordered) - n
             break
@@ -1075,7 +1198,7 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
         ) is not None
         if left:
             outcome.cards += 1
-            if job.once:
+            if job.once and not job.updates_notice:
                 _mark_told(job, day, spec)
             elif spec.key.startswith(UNCARDED_PREFIX):
                 _mark_uncarded_told(job, day, spec)
@@ -1848,6 +1971,73 @@ def _still_open(key: str) -> bool:
     return row is not None
 
 
+@dataclass(frozen=True)
+class _OpenNotice:
+    id: int
+    headline: str
+    body: str
+    status: str
+    routed_to: int | None
+
+
+def _open_notice(key: str) -> _OpenNotice | None:
+    """The newest notice still open (unread or read) for this finding, or None."""
+    from openexecutive.alerts import store
+
+    if not store._resolve_db_path(None).exists():
+        return None
+    with store._get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, headline, body, status, routed_to_person_id FROM alerts WHERE source = ? "
+            "AND dedup_key = ? AND status IN ('unread', 'read') ORDER BY id DESC LIMIT 1",
+            (SOURCE, f"private:{key}"),
+        ).fetchone()
+    if row is None:
+        return None
+    routed = row["routed_to_person_id"]
+    return _OpenNotice(
+        id=int(row["id"]), headline=str(row["headline"] or ""), body=str(row["body"] or ""),
+        status=str(row["status"]), routed_to=routed if isinstance(routed, int) else None,
+    )
+
+
+# The day a notice's code preamble names (its first paragraph: code's own
+# words, never ERPNext's text).
+_PREAMBLE_DAY = re.compile(r"\b(\d{4}-\d{2}-\d{2})\b")
+
+
+def _update_notice(
+    job: registry.WatchJob, day: str, spec: registry.CardSpec, open_notice: _OpenNotice, reason: str, *,
+    found: int, reasons: Mapping[str, str] | None = None, notes: Sequence[str] = (), to: int | None = None,
+) -> bool:
+    """Rewrite an open notice of an ``updates_notice`` job with this run's
+    finding, and mark it unread, when what it says changed; True when it
+    did. The day alone never counts as a change: the stored notice is
+    compared with this run's built for the day its preamble names."""
+    from openexecutive.alerts import store
+
+    routed = to if to is not None else _principal_id()
+    named = _PREAMBLE_DAY.search(open_notice.body.split("\n\n", 1)[0])
+    then = named.group(1) if named else ""
+    same = bool(then) and (
+        open_notice.headline == notice_headline(job, then, spec, found)[:200]
+        and open_notice.body == notice_body(job, then, spec, reason, reasons=reasons, notes=notes)
+        and open_notice.routed_to == routed
+    )
+    if same:
+        return False
+    try:
+        # One statement: subject, body, routing and status together, and
+        # only while it's still open (dismissed since, it stays dismissed).
+        return store.rewrite_open_alert(
+            open_notice.id, headline=notice_headline(job, day, spec, found),
+            body=notice_body(job, day, spec, reason, reasons=reasons, notes=notes), routed_to_person_id=routed,
+        )
+    except Exception:
+        logger.error("watch: job %s couldn't update its notice", job.id)
+        return False
+
+
 def _raised_today(key: str, day: str) -> bool:
     """Whether this finding's notice was left already today, in any state:
     a job that runs at several slots raises a finding once a day."""
@@ -1922,6 +2112,16 @@ def notice_subject(job: registry.WatchJob, day: str, found: int) -> str:
     return f"{job.title}: {found} found on {day}"
 
 
+def notice_headline(job: registry.WatchJob, day: str, spec: registry.CardSpec, found: int) -> str:
+    """The subject a notice is stored with: the finding's own ``subject``,
+    cleaned, when it fully matches its job's ``subject_pattern`` (code's
+    words and counts only), else ``notice_subject``."""
+    own = clean(spec.subject, MAX_SUBJECT_CHARS) if spec.subject and job.subject_pattern else ""
+    if own and re.fullmatch(job.subject_pattern, own) is None:
+        own = ""
+    return own or notice_subject(job, day, found)
+
+
 def _leave_notice(
     job: registry.WatchJob, day: str, spec: registry.CardSpec, reason: str, key: str, *, found: int,
     reasons: Mapping[str, str] | None = None, notes: Sequence[str] = (), to: int | None = None,
@@ -1937,7 +2137,7 @@ def _leave_notice(
             source=SOURCE,
             external_id=f"{key}:{day}",
             severity=NOTICE_SEVERITY,
-            headline=notice_subject(job, day, found),
+            headline=notice_headline(job, day, spec, found),
             body=notice_body(job, day, spec, reason, reasons=reasons, notes=notes),
             topic_tags=[PRIVATE_ALERT_TAG],
             dedup_key=f"private:{key}",
