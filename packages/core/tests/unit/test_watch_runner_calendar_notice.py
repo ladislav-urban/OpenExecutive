@@ -246,6 +246,43 @@ def test_an_account_slot_stands_alone_in_a_list_and_nowhere_else_in_one() -> Non
 
 
 # --------------------------------------------------------------------------- #
+# $month_end
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(("value", "held"), [
+    ("2026-10-31", True), ("2026-11-30", True), ("2026-02-28", True), ("2028-02-29", True), ("2026-12-31", True),
+    ("2026-11-29", False), ("2028-02-28", False), ("2026-10-30", False), ("2026-02-29", False),
+    ("2024-01-31", False),  # beyond 400 days of today
+    ("2026-10-31T00:00:00", False), (20261031, False), ("", False),
+])
+def test_a_month_end_is_a_dates_last_day_of_its_month(value: Any, held: bool) -> None:
+    assert registry._slot_holds("$month_end", value, date(2026, 11, 10)) is held
+    # Every month's end is also a $date.
+    if held:
+        assert registry._slot_holds("$date", value, date(2026, 11, 10))
+
+
+def test_one_calls_month_ends_hold_one_date() -> None:
+    today = date(2026, 11, 10)
+    shape = {"report_name": "General Ledger", "filters": {
+        "company": "$company", "from_date": "$month_end", "to_date": "$month_end", "account": ["$account"],
+    }}
+    same = {"report_name": "General Ledger", "filters": {
+        "company": "Acme", "from_date": "2026-10-31", "to_date": "2026-10-31", "account": ["Euro - AC"],
+    }}
+    assert registry.shape_problem(shape) == "" and registry.shape_mismatch(shape, same, today) == ""
+    apart = {**same, "filters": {**same["filters"], "from_date": "2026-09-30"}}
+    assert registry.shape_mismatch(shape, apart, today) == "its $month_end slots hold different dates"
+    # A $date beside a $month_end needn't agree with it.
+    period = {"filters": {"start_date": ["<=", "$date"], "end_date": [">=", "$month_end"]}}
+    assert registry.shape_mismatch(
+        period, {"filters": {"start_date": ["<=", "2026-10-01"], "end_date": [">=", "2026-10-31"]}}, today,
+    ) == ""
+    assert registry.shape_problem({"filters": {"posting_date": ["in", "$month_end"]}})
+
+
+# --------------------------------------------------------------------------- #
 # updates_notice and a finding's own subject
 # --------------------------------------------------------------------------- #
 

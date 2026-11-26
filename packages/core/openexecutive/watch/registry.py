@@ -59,7 +59,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, time
+from datetime import date, time, timedelta
 from types import MappingProxyType
 from typing import Any
 
@@ -68,8 +68,13 @@ from typing import Any
 JOB_ID = re.compile(r"[a-z0-9-]{1,40}")
 SLOTS: tuple[str, ...] = (
     "$company", "$date", "$party", "$parties", "$customers", "$projects", "$int", "$bank_line", "$mail_draft",
-    "$mail_file",
+    "$mail_file", "$month_end",
 )
+# A month's last day (oe_connector's watch._slot_holds: a $date that is the
+# last day of its own month), and within one call every $month_end holds the
+# same date (its watch._mismatch), so a month-end read is one month's end
+# throughout: General Ledger's from_date can't differ from its to_date.
+MONTH_END = "$month_end"
 # The list slots (oe_connector's watch.LIST_SLOTS): up to MAX_LIST names,
 # only after in or not in. oe_connector also checks each name is a document
 # of the slot's DocType the call's user may read (its LIST_SLOT_DOCTYPES:
@@ -580,12 +585,14 @@ def _slot_holds(slot: str, value: Any, today: date) -> bool:
         return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_INT
     if slot == "$chain_index":
         return isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_CHAIN_INDEX
-    if slot == "$date":
+    if slot in ("$date", MONTH_END):
         if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
             return False
         try:
             day = date.fromisoformat(value)
         except ValueError:
+            return False
+        if slot == MONTH_END and (day + timedelta(days=1)).month == day.month:
             return False
         return abs((day - today).days) <= DATE_RANGE_DAYS
     if slot in ("$company", "$party"):
@@ -696,6 +703,30 @@ def shape_mismatch(
     ``watch._mismatch``). The reason names keys and slots only, never a
     value. ``holds``: whether a slot takes a value; the runner's own check on
     ``today`` unless given."""
+    why = _fit(shape, value, today, where, holds=holds)
+    if why or where:
+        return why
+    # The call's top level: one month's end throughout (oe_connector's
+    # watch._mismatch, after the slot-by-slot fit).
+    return "its $month_end slots hold different dates" if len(set(_month_ends(shape, value))) > 1 else ""
+
+
+def _month_ends(shape: Any, value: Any) -> list[Any]:
+    """The values at ``shape``'s $month_end positions in ``value``, which
+    already fits it."""
+    if isinstance(shape, str):
+        return [value] if shape == MONTH_END else []
+    if isinstance(shape, Mapping) and isinstance(value, Mapping):
+        return [v for key, sub in shape.items() if key in value for v in _month_ends(sub, value[key])]
+    if isinstance(shape, list | tuple) and isinstance(value, list) and len(shape) == len(value):
+        return [v for sub, item in zip(shape, value, strict=True) for v in _month_ends(sub, item)]
+    return []
+
+
+def _fit(
+    shape: Any, value: Any, today: date, where: str = "", *, holds: SlotHolds | None = None,
+) -> str:
+    """Why ``value`` doesn't fit ``shape`` slot by slot, or ""."""
     if isinstance(shape, str) and (shape in SLOTS or shape in LOCAL_SLOTS):
         held = holds(shape, value) if holds is not None else _slot_holds(shape, value, today)
         return "" if held else f"{where or 'value'} isn't a {shape[1:]}"

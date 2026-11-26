@@ -12352,7 +12352,10 @@ watch:
     watch.JOB_ID ([a-z0-9-]{1,40}), the key of oe_connector_watch_jobs and of
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same
-    slot names ($company, $date within 400 days, $party, $parties and
+    slot names ($company, $date within 400 days, $month_end such a date that
+    is its month's last day, every $month_end in one call the same date
+    (shape_mismatch's top level, oe_connector's watch._mismatch), $party,
+    $parties and
     $customers and $projects up to 50 (oe_connector's _slot_holds also
     checks each is a Supplier, Customer or Project the call's user may
     read; here, LIST_SLOTS and _slot_holds check names only), $int 1-500, $bank_line a Bank Transaction's name

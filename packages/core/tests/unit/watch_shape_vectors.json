@@ -10,7 +10,8 @@
   "$int": [50],
   "$bank_line": ["ACC-BTN-2026-00001"],
   "$mail_draft": ["ACC-PINV-2026-00001"],
-  "$mail_file": ["f1a2b3c4d5"]
+  "$mail_file": ["f1a2b3c4d5"],
+  "$month_end": ["2026-10-31", "2026-09-30"]
  },
  "shapes": [
   {"note": "the collections report", "read": {"report_name": "Accounts Receivable", "filters": {"company": "$company", "report_date": "$date", "ageing_based_on": "Due Date"}}, "valid": true},
@@ -52,7 +53,9 @@
   {"note": "project-status, to sync with OpenExecutive: $projects after like", "read": {"filters": {"project": ["like", "$projects"]}}, "valid": false},
   {"note": "project-status, to sync with OpenExecutive: $projects after =", "read": {"filters": {"project": ["=", "$projects"]}}, "valid": false},
   {"note": "project-status, to sync with OpenExecutive: $projects on its own as a filter value", "read": {"filters": {"project": "$projects"}}, "valid": false},
-  {"note": "project-status, to sync with OpenExecutive: not in with $projects", "read": {"filters": {"project": ["not in", "$projects"]}}, "valid": true}
+  {"note": "project-status, to sync with OpenExecutive: not in with $projects", "read": {"filters": {"project": ["not in", "$projects"]}}, "valid": true},
+  {"note": "$month_end bare and after <=", "read": {"filters": {"posting_date": ["<=", "$month_end"], "to_date": "$month_end"}}, "valid": true},
+  {"note": "$month_end never follows in", "read": {"filters": {"posting_date": ["in", "$month_end"]}}, "valid": false}
  ],
  "matches": [
   {"note": "read 1 as listed", "read": {"filters": {"company": "$company", "docstatus": ["<", 2], "outstanding_amount": [">", 0], "due_date": ["<=", "$date"]}}, "arguments": {"filters": {"company": "Acme Ltd", "docstatus": ["<", 2], "outstanding_amount": [">", 0], "due_date": ["<=", "2026-11-10"]}}, "ok": true},
@@ -104,6 +107,10 @@
   {"note": "project-status, to sync with OpenExecutive: read 2 with a single name for the project list", "read": {"doctype": "Task", "fields": ["name", "subject", "project", "status", "exp_end_date"], "filters": {"company": "$company", "status": ["!=", "Completed"], "project": ["in", "$projects"]}, "limit": "$int"}, "arguments": {"doctype": "Task", "fields": ["name", "project", "exp_end_date"], "filters": {"company": "Acme Ltd", "status": ["!=", "Completed"], "project": ["in", "PROJ-0001"]}, "limit": 50}, "ok": false},
   {"note": "project-status, to sync with OpenExecutive: read 3 asks for the users' emails", "read": {"doctype": "Project Update", "fields": ["name", "project", "date", "users.project_status"], "filters": {"docstatus": 1, "date": [">=", "$date"], "project": ["in", "$projects"]}, "limit": "$int"}, "arguments": {"doctype": "Project Update", "fields": ["name", "users.email"], "filters": {"docstatus": 1, "date": [">=", "2026-11-10"], "project": ["in", ["PROJ-0001"]]}, "limit": 50}, "ok": false},
   {"note": "project-status, to sync with OpenExecutive: read 3 drafts as well", "read": {"doctype": "Project Update", "fields": ["name", "project", "date", "users.project_status"], "filters": {"docstatus": 1, "date": [">=", "$date"], "project": ["in", "$projects"]}, "limit": "$int"}, "arguments": {"doctype": "Project Update", "fields": ["name", "project", "users.project_status"], "filters": {"docstatus": ["<", 2], "date": [">=", "2026-11-10"], "project": ["in", ["PROJ-0001"]]}, "limit": 50}, "ok": false},
-  {"note": "project-status, to sync with OpenExecutive: Timesheet in read 2's shape", "read": {"doctype": "Task", "fields": ["name", "subject", "project", "status", "exp_end_date"], "filters": {"company": "$company", "status": ["!=", "Completed"], "project": ["in", "$projects"]}, "limit": "$int"}, "arguments": {"doctype": "Timesheet", "fields": ["name", "project", "exp_end_date"], "filters": {"company": "Acme Ltd", "status": ["!=", "Completed"], "project": ["in", ["PROJ-0001", "PROJ-0002"]]}, "limit": 50}, "ok": false}
+  {"note": "project-status, to sync with OpenExecutive: Timesheet in read 2's shape", "read": {"doctype": "Task", "fields": ["name", "subject", "project", "status", "exp_end_date"], "filters": {"company": "$company", "status": ["!=", "Completed"], "project": ["in", "$projects"]}, "limit": "$int"}, "arguments": {"doctype": "Timesheet", "fields": ["name", "project", "exp_end_date"], "filters": {"company": "Acme Ltd", "status": ["!=", "Completed"], "project": ["in", ["PROJ-0001", "PROJ-0002"]]}, "limit": 50}, "ok": false},
+  {"note": "one month's end throughout", "read": {"filters": {"company": "$company", "from_date": "$month_end", "to_date": "$month_end"}}, "arguments": {"filters": {"company": "Acme Ltd", "from_date": "2026-10-31", "to_date": "2026-10-31"}}, "ok": true},
+  {"note": "$month_end slots holding different dates", "read": {"filters": {"company": "$company", "from_date": "$month_end", "to_date": "$month_end"}}, "arguments": {"filters": {"company": "Acme Ltd", "from_date": "2026-09-30", "to_date": "2026-10-31"}}, "ok": false},
+  {"note": "$month_end not a month's end", "read": {"filters": {"company": "$company", "from_date": "$month_end", "to_date": "$month_end"}}, "arguments": {"filters": {"company": "Acme Ltd", "from_date": "2026-10-30", "to_date": "2026-10-30"}}, "ok": false},
+  {"note": "a $date and a $month_end need not agree", "read": {"filters": {"start_date": ["<=", "$date"], "end_date": [">=", "$month_end"]}}, "arguments": {"filters": {"start_date": ["<=", "2026-11-10"], "end_date": [">=", "2026-10-31"]}}, "ok": true}
  ]
 }
