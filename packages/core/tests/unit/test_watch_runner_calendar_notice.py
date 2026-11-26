@@ -56,6 +56,7 @@ def _owed(read: Mapping[str, Any]) -> str:
 def _calendar_job(
     job_id: str = "calendar", *, runs_on: Any = None, may_fail: bool = False, updates: bool = False,
     subject: str = "", once: bool = False, second_read: bool = False, pattern: str | None = None,
+    both_may_fail: bool = False,
 ) -> WatchJob:
     """A job reading the receivables report (twice with ``second_read``,
     the first then ``may_fail``), whose one notice says what it read."""
@@ -67,7 +68,8 @@ def _calendar_job(
 
     first = WatchRead("run_report", _example.RECEIVABLES_SHAPE, _example._receivables, "the first report",
                       may_fail=may_fail)
-    second = WatchRead("run_report", _example.RECEIVABLES_SHAPE, _example._receivables, "the second report")
+    second = WatchRead("run_report", _example.RECEIVABLES_SHAPE, _example._receivables, "the second report",
+                       may_fail=both_may_fail)
     return WatchJob(
         id=job_id, title="Calendar check", reads=(first, second) if second_read else (first,), build=build,
         schedule=time(7, 0), card_cap_day=3, default_settings={"company": "", "limit": 200},
@@ -248,9 +250,11 @@ def test_a_run_whose_every_read_came_back_unread_is_the_jobs_failure_once(
     """security_reviewer's L1 on ladislav-urban/OpenExecutive#312: with no
     read returning anything (a revoked key, a removed role) the run fails
     with the job's own notice, not "0 of N clear"."""
-    job = register(_calendar_job(may_fail=True, second_read=True, updates=True))
+    job = register(_calendar_job(may_fail=True, second_read=True, updates=True, both_may_fail=True))
     erp.replies.extend([refusal, refusal])
     outcome = _run(job)
+    # Both reads were made, each may fail, and neither answered.
+    assert len(erp.calls) == 2
     assert (outcome.status, outcome.error) == ("failed", code)
     [notice] = _alerts()
     assert notice.headline == "Calendar check didn't run today"
