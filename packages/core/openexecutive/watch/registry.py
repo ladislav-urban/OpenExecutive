@@ -20,8 +20,9 @@ payment-checks job (``watch.jobs.payment_checks``), its quote-follow-up
 job (``watch.jobs.quote_follow_up``), its late-deliveries job
 (``watch.jobs.late_deliveries``) and its project-status job
 (``watch.jobs.project_status``), and phase 2's bank-matching job
-(``watch.jobs.bank_matching``) and invoice-capture job
-(``watch.jobs.invoice_capture``). The test job,
+(``watch.jobs.bank_matching``), invoice-capture job
+(``watch.jobs.invoice_capture``) and month-end close job
+(``watch.jobs.month_end``). The test job,
 ``watch.jobs._example``, is put in by the tests alone.
 
 A read may also be **repeated** (``WatchRead.repeat``): its ``arguments``
@@ -808,9 +809,10 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
             )
         if not ok:
             raise SettingsError(f"Setting {key} isn't of its type or is out of bounds.")
-        if key == "assign_to" and not value.isascii():
-            # An address in look-alike letters could pass for another's.
-            raise SettingsError("Setting assign_to must be a plain email address (ASCII letters only).")
+        if (key == "assign_to" or key.startswith("assign_to_")) and not value.isascii():
+            # An address in look-alike letters could pass for another's
+            # (assign_to, or a job's per-item assign_to_<item>).
+            raise SettingsError(f"Setting {key} must be a plain email address (ASCII letters only).")
         out[key] = list(value) if isinstance(value, list) else value
     return out
 
@@ -822,13 +824,14 @@ from openexecutive.watch.jobs import bank_rules as _bank_rules  # noqa: E402
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
 from openexecutive.watch.jobs import invoice_capture as _invoice_capture  # noqa: E402
 from openexecutive.watch.jobs import late_deliveries as _late_deliveries  # noqa: E402
+from openexecutive.watch.jobs import month_end as _month_end  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
 from openexecutive.watch.jobs import project_status as _project_status  # noqa: E402
 from openexecutive.watch.jobs import quote_follow_up as _quote_follow_up  # noqa: E402
 
 _LISTED: tuple[WatchJob, ...] = (
     _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB, _quote_follow_up.JOB,
-    _late_deliveries.JOB, _project_status.JOB, _bank_rules.JOB,
+    _late_deliveries.JOB, _project_status.JOB, _bank_rules.JOB, _month_end.JOB,
 )
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)

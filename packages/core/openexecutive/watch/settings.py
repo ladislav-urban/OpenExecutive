@@ -596,6 +596,23 @@ ASSIGN_TO_LINES: dict[str, str] = {
 }
 
 
+def is_assign_key(key: object) -> bool:
+    """Whether a setting names who takes a job's tasks: ``assign_to``, or
+    one of a job's per-item ``assign_to_<item>`` (month-end's). Each such
+    setting gets ``assign_to``'s rules."""
+    return isinstance(key, str) and (key == "assign_to" or key.startswith("assign_to_"))
+
+
+def assign_problem(settings: Mapping[str, Any], configured_by_person_id: object) -> str:
+    """The first of ``settings``' assign keys (``is_assign_key``) that can't
+    take the job's tasks, as an ``ASSIGN_TO_LINES`` code, or ""."""
+    for key in sorted(k for k in settings if is_assign_key(k)):
+        problem = assign_to_problem(settings.get(key), configured_by_person_id)
+        if problem:
+            return problem
+    return ""
+
+
 def _address(value: str) -> str:
     """An address as assign_to is compared: trimmed and casefolded."""
     return value.strip().casefold()

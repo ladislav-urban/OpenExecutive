@@ -238,5 +238,29 @@
     "reads": [
       {"tool": "run_report", "report_name": "Accounts Receivable", "filters": {"company": "$company", "report_date": "$date", "ageing_based_on": "Due Date"}, "limit": "$int"}
     ]
+  },
+  "month_end_job": {
+    "id": "month-end",
+    "as_job_user": true,
+    "note": "oe_connector's listing for the demo: its 14 fixed reads, then a General Ledger balance read per account in another currency and a Bank Reconciliation Statement per bank account, each account a literal (this side's $account and $bank_account).",
+    "reads": [
+      {"tool": "list_records", "doctype": "Purchase Invoice", "fields": ["name", "supplier", "posting_date", "grand_total", "currency"], "filters": {"company": "$company", "docstatus": 0, "posting_date": ["<=", "$month_end"]}, "order_by": "posting_date desc", "limit": "$int"},
+      {"tool": "list_records", "doctype": "Sales Invoice", "fields": ["name", "customer", "posting_date", "grand_total", "currency"], "filters": {"company": "$company", "docstatus": 0, "posting_date": ["<=", "$month_end"]}, "order_by": "posting_date desc", "limit": "$int"},
+      {"tool": "run_report", "report_name": "Received Items To Be Billed", "filters": {"company": "$company", "posting_date": "$month_end"}},
+      {"tool": "run_report", "report_name": "Delivered Items To Be Billed", "filters": {"company": "$company", "posting_date": "$month_end"}},
+      {"tool": "list_records", "doctype": "Repost Item Valuation", "fields": ["name", "status", "posting_date", "voucher_type", "voucher_no"], "filters": {"company": "$company", "docstatus": 1, "status": ["!=", "Completed"], "posting_date": ["<=", "$month_end"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Asset Depreciation Schedule", "fields": ["name", "asset", "depreciation_schedule.schedule_date", "depreciation_schedule.journal_entry", "depreciation_schedule.depreciation_amount"], "filters": {"company": "$company", "docstatus": 1, "depreciation_schedule.schedule_date": ["<=", "$month_end"], "depreciation_schedule.journal_entry": ["is", "not set"]}, "order_by": "depreciation_schedule.schedule_date desc", "limit": "$int"},
+      {"tool": "list_records", "doctype": "Account", "fields": ["name", "account_currency", "account_type"], "filters": {"company": "$company", "is_group": 0, "disabled": 0, "account_currency": ["!=", ""]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Exchange Rate Revaluation", "fields": ["name", "posting_date"], "filters": {"company": "$company", "docstatus": 1, "posting_date": "$month_end"}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Item", "fields": ["name"], "filters": {"enable_deferred_revenue": 1, "disabled": 0}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Item", "fields": ["name"], "filters": {"enable_deferred_expense": 1, "disabled": 0}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Process Deferred Accounting", "fields": ["name", "type", "start_date", "end_date"], "filters": {"company": "$company", "docstatus": 1, "end_date": [">=", "$month_end"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Accounting Period", "fields": ["name", "start_date", "end_date"], "filters": {"company": "$company", "start_date": ["<=", "$date"], "end_date": [">=", "$month_end"]}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Company", "fields": ["name", "accounts_frozen_till_date"], "filters": {"name": "$company"}, "limit": "$int"},
+      {"tool": "list_records", "doctype": "Account", "fields": ["name"], "filters": {"company": "$company", "is_group": 0, "disabled": 0, "account_type": "Bank"}, "limit": "$int"},
+      {"tool": "run_report", "report_name": "General Ledger", "filters": {"company": "$company", "from_date": "$month_end", "to_date": "$month_end", "account": ["Creditors EUR - ACD"], "categorize_by": "Categorize by Voucher (Consolidated)"}},
+      {"tool": "run_report", "report_name": "General Ledger", "filters": {"company": "$company", "from_date": "$month_end", "to_date": "$month_end", "account": ["Euro Account - ACD"], "categorize_by": "Categorize by Voucher (Consolidated)"}},
+      {"tool": "run_report", "report_name": "Bank Reconciliation Statement", "filters": {"company": "$company", "account": "11131 - Checking Account - ACD", "report_date": "$month_end"}}
+    ]
   }
 }

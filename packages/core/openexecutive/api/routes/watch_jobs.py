@@ -231,7 +231,7 @@ def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> Wat
     from openexecutive.watch import registry
     from openexecutive.watch.settings import (
         ASSIGN_TO_SAVE,
-        assign_to_problem,
+        assign_problem,
         effective_settings,
         get_row,
         save,
@@ -256,7 +256,9 @@ def update_watch_job(job_id: str, body: WatchJobUpdate, request: Request) -> Wat
     stays_on = body.enabled if body.enabled is not None else row.enabled
     effective = settings if settings is not None else effective_settings(job, row)
     checked = settings is not None or stays_on
-    problem = assign_to_problem(effective.get("assign_to"), int(principal.id)) if checked else ""
+    # Every setting naming who takes the tasks (assign_to, or a job's
+    # per-item assign_to_<item>) is held to the same rules.
+    problem = assign_problem(effective, int(principal.id)) if checked else ""
     if problem:
         raise _refuse(400, "bad_settings", ASSIGN_TO_SAVE[problem])
     set_reviewer = "reviewer_person_id" in body.model_fields_set
