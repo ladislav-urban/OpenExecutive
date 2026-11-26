@@ -575,8 +575,12 @@ def subject_pattern_problem(pattern: str) -> str:
     or "": no ``.``, no negated character or set, no class but a digit or a
     space, no range but digits. "Close of .*" passes every probe but not
     this."""
-    from re import _constants as sre
-    from re import _parser
+    import importlib
+
+    # The standard library's own regex parser (private, untyped): the
+    # parse tree is what can be checked, not the text.
+    sre: Any = importlib.import_module("re._constants")
+    _parser: Any = importlib.import_module("re._parser")
 
     try:
         parsed = _parser.parse(pattern)
