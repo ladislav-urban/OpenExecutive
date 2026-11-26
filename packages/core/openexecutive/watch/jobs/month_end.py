@@ -246,8 +246,14 @@ def said_all_clear(company: str, day: date) -> bool:
 # The reads (oe_connector's listing, tests/unit/watch_job_vectors.json)
 # --------------------------------------------------------------------------- #
 
-PI_FIELDS = ["name", "supplier", "posting_date", "grand_total", "currency"]
-SI_FIELDS = ["name", "customer", "posting_date", "grand_total", "currency"]
+# Only what the rules read (ladislav-urban/oe_connector#645 trimmed the
+# listing to these): no record's name, party or remark is read.
+PI_FIELDS = ["posting_date", "grand_total", "currency"]
+SI_FIELDS = ["posting_date", "grand_total", "currency"]
+# A report's columns, pinned exact in the listing, in this order.
+BILLED_COLUMNS = ["date", "pending_amount"]
+BALANCE_COLUMNS = ["account", "balance"]
+STATEMENT_COLUMNS = ["posting_date", "clearance_date", "debit", "credit", "account_currency"]
 
 
 def _drafts_shape(doctype: str, fields: list[str]) -> Mapping[str, Any]:
@@ -259,7 +265,10 @@ def _drafts_shape(doctype: str, fields: list[str]) -> Mapping[str, Any]:
 
 
 def _billed_shape(report: str) -> Mapping[str, Any]:
-    return {"report_name": report, "filters": {"company": "$company", "posting_date": "$month_end"}}
+    return {
+        "report_name": report, "filters": {"company": "$company", "posting_date": "$month_end"},
+        "columns": BILLED_COLUMNS,
+    }
 
 
 PI_SHAPE = _drafts_shape("Purchase Invoice", PI_FIELDS)
@@ -267,26 +276,26 @@ SI_SHAPE = _drafts_shape("Sales Invoice", SI_FIELDS)
 RECEIVED_REPORT, DELIVERED_REPORT = "Received Items To Be Billed", "Delivered Items To Be Billed"
 RECEIVED_SHAPE, DELIVERED_SHAPE = _billed_shape(RECEIVED_REPORT), _billed_shape(DELIVERED_REPORT)
 REPOST_SHAPE: Mapping[str, Any] = {
-    "doctype": "Repost Item Valuation", "fields": ["name", "status", "posting_date", "voucher_type", "voucher_no"],
+    "doctype": "Repost Item Valuation", "fields": ["status", "posting_date"],
     "filters": {"company": "$company", "docstatus": 1, "status": ["!=", "Completed"],
                 "posting_date": ["<=", "$month_end"]},
     "limit": "$int",
 }
 DEPRECIATION_SHAPE: Mapping[str, Any] = {
     "doctype": "Asset Depreciation Schedule",
-    "fields": ["name", "asset", "depreciation_schedule.schedule_date", "depreciation_schedule.journal_entry",
+    "fields": ["depreciation_schedule.schedule_date", "depreciation_schedule.journal_entry",
                "depreciation_schedule.depreciation_amount"],
     "filters": {"company": "$company", "docstatus": 1, "depreciation_schedule.schedule_date": ["<=", "$month_end"],
                 "depreciation_schedule.journal_entry": ["is", "not set"]},
     "order_by": "depreciation_schedule.schedule_date desc", "limit": "$int",
 }
 ACCOUNTS_SHAPE: Mapping[str, Any] = {
-    "doctype": "Account", "fields": ["name", "account_currency", "account_type"],
+    "doctype": "Account", "fields": ["name", "account_currency"],
     "filters": {"company": "$company", "is_group": 0, "disabled": 0, "account_currency": ["!=", ""]},
     "limit": "$int",
 }
 REVALUATION_SHAPE: Mapping[str, Any] = {
-    "doctype": "Exchange Rate Revaluation", "fields": ["name", "posting_date"],
+    "doctype": "Exchange Rate Revaluation", "fields": ["posting_date"],
     "filters": {"company": "$company", "docstatus": 1, "posting_date": "$month_end"}, "limit": "$int",
 }
 
@@ -298,16 +307,16 @@ def _deferring_shape(flag: str) -> Mapping[str, Any]:
 DEFERRED_REVENUE_SHAPE = _deferring_shape("enable_deferred_revenue")
 DEFERRED_EXPENSE_SHAPE = _deferring_shape("enable_deferred_expense")
 DEFERRED_RUN_SHAPE: Mapping[str, Any] = {
-    "doctype": "Process Deferred Accounting", "fields": ["name", "type", "start_date", "end_date"],
+    "doctype": "Process Deferred Accounting", "fields": ["name"],
     "filters": {"company": "$company", "docstatus": 1, "end_date": [">=", "$month_end"]}, "limit": "$int",
 }
 PERIOD_SHAPE: Mapping[str, Any] = {
-    "doctype": "Accounting Period", "fields": ["name", "start_date", "end_date"],
+    "doctype": "Accounting Period", "fields": ["start_date", "end_date"],
     "filters": {"company": "$company", "start_date": ["<=", "$date"], "end_date": [">=", "$month_end"]},
     "limit": "$int",
 }
 COMPANY_SHAPE: Mapping[str, Any] = {
-    "doctype": "Company", "fields": ["name", "accounts_frozen_till_date"], "filters": {"name": "$company"},
+    "doctype": "Company", "fields": ["accounts_frozen_till_date"], "filters": {"name": "$company"},
     "limit": "$int",
 }
 BANKS_SHAPE: Mapping[str, Any] = {
@@ -320,11 +329,13 @@ BALANCE_SHAPE: Mapping[str, Any] = {
     "report_name": "General Ledger",
     "filters": {"company": "$company", "from_date": "$month_end", "to_date": "$month_end", "account": ["$account"],
                 "categorize_by": "Categorize by Voucher (Consolidated)"},
+    "columns": BALANCE_COLUMNS,
 }
 # One per bank account, the account a literal in the listing.
 STATEMENT_SHAPE: Mapping[str, Any] = {
     "report_name": "Bank Reconciliation Statement",
     "filters": {"company": "$company", "account": "$bank_account", "report_date": "$month_end"},
+    "columns": STATEMENT_COLUMNS,
 }
 
 # Each read's place in ``reads`` (and so in ``build``'s results).
@@ -332,25 +343,8 @@ STATEMENT_SHAPE: Mapping[str, Any] = {
  R_DEFERRED, R_PERIOD, R_COMPANY, R_BANKS, R_BALANCES, R_STATEMENTS) = range(16)
 
 
-# The fields each read asks for, of those its listing allows: only what the
-# rules use.
-CALL_FIELDS: Mapping[str, list[str]] = {
-    "Purchase Invoice": ["posting_date", "grand_total", "currency"],
-    "Sales Invoice": ["posting_date", "grand_total", "currency"],
-    "Repost Item Valuation": ["status", "posting_date"],
-    "Asset Depreciation Schedule": [
-        "depreciation_schedule.schedule_date", "depreciation_schedule.journal_entry",
-        "depreciation_schedule.depreciation_amount",
-    ],
-    "Account": ["name", "account_currency"],
-    "Process Deferred Accounting": ["name"],
-}
-
-
 def _list_args(shape: Mapping[str, Any], filters: dict[str, Any], limit: int = READ_LIMIT) -> dict[str, Any]:
-    fields = list(shape["fields"])
-    asked = [f for f in CALL_FIELDS.get(shape["doctype"], fields) if f in fields] or fields
-    out: dict[str, Any] = {"doctype": shape["doctype"], "fields": asked, "filters": filters}
+    out: dict[str, Any] = {"doctype": shape["doctype"], "fields": list(shape["fields"]), "filters": filters}
     if "order_by" in shape:
         out["order_by"] = shape["order_by"]
     out["limit"] = limit
@@ -373,7 +367,10 @@ def _drafts(shape: Mapping[str, Any]) -> Any:
 
 def _billed(report: str) -> Any:
     def arguments(settings: Settings, today: date, prior: Prior = ()) -> ReadArguments:
-        return {"report_name": report, "filters": {"company": settings["company"], "posting_date": _ends(today)[1]}}
+        return {
+            "report_name": report, "filters": {"company": settings["company"], "posting_date": _ends(today)[1]},
+            "columns": list(BILLED_COLUMNS),
+        }
 
     return arguments
 
@@ -452,7 +449,7 @@ def _balances(settings: Settings, today: date, prior: Prior = ()) -> ReadArgumen
         {"report_name": "General Ledger", "filters": {
             "company": settings["company"], "from_date": last, "to_date": last, "account": [account],
             "categorize_by": "Categorize by Voucher (Consolidated)",
-        }} for account in accounts
+        }, "columns": list(BALANCE_COLUMNS)} for account in accounts
     ), truncated=len(accounts) > MAX_ACCOUNTS)
 
 
@@ -466,7 +463,7 @@ def _statements(settings: Settings, today: date, prior: Prior = ()) -> ReadArgum
     return Repeated(tuple(
         {"report_name": "Bank Reconciliation Statement", "filters": {
             "company": settings["company"], "account": account, "report_date": last,
-        }} for account in accounts
+        }, "columns": list(STATEMENT_COLUMNS)} for account in accounts
     ), truncated=len(accounts) > MAX_ACCOUNTS)
 
 
