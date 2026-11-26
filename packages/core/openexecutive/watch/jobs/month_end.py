@@ -962,12 +962,32 @@ def setting_key(item: str) -> str:
     return f"assign_to_{item}"
 
 
+def reviewer_owner() -> tuple[str, str]:
+    """The reviewer as an item's fallback owner: their email (their ERPNext
+    user), and why it can't take tasks (an ``ASSIGN_TO_LINES`` code: the
+    job's configurer or an alias, a demo person, not plain ASCII), or ""."""
+    from openexecutive.delegation.gmail import normalize_email
+    from openexecutive.people.store import get_person
+    from openexecutive.watch.settings import assign_to_problem, get_row
+
+    row = get_row(JOB_ID)
+    reviewer_id = getattr(row, "reviewer_person_id", None)
+    if not isinstance(reviewer_id, int) or isinstance(reviewer_id, bool):
+        return "", ""
+    person = get_person(reviewer_id)
+    raw = person.email or "" if person is not None else ""
+    if raw and not raw.isascii():
+        return "", "not_ascii"
+    email = normalize_email(raw)
+    if "@" not in email:
+        return "", ""
+    return email, assign_to_problem(email, row.configured_by_person_id)
+
+
 def assignees(settings: Settings | None = None) -> dict[str, str]:
     """Who takes each item's task: its ``assign_to_<item>``, else the
     reviewer's email (their ERPNext user); an item whose setting can't take
     tasks (the configurer, a demo account) gets "" (no card)."""
-    from openexecutive.delegation.gmail import normalize_email
-    from openexecutive.people.store import get_person
     from openexecutive.watch import registry
     from openexecutive.watch.settings import assign_to_problem, effective_settings, get_row
 
@@ -976,12 +996,8 @@ def assignees(settings: Settings | None = None) -> dict[str, str]:
         return {}
     row = get_row(JOB_ID)
     current = settings if settings is not None else effective_settings(job, row)
-    reviewer = ""
-    reviewer_id = getattr(row, "reviewer_person_id", None)
-    if isinstance(reviewer_id, int) and not isinstance(reviewer_id, bool):
-        person = get_person(reviewer_id)
-        email = normalize_email(person.email or "") if person is not None else ""
-        reviewer = email if "@" in email and not assign_to_problem(email, row.configured_by_person_id) else ""
+    email, problem = reviewer_owner()
+    reviewer = "" if problem else email
     out: dict[str, str] = {}
     for item in ITEMS:
         given = str(current.get(setting_key(item.key)) or "")
@@ -994,10 +1010,14 @@ def assignees(settings: Settings | None = None) -> dict[str, str]:
 
 def _assign_notice(settings: Settings, today: date) -> CardSpec | None:
     """The principal's notice, once a week, that an item's owner setting
-    can't take its tasks."""
+    can't take its tasks, or that the reviewer can't take the tasks of the
+    items with no owner set."""
     from openexecutive.watch.settings import ASSIGN_TO_LINES, assign_problem, get_row
 
     problem = assign_problem(settings, get_row(JOB_ID).configured_by_person_id)
+    if not problem and any(not settings.get(setting_key(item.key)) for item in ITEMS):
+        reviewer_problem = reviewer_owner()[1]
+        problem = f"reviewer_{reviewer_problem}" if reviewer_problem else ""
     if not problem:
         return None
     year, week, _ = today.isocalendar()

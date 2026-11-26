@@ -497,6 +497,37 @@ def test_each_items_owner_is_held_to_assign_tos_rules(roster: SimpleNamespace) -
     assert watch_settings.assign_problem(SETTINGS, roster.principal) == ""
 
 
+def test_a_reviewer_who_cant_take_tasks_is_told_to_the_principal_weekly(
+    roster: SimpleNamespace,  # noqa: F811
+) -> None:
+    """reviewer2's Low on ladislav-urban/OpenExecutive#312: the reviewer as
+    the fallback owner is held to assign_to's rules, and when it fails them
+    the items with no owner get no task and the principal hears why."""
+    # The reviewer is the person who set the job up.
+    _enable(me.JOB, roster.teammate, settings=dict(SETTINGS), reviewer=roster.teammate)
+    email, problem = me.reviewer_owner()
+    assert problem == "configurer" and email
+    assert all(owner == "" for owner in me.assignees(SETTINGS).values())
+    notice = me._assign_notice(SETTINGS, TODAY)
+    assert notice is not None and notice.to_principal
+    assert notice.notes == (watch_settings.ASSIGN_TO_LINES["reviewer_configurer"],)
+    assert notice.key == "assign-to:month-end:2026-W45"
+    # Every item with an owner of its own: the reviewer takes nothing, so
+    # nothing to tell.
+    owned = {**SETTINGS, **{me.setting_key(i.key): "owner@co.example" for i in me.ITEMS}}
+    assert me._assign_notice(owned, TODAY) is None
+    assert set(me.assignees(owned).values()) == {"owner@co.example"}
+    # Another reviewer: fine.
+    _enable(me.JOB, roster.principal, settings=dict(SETTINGS), reviewer=roster.teammate)
+    assert me.reviewer_owner()[1] == "" and me._assign_notice(SETTINGS, TODAY) is None
+
+
+def test_the_reviewer_lines_are_the_same_rules_in_the_reviewers_words() -> None:
+    for code in ("configurer", "demo", "not_ascii"):
+        line = watch_settings.ASSIGN_TO_LINES[f"reviewer_{code}"]
+        assert line.startswith("The job's reviewer") and "no owner set" in line
+
+
 # --------------------------------------------------------------------------- #
 # End to end
 # --------------------------------------------------------------------------- #

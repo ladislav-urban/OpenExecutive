@@ -593,6 +593,22 @@ ASSIGN_TO_LINES: dict[str, str] = {
         "The job's assign_to isn't a plain email address (ASCII letters only), so no tasks were prepared. "
         "Correct it in Settings → Watch jobs."
     ),
+    # A job whose reviewer takes the tasks no setting names an owner for
+    # (month-end's items): the same rules, said of the reviewer.
+    "reviewer_configurer": (
+        "The job's reviewer, who takes the tasks of items with no owner set, is the person who set it up, who "
+        "never takes its tasks, so no tasks were prepared for those items. Name an owner for each item, or "
+        "another reviewer, in Settings → Watch jobs."
+    ),
+    "reviewer_demo": (
+        "The job's reviewer, who takes the tasks of items with no owner set, is a demo account, so no tasks were "
+        "prepared for those items. Name an owner for each item, or another reviewer, in Settings → Watch jobs."
+    ),
+    "reviewer_not_ascii": (
+        "The job's reviewer's address, which takes the tasks of items with no owner set, isn't a plain email "
+        "address (ASCII letters only), so no tasks were prepared for those items. Name an owner for each item, "
+        "or another reviewer, in Settings → Watch jobs."
+    ),
 }
 
 
