@@ -220,6 +220,12 @@ FAIL_LINES: dict[str, str] = {
     # ladislav-urban/oe_connector#534: supplier_bank_changed refuses until the
     # site sets oe_connector_bank_facts.
     "bank_facts_off": "Supplier bank checks are off in ERPNext's settings.",
+    # Every read refused as not listed: the job's entry in the site's
+    # oe_connector_watch_jobs is missing or out of date.
+    "read_not_listed": (
+        "This job's reads aren't listed on ERPNext's side: an ERPNext operator needs to add or update its entry "
+        "in the site's watch listing (oe_connector_watch_jobs)."
+    ),
 }
 # A refusal's own setting name, read only to pick the reason code above: the
 # text is never stored or shown.
@@ -1074,7 +1080,10 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     if attempted and all(entry.get("unread") is True for entry in attempted):
         # No read returned anything (a revoked key, a removed role): the
         # job's failure notice, once a day, rather than a run of "not read".
-        raise _Stop("read_refused", str(attempted[0].get("read") or ""))
+        # Refused as not listed on ERPNext's side (the job's listing never
+        # added, or gone): that notice points at the listing.
+        reason = "read_not_listed" if not_listed else "read_refused"
+        raise _Stop(reason, str(attempted[0].get("read") or ""))
     if len(users) > 1:
         # Not one job user across the run: none of its reads counts as one.
         for entry in reads:

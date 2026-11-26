@@ -233,12 +233,17 @@ def test_a_may_fail_read_that_times_out_is_not_read(
     assert "Read 1: not read" in alert.body and "Read 2: 10.00" in alert.body
 
 
-@pytest.mark.parametrize("refusal", [
-    json.dumps({"error": f"Permission denied for {CANARY}"}),
-    "Tool error: The watch job 'calendar' doesn't list run_report.",
+@pytest.mark.parametrize(("refusal", "code", "said"), [
+    (json.dumps({"error": f"Permission denied for {CANARY}"}), "read_refused", "ERPNext refused the read"),
+    # The job's listing never added on ERPNext's side (go-live's listing
+    # step missed): said as such, pointing at the listing.
+    ("Tool error: The watch job 'calendar' doesn't list run_report.", "read_not_listed",
+     "oe_connector_watch_jobs"),
+    (json.dumps({"error": f"ERPNext doesn't answer the watch job 'calendar': an ERPNext operator lists {CANARY}"}),
+     "read_not_listed", "add or update its entry"),
 ])
 def test_a_run_whose_every_read_came_back_unread_is_the_jobs_failure_once(
-    register: Any, erp: FakeErpnext, triage: list[Any], refusal: str,  # noqa: F811
+    register: Any, erp: FakeErpnext, triage: list[Any], refusal: str, code: str, said: str,  # noqa: F811
 ) -> None:
     """security_reviewer's L1 on ladislav-urban/OpenExecutive#312: with no
     read returning anything (a revoked key, a removed role) the run fails
@@ -246,10 +251,10 @@ def test_a_run_whose_every_read_came_back_unread_is_the_jobs_failure_once(
     job = register(_calendar_job(may_fail=True, second_read=True, updates=True))
     erp.replies.extend([refusal, refusal])
     outcome = _run(job)
-    assert (outcome.status, outcome.error) == ("failed", "read_refused")
+    assert (outcome.status, outcome.error) == ("failed", code)
     [notice] = _alerts()
     assert notice.headline == "Calendar check didn't run today"
-    assert "ERPNext refused the read" in notice.body and CANARY not in notice.body
+    assert said in notice.body and CANARY not in notice.body
     assert "Read 1" not in notice.body
     # Once a day: a retry the same day leaves no second one.
     conn = watch_settings.connect()
