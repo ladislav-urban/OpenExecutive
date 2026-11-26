@@ -10430,8 +10430,8 @@ integrations:
     orchestrator/mcp_gateway.py), and docker/Dockerfile pre-warms with the same
     arguments. The commit fixes extensible-mcp's code; the cutoff fixes its ~94
     transitive dependencies, which uvx otherwise re-resolves against PyPI on
-    every networked start. The commit is on the owner's fork
-    (ladislav-urban/extensible-mcp): upstream 6862ebd2 plus one fix, the
+    every networked start. The commit is on the project's fork
+    (dynocortex/extensible-mcp): upstream 6862ebd2 plus one fix, the
     MCP SDK's HTTP timeouts (30 s, 300 s to read) for a URL server reached
     with a bearer token, which had httpx's 5 s default and cut off any
     slower ERPNext read (chat, panel, brief and watch jobs alike). Offered
