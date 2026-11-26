@@ -450,7 +450,7 @@ def test_check_fields_takes_only_the_jobs_own_card(owners: dict[str, str]) -> No
     for operation, doctype, fields, name in (
         ("update", "ToDo", _fields(), ""),
         ("create", "Purchase Invoice", _fields(), ""),
-        ("create", "ToDo", _fields(), "TODO-1"),
+        ("create", "ToDo", _fields(), "TD-0001"),
         ("create", "ToDo", {**_fields(), "reference_type": "Purchase Invoice"}, ""),
         ("create", "ToDo", _fields(priority="High"), ""),
         ("create", "ToDo", _fields(allocated_to="reviewer@co.example"), ""),
