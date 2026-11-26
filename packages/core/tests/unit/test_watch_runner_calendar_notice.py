@@ -425,7 +425,7 @@ def test_a_subject_pattern_that_takes_any_text_is_refused_at_registration(patter
 @pytest.mark.parametrize(("pattern", "why"), [
     ("Close of .*", "any character"),
     (r"Close of [^\n]+", "any character"),
-    (r"Close of [^0-9]{1,40}", "any character"),
+    (r"Close of [^0-9]{1,40}", "negated set"),
     (r"Close of \w+", "class other than digits"),
     (r"Close of \S+", "class other than digits"),
     (r"Close of [A-Za-z ]+", "range other than digits"),
