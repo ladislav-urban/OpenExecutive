@@ -5,6 +5,7 @@ finding's own ``CardSpec.subject``. End to end with the fake ERPNext, as
 test_watch_jobs.py drives the test job."""
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime, time
@@ -16,6 +17,7 @@ import pytest
 
 from openexecutive.alerts import store as alert_store
 from openexecutive.watch import registry, runner
+from openexecutive.watch import settings as watch_settings
 from openexecutive.watch.jobs import _example
 from openexecutive.watch.registry import CardSpec, WatchJob, WatchRead
 
@@ -54,6 +56,7 @@ def _owed(read: Mapping[str, Any]) -> str:
 def _calendar_job(
     job_id: str = "calendar", *, runs_on: Any = None, may_fail: bool = False, updates: bool = False,
     subject: str = "", once: bool = False, second_read: bool = False, pattern: str | None = None,
+    both_may_fail: bool = False,
 ) -> WatchJob:
     """A job reading the receivables report (twice with ``second_read``,
     the first then ``may_fail``), whose one notice says what it read."""
@@ -65,7 +68,8 @@ def _calendar_job(
 
     first = WatchRead("run_report", _example.RECEIVABLES_SHAPE, _example._receivables, "the first report",
                       may_fail=may_fail)
-    second = WatchRead("run_report", _example.RECEIVABLES_SHAPE, _example._receivables, "the second report")
+    second = WatchRead("run_report", _example.RECEIVABLES_SHAPE, _example._receivables, "the second report",
+                       may_fail=both_may_fail)
     return WatchJob(
         id=job_id, title="Calendar check", reads=(first, second) if second_read else (first,), build=build,
         schedule=time(7, 0), card_cap_day=3, default_settings={"company": "", "limit": 200},
@@ -202,8 +206,8 @@ def test_a_may_fail_read_not_listed_on_erpnexts_side_is_said_so_to_the_principal
 def test_a_refusal_that_isnt_the_listings_is_only_not_read(
     register: Any, erp: FakeErpnext, triage: list[Any], refusal: str,  # noqa: F811
 ) -> None:
-    job = register(_calendar_job(may_fail=True))
-    erp.replies.append(refusal)
+    job = register(_calendar_job(may_fail=True, second_read=True))
+    erp.replies.extend([refusal, _ar(("Acme Retail", 10.0), acting=_acting(job.id))])
     outcome = _run(job)
     assert (outcome.status, outcome.unread, outcome.not_listed) == ("done", 1, 0)
     assert _run_row(job.id)["reads"][0]["error"] == "read_refused"
@@ -213,12 +217,59 @@ def test_a_refusal_that_isnt_the_listings_is_only_not_read(
 def test_a_may_fail_read_that_times_out_is_not_read(
     register: Any, erp: FakeErpnext, triage: list[Any],  # noqa: F811
 ) -> None:
-    job = register(_calendar_job(may_fail=True))
-    erp.session.call_tool = AsyncMock(side_effect=TimeoutError())
+    job = register(_calendar_job(may_fail=True, second_read=True))
+    answer = erp._call
+    calls: list[str] = []
+
+    async def slow_then_answer(name: str, body: dict[str, Any]) -> Any:
+        calls.append(name)
+        if len(calls) == 1:
+            raise TimeoutError
+        return await answer(name, body)
+
+    erp.session.call_tool = AsyncMock(side_effect=slow_then_answer)
+    erp.replies.append(_ar(("Acme Retail", 10.0), acting=_acting(job.id)))
     outcome = _run(job)
     assert (outcome.status, outcome.unread) == ("done", 1)
     [alert] = _alerts()
-    assert "Read 1: not read" in alert.body
+    assert "Read 1: not read" in alert.body and "Read 2: 10.00" in alert.body
+
+
+@pytest.mark.parametrize(("refusal", "code", "said"), [
+    (json.dumps({"error": f"Permission denied for {CANARY}"}), "read_refused", "ERPNext refused the read"),
+    # The job's listing never added on ERPNext's side (go-live's listing
+    # step missed): said as such, pointing at the listing.
+    ("Tool error: The watch job 'calendar' doesn't list run_report.", "read_not_listed",
+     "oe_connector_watch_jobs"),
+    (json.dumps({"error": f"ERPNext doesn't answer the watch job 'calendar': an ERPNext operator lists {CANARY}"}),
+     "read_not_listed", "add or update its entry"),
+])
+def test_a_run_whose_every_read_came_back_unread_is_the_jobs_failure_once(
+    register: Any, erp: FakeErpnext, triage: list[Any], refusal: str, code: str, said: str,  # noqa: F811
+) -> None:
+    """security_reviewer's L1 on ladislav-urban/OpenExecutive#312: with no
+    read returning anything (a revoked key, a removed role) the run fails
+    with the job's own notice, not "0 of N clear"."""
+    job = register(_calendar_job(may_fail=True, second_read=True, updates=True, both_may_fail=True))
+    erp.replies.extend([refusal, refusal])
+    outcome = _run(job)
+    # Both reads were made, each may fail, and neither answered.
+    assert len(erp.calls) == 2
+    assert (outcome.status, outcome.error) == ("failed", code)
+    [notice] = _alerts()
+    assert notice.headline == "Calendar check didn't run today"
+    assert said in notice.body and CANARY not in notice.body
+    assert "Read 1" not in notice.body
+    # Once a day: a retry the same day leaves no second one.
+    conn = watch_settings.connect()
+    try:
+        conn.execute("UPDATE watch_runs SET status = 'running', started_at = '2000-01-01T00:00:00+00:00'")
+    finally:
+        conn.close()
+    erp.replies.extend([refusal, refusal])
+    assert runner.claim(job.id, DAY, datetime.now(UTC)) == "run"
+    asyncio.run(runner.run_job(job, DAY))
+    assert len(_alerts()) == 1
 
 
 def test_a_read_not_read_says_nothing_about_who_the_reads_ran_as() -> None:
@@ -420,6 +471,37 @@ def test_a_subject_pattern_that_takes_any_text_is_refused_at_registration(patter
         _calendar_job("calendar-open", pattern=pattern)
     # The job's own constant passes.
     assert _calendar_job("calendar-own").subject_pattern == SUBJECTS
+
+
+@pytest.mark.parametrize(("pattern", "why"), [
+    ("Close of .*", "any character"),
+    (r"Close of [^\n]+", "any character"),
+    (r"Close of [^0-9]{1,40}", "negated set"),
+    (r"Close of \w+", "class other than digits"),
+    (r"Close of \S+", "class other than digits"),
+    (r"Close of [A-Za-z ]+", "range other than digits"),
+    (r"Close of (?:October|.+)", "any character"),
+    (r"Close of (?=.)October", "any character"),
+    (r"Close of (?>October.?)", "any character"),
+    # A hand-written set of letters takes a name as a class would.
+    (r"Close of [abcdefghijklmnopqrstuvwxyz]+", "set of characters"),
+    (r"Close of [ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz ]{1,40}", "set of characters"),
+    (r"Close of [éè]+", "set of characters"),
+])
+def test_a_subject_pattern_that_passes_the_probes_but_takes_other_text_is_refused(pattern: str, why: str) -> None:
+    """security_reviewer's L2 on ladislav-urban/OpenExecutive#311: "Close of
+    .*" passes every probe, so the pattern's structure is checked too."""
+    assert why in registry.subject_pattern_problem(pattern)
+    with pytest.raises(ValueError, match="code's words and digits only"):
+        _calendar_job("calendar-open", pattern=pattern)
+
+
+@pytest.mark.parametrize("pattern", [
+    SUBJECTS, r"Close of (?:October|November): \d{1,2} of \d{1,2} clear", r"Run [0-9]{1,3}", r"A[\d\s]+B",
+    r"Run [0-9]{1,3}[.,:] done", r"Total [ 0123456789]{1,9}",
+])
+def test_literal_words_and_digits_pass_the_structural_check(pattern: str) -> None:
+    assert registry.subject_pattern_problem(pattern) == ""
 
 
 def test_a_rewrite_never_reopens_a_notice_dealt_with_since() -> None:

@@ -13273,6 +13273,43 @@ watch:
     an injected update leaking into it in paraphrase ("the team's account
     stands as written"), which no word filter catches; the owner chose to
     remove the channel.
+  month_end: |
+    watch.jobs.month_end (phase 2, A14; oe_connector's half is
+    ladislav-urban/oe_connector#644, the plan oe_connector's
+    month-end-close-plan.md): last month's close checklist. runs_on: the
+    month's first working day (Mon-Fri, no holiday list), daily up to
+    close_days (5, 1-15) working days, then every fifth, until this month's
+    notice says all clear (said_all_clear reads its latest headline, code's
+    own). 07:30 company time, card cap 10. Settings: company, close_days,
+    unbilled_grace_days (0, 0-60), bank_grace_days (5, 0-60), and
+    assign_to_<item> per item (empty: the reviewer), each held to
+    assign_to's rules (settings.is_assign_key / assign_problem, in
+    registry.check_settings and the settings API). Reads, all may_fail, all
+    month-end bounds $month_end: PI and SI drafts (<= end, newest first),
+    Received / Delivered Items To Be Billed (as at end), Repost Item
+    Valuation != Completed, ADS lines due by end with no Journal Entry
+    (unprefixed child keys), Account (live, non-group, currency set), ERR
+    posting_date = end (only with a foreign account), Item deferring revenue
+    then expense, Process Deferred Accounting end_date >= end (only when one
+    defers), Accounting Period start <= the 1st and end >= end, Company
+    accounts_frozen_till_date, Account type Bank (R11); then General Ledger
+    per foreign account (["$account"], repeat 10; closing_balance keeps
+    only the "'Closing (Opening + Total)'" row's number: security_reviewer's
+    L2 on #644, vouchers name parties and remarks) and Bank Reconciliation
+    Statement per bank account ($bank_account, repeat 10; a row with no
+    posting_date is a summary, never an entry). listing(foreign, banks)
+    prints oe_connector's entry with the accounts as literals; an account
+    not listed is refused and named "not checked" (security_reviewer's Low
+    on #644). Nine items, each clear / open (count, sums, oldest) / not
+    read, never "not read" as clear; the lock (an Accounting Period or the
+    frozen date) reported only. One notice, updates_notice, subject
+    "Close of October: 6 of 9 clear" or "... all clear" (subject_pattern),
+    a row per item with state, figures and owner, and at all clear "Lock
+    the period?" (it never locks). A ToDo card per open item with an owner:
+    no reference, Medium, today, description code's template (month,
+    counts, sums, dates; item_of and check_fields hold it to its item and
+    owner); once per item and month (once, periodic_keys, key
+    close:<company>:<YYYY-MM>:<item>). No model call.
   reasons: |
     Only for a job with a reason_schema: one tool-less call to
     get_fast_model() with the constant REASON_SYSTEM; the user turn holds

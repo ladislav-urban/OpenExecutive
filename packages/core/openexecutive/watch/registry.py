@@ -20,8 +20,9 @@ payment-checks job (``watch.jobs.payment_checks``), its quote-follow-up
 job (``watch.jobs.quote_follow_up``), its late-deliveries job
 (``watch.jobs.late_deliveries``) and its project-status job
 (``watch.jobs.project_status``), and phase 2's bank-matching job
-(``watch.jobs.bank_matching``) and invoice-capture job
-(``watch.jobs.invoice_capture``). The test job,
+(``watch.jobs.bank_matching``), invoice-capture job
+(``watch.jobs.invoice_capture``) and month-end close job
+(``watch.jobs.month_end``). The test job,
 ``watch.jobs._example``, is put in by the tests alone.
 
 A read may also be **repeated** (``WatchRead.repeat``): its ``arguments``
@@ -57,6 +58,7 @@ when its job is defined, so the registry never imports one.
 from __future__ import annotations
 
 import re
+import string
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, time, timedelta
@@ -122,6 +124,9 @@ _NAME_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^
 # the job connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to.
 READ_TOOLS: frozenset[str] = frozenset({"run_report", "list_records"})
 MAX_CARD_CAP = 50
+# The characters a subject_pattern's set ([...]) may list one by one:
+# digits, a space and ASCII punctuation, never a letter.
+SET_CHARACTERS = frozenset(string.digits + " " + string.punctuation)
 # Texts no job's subject_pattern may match in full: a pattern that takes
 # them takes any text (".*", "[^\n]+", "\S.*"), so it keeps no ERPNext name
 # out of a subject.
@@ -528,6 +533,9 @@ class WatchJob:
             if any(pattern.fullmatch(probe) for probe in SUBJECT_PROBES):
                 # A pattern as open as ".*" would let any text through.
                 raise ValueError("a job's subject_pattern must not match any text (it matches a probe)")
+            why = subject_pattern_problem(self.subject_pattern)
+            if why:
+                raise ValueError(f"a job's subject_pattern is code's words and digits only: {why}")
         if (self.proposals is None) != (not self.proposal_tool) or (self.proposals is None) != (
             self.proposal_check is None
         ):
@@ -564,6 +572,71 @@ class WatchJob:
     def proposal_gateway_tool(self) -> str:
         """Its proposal tool's gateway name, or "" for a job that proposes nothing."""
         return GATEWAY_PREFIX + self.proposal_tool if self.proposal_tool else ""
+
+
+def subject_pattern_problem(pattern: str) -> str:
+    """Why ``pattern`` could take text other than code's words and digits,
+    or "": no ``.``, no negated character or set, no class but a digit or a
+    space, no range but digits. "Close of .*" passes every probe but not
+    this."""
+    import importlib
+
+    # The standard library's own regex parser (private, untyped): the
+    # parse tree is what can be checked, not the text.
+    sre: Any = importlib.import_module("re._constants")
+    _parser: Any = importlib.import_module("re._parser")
+
+    try:
+        parsed = _parser.parse(pattern)
+    except re.error:
+        return "it doesn't compile"
+    allowed = {sre.CATEGORY_DIGIT, sre.CATEGORY_SPACE}
+
+    def walk(items: Any) -> str:
+        for op, av in items:
+            if op in (sre.ANY, sre.NOT_LITERAL):
+                return "it takes any character"
+            if op is sre.IN:
+                for inner, arg in av:
+                    if inner is sre.NEGATE:
+                        return "it has a negated set"
+                    if inner is sre.CATEGORY and arg not in allowed:
+                        return "it has a class other than digits or spaces"
+                    if inner is sre.RANGE and not (48 <= arg[0] <= arg[1] <= 57):
+                        return "it has a range other than digits"
+                    if inner is sre.LITERAL and chr(arg) not in SET_CHARACTERS:
+                        # A hand-written set of letters takes a name as a class would.
+                        return "it has a set of characters other than digits, spaces or punctuation"
+            elif op is sre.CATEGORY and av not in allowed:
+                return "it has a class other than digits or spaces"
+            elif op in (sre.MAX_REPEAT, sre.MIN_REPEAT, sre.POSSESSIVE_REPEAT):
+                why = walk(av[2])
+                if why:
+                    return why
+            elif op is sre.SUBPATTERN:
+                why = walk(av[3])
+                if why:
+                    return why
+            elif op is sre.BRANCH:
+                for branch in av[1]:
+                    why = walk(branch)
+                    if why:
+                        return why
+            elif op in (sre.ASSERT, sre.ASSERT_NOT):
+                why = walk(av[1])
+                if why:
+                    return why
+            elif op is sre.ATOMIC_GROUP:
+                why = walk(av)
+                if why:
+                    return why
+            elif op is sre.GROUPREF_EXISTS:
+                why = walk(av[1]) or (walk(av[2]) if av[2] is not None else "")
+                if why:
+                    return why
+        return ""
+
+    return walk(parsed)
 
 
 def get(job_id: object) -> WatchJob | None:
@@ -815,9 +888,10 @@ def check_settings(job: WatchJob, settings: object) -> dict[str, Any]:
             )
         if not ok:
             raise SettingsError(f"Setting {key} isn't of its type or is out of bounds.")
-        if key == "assign_to" and not value.isascii():
-            # An address in look-alike letters could pass for another's.
-            raise SettingsError("Setting assign_to must be a plain email address (ASCII letters only).")
+        if (key == "assign_to" or key.startswith("assign_to_")) and not value.isascii():
+            # An address in look-alike letters could pass for another's
+            # (assign_to, or a job's per-item assign_to_<item>).
+            raise SettingsError(f"Setting {key} must be a plain email address (ASCII letters only).")
         out[key] = list(value) if isinstance(value, list) else value
     return out
 
@@ -829,13 +903,14 @@ from openexecutive.watch.jobs import bank_rules as _bank_rules  # noqa: E402
 from openexecutive.watch.jobs import collections as _collections  # noqa: E402
 from openexecutive.watch.jobs import invoice_capture as _invoice_capture  # noqa: E402
 from openexecutive.watch.jobs import late_deliveries as _late_deliveries  # noqa: E402
+from openexecutive.watch.jobs import month_end as _month_end  # noqa: E402
 from openexecutive.watch.jobs import payment_checks as _payment_checks  # noqa: E402
 from openexecutive.watch.jobs import project_status as _project_status  # noqa: E402
 from openexecutive.watch.jobs import quote_follow_up as _quote_follow_up  # noqa: E402
 
 _LISTED: tuple[WatchJob, ...] = (
     _collections.JOB, _payment_checks.JOB, _bank_matching.JOB, _invoice_capture.JOB, _quote_follow_up.JOB,
-    _late_deliveries.JOB, _project_status.JOB, _bank_rules.JOB,
+    _late_deliveries.JOB, _project_status.JOB, _bank_rules.JOB, _month_end.JOB,
 )
 _JOBS: dict[str, WatchJob] = {job.id: job for job in _LISTED}
 JOBS: Mapping[str, WatchJob] = MappingProxyType(_JOBS)
