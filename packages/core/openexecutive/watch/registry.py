@@ -58,6 +58,7 @@ when its job is defined, so the registry never imports one.
 from __future__ import annotations
 
 import re
+import string
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date, time, timedelta
@@ -123,6 +124,9 @@ _NAME_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^
 # the job connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to.
 READ_TOOLS: frozenset[str] = frozenset({"run_report", "list_records"})
 MAX_CARD_CAP = 50
+# The characters a subject_pattern's set ([...]) may list one by one:
+# digits, a space and ASCII punctuation, never a letter.
+SET_CHARACTERS = frozenset(string.digits + " " + string.punctuation)
 # Texts no job's subject_pattern may match in full: a pattern that takes
 # them takes any text (".*", "[^\n]+", "\S.*"), so it keeps no ERPNext name
 # out of a subject.
@@ -600,6 +604,9 @@ def subject_pattern_problem(pattern: str) -> str:
                         return "it has a class other than digits or spaces"
                     if inner is sre.RANGE and not (48 <= arg[0] <= arg[1] <= 57):
                         return "it has a range other than digits"
+                    if inner is sre.LITERAL and chr(arg) not in SET_CHARACTERS:
+                        # A hand-written set of letters takes a name as a class would.
+                        return "it has a set of characters other than digits, spaces or punctuation"
             elif op is sre.CATEGORY and av not in allowed:
                 return "it has a class other than digits or spaces"
             elif op in (sre.MAX_REPEAT, sre.MIN_REPEAT, sre.POSSESSIVE_REPEAT):
