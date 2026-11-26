@@ -163,10 +163,14 @@ class WatchRead:
     # A repeated read: at most this many calls a run (1 to MAX_REPEAT), its
     # arguments ``Repeated``. 0: one call.
     repeat: int = 0
-    # A repeated read whose one call may be refused without ending the run
-    # (one supplier's unreadable PDF): that item's result is
-    # ``{"unread": True}``, which the job's rules treat as "needs a person",
-    # never a card. Only on a repeated read.
+    # A read that may be refused without ending the run. On a repeated read,
+    # one call ERPNext refused (one supplier's unreadable PDF) gives that
+    # item ``{"unread": True}``. On a single read, a refusal or a timeout
+    # gives the whole read's result as ``{"unread": True}`` (month-end's
+    # checks, each said as "not read", never as clear). Either way the
+    # job's rules treat it as "needs a person", never a card. A read whose
+    # arguments don't fit its shape, or answered as another job, still ends
+    # the run.
     may_fail: bool = False
 
     @property
@@ -211,6 +215,10 @@ class CardSpec:
     # quote-follow-up job's quotations to leads): recorded as told with its
     # rows once the notice is left. Keys only, never shown.
     counted: tuple[str, ...] = ()
+    # The notice's subject in code's own words and counts only, never
+    # ERPNext's text ("Close of October: 6 of 9 clear"); "": the job's title
+    # and the run's count (``runner.notice_subject``).
+    subject: str = ""
 
 
 @dataclass(frozen=True)
@@ -323,6 +331,11 @@ Proposals = Callable[[Sequence[Mapping[str, Any]], Settings, date], Sequence[Pro
 ProposalCheck = Callable[[Settings, Mapping[str, Any]], bool]
 # (oe_connector's refusal text, only searched) -> a short code, never the text.
 ProposalRefusal = Callable[[object], str]
+# (the job's current settings, a day in company time) -> whether its
+# scheduled run is due that day, beyond its ``weekdays`` (month-end's first
+# working day, then daily, then weekly until clear). Pure code, or reading
+# this install's own records only; never a read of ERPNext.
+RunsOn = Callable[[Settings, date], bool]
 
 
 def _setting_ok(value: object, bounds: tuple[int, int] | None = None) -> bool:
@@ -394,6 +407,15 @@ class WatchJob:
     # ISO week): a hold written when ERPNext refused a finding's check ends
     # with the period. Without one, such a hold lasts ``cards.HOLD_DAYS``.
     periodic_keys: bool = False
+    # Whether its scheduled run is due on a day (``RunsOn``), besides its
+    # weekdays; None: each of them. A run started by hand ignores it.
+    runs_on: RunsOn | None = None
+    # Its notices are kept current rather than left again: while one is
+    # still open (unread or read), a run that finds it changed rewrites its
+    # subject and body in place and marks it unread; unchanged, it's a
+    # repeat. A once job's told record never holds such a notice back (its
+    # cards are still once). One closed is left afresh, at most once a day.
+    updates_notice: bool = False
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -428,8 +450,8 @@ class WatchJob:
                 or not 0 <= read.repeat <= MAX_REPEAT
             ):
                 raise ValueError(f"a read repeats at most {MAX_REPEAT} times")
-            if not isinstance(read.may_fail, bool) or (read.may_fail and not read.repeat):
-                raise ValueError("only a repeated read's call may fail on its own")
+            if not isinstance(read.may_fail, bool):
+                raise ValueError("a read's may_fail is true or false")
         if not (1 <= self.card_cap_day <= MAX_CARD_CAP):
             raise ValueError("a job's card cap is 1 to 50 a day")
         schema = self.reason_schema
@@ -469,6 +491,10 @@ class WatchJob:
             raise ValueError("a job's slots are distinct times, in order, from its schedule")
         if not self.weekdays or not self.weekdays <= frozenset(range(7)):
             raise ValueError("a job runs on some of the week's days, Monday 0 to Sunday 6")
+        if self.runs_on is not None and not callable(self.runs_on):
+            raise ValueError("a job's runs_on is a function of its settings and a day")
+        if not isinstance(self.updates_notice, bool):
+            raise ValueError("a job's updates_notice is true or false")
         if (self.proposals is None) != (not self.proposal_tool) or (self.proposals is None) != (
             self.proposal_check is None
         ):
