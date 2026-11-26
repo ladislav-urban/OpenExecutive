@@ -583,7 +583,7 @@ def check_billed(item: Item, result: Mapping[str, Any], today: date, grace: int)
         return Check(item, UNREAD)
     cutoff = period(today)[1] - timedelta(days=grace)
     currency = _currency(result.get("currency"))
-    dated = []
+    dated: list[tuple[date, float | None, str]] = []
     for r in rows:
         d, pending = _day(r.get("date")), _amount(r.get("pending_amount"))
         if d is not None and pending is not None and pending > 0 and d <= cutoff:
