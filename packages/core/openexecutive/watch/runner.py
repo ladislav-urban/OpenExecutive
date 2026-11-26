@@ -1070,11 +1070,11 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
                 "".join(f" {k}={v}" for k, v in sorted((stopped.refusal or {}).items())),
             )
             results.append({"unread": True})
-    made = [entry for entry in reads if not entry.get("skipped")]
-    if made and all(entry.get("unread") is True for entry in made):
+    attempted = [entry for entry in reads if not entry.get("skipped")]
+    if attempted and all(entry.get("unread") is True for entry in attempted):
         # No read returned anything (a revoked key, a removed role): the
         # job's failure notice, once a day, rather than a run of "not read".
-        raise _Stop("read_refused", str(made[0].get("read") or ""))
+        raise _Stop("read_refused", str(attempted[0].get("read") or ""))
     if len(users) > 1:
         # Not one job user across the run: none of its reads counts as one.
         for entry in reads:
