@@ -172,8 +172,13 @@ REASONS: dict[str, str] = {
 # who turned it off.
 _QUIET = frozenset({"watch-job-off"})
 # What a single read listed ``may_fail`` may end in without ending the run:
-# ERPNext's own refusal, or no answer in time. Never this side's own checks
-# (a shape, a marker, the job's identity) nor ERPNext not being connected.
+# a refusal returned as the call's answer, or no answer in time. That covers
+# oe_connector's and ERPNext's refusals and the gateway's own call-time
+# refusals (a changed tool pin, a marker it won't honour), which come back
+# the same way; each is kept with the run's record by its code and
+# refusal_record, and the read is "not read", never clear. The runner's own
+# checks (a shape, the marker it sets, the job's identity) and ERPNext not
+# being connected still end the run.
 _MAY_FAIL_REASONS = frozenset({"read_refused", "read_timeout"})
 # What a failure notice says, whole, for a stop that needs an ERPNext
 # operator rather than a look at the job (code's words, never ERPNext's).
@@ -1005,7 +1010,16 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             if not (read.may_fail and stopped.reason in _MAY_FAIL_REASONS):
                 raise
             unread += 1
-            reads.append({"read": read.label, "unread": True})
+            # Why, in codes only (refusal_record: ids, a hash and a length),
+            # kept with the run's record and logged, never the text.
+            entry: dict[str, Any] = {"read": read.label, "unread": True, "error": stopped.reason}
+            if stopped.refusal:
+                entry["refusal"] = dict(stopped.refusal)
+            reads.append(entry)
+            logger.warning(
+                "watch: job %s read %s not read (%s)%s", job.id, read.label, stopped.reason,
+                "".join(f" {k}={v}" for k, v in sorted((stopped.refusal or {}).items())),
+            )
             results.append({"unread": True})
     if len(users) > 1:
         # Not one job user across the run: none of its reads counts as one.
@@ -1960,18 +1974,15 @@ def _update_notice(
     if same:
         return False
     try:
-        store.update_alert_content(
+        # One statement: subject, body, routing and status together, and
+        # only while it's still open (dismissed since, it stays dismissed).
+        return store.rewrite_open_alert(
             open_notice.id, headline=notice_headline(job, day, spec, found),
-            body=notice_body(job, day, spec, reason, reasons=reasons, notes=notes),
+            body=notice_body(job, day, spec, reason, reasons=reasons, notes=notes), routed_to_person_id=routed,
         )
-        if open_notice.routed_to != routed:
-            store.update_alert_routing(open_notice.id, routed)
-        if open_notice.status != "unread":
-            store.set_status(open_notice.id, "unread")
     except Exception:
         logger.error("watch: job %s couldn't update its notice", job.id)
         return False
-    return True
 
 
 def _raised_today(key: str, day: str) -> bool:
@@ -2049,9 +2060,12 @@ def notice_subject(job: registry.WatchJob, day: str, found: int) -> str:
 
 
 def notice_headline(job: registry.WatchJob, day: str, spec: registry.CardSpec, found: int) -> str:
-    """The subject a notice is stored with: the finding's own ``subject``
-    (code's words and counts only), cleaned, else ``notice_subject``."""
-    own = clean(spec.subject, MAX_SUBJECT_CHARS) if spec.subject else ""
+    """The subject a notice is stored with: the finding's own ``subject``,
+    cleaned, when it fully matches its job's ``subject_pattern`` (code's
+    words and counts only), else ``notice_subject``."""
+    own = clean(spec.subject, MAX_SUBJECT_CHARS) if spec.subject and job.subject_pattern else ""
+    if own and re.fullmatch(job.subject_pattern, own) is None:
+        own = ""
     return own or notice_subject(job, day, found)
 
 

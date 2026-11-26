@@ -12334,14 +12334,21 @@ watch:
     code or this install's records, never a read; raising or not True keeps
     it from starting that tick; a run started by hand ignores it; month-end's
     calendar). A WatchRead with may_fail and no repeat that ERPNext refuses
-    or that times out gives {"unread": true} and the run goes on; its shape,
-    another job's answer or no ERPNext still end it, and an unread read is
-    left out of cards.route's job-user check (it returned no data).
-    updates_notice: an open notice (unread or read) is rewritten in place and
-    marked unread when what it says changed (the preamble's day alone isn't a
-    change), outside the day's notice cap and never held back by a once job's
-    told record; CardSpec.subject is a code-only subject, cleaned, at most
-    120 characters. id is oe_connector's
+    or that times out gives {"unread": true} and the run goes on (that
+    includes the gateway's own call-time refusals, which come back as an
+    answer; the run's record keeps each one's code and refusal_record, and
+    logs it); its shape, the runner's own marker refusals, another job's
+    answer or no ERPNext still end it, and an unread read is left out of
+    cards.route's job-user check (it returned no data). A job's rules read
+    {"unread": true} as not read, never as no rows. updates_notice: an open
+    notice (unread or read) is rewritten in place and marked unread when what
+    it says changed (the preamble's day alone isn't a change), in one
+    statement (alerts.store.rewrite_open_alert) that leaves a notice dealt
+    with meanwhile alone, outside the day's notice cap and never held back by
+    a once job's told record. CardSpec.subject is used only when, cleaned and
+    at most 120 characters, it fully matches the job's subject_pattern (a
+    constant regex of code's words and digits), else the title and count.
+    id is oe_connector's
     watch.JOB_ID ([a-z0-9-]{1,40}), the key of oe_connector_watch_jobs and of
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same

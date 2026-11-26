@@ -221,8 +221,9 @@ class CardSpec:
     # rows once the notice is left. Keys only, never shown.
     counted: tuple[str, ...] = ()
     # The notice's subject in code's own words and counts only, never
-    # ERPNext's text ("Close of October: 6 of 9 clear"); "": the job's title
-    # and the run's count (``runner.notice_subject``).
+    # ERPNext's text ("Close of October: 6 of 9 clear"). Used only when it
+    # fully matches its job's ``subject_pattern``; otherwise, or "", the
+    # job's title and the run's count (``runner.notice_subject``).
     subject: str = ""
 
 
@@ -413,7 +414,10 @@ class WatchJob:
     # with the period. Without one, such a hold lasts ``cards.HOLD_DAYS``.
     periodic_keys: bool = False
     # Whether its scheduled run is due on a day (``RunsOn``), besides its
-    # weekdays; None: each of them. A run started by hand ignores it.
+    # weekdays; None: each of them. A run started by hand ignores it. The
+    # day's claim, and with it the stale-run check, is reached only on a day
+    # it's due: a run started by hand that died on another day is found
+    # stale on the next due day, or by the next run started by hand.
     runs_on: RunsOn | None = None
     # Its notices are kept current rather than left again: while one is
     # still open (unread or read), a run that finds it changed rewrites its
@@ -421,6 +425,11 @@ class WatchJob:
     # repeat. A once job's told record never holds such a notice back (its
     # cards are still once). One closed is left afresh, at most once a day.
     updates_notice: bool = False
+    # The subjects its notices may have of their own (``CardSpec.subject``):
+    # a constant regular expression of code's words and digits, which a
+    # subject must match in full, so no ERPNext text can stand in one. "":
+    # none, every subject is the title and count.
+    subject_pattern: str = ""
 
     def __post_init__(self) -> None:
         if not JOB_ID.fullmatch(self.id):
@@ -500,6 +509,13 @@ class WatchJob:
             raise ValueError("a job's runs_on is a function of its settings and a day")
         if not isinstance(self.updates_notice, bool):
             raise ValueError("a job's updates_notice is true or false")
+        if not isinstance(self.subject_pattern, str) or len(self.subject_pattern) > 400:
+            raise ValueError("a job's subject_pattern is a short regular expression")
+        if self.subject_pattern:
+            try:
+                re.compile(self.subject_pattern)
+            except re.error:
+                raise ValueError("a job's subject_pattern doesn't compile") from None
         if (self.proposals is None) != (not self.proposal_tool) or (self.proposals is None) != (
             self.proposal_check is None
         ):
