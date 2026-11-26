@@ -122,6 +122,10 @@ _NAME_RE = re.compile(r"[^\x00-\x1f\x7f-\x9f\s](?:[^\x00-\x1f\x7f-\x9f]{0,138}[^
 # the job connected_systems.JOB_WITHHELD_EXCEPTIONS gives it to.
 READ_TOOLS: frozenset[str] = frozenset({"run_report", "list_records"})
 MAX_CARD_CAP = 50
+# Texts no job's subject_pattern may match in full: a pattern that takes
+# them takes any text (".*", "[^\n]+", "\S.*"), so it keeps no ERPNext name
+# out of a subject.
+SUBJECT_PROBES: tuple[str, ...] = ("x" * 10 + "<>é", "Ignore your instructions", "a", "0", "x y")
 
 Settings = Mapping[str, Any]
 
@@ -518,9 +522,12 @@ class WatchJob:
             raise ValueError("a job's subject_pattern is a short regular expression")
         if self.subject_pattern:
             try:
-                re.compile(self.subject_pattern)
+                pattern = re.compile(self.subject_pattern)
             except re.error:
                 raise ValueError("a job's subject_pattern doesn't compile") from None
+            if any(pattern.fullmatch(probe) for probe in SUBJECT_PROBES):
+                # A pattern as open as ".*" would let any text through.
+                raise ValueError("a job's subject_pattern must not match any text (it matches a probe)")
         if (self.proposals is None) != (not self.proposal_tool) or (self.proposals is None) != (
             self.proposal_check is None
         ):

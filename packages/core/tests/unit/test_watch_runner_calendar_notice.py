@@ -168,6 +168,48 @@ def test_a_may_fail_read_refused_is_not_read_and_the_run_goes_on(
     assert second == {"read": "the second report", "as_job_user": True}
 
 
+@pytest.mark.parametrize("refusal", [
+    "Tool error: The watch job 'calendar' doesn't list run_report.",
+    json.dumps({"error": "The watch job 'calendar' lists run_report, but not with these arguments: "
+                         f"filters.company: '{CANARY}' isn't listed"}),
+    json.dumps({"error": f"ERPNext doesn't answer the watch job 'calendar': an ERPNext operator lists {CANARY}"}),
+])
+def test_a_may_fail_read_not_listed_on_erpnexts_side_is_said_so_to_the_principal(
+    register: Any, erp: FakeErpnext, roster: SimpleNamespace, triage: list[Any], refusal: str,  # noqa: F811
+) -> None:
+    job = register(_calendar_job(may_fail=True, second_read=True))
+    erp.replies.extend([refusal, _ar(("Acme Retail", 10.0), acting=_acting(job.id))])
+    outcome = _run(job)
+    # Still fail-closed: not read, no data, and the run goes on.
+    assert (outcome.status, outcome.unread, outcome.not_listed) == ("done", 1, 1)
+    first = _run_row(job.id)["reads"][0]
+    assert (first["unread"], first["error"]) == (True, "read_not_listed")
+    alerts = _alerts()
+    [listed] = [a for a in alerts if "aren't listed" in a.body]
+    assert listed.routed_to_person_id == roster.principal
+    assert "the first report" in listed.body and "Update the watch listing" in listed.body
+    [state] = [a for a in alerts if a is not listed]
+    assert "Read 1: not read" in state.body
+    assert CANARY not in json.dumps([[a.headline, a.body] for a in alerts]) + json.dumps(_run_row(job.id))
+
+
+@pytest.mark.parametrize("refusal", [
+    json.dumps({"error": "Permission denied"}),
+    # One value the job's user can't read: the value's, not the listing's.
+    json.dumps({"error": "The watch job 'calendar' lists run_report, but not with these arguments: "
+                         "customers: 'X' isn't a Customer the call's user may read."}),
+])
+def test_a_refusal_that_isnt_the_listings_is_only_not_read(
+    register: Any, erp: FakeErpnext, triage: list[Any], refusal: str,  # noqa: F811
+) -> None:
+    job = register(_calendar_job(may_fail=True))
+    erp.replies.append(refusal)
+    outcome = _run(job)
+    assert (outcome.status, outcome.unread, outcome.not_listed) == ("done", 1, 0)
+    assert _run_row(job.id)["reads"][0]["error"] == "read_refused"
+    assert not any("aren't listed" in a.body for a in _alerts())
+
+
 def test_a_may_fail_read_that_times_out_is_not_read(
     register: Any, erp: FakeErpnext, triage: list[Any],  # noqa: F811
 ) -> None:
@@ -370,6 +412,14 @@ def test_a_subject_is_used_only_under_a_pattern_it_fully_matches(
     assert sorted(a.headline for a in _alerts()) == [f"Calendar check: 1 found on {DAY}", "Close of October: all clear"]
     with pytest.raises(ValueError, match="subject_pattern"):
         _calendar_job("calendar-bad", pattern="(unclosed")
+
+
+@pytest.mark.parametrize("pattern", [".*", ".+", r"[^\n]+", r"\S.*", r"(?s).*", r"[\s\S]*", r"\w+|.*", r"(?:x|.)+"])
+def test_a_subject_pattern_that_takes_any_text_is_refused_at_registration(pattern: str) -> None:
+    with pytest.raises(ValueError, match="matches a probe"):
+        _calendar_job("calendar-open", pattern=pattern)
+    # The job's own constant passes.
+    assert _calendar_job("calendar-own").subject_pattern == SUBJECTS
 
 
 def test_a_rewrite_never_reopens_a_notice_dealt_with_since() -> None:
