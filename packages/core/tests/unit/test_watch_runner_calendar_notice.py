@@ -422,6 +422,32 @@ def test_a_subject_pattern_that_takes_any_text_is_refused_at_registration(patter
     assert _calendar_job("calendar-own").subject_pattern == SUBJECTS
 
 
+@pytest.mark.parametrize(("pattern", "why"), [
+    ("Close of .*", "any character"),
+    (r"Close of [^\n]+", "any character"),
+    (r"Close of [^0-9]{1,40}", "any character"),
+    (r"Close of \w+", "class other than digits"),
+    (r"Close of \S+", "class other than digits"),
+    (r"Close of [A-Za-z ]+", "range other than digits"),
+    (r"Close of (?:October|.+)", "any character"),
+    (r"Close of (?=.)October", "any character"),
+    (r"Close of (?>October.?)", "any character"),
+])
+def test_a_subject_pattern_that_passes_the_probes_but_takes_other_text_is_refused(pattern: str, why: str) -> None:
+    """security_reviewer's L2 on ladislav-urban/OpenExecutive#311: "Close of
+    .*" passes every probe, so the pattern's structure is checked too."""
+    assert why in registry.subject_pattern_problem(pattern)
+    with pytest.raises(ValueError, match="code's words and digits only"):
+        _calendar_job("calendar-open", pattern=pattern)
+
+
+@pytest.mark.parametrize("pattern", [
+    SUBJECTS, r"Close of (?:October|November): \d{1,2} of \d{1,2} clear", r"Run [0-9]{1,3}", r"A[\d\s]+B",
+])
+def test_literal_words_and_digits_pass_the_structural_check(pattern: str) -> None:
+    assert registry.subject_pattern_problem(pattern) == ""
+
+
 def test_a_rewrite_never_reopens_a_notice_dealt_with_since() -> None:
     alert_id = alert_store.insert_alert(
         source="watch", external_id="k:2026-11-10", severity=runner.NOTICE_SEVERITY, headline="Old",

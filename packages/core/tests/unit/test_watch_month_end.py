@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -117,6 +118,15 @@ def test_the_listing_is_oe_connectors_read_for_read() -> None:
     # per bank account, each account a literal in place of this side's slot.
     assert me.listing(FOREIGN, [BANK]) == listed["reads"]
     assert registry.JOBS[me.JOB_ID] is me.JOB
+
+
+def test_its_subjects_are_literal_words_and_digits() -> None:
+    assert registry.subject_pattern_problem(me.SUBJECTS) == ""
+    assert me.JOB.subject_pattern == me.SUBJECTS
+    for month in me.MONTHS:
+        assert re.fullmatch(me.SUBJECTS, f"Close of {month}: all clear")
+        assert re.fullmatch(me.SUBJECTS, f"Close of {month}: 6 of 9 clear")
+    assert not re.fullmatch(me.SUBJECTS, "Close of Lumen & Co: 6 of 9 clear")
 
 
 def test_every_read_may_fail_on_its_own_and_lists_reads_only() -> None:

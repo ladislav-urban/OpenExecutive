@@ -529,6 +529,9 @@ class WatchJob:
             if any(pattern.fullmatch(probe) for probe in SUBJECT_PROBES):
                 # A pattern as open as ".*" would let any text through.
                 raise ValueError("a job's subject_pattern must not match any text (it matches a probe)")
+            why = subject_pattern_problem(self.subject_pattern)
+            if why:
+                raise ValueError(f"a job's subject_pattern is code's words and digits only: {why}")
         if (self.proposals is None) != (not self.proposal_tool) or (self.proposals is None) != (
             self.proposal_check is None
         ):
@@ -565,6 +568,63 @@ class WatchJob:
     def proposal_gateway_tool(self) -> str:
         """Its proposal tool's gateway name, or "" for a job that proposes nothing."""
         return GATEWAY_PREFIX + self.proposal_tool if self.proposal_tool else ""
+
+
+def subject_pattern_problem(pattern: str) -> str:
+    """Why ``pattern`` could take text other than code's words and digits,
+    or "": no ``.``, no negated character or set, no class but a digit or a
+    space, no range but digits. "Close of .*" passes every probe but not
+    this."""
+    from re import _constants as sre, _parser
+
+    try:
+        parsed = _parser.parse(pattern)
+    except re.error:
+        return "it doesn't compile"
+    allowed = {sre.CATEGORY_DIGIT, sre.CATEGORY_SPACE}
+
+    def walk(items: Any) -> str:
+        for op, av in items:
+            if op in (sre.ANY, sre.NOT_LITERAL):
+                return "it takes any character"
+            if op is sre.IN:
+                for inner, arg in av:
+                    if inner is sre.NEGATE:
+                        return "it has a negated set"
+                    if inner is sre.CATEGORY and arg not in allowed:
+                        return "it has a class other than digits or spaces"
+                    if inner is sre.RANGE and not (48 <= arg[0] <= arg[1] <= 57):
+                        return "it has a range other than digits"
+            elif op is sre.CATEGORY and av not in allowed:
+                return "it has a class other than digits or spaces"
+            elif op in (sre.MAX_REPEAT, sre.MIN_REPEAT, sre.POSSESSIVE_REPEAT):
+                why = walk(av[2])
+                if why:
+                    return why
+            elif op is sre.SUBPATTERN:
+                why = walk(av[3])
+                if why:
+                    return why
+            elif op is sre.BRANCH:
+                for branch in av[1]:
+                    why = walk(branch)
+                    if why:
+                        return why
+            elif op in (sre.ASSERT, sre.ASSERT_NOT):
+                why = walk(av[1])
+                if why:
+                    return why
+            elif op is sre.ATOMIC_GROUP:
+                why = walk(av)
+                if why:
+                    return why
+            elif op is sre.GROUPREF_EXISTS:
+                why = walk(av[1]) or (walk(av[2]) if av[2] is not None else "")
+                if why:
+                    return why
+        return ""
+
+    return walk(parsed)
 
 
 def get(job_id: object) -> WatchJob | None:
