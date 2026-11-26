@@ -151,6 +151,7 @@ REQUIRED = len(ITEMS)
 LOCK_TITLE = "Period locked"
 
 CLEAR, OPEN, UNREAD = "clear", "open", "not read"
+CUT_NOTE = "More rows than one read takes: not all could be read this run."
 
 
 @dataclass
@@ -331,8 +332,25 @@ STATEMENT_SHAPE: Mapping[str, Any] = {
  R_DEFERRED, R_PERIOD, R_COMPANY, R_BANKS, R_BALANCES, R_STATEMENTS) = range(16)
 
 
+# The fields each read asks for, of those its listing allows: only what the
+# rules use.
+CALL_FIELDS: Mapping[str, list[str]] = {
+    "Purchase Invoice": ["posting_date", "grand_total", "currency"],
+    "Sales Invoice": ["posting_date", "grand_total", "currency"],
+    "Repost Item Valuation": ["status", "posting_date"],
+    "Asset Depreciation Schedule": [
+        "depreciation_schedule.schedule_date", "depreciation_schedule.journal_entry",
+        "depreciation_schedule.depreciation_amount",
+    ],
+    "Account": ["name", "account_currency"],
+    "Process Deferred Accounting": ["name"],
+}
+
+
 def _list_args(shape: Mapping[str, Any], filters: dict[str, Any], limit: int = READ_LIMIT) -> dict[str, Any]:
-    out: dict[str, Any] = {"doctype": shape["doctype"], "fields": list(shape["fields"]), "filters": filters}
+    fields = list(shape["fields"])
+    asked = [f for f in CALL_FIELDS.get(shape["doctype"], fields) if f in fields] or fields
+    out: dict[str, Any] = {"doctype": shape["doctype"], "fields": asked, "filters": filters}
     if "order_by" in shape:
         out["order_by"] = shape["order_by"]
     out["limit"] = limit
@@ -554,10 +572,14 @@ def _each(result: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], bool]:
 # --------------------------------------------------------------------------- #
 
 
-def _counted(item: Item, dated: list[tuple[date, float | None, str]], *, at_least: bool) -> Check:
-    """An item from its dated findings (date, amount, currency)."""
+def _counted(
+    item: Item, dated: list[tuple[date, float | None, str]], *, at_least: bool, cut: bool = False,
+) -> Check:
+    """An item from its dated findings (date, amount, currency). Nothing
+    counted on a cut result is not read, never clear: the rows past the cut
+    may hold one."""
     if not dated:
-        return Check(item, CLEAR)
+        return Check(item, UNREAD, note=CUT_NOTE) if cut else Check(item, CLEAR)
     sums: dict[str, float] = {}
     for _, amount, currency in dated:
         if amount is not None:
@@ -588,7 +610,7 @@ def check_billed(item: Item, result: Mapping[str, Any], today: date, grace: int)
         d, pending = _day(r.get("date")), _amount(r.get("pending_amount"))
         if d is not None and pending is not None and pending > 0 and d <= cutoff:
             dated.append((d, pending, currency))
-    return _counted(item, dated, at_least=_cut(result))
+    return _counted(item, dated, at_least=_cut(result), cut=_cut(result))
 
 
 def check_reposts(item: Item, result: Mapping[str, Any], today: date) -> Check:
@@ -600,7 +622,7 @@ def check_reposts(item: Item, result: Mapping[str, Any], today: date) -> Check:
         (d, None, "") for r in rows
         if r.get("status") in OPEN_REPOSTS and (d := _day(r.get("posting_date"))) is not None and d <= last
     ]
-    return _counted(item, dated, at_least=_cut(result))
+    return _counted(item, dated, at_least=_cut(result), cut=_cut(result))
 
 
 def check_depreciation(item: Item, result: Mapping[str, Any], today: date) -> Check:
@@ -617,7 +639,7 @@ def check_depreciation(item: Item, result: Mapping[str, Any], today: date) -> Ch
         (d, _amount(field_of(r, "depreciation_amount")), "") for r in rows
         if not field_of(r, "journal_entry") and (d := _day(field_of(r, "schedule_date"))) is not None and d <= last
     ]
-    return _counted(item, dated, at_least=_cut(result))
+    return _counted(item, dated, at_least=_cut(result), cut=_cut(result))
 
 
 def check_bank(item: Item, banks: Mapping[str, Any], statements: Mapping[str, Any], today: date,
@@ -631,12 +653,14 @@ def check_bank(item: Item, banks: Mapping[str, Any], statements: Mapping[str, An
     cutoff = period(today)[1] - timedelta(days=grace)
     dated: list[tuple[date, float | None, str]] = []
     unread: list[str] = []
+    statement_cut = False
     for n, account in enumerate(accounts):
         result = each[n] if n < len(each) else {"unread": True}
         rows = _rows(result)
         if rows is None:
             unread.append(account)
             continue
+        statement_cut = statement_cut or _cut(result)
         for r in rows:
             # A statement's summary rows have no posting date: never an entry.
             d = _day(r.get("posting_date"))
@@ -644,11 +668,13 @@ def check_bank(item: Item, banks: Mapping[str, Any], statements: Mapping[str, An
                 continue
             debit, credit = _amount(r.get("debit")) or 0.0, _amount(r.get("credit")) or 0.0
             dated.append((d, round(debit + credit, 2), _currency(r.get("account_currency"))))
-    checked = _counted(item, dated, at_least=False)
+    checked = _counted(item, dated, at_least=statement_cut)
     checked.not_checked = tuple(unread)
     if banks_cut or cut:
         checked.note = "Not every bank account could be read this run."
-    if checked.state == CLEAR and (unread or banks_cut or cut):
+    elif statement_cut:
+        checked.note = CUT_NOTE
+    if checked.state == CLEAR and (unread or banks_cut or cut or statement_cut):
         checked.state = UNREAD
     return checked
 
@@ -717,9 +743,35 @@ def lock_state(periods: Mapping[str, Any], company: Mapping[str, Any], today: da
     return "not locked"
 
 
+def known_currencies(accounts: Mapping[str, Any]) -> frozenset[str]:
+    """The currencies the company's accounts use (read 8a and its company
+    currency): the only ones a notice or card names. Any other code is
+    ERPNext's own text and is dropped."""
+    rows = _rows(accounts) or []
+    found = {_currency(r.get("account_currency")) for r in rows} | {_currency(accounts.get("currency"))}
+    return frozenset(c for c in found if c)
+
+
+def _named_currencies(check: Check, known: frozenset[str]) -> Check:
+    """``check`` with any currency the company's accounts don't use
+    unnamed (its sum kept under "")."""
+    if any(c and c not in known for c in check.sums):
+        merged: dict[str, float] = {}
+        for currency, amount in check.sums.items():
+            key = currency if currency in known else ""
+            merged[key] = round(merged.get(key, 0.0) + amount, 2)
+        check.sums = merged
+    return check
+
+
 def checks(reads: Sequence[Mapping[str, Any]], settings: Settings, today: date) -> list[Check]:
     """The nine items, in order, from the reads."""
     r = list(reads) + [{}] * (R_STATEMENTS + 1 - len(reads))
+    known = known_currencies(r[R_ACCOUNTS])
+    return [_named_currencies(c, known) for c in _checks(r, settings, today)]
+
+
+def _checks(r: list[Mapping[str, Any]], settings: Settings, today: date) -> list[Check]:
     return [
         check_drafts(BY_KEY["purchase_drafts"], r[R_PI], today),
         check_drafts(BY_KEY["sales_drafts"], r[R_SI], today),
@@ -768,22 +820,38 @@ def description(check: Check, today: date) -> str:
 def _template_re(item: Item) -> re.Pattern[str]:
     noun = rf"(?:{re.escape(item.noun)}|{re.escape(item.nouns)})"
     return re.compile(
-        r"Month-end close of (?:" + "|".join(MONTHS) + r") \d{4}: (?:at least )?\d{1,6} " + noun
-        + r"(?:, -?\d{1,3}(?:,\d{3})*\.\d{2}(?: [A-Z]{3})?)?(?:, oldest \d{4}-\d{2}-\d{2})?\. "
-        + re.escape(item.where)
+        r"Month-end close of (?P<month>" + "|".join(MONTHS) + r") (?P<year>\d{4}): (?:at least )?\d{1,6} "
+        + noun + r"(?:, -?\d{1,3}(?:,\d{3})*\.\d{2}(?: [A-Z]{3})?)?(?:, oldest (?P<oldest>\d{4}-\d{2}-\d{2}))?\. "
+        + re.escape(item.where),
+        re.ASCII,
     )
 
 
 TEMPLATES: Mapping[str, re.Pattern[str]] = {item.key: _template_re(item) for item in ITEMS}
 
 
-def item_of(text: object) -> Item | None:
-    """The item whose template ``text`` is, in full, or None."""
+def item_of(text: object, day: object = None) -> Item | None:
+    """The item whose template ``text`` is, in full, or None. With ``day``
+    (a ToDo's date, "YYYY-MM-DD"), the text's month must be the one before
+    the day's, and its oldest date on or before that month's end."""
     if not isinstance(text, str) or len(text) > DESCRIPTION_MAX:
         return None
     for item in ITEMS:
-        if TEMPLATES[item.key].fullmatch(text):
+        found = TEMPLATES[item.key].fullmatch(text)
+        if found is None:
+            continue
+        if day is None:
             return item
+        when = _day(day) if isinstance(day, str) and len(day) == 10 else None
+        if when is None:
+            return None
+        last = period(when)[1]
+        if (MONTHS.index(found.group("month")) + 1, int(found.group("year"))) != (last.month, last.year):
+            return None
+        oldest = found.group("oldest")
+        if oldest is not None and ((d := _day(oldest)) is None or d > last):
+            return None
+        return item
     return None
 
 
@@ -793,7 +861,7 @@ def _state_text(check: Check) -> str:
     return check.state
 
 
-def _row(check: Check, company: str, today: date, owner: str) -> CardSpec:
+def _row(check: Check, company: str, today: date, owner_text: str) -> CardSpec:
     values: list[tuple[str, str]] = [("State", _state_text(check))]
     if check.state == OPEN:
         values.append(("Count", f"{'at least ' if check.at_least else ''}{check.count}"))
@@ -804,12 +872,20 @@ def _row(check: Check, company: str, today: date, owner: str) -> CardSpec:
             values.append(("Value", "in several currencies"))
         if check.oldest is not None:
             values.append(("Oldest", check.oldest.isoformat()))
-        values.append(("Owner", owner or "no one: set its owner or a reviewer"))
+        values.append(("Owner", owner_text or "no one: set its owner or a reviewer"))
     if check.note:
         values.append(("Note", check.note))
     if check.not_checked:
         values.append(("Not checked", "; ".join(check.not_checked) + "; add them to the watch listing"))
     return CardSpec(key=_item_key(company, today, check.item.key), summary=check.item.title, values=tuple(values))
+
+
+def _owner_text(item: str, who: Mapping[str, str], settings: Settings) -> str:
+    """Who takes an item's task, as the notice says it: the setting that
+    names them, never the address (a notice shows no addresses)."""
+    if not who.get(item):
+        return ""
+    return f"its owner ({setting_key(item)})" if settings.get(setting_key(item)) else "the reviewer"
 
 
 def subject(found: Sequence[Check], today: date) -> str:
@@ -848,7 +924,7 @@ def build(
         notes.append(ALL_CLEAR_LINE.format(month=MONTHS[last.month - 1], year=last.year))
     if any(c.state == OPEN and not who.get(c.item.key) for c in found):
         notes.append(NO_OWNER_LINE)
-    rows = [_row(c, company, today, who.get(c.item.key, "")) for c in found]
+    rows = [_row(c, company, today, _owner_text(c.item.key, who, settings)) for c in found]
     rows.append(CardSpec(key=_item_key(company, today, "lock"), summary=LOCK_TITLE, values=(("State", lock),)))
     clear = sum(1 for c in found if c.state == CLEAR)
     notice = CardSpec(
@@ -908,7 +984,7 @@ def assignees(settings: Settings | None = None) -> dict[str, str]:
     if isinstance(reviewer_id, int) and not isinstance(reviewer_id, bool):
         person = get_person(reviewer_id)
         email = normalize_email(person.email or "") if person is not None else ""
-        reviewer = email if "@" in email else ""
+        reviewer = email if "@" in email and not assign_to_problem(email, row.configured_by_person_id) else ""
     out: dict[str, str] = {}
     for item in ITEMS:
         given = str(current.get(setting_key(item.key)) or "")
@@ -953,9 +1029,12 @@ def check_fields(operation: str, doctype: str, fields: Mapping[str, Any], name: 
         return "A month-end card's fields are a ToDo's description, allocated_to, priority and date."
     if fields.get("priority") != "Medium":
         return "A month-end card's priority is Medium."
-    item = item_of(fields.get("description"))
+    item = item_of(fields.get("description"), fields.get("date"))
     if item is None:
-        return "A month-end card's description is the job's own: Month-end close of <month> ..."
+        return (
+            "A month-end card's description is the job's own (Month-end close of <month> ...), "
+            "dated in the month after."
+        )
     expected = assignees().get(item.key, "")
     if not expected or fields.get("allocated_to") != expected:
         return "A month-end card's ToDo is for the item's owner: its assign_to setting, else the reviewer."
