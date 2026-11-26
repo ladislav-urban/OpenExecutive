@@ -49,14 +49,15 @@ _UVX_CMD = "uvx"
 # pads MiniLM batches to a fixed 128 tokens but truncates at 256, so any batch
 # mixing shorter and 129-256-token texts fails to stack, and the Google
 # Workspace tool index is such a batch — the gateway died building it.
-# The owner's fork of SenteLabsAI/extensible-mcp at that repository's
-# 6862ebd2 plus one change only: the client a URL server with a bearer
-# token is reached through gets the MCP SDK's own HTTP timeouts (30 s,
-# 300 s to read) instead of httpx's 5 s default, which cut off any slower
-# ERPNext read. Offered upstream; pin back to SenteLabsAI once it is merged.
+# The project's fork of SenteLabsAI/extensible-mcp, dynocortex/extensible-mcp,
+# at that repository's 6862ebd2 plus one change only: the client a URL server
+# with a bearer token is reached through gets the MCP SDK's own HTTP timeouts
+# (30 s, 300 s to read) instead of httpx's 5 s default, which cut off any
+# slower ERPNext read. Offered upstream; pin back to SenteLabsAI once it is
+# merged.
 _EXTENSIBLE_MCP_REV = "9ddd6d9cf667688e6fa9ae9832dd5b838761bd25"
 _EXTENSIBLE_MCP_EXCLUDE_NEWER = "2026-09-23T00:00:00Z"
-_EXTENSIBLE_MCP_GIT = f"git+https://github.com/ladislav-urban/extensible-mcp@{_EXTENSIBLE_MCP_REV}"
+_EXTENSIBLE_MCP_GIT = f"git+https://github.com/dynocortex/extensible-mcp@{_EXTENSIBLE_MCP_REV}"
 _EXTENSIBLE_MCP_CMD = "extensible-mcp"
 # Everything after `uvx` up to the command, shared with docker/Dockerfile's pre-warm.
 _EXTENSIBLE_MCP_LAUNCH_ARGS = (
