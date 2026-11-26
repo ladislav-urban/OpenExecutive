@@ -12329,7 +12329,19 @@ watch:
   registry: |
     watch.registry: WatchJob(id, title, reads, build, schedule,
     card_cap_day, default_settings, reason_schema=None, ..., slots=(),
-    weekdays=all). id is oe_connector's
+    weekdays=all, runs_on=None, updates_notice=False). runs_on(settings,
+    day): whether the scheduled run is due that day besides weekdays (pure
+    code or this install's records, never a read; raising or not True keeps
+    it from starting that tick; a run started by hand ignores it; month-end's
+    calendar). A WatchRead with may_fail and no repeat that ERPNext refuses
+    or that times out gives {"unread": true} and the run goes on; its shape,
+    another job's answer or no ERPNext still end it, and an unread read is
+    left out of cards.route's job-user check (it returned no data).
+    updates_notice: an open notice (unread or read) is rewritten in place and
+    marked unread when what it says changed (the preamble's day alone isn't a
+    change), outside the day's notice cap and never held back by a once job's
+    told record; CardSpec.subject is a code-only subject, cleaned, at most
+    120 characters. id is oe_connector's
     watch.JOB_ID ([a-z0-9-]{1,40}), the key of oe_connector_watch_jobs and of
     the job's ERP user oe-watch-<id>@<site>. reads: WatchRead(tool, shape,
     arguments, label), oe_connector's tool and argument shape with the same
