@@ -82,7 +82,12 @@ LIST_SLOTS: tuple[str, ...] = ("$parties", "$customers", "$projects")
 # ``$chain_index``: the OE Draft chain's place the bank-rules job kept last
 # time, sent as bank_rule_evidence's ``seen_index``, which oe_connector
 # checks itself (its listing holds the read without it).
-LOCAL_SLOTS: tuple[str, ...] = ("$bank_account", "$chain_index")
+# ``$account``: a GL account's name, which a report filter takes as a list
+# of one (General Ledger's ``account``): the only slot a list may hold
+# alone, as ``["$account"]``, one read per account as with $bank_account.
+LOCAL_SLOTS: tuple[str, ...] = ("$bank_account", "$chain_index", "$account")
+# The local slots a list may hold as its one element.
+LIST_LOCAL_SLOTS: tuple[str, ...] = ("$account",)
 # A chain index's bound (oe_connector's own).
 MAX_CHAIN_INDEX = 10**9
 # Slots that only mean something together, as a read_attachment read's
@@ -569,7 +574,7 @@ def _slot_holds(slot: str, value: Any, today: date) -> bool:
         return abs((day - today).days) <= DATE_RANGE_DAYS
     if slot in ("$company", "$party"):
         return isinstance(value, str) and _text_ok(value)
-    if slot in ("$bank_line", "$bank_account", "$mail_draft", "$mail_file"):
+    if slot in ("$bank_line", "$bank_account", "$account", "$mail_draft", "$mail_file"):
         return isinstance(value, str) and _text_ok(value) and _NAME_RE.fullmatch(value) is not None
     if slot in LIST_SLOTS:
         return (
@@ -647,6 +652,10 @@ def shape_problem(shape: Any, where: str = "", in_filters: bool = False) -> str:
             return f"{where}: a list inside a list or an object inside one"
         slots = [e for e in shape if isinstance(e, str) and e.startswith("$")]
         if not slots:
+            return ""
+        if len(shape) == 1 and shape[0] in LIST_LOCAL_SLOTS:
+            # A filter's list of one account, this side's slot only: the
+            # listing holds the literal, one read per account.
             return ""
         unknown = [e for e in slots if e not in SLOTS]
         if unknown:

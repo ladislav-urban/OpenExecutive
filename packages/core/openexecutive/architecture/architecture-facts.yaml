@@ -12351,7 +12351,9 @@ watch:
     read; here, LIST_SLOTS and _slot_holds check names only), $int 1-500, $bank_line a Bank Transaction's name
     that oe_connector also checks is on an account listed for bank
     matching; LOCAL_SLOTS holds this side's own $bank_account, a value
-    oe_connector's listing holds as a literal, one read per account; the
+    oe_connector's listing holds as a literal, one read per account, and
+    $account, a GL account's name, the one slot a list may hold alone
+    (["$account"], General Ledger's account filter; LIST_LOCAL_SLOTS); the
     top-level `fields` a most; any other
     list the same length, element by element, so ["<=", "$date"] and
     ["in", "$parties"]; a literal only the same JSON type and value, true

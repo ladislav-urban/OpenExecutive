@@ -212,6 +212,30 @@ def test_a_may_fail_read_still_ends_the_run_on_its_shape_or_another_jobs_answer(
 
 
 # --------------------------------------------------------------------------- #
+# A list of one account ($account)
+# --------------------------------------------------------------------------- #
+
+
+def test_an_account_slot_stands_alone_in_a_list_and_nowhere_else_in_one() -> None:
+    sound = {"report_name": "General Ledger", "filters": {"company": "$company", "account": ["$account"]}}
+    assert registry.shape_problem(sound) == ""
+    for unsound in (
+        {"filters": {"account": ["$account", "$account"]}},
+        {"filters": {"account": ["$account", "Cash - AC"]}},
+        {"filters": {"account": ["=", "$account"]}},
+        {"filters": {"account": ["$bank_account"]}},
+        {"filters": {"account": ["$chain_index"]}},
+        {"filters": {"account": ["$company"]}},
+    ):
+        assert registry.shape_problem(unsound), unsound
+    today = date(2026, 11, 10)
+    shape = sound["filters"]["account"]
+    assert registry.shape_mismatch(shape, ["Euro Account - AC"], today) == ""
+    for bad in (["Euro Account - AC", "Cash - AC"], [], [""], [" Euro"], ["Euro\nAccount"], "Euro Account - AC", [7]):
+        assert registry.shape_mismatch(shape, bad, today), bad
+
+
+# --------------------------------------------------------------------------- #
 # updates_notice and a finding's own subject
 # --------------------------------------------------------------------------- #
 
