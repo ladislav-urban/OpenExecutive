@@ -155,6 +155,9 @@ REASONS: dict[str, str] = {
     "read_refused": "ERPNext refused the read",
     "bank_facts_off": "supplier bank checks are off in ERPNext's settings",
     "read_timeout": "ERPNext didn't answer in time",
+    # A may-fail read only (its run goes on): the read isn't listed on
+    # ERPNext's side for the job (_scope_refusal).
+    "read_not_listed": "the read isn't listed on ERPNext's side; update the watch listing",
     "read_failed": "the read couldn't be made",
     "acting_job_mismatch": "ERPNext answered the read for a different job",
     "rules_failed": "the job's rules couldn't use what ERPNext returned",
@@ -171,6 +174,37 @@ REASONS: dict[str, str] = {
 # Turned off between its claim and its reads: nothing to tell the principal,
 # who turned it off.
 _QUIET = frozenset({"watch-job-off"})
+# oe_connector's refusals of a read it doesn't list for the job (its
+# refusal_record template ids): the listing drifted, a setting to fix. One
+# name the job's user can't read ("arguments", why "unreadable_value") isn't
+# one: it's the value's, not the listing's.
+_SCOPE_TEMPLATES = frozenset({"job_not_listed", "tool_not_listed", "never_for_a_job", "arguments"})
+NOT_LISTED_LINE = (
+    "Some of this job's reads aren't listed on ERPNext's side, so they weren't read: {reads}. Update the watch "
+    "listing (oe_connector_watch_jobs) for this job; until then they are shown as not read, never as clear."
+)
+
+
+def _scope_refusal(refusal: Mapping[str, Any] | None) -> bool:
+    """Whether a refusal's record (``refusal_record``) says the read isn't
+    listed on ERPNext's side for this job."""
+    if not refusal or refusal.get("template") not in _SCOPE_TEMPLATES:
+        return False
+    return not (refusal.get("template") == "arguments" and refusal.get("why") == "unreadable_value")
+
+
+def _not_listed_notice(job: registry.WatchJob, today: date, labels: set[str]) -> registry.CardSpec:
+    """The principal's notice that some of the job's reads aren't listed on
+    ERPNext's side (their labels, code's words), once a week while it lasts."""
+    year, week, _ = today.isocalendar()
+    return registry.CardSpec(
+        key=f"not-listed:{job.id}:{year}-W{week:02d}",
+        summary="Some of this job's reads aren't listed on ERPNext's side",
+        notes=(NOT_LISTED_LINE.format(reads=", ".join(sorted(labels))),),
+        to_principal=True,
+    )
+
+
 # What a single read listed ``may_fail`` may end in without ending the run:
 # a refusal returned as the call's answer, or no answer in time. That covers
 # oe_connector's and ERPNext's refusals and the gateway's own call-time
@@ -273,6 +307,8 @@ class RunOutcome:
     refusal: dict[str, Any] = field(default_factory=dict)
     # Open notices an ``updates_notice`` job rewrote in place this run.
     updated: int = 0
+    # May-fail reads refused as not listed on ERPNext's side (a count).
+    not_listed: int = 0
 
     def detail(self) -> dict[str, Any]:
         """What ``watch_runs.detail`` keeps: codes and counts only."""
@@ -293,6 +329,8 @@ class RunOutcome:
             out["refusal"] = dict(self.refusal)
         if self.updated:
             out["updated"] = self.updated
+        if self.not_listed:
+            out["not_listed"] = self.not_listed
         return out
 
 
@@ -970,6 +1008,8 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     users: set[str] = set()
     # Items of a may-fail read ERPNext refused, kept with the run's record.
     unread = 0
+    # The may-fail reads refused as not listed on ERPNext's side (their labels).
+    not_listed: set[str] = set()
     for read in job.reads:
         try:
             built = read.arguments(settings, today, tuple(results))
@@ -996,6 +1036,8 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
                     if not (read.may_fail and stopped.reason == "read_refused"):
                         raise
                     unread += 1
+                    if _scope_refusal(stopped.refusal):
+                        not_listed.add(read.label)
                     each.append({"unread": True})
             results.append({"each": each, "truncated": cut})
             continue
@@ -1010,14 +1052,21 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
             if not (read.may_fail and stopped.reason in _MAY_FAIL_REASONS):
                 raise
             unread += 1
+            # A refusal because the read isn't listed on ERPNext's side (the
+            # listing drifted, say an account added and never listed) is a
+            # setting to fix, not an outage: said as such, with no data.
+            reason = stopped.reason
+            if reason == "read_refused" and _scope_refusal(stopped.refusal):
+                reason = "read_not_listed"
+                not_listed.add(read.label)
             # Why, in codes only (refusal_record: ids, a hash and a length),
             # kept with the run's record and logged, never the text.
-            entry: dict[str, Any] = {"read": read.label, "unread": True, "error": stopped.reason}
+            entry: dict[str, Any] = {"read": read.label, "unread": True, "error": reason}
             if stopped.refusal:
                 entry["refusal"] = dict(stopped.refusal)
             reads.append(entry)
             logger.warning(
-                "watch: job %s read %s not read (%s)%s", job.id, read.label, stopped.reason,
+                "watch: job %s read %s not read (%s)%s", job.id, read.label, reason,
                 "".join(f" {k}={v}" for k, v in sorted((stopped.refusal or {}).items())),
             )
             results.append({"unread": True})
@@ -1050,12 +1099,16 @@ async def _run(job: registry.WatchJob, day: str, reads: list[dict[str, Any]]) ->
     # Bounded whatever the job's rules return: the reason step, the dedupe
     # reads and the audit's counts never see more.
     specs = specs[:MAX_FINDINGS]
+    if not_listed:
+        # The principal hears that the listing needs updating, whatever the
+        # job's own notice says of the read (its rules see only "not read").
+        specs.insert(0, _not_listed_notice(job, today, not_listed))
     notices = [s for s in specs if isinstance(s, registry.CardSpec)]
     drafts = [s for s in specs if isinstance(s, registry.DraftSpec)]
     # Who it goes to, from the database and oe_connector's own word, before
     # anything is checked as the reviewer.
     run_route = cards.route(job, row, reads)
-    outcome = RunOutcome("done", findings=len(specs), unread=unread)
+    outcome = RunOutcome("done", findings=len(specs), unread=unread, not_listed=len(not_listed))
     outcome.routed = "reviewer" if run_route.reviewer is not None else "principal"
     outcome.routed_principal = run_route.reason
     shown = _reasoned(notices)
