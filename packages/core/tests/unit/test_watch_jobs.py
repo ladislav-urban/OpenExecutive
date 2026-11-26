@@ -1023,7 +1023,7 @@ def test_the_principal_configures_a_job_and_it_is_recorded(
     assert listed["master_switch"] is True
     assert [j["id"] for j in listed["jobs"]] == [
         "bank-matching", "bank-rules", "collections", "example", "invoice-capture", "late-deliveries",
-        "payment-checks", "project-status", "quote-follow-up",
+        "month-end", "payment-checks", "project-status", "quote-follow-up",
     ]
     response = client.put("/watch/jobs/example", json={
         "enabled": False, "settings": {"company": "Bolt Industries", "limit": 50}, "reviewer_person_id": roster.teammate,

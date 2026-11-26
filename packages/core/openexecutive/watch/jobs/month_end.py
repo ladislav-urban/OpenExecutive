@@ -559,7 +559,7 @@ def _counted(item: Item, dated: list[tuple[date, float | None, str]], *, at_leas
     if not dated:
         return Check(item, CLEAR)
     sums: dict[str, float] = {}
-    for _day_, amount, currency in dated:
+    for _, amount, currency in dated:
         if amount is not None:
             sums[currency] = round(sums.get(currency, 0.0) + amount, 2)
     return Check(item, OPEN, count=len(dated), at_least=at_least, sums=sums, oldest=min(d for d, _a, _c in dated))
