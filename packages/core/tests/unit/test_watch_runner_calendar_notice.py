@@ -35,7 +35,6 @@ from .test_watch_jobs import (  # noqa: F401
     triage,
 )
 
-
 # The subjects the test job may give its notice: code's words and counts.
 SUBJECTS = (
     r"Close of (?:January|February|March|April|May|June|July|August|September|October|November|December): "
