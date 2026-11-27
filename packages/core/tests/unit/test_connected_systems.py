@@ -510,10 +510,17 @@ def test_erpnext_times_are_quoted_in_the_sites_zone_never_as_utc(channel_env: An
     # results give naive times in the site's zone, and now say which in
     # `time_zone`.
     text = _render(("erpnext", "fetch"))
-    assert "ERPNext's dates and times are the site's local time, never UTC" in text
-    assert "a result's `time_zone` names that zone" in text
+    assert "ERPNext's dates and times are the site's local time, not UTC unless that zone is UTC" in text
+    # Only the result's own field names the zone, never a row's (a User or
+    # web-view row can carry a `time_zone` of its own).
+    assert "a result's top-level `time_zone` names it" in text
+    assert "never a field inside a row" in text
+    assert "A time written with its own offset or Z is in that offset." in text
     assert "When you quote a time, name its zone" in text
-    assert "When a result gives no `time_zone`, call the time the ERP's local time" in text
+    assert "When a result gives no top-level `time_zone`, call the time the ERP's local time" in text
+    # The example isn't the pilot's zone, so eval erpnext_105 can tell a zone
+    # read from the result from one copied out of the prompt.
+    assert "America/Los_Angeles" not in text
 
 
 def test_records_read_to_check_a_report_are_not_shown_in_its_place(channel_env: Any) -> None:

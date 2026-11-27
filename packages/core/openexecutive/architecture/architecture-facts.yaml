@@ -11014,11 +11014,14 @@ integrations:
     (email, attachments, the answer check's question and draft), where
     a reply line about ignored text would be wrong. A private Act as me turn
     offers only PRIVATE_TURN_MCP_TOOLS, which holds no ERPNext tool.
-    The guide also says ERPNext's dates and times are the site's local time,
-    never UTC: a result's `time_zone` (oe_connector, ladislav-urban/oe_connector#648)
-    names the zone, a quoted time names it, a conversion starts from it only
-    when asked, and a result with no `time_zone` is called the ERP's local time
-    with no zone named (eval erpnext_105; a quotation made at 11:40
+    The guide also says ERPNext's dates and times are the site's local time
+    (not UTC unless that zone is UTC): a result's top-level `time_zone`
+    (oe_connector, ladislav-urban/oe_connector#648), never a row's field, names
+    the zone; a time with its own offset or Z is in that offset; a quoted time
+    names its zone, a conversion starts from it only when asked, and a result
+    with no top-level `time_zone` is called the ERP's local time with no zone
+    named. The guide's example zone is not the pilot's, so the eval tells a
+    zone read from the result from one copied from the prompt (eval erpnext_105; a quotation made at 11:40
     America/Los_Angeles was quoted as "11:40 UTC" on the pilot, Nov 27, 2026).
 
     Credential handling: extensible-mcp sends a URL server the `tokens` line
