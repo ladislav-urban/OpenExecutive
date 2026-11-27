@@ -14,19 +14,25 @@ permissions:
 # superseded run would otherwise hold a self-hosted runner for a full suite and
 # queue every PR behind it (Nov 2, 2026: PR checks waited 1-2 h behind a main
 # run for a commit already superseded). On main the newest run tests every
-# merge before it as well. Nothing waits on main's CI (images publish in
-# parallel; the release PR is gated on its own CI), and Publish images and
+# merge before it as well (a push skips a suite only when CI passed at the
+# commit before it; see the changes job). Nothing waits
+# on main's CI (the release PR is gated on its own CI), and Publish images and
 # Release please keep their own groups, which never cancel.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  # Decides which suites a PR can affect. Skipped jobs count as passing for
-  # required checks. Pushes to main run everything.
+  # Decides which suites a PR or push can affect. Skipped jobs count as
+  # passing for required checks. A push to main skips the same way, but only
+  # when CI passed at the commit before it (see the filter step).
   changes:
     name: Detect changed areas
     runs-on: ${{ vars.CI_RUNNER != '' && github.actor != 'dependabot[bot]' && (!startsWith(github.event_name, 'pull_request') || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON(vars.CI_RUNNER) || 'ubuntu-latest' }}
+    # actions: read lets a push ask whether CI passed at the commit before it.
+    permissions:
+      contents: read
+      actions: read
     outputs:
       python: ${{ steps.filter.outputs.python }}
       ui: ${{ steps.filter.outputs.ui }}
@@ -41,17 +47,64 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+        # Prose is docs/** and Markdown outside packages/ and fixtures/.
+        # Markdown in the Python package (built-in knowledge, personas, the
+        # README pyproject.toml names) and the demo fixtures is read by code
+        # and tests, and the User Guide and Architecture pages' prebuilt JSON
+        # is checked by Python tests, so a change there runs the suites.
         run: |
           python=true; ui=true
+          prose='^docs/|^[^/]+\.md$|^\.github/.+\.md$|^\.claude/.+\.md$|^docker/.+\.md$'
+          # What the web app's checks read: the web app, this workflow, and
+          # the Python files its parity tests parse (see CLAUDE.md -> UI lint).
+          uiread='^(packages/ui/|\.github/workflows/ci\.yml$|packages/core/openexecutive/api/main\.py$|packages/core/openexecutive/utils/deployment\.py$)'
+          # --no-renames: a move lists its old path too, so moving code into
+          # docs/ (or out of the web app) can't pass as prose. Matches are
+          # counted with grep -c, which reads every line, rather than by
+          # negating a `grep -q` pipeline, which fails open under pipefail
+          # (an early-exiting grep -q SIGPIPEs the writer, and `!` turns that
+          # into "nothing matched").
+          # hits LIST RE / misses LIST RE: how many lines of LIST do / don't match RE.
+          hits() { printf '%s\n' "$1" | grep -cE "$2" || true; }
+          misses() { printf '%s\n' "$1" | grep -cvE "$2" || true; }
           if [ "$EVENT" = pull_request ]; then
-            files=$(git diff --name-only "origin/$BASE_REF"...HEAD)
-            # Python suites only skip when every change is inside the web app.
-            if ! echo "$files" | grep -qv '^packages/ui/'; then python=false; fi
-            # The web app's checks only run when it changed, or when something
-            # they read changed: this workflow, and the Python files its
-            # parity tests parse (see CLAUDE.md -> UI lint).
-            if ! echo "$files" | grep -qE '^(packages/ui/|\.github/workflows/ci\.yml$|packages/core/openexecutive/api/main\.py$|packages/core/openexecutive/utils/deployment\.py$)'; then ui=false; fi
+            files=$(git diff --no-renames --name-only "origin/$BASE_REF"...HEAD)
+            # Python suites skip when every change is inside the web app or
+            # is prose.
+            outside_ui=$(printf '%s\n' "$files" | grep -vE '^packages/ui/' || true)
+            if [ -n "$files" ] && { [ -z "$outside_ui" ] || [ "$(misses "$outside_ui" "$prose")" = 0 ]; }; then python=false; fi
+            # The web app's checks only run when something they read changed.
+            if [ "$(hits "$files" "$uiread")" = 0 ]; then ui=false; fi
+          elif [ "$EVENT" = push ] && echo "$BEFORE" | grep -qE '^[0-9a-f]{40}$' \
+               && ! echo "$BEFORE" | grep -qE '^0+$' \
+               && git merge-base --is-ancestor "$BEFORE" HEAD 2>/dev/null; then
+            # A push skips the Python suites when everything it brings is
+            # prose, and the web app's checks when it touches nothing they
+            # read (the PR rule) - but either only when this workflow already
+            # passed at the commit it builds on. A newer push cancels the run
+            # in flight (above), so without that test a push whose run was
+            # cancelled by a later one that skips would never be tested on
+            # main. A new branch, a force push, an unknown base, or no answer
+            # from the API runs everything.
+            files=$(git diff --no-renames --name-only "$BEFORE" HEAD)
+            py_skip=false; ui_skip=false
+            if [ -n "$files" ]; then
+              if [ "$(misses "$files" "$prose")" = 0 ]; then py_skip=true; fi
+              if [ "$(hits "$files" "$uiread")" = 0 ]; then ui_skip=true; fi
+            fi
+            if { [ "$py_skip" = true ] || [ "$ui_skip" = true ]; } && command -v gh >/dev/null; then
+              passed=$(gh api "repos/$REPO/actions/workflows/ci.yml/runs?head_sha=$BEFORE&event=push&branch=main&status=success" \
+                --jq '.total_count' 2>/dev/null || echo 0)
+              if [ "${passed:-0}" -gt 0 ] 2>/dev/null; then
+                if [ "$py_skip" = true ]; then python=false; fi
+                if [ "$ui_skip" = true ]; then ui=false; fi
+              fi
+            fi
           fi
+          echo "python=$python ui=$ui"
           echo "python=$python" >> "$GITHUB_OUTPUT"
           echo "ui=$ui" >> "$GITHUB_OUTPUT"
 

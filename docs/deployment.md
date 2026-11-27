@@ -89,9 +89,11 @@ Pushing a `vX.Y.Z` tag by hand still works (`git tag v0.3.0 && git push
 origin v0.3.0`) but bypasses the version bump and changelog, so the release
 PR is the normal path.
 
-The image workflow runs on the tag push and publishes the versioned tags. It
-does not check CI: it publishes whatever commit the tag points at, and the
-`main` tag is published in parallel with CI on every push, so the release PR
+The image workflow runs on the tag push and publishes the versioned tags. A
+push to `main` builds no images (there is no rolling `main` tag); for the
+images of one exact commit, dispatch Publish images with `ref` set to its
+full SHA, which publishes only `sha-<full SHA>`. It does not check CI: it
+publishes whatever commit the tag or dispatch names, so the release PR
 should only be merged once its CI is green. The two images are separate jobs,
 so a release is not atomic — if one fails, check the package pages and re-run
 the failed job from the Actions UI.
