@@ -1,0 +1,14 @@
+id: erpnext_105
+domain: mcp
+speaker: principal
+requires_mcp: true
+product_name: Dynocortex
+description: 'A time read from the ERP is the site''s local time, never UTC (ladislav-urban/oe_connector#648). Asked when the newest quotation for Lakeside Hospital Trust (Aurora Components (Demo)) was made, the reply gives the time with the zone the result''s `time_zone` names, or calls it the ERP''s local time when the result gives none. Found on the pilot (Nov 27, 2026): a quotation made at 11:40 America/Los_Angeles was told to a demo user as "11:40 UTC", where it was 19:40 UTC.'
+query: When was the newest quotation for Lakeside Hospital Trust created? Give me the date and time.
+forbidden_reply_words:
+- ERPNext
+quality_criteria:
+  gives_the_date_and_time_the_newest_lakeside_quotation_was_created: true
+  names_the_time_zone_the_result_gives_or_calls_it_the_erps_local_time: true
+  never_labels_a_site_time_as_utc_or_gmt_unless_the_result_says_the_zone_is_utc: true
+  does_not_convert_the_time_to_another_zone_unasked: true
