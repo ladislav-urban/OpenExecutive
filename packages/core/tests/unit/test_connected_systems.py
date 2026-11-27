@@ -504,6 +504,20 @@ def test_a_truncated_report_is_narrowed_not_given_up(channel_env: Any) -> None:
     assert "Never say you couldn't read a report when a narrower read would answer." in text
 
 
+def test_erpnext_times_are_quoted_in_the_sites_zone_never_as_utc(channel_env: Any) -> None:
+    # ladislav-urban/oe_connector#648 (pilot, Nov 27, 2026): a quotation made
+    # at 11:40 site time (America/Los_Angeles) was quoted as "11:40 UTC". Its
+    # results give naive times in the site's zone, and now say which in
+    # `time_zone`.
+    text = _render(("erpnext", "fetch"))
+    assert "ERPNext's dates and times are the site's local time, never UTC" in text
+    assert "a result's `time_zone` names that zone" in text
+    assert "When you quote a time, name its zone" in text
+    assert "When a result gives no `time_zone`, call the time the ERP's local time" in text
+    # Constant text: block 0 stays cacheable.
+    assert "time_zone" in connected_systems._ERPNEXT_GUIDE
+
+
 def test_records_read_to_check_a_report_are_not_shown_in_its_place(channel_env: Any) -> None:
     # Reshoot on the pilot (Nov 4, 2026), books-check step 3: the Bin records
     # read to check Stock Balance opened beside the panel as an empty "(Bin)"
