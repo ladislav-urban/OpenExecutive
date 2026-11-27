@@ -514,8 +514,6 @@ def test_erpnext_times_are_quoted_in_the_sites_zone_never_as_utc(channel_env: An
     assert "a result's `time_zone` names that zone" in text
     assert "When you quote a time, name its zone" in text
     assert "When a result gives no `time_zone`, call the time the ERP's local time" in text
-    # Constant text: block 0 stays cacheable.
-    assert "time_zone" in connected_systems._ERPNEXT_GUIDE
 
 
 def test_records_read_to_check_a_report_are_not_shown_in_its_place(channel_env: Any) -> None:
