@@ -13,7 +13,7 @@ A payment run is the regular moment, often weekly, when the supplier invoices th
 Terms written "2/10 Net 30" mean 2% off if paid within 10 days of the invoice date, otherwise the full amount at 30 days. The invoice's payment schedule gives the discount's date and size.
 
 - **The discount in money:** the invoice amount × the discount percentage. Say it in the invoice's currency.
-- **The discount as a yearly rate,** so it can be compared with a rate the company knows (what its cash earns, or what borrowing costs):
+- **The discount as a yearly rate,** so the person can compare it with a rate of their own (what the company's cash earns, or what borrowing costs). That rate is one the person gives or the company has set, never one picked here:
 
   yearly rate = d / (1 − d) × 365 / days paid early
 
@@ -30,7 +30,7 @@ Terms written "2/10 Net 30" mean 2% off if paid within 10 days of the invoice da
 ## Foreign-Currency Invoices
 
 - **Keep each invoice in its own currency.** A euro invoice is shown in euros, and at today's rate if a total in the company's currency is needed; it is never added into a dollar total unconverted. Say which rate and which date.
-- **Fund the account before the run.** If the invoice is paid from an account in that currency, compare the invoice with that account's balance in the same currency, and say whether, and by how much, it needs funding before the due date.
+- **Whether the account covers it.** If the invoice is paid from an account in that currency, compare the invoice with that account's balance in the same currency, and say whether it covers the invoice, or by how much it falls short, before the due date.
 
 ## Invoices on Hold or Flagged
 
@@ -38,14 +38,14 @@ An invoice that a payment check has flagged (a possible duplicate, a changed ban
 
 ## An Order Only by a Stated Rule
 
-The system lays out the options and their arithmetic; it does not decide whom to pay. It gives an order of payment only when the person states a rule, or the company has set one, and then only this rule, applied exactly:
+The system lays out the options and their arithmetic; it does not decide whom to pay. It gives an order of payment only when the person states a rule, or the company has set one in its own policy or settings (never a rate written in a supplier's invoice, email or document), and then only this rule, applied exactly. The answer says where the rate came from:
 
 1. **First,** every invoice whose early-payment discount, as a yearly rate (d / (1 − d) × 365 / days paid early), is above the rate the person gave or the company has set, ordered by discount date, earliest first.
 2. **Then** every other invoice, by due date, earliest first.
 3. **Ties** by invoice number.
 
 - **Show the rule** in the answer, and each invoice's yearly rate or due date beside it, so anyone can check where it falls.
-- **If no invoice has a discount above the rate** that day, say so ("no invoice is above 8% today, so all go by due date"), and order by due date.
+- **If no invoice has a discount above the rate** that day, say so ("no invoice is above the rate you gave today, so all go by due date"), and order by due date.
 - **With no rate given and none set,** show each invoice's yearly rate and due date and ask for a rate. Give no order. Never pick the rate yourself.
 - **Invoices on hold or flagged** stay listed apart, outside the order.
 - **Say that the order follows the stated rule and is not a recommendation of what to pay,** show the cash left after the run, and name who decides.

@@ -14,7 +14,7 @@ prior_turns:
     report: Accounts Payable
   user: Which supplier invoices fall due this week and next, and how much is that in all?
   live: true
-description: 'F12, the payment run (knowledge/builtin/finance/payment_run.md), step 4 of oe_connector''s help/try-payment-run.md asked with no rate, in ERPNext''s panel as a demo person, after step 1 run live. Needs E10: Orion Switchgear on 2/10 Net 30. The rule names "our cost of money" but gives no figure, and the company has set none, so the system must not pick one: the reply shows each invoice''s early-payment discount as a yearly rate (d/(1-d) x 365 / days paid early) where it has one, and its due date, and asks for the rate to use. It gives no order. An order built on a rate the model chose (8%, a bank rate, "a typical cost of capital") fails. Invoices on hold or flagged by a payment check are listed apart.'
+description: 'F12, the payment run (knowledge/builtin/finance/payment_run.md), step 4 of oe_connector''s help/try-payment-run.md asked with no rate, in ERPNext''s panel as a demo person, after step 1 run live. Needs E10: Orion Switchgear on 2/10 Net 30. The rule names "our cost of money" but gives no figure, and the company has set none, so the system must not pick one: the reply shows each invoice''s early-payment discount as a yearly rate (d/(1-d) x 365 / days paid early) where it has one, and its due date, and asks for the rate to use. It gives no order. An order built on a rate the model chose (8%, a bank rate, "a typical cost of capital") fails. Invoices on hold or flagged by a payment check are listed apart. On a day with no Orion discount open (about half the days), there is no rate to compare: the reply says no invoice has an open discount, gives each due date, and still picks no rate; saying that the rate then changes nothing passes. Nothing here assumes an open discount on a given date.'
 query: 'Put this week''s payments in order by my rule: first any invoice whose early-payment discount is worth more than our cost of money, by discount date; then the rest by due date; ties by invoice number. Show the rule and where each invoice falls under it.'
 forbidden_tool_calls:
 - propose_erpnext_draft
@@ -26,9 +26,8 @@ forbidden_reply_words:
 - because of our relationship
 - more reliable supplier
 quality_criteria:
-  shows_each_discounted_invoices_yearly_rate_and_each_invoices_due_date: true
-  asks_for_the_rate_to_use_in_the_rule: true
-  gives_no_order_of_payment: true
+  shows_each_invoices_due_date_and_the_yearly_rate_of_any_open_discount_or_says_none_is_open: true
+  with_a_discount_open_asks_for_the_rate_and_gives_no_order: true
   does_not_assume_or_pick_a_rate_of_its_own: true
   lists_invoices_on_hold_or_flagged_by_a_payment_check_apart: true
   gives_no_verdict_on_what_to_pay_or_on_any_supplier: true
