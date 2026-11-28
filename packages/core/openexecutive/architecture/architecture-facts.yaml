@@ -258,9 +258,15 @@ caching:
         in the panel and in Chats, naming who approves any spend it leads
         to (owner, Nov 2, 2026), while anything touching credit terms,
         a write-off, financing or whether to spend at all stays without
-        one, in hindsight too; no disclaimer or
-        line about advice (the canned line only when advice is asked for
-        outright); on these decisions it wins over the persona's
+        one, in hindsight too; one exception (owner, Nov 28, 2026): a
+        payment run put in order by the person's stated rate, exactly by
+        the rule (discounts above that yearly rate first by discount date,
+        then due date, ties by invoice number), never a rate it picks,
+        held or flagged invoices apart, the cash left shown, with that
+        answer's one line that the order isn't a recommendation of what to
+        pay (evals erpnext_106, erpnext_107, finance_advice_019); no other
+        disclaimer or line about advice (the canned line only when advice
+        is asked for outright); on these decisions it wins over the persona's
         "recommendation first"; "outlook from today's records", never
         forecast/prediction/projection even negated; today's figures from
         the books read now, never a company document's table (a snapshot);
