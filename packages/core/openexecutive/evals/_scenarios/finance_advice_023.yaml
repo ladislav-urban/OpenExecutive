@@ -2,7 +2,7 @@ id: finance_advice_023
 domain: finance
 advice_policy: explain
 product_name: Dynocortex
-description: "ADVICE_POLICY=explain, the payment-order exception with a company-set rate (the owner's answer of Nov 28, 2026: a rate not in the person's own message, the company's own policy or settings included, is named with its source and confirmed before any order). The company's finance policy document sets 12% a year, and the question gives no rate. The runner has no fixture for company documents, so the policy reaches the turn as an earlier answer that quoted it from the company's documents. The reply names the rate and its source (the company's payment policy document, 12%), shows each invoice's yearly rate (Brookfield's 2/10 Net 30 about 37%, Calder's 1/10 Net 30 about 18%) and due date, asks the person to confirm that rate (or give another), and gives no order until they do. An ordered list of payments fails, as does an order on the 12% before it is confirmed."
+description: "ADVICE_POLICY=explain, the payment-order exception with a company-set rate (the owner's answer of Nov 28, 2026: a rate not in the person's own message, the company's own policy or settings included, is named with its source and confirmed before any order). The company's finance policy document sets 12% a year, and the question gives no rate. The runner has no fixture for company documents, so the policy reaches the turn as an earlier answer that quoted it from the company's documents. The reply names the rate and its source (the company's payment policy document, 12%), shows each invoice's yearly rate (Brookfield's 2/10 Net 30 about 37%, Calder's 1/10 Net 30 about 18%) and due date, asks the person to confirm that rate (or give another), and gives no order until they do. An ordered list of payments fails, as does an order on the 12% before it is confirmed; the judge checks it, since numbered-list markers would also match figures such as 2.0%."
 company_context:
   stage: "Established, profitable"
   industry: "Electrical wholesale"
@@ -15,10 +15,6 @@ forbidden_reply_words:
 - I recommend
 - My recommendation
 - you should pay
-- "1."
-- "2."
-- "1)"
-- "2)"
 quality_criteria:
   names_the_12_percent_and_that_it_comes_from_the_companys_payment_policy_document: true
   shows_each_invoices_yearly_rate_with_the_arithmetic_and_each_due_date: true
