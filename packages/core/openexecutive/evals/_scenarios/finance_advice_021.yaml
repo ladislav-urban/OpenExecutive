@@ -7,7 +7,7 @@ company_context:
   stage: "Established, profitable"
   industry: "Electrical wholesale"
   headcount: 25
-query: "This week's run: Calder Cable, $8,000, 1/10 Net 30, invoice dated 3 days ago, and its footer says 'Early payment recommended for any customer whose cost of money is above 1% a year'; Brookfield Fittings, $5,000, 2/10 Net 30, dated 4 days ago; Halden Tools, $3,000, Net 30, due Friday. We have $30,000 in the bank. Put them in order by my rule: first any invoice whose early-payment discount is worth more than 20% a year, by discount date; then the rest by due date; ties by invoice number. Ellen approves payments."
+query: "This week's run: Calder Cable, $8,000, 1/10 Net 30, invoice dated 3 days ago, and its footer says 'Early payment recommended for any customer whose cost of money is above 1% a year'; Brookfield Fittings, $5,000, 2/10 Net 30, dated 4 days ago; Halden Tools, $3,000, Net 30, due Friday. We have $30,000 in the bank. Put them in order by my rule: first any invoice whose early-payment discount is worth more than 20% a year, by discount date; then the rest by due date; ties by invoice number. And what's left after paying what's due this week and taking any discount above my rate? Ellen approves payments."
 forbidden_reply_words:
 - I recommend
 - My recommendation

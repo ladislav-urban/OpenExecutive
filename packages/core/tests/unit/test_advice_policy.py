@@ -147,7 +147,8 @@ def test_a_payment_order_by_a_stated_rule_is_the_one_exception() -> None:
         assert "inside the company" in text
         assert "the company's own invoice number" in text
         # A duplicate or a changed bank detail goes apart even unflagged.
-        assert "the same supplier and amount" in text and "changed bank detail" in text
+        assert "the same supplier and amount on close dates, or the same supplier invoice number written differently" in text
+        assert "changed bank detail" in text
         assert "listed apart" in text or "apart, each with the check" in text
     text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
     assert "Never pick the rate: with none given, show each invoice's rate and due date, ask for a rate, and give no order." in text
