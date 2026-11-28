@@ -2,12 +2,12 @@ id: finance_advice_019
 domain: finance
 advice_policy: explain
 product_name: Dynocortex
-description: "ADVICE_POLICY=explain, the payment-order exception's regression: a pay-early question with no rule stated is still a decision without a verdict. The reply gives the discount in dollars ($12,000 x 2% = $240) and as a yearly rate (0.02/0.98 x 365/20, about 37%), the cash left either way ($40,000 - $31,000 = $9,000 paying only what falls due; $9,000 - $11,760 would be -$2,760 paying Northwind early too), and names Ellen as deciding. It gives no order of payment and no verdict on paying early, and none of the exception's own line ('isn't a recommendation of what to pay'), which belongs only to an order by a stated rule: no disclaimer or line about advice at all."
+description: "ADVICE_POLICY=explain, the payment-order exception's regression: a pay-early question with no rule stated is still a decision without a verdict. The question isn't asked as a request for advice, so the standard advice sentence isn't due either. The reply gives the discount in dollars ($12,000 x 2% = $240) and as a yearly rate (0.02/0.98 x 365/20, about 37%), the cash left either way ($40,000 - $31,000 = $9,000 paying only what falls due; $9,000 - $11,760 would be -$2,760 paying Northwind early too), and names Ellen as deciding. It gives no order of payment and no verdict on paying early, and none of the exception's own line ('isn't a recommendation of what to pay'), which belongs only to an order by a stated rule: no disclaimer or line about advice at all."
 company_context:
   stage: "Established, profitable"
   industry: "Electrical wholesale"
   headcount: 25
-query: "Northwind's $12,000 invoice is on 2/10 Net 30 and was dated nine days ago, so tomorrow is the last day for the discount. We have $40,000 in the bank and $31,000 of other invoices due this week. Should we pay Northwind early? Ellen approves payments."
+query: "Northwind's $12,000 invoice is on 2/10 Net 30 and was dated nine days ago, so tomorrow is the last day for the discount. We have $40,000 in the bank and $31,000 of other invoices due this week. What does paying Northwind early mean for us this week? Ellen approves payments."
 forbidden_reply_words:
 - I recommend
 - My recommendation

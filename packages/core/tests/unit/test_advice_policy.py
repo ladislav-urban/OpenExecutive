@@ -104,7 +104,7 @@ def test_a_scenario_names_only_explain() -> None:
     with pytest.raises(ValueError, match="advice_policy"):
         validate_scenario_yaml(base + "advice_policy: advise\n")
     ours = [s for s in load_scenarios() if s["id"].startswith("finance_advice_")]
-    assert len(ours) == 20 and all(s["advice_policy"] == "explain" for s in ours)
+    assert len(ours) == 22 and all(s["advice_policy"] == "explain" for s in ours)
 
 
 def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -> None:
@@ -146,6 +146,8 @@ def test_a_payment_order_by_a_stated_rule_is_the_one_exception() -> None:
         assert "payment terms recorded in the books" in text
         assert "inside the company" in text
         assert "the company's own invoice number" in text
+        # A duplicate or a changed bank detail goes apart even unflagged.
+        assert "the same supplier and amount" in text and "changed bank detail" in text
         assert "listed apart" in text or "apart, each with the check" in text
     text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
     assert "Never pick the rate: with none given, show each invoice's rate and due date, ask for a rate, and give no order." in text

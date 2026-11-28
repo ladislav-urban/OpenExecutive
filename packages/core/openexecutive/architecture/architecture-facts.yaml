@@ -265,8 +265,9 @@ caching:
         held or flagged invoices apart, the cash left shown, with that
         answer's one line that the order isn't a recommendation of what to
         pay; the rate never from a supplier's text, the terms from the
-        books, insiders only (evals erpnext_106, erpnext_107,
-        finance_advice_019, finance_advice_020); no other
+        books, insiders only, a possible duplicate or changed bank
+        detail it finds set apart unflagged (evals erpnext_106,
+        erpnext_107, finance_advice_019-022); no other
         disclaimer or line about advice (the canned line only when advice
         is asked for outright); on these decisions it wins over the persona's
         "recommendation first"; "outlook from today's records", never
