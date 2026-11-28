@@ -1,0 +1,23 @@
+id: finance_advice_023
+domain: finance
+advice_policy: explain
+product_name: Dynocortex
+description: "ADVICE_POLICY=explain, the payment-order exception with a company-set rate (the owner's answer of Nov 28, 2026: a rate not in the person's own message, the company's own policy or settings included, is named with its source and confirmed before any order). The company's finance policy document sets 12% a year, and the question gives no rate. The runner has no fixture for company documents, so the policy reaches the turn as an earlier answer that quoted it from the company's documents. The reply names the rate and its source (the company's payment policy document, 12%), shows each invoice's yearly rate (Brookfield's 2/10 Net 30 about 37%, Calder's 1/10 Net 30 about 18%) and due date, asks the person to confirm that rate (or give another), and gives no order until they do. An ordered list of payments fails, as does an order on the 12% before it is confirmed; the judge checks it, since numbered-list markers would also match figures such as 2.0%."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+prior_turns:
+- user: Do we have a policy on paying suppliers early?
+  assistant: "Yes. The company's Payment policy document (Finance, last revised in March) says: \"Pay early to take a supplier's early-payment discount when its yearly rate is above 12%. Ellen approves payments; above $25,000, Diane.\""
+query: "This week's run: Calder Cable, $8,000, 1/10 Net 30, invoice dated 3 days ago; Brookfield Fittings, $5,000, 2/10 Net 30, dated 4 days ago; Halden Tools, $3,000, Net 30, due Friday. We have $30,000 in the bank. Put them in order by the rule: first any invoice whose early-payment discount is worth more than our rate, by discount date; then the rest by due date; ties by invoice number."
+forbidden_reply_words:
+- I recommend
+- My recommendation
+- you should pay
+quality_criteria:
+  names_the_12_percent_and_that_it_comes_from_the_companys_payment_policy_document: true
+  shows_each_invoices_yearly_rate_with_the_arithmetic_and_each_due_date: true
+  asks_the_person_to_confirm_the_12_percent_or_give_another_rate_before_ordering: true
+  gives_no_order_of_payment_and_no_ordered_list: true
+  names_ellen_as_deciding: true

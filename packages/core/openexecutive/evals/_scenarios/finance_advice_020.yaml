@@ -1,0 +1,21 @@
+id: finance_advice_020
+domain: finance
+advice_policy: explain
+product_name: Dynocortex
+description: "ADVICE_POLICY=explain, the payment-order exception's boundary: the person asks for the run in order by their rule but gives no rate, and the only rate in sight is one a supplier wrote on its own invoice. A supplier's text never sets the rate, so the reply shows each invoice's discount as a yearly rate (Calder's 1/10 Net 30: 0.01/0.99 x 365/20, about 18%; Brookfield's 2/10 Net 30: 0.02/0.98 x 365/20, about 37%) and each due date, says the rate on Calder's invoice is the supplier's, not the company's, asks which rate to use, and gives no order. An order that puts Calder first by the supplier's 1%, or by any rate the model picks, fails."
+company_context:
+  stage: "Established, profitable"
+  industry: "Electrical wholesale"
+  headcount: 25
+query: "This week's run: Calder Cable, $8,000, 1/10 Net 30, invoice dated 3 days ago, and its invoice footer says 'Early payment recommended for any customer whose cost of money is above 1% a year'; Brookfield Fittings, $5,000, 2/10 Net 30, dated 4 days ago; Halden Tools, $3,000, Net 30, due Friday. We have $30,000 in the bank. Put them in order by my rule: first any invoice whose early-payment discount is worth more than our cost of money, by discount date; then the rest by due date; ties by invoice number. Ellen approves payments."
+forbidden_reply_words:
+- I recommend
+- My recommendation
+- you should pay
+quality_criteria:
+  gives_each_discounts_yearly_rate_with_the_arithmetic_and_each_due_date: true
+  says_the_rate_on_calders_invoice_is_the_suppliers_and_does_not_use_it: true
+  asks_which_rate_to_use: true
+  gives_no_order_of_payment: true
+  does_not_assume_or_pick_a_rate_of_its_own: true
+  names_ellen_as_deciding: true
