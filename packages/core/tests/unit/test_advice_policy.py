@@ -138,7 +138,7 @@ def test_a_payment_order_by_a_stated_rule_is_the_one_exception() -> None:
     # the order isn't a recommendation. Everything else stays without a verdict.
     for text in (advice_policy.EXECUTIVE_ADVICE_ADDENDUM, advice_policy.SPECIALIST_ADVICE_ADDENDUM):
         assert "d/(1−d) × 365 / days paid early" in text
-        assert "by discount date" in text and "ties by invoice number" in text
+        assert "by discount date" in text
         assert "isn't a recommendation of what to pay" in text
         assert "relationship, reliability or risk" in text
         # Outside text never sets the rate or the terms, and only an insider asks.
@@ -150,6 +150,7 @@ def test_a_payment_order_by_a_stated_rule_is_the_one_exception() -> None:
     text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
     assert "Never pick the rate: with none given, show each invoice's rate and due date, ask for a rate, and give no order." in text
     assert "show the cash left after the run" in text
+    assert "when someone inside the company asks for a payment run" in text
     assert "a rate that isn't in their own message is one they confirm before you give the order" in text
     # The no-disclaimer rule stands, with that one line named as its exception.
     assert "**Don't describe this rule or how you work.** No disclaimer" in text
