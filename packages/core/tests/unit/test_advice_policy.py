@@ -104,7 +104,7 @@ def test_a_scenario_names_only_explain() -> None:
     with pytest.raises(ValueError, match="advice_policy"):
         validate_scenario_yaml(base + "advice_policy: advise\n")
     ours = [s for s in load_scenarios() if s["id"].startswith("finance_advice_")]
-    assert len(ours) == 22 and all(s["advice_policy"] == "explain" for s in ours)
+    assert len(ours) == 23 and all(s["advice_policy"] == "explain" for s in ours)
 
 
 def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -> None:
