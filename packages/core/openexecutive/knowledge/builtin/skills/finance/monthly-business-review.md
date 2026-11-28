@@ -21,6 +21,8 @@ Before drafting, confirm or ask for:
 
 If any of these is missing, stop and ask. An MBR without actuals or context produces an empty template.
 
+**A business without recurring revenue** (a trading, distribution, manufacturing or project company) uses its own lines in place of the ARR, NRR, CAC, burn and runway rows: sales, gross margin and net profit, cash, receivables and payables, each against the month before and a trailing average; where a comparison period isn't fully in the books, say so rather than compare a partial one, and give no outlook beyond what the books hold.
+
 ## Output structure
 
 Six sections, in this order. Total length: 4-6 pages.

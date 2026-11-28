@@ -1,0 +1,30 @@
+id: erpnext_108
+domain: mcp
+surface: host
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+description: 'F9, the owner''s monthly pack (knowledge/builtin/skills/finance/monthly-business-review.md), steps 1 and 3 of oe_connector''s help/try-monthly-pack.md asked together in Chats as a demo person. Last month''s sales, gross margin and net profit come from Profit and Loss against the month before and the trailing three months, each figure with its company, currency (USD) and period. The demo holds 12 months, so there is no full same month last year: the reply says so rather than compare a partial month. Three things Diane should know, each with its figure, its source and who acts, come from the records (for example Metro''s overdue invoices, a budget line over, an unbilled delivery or close blockers), not a fixed list. No outlook beyond the books, and no SaaS metrics on a trading company.'
+query: 'Give me last month on one page for Diane: sales, gross margin and net profit against the month before and the three months before, and the three things she should know, each with its figure and who acts on it.'
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- forecast
+- projection
+- ARR
+- MRR
+- burn multiple
+- I recommend
+quality_criteria:
+  gives_last_months_sales_gross_margin_and_net_profit_from_profit_and_loss: true
+  compares_with_the_month_before_and_the_trailing_three_months_and_says_where_each_figure_came_from: true
+  makes_no_comparison_with_a_partial_or_missing_same_month_last_year: true
+  gives_three_findings_each_with_its_figure_source_and_who_acts: true
+  takes_the_findings_from_the_records: true
+  gives_every_figure_with_company_currency_and_period: true
+  gives_no_outlook_beyond_what_the_books_hold: true
+  fits_on_one_page: true
