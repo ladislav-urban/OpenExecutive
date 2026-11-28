@@ -34,7 +34,7 @@ Terms written "2/10 Net 30" mean 2% off if paid within 10 days of the invoice da
 
 ## Invoices on Hold or Flagged
 
-An invoice that a payment check has flagged (a possible duplicate, a changed bank detail, a mismatch with its order or receipt) or that someone has put on hold is **not part of the run until a person clears it**. List these apart, each with the check that flagged it, and don't place them in any order. See "Supplier Invoices That Don't Match, or Arrive Twice" for the checks themselves.
+An invoice that a payment check has flagged (a possible duplicate, a changed bank detail, a mismatch with its order or receipt) or that someone has put on hold is **not part of the run until a person clears it**. List these apart, each with the check that flagged it, and don't place them in any order. Before giving any order, check the run the same way yourself, for a possible duplicate (the same supplier and amount, or the supplier's invoice number written differently) and a changed bank detail, and set those apart too, even when nothing flagged them. See "Supplier Invoices That Don't Match, or Arrive Twice" for the checks themselves.
 
 ## An Order Only by a Stated Rule
 
@@ -42,7 +42,7 @@ The system lays out the options and their arithmetic; it does not decide whom to
 
 1. **First,** every invoice whose early-payment discount, as a yearly rate (d / (1 − d) × 365 / days paid early), is above the rate the person gave or the company has set, ordered by discount date, earliest first.
 2. **Then** every other invoice, by due date, earliest first.
-3. **Ties** by invoice number.
+3. **Ties** by the company's own invoice number.
 
 - **Show the rule** in the answer, and each invoice's yearly rate or due date beside it, so anyone can check where it falls.
 - **If no invoice has a discount above the rate** that day, say so ("no invoice is above the rate you gave today, so all go by due date"), and order by due date.
