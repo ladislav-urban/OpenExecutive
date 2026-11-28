@@ -1,0 +1,39 @@
+id: erpnext_109
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Customer Credit Balance
+prior_turns:
+- page:
+    report: Customer Credit Balance
+  user: Which customers are closest to their credit limit, and how have they paid this year?
+  live: true
+description: 'F8, customers'' credit exposure as a view, not a review (knowledge/builtin/finance/customer_credit_exposure.md), the two steps oe_connector''s help/try-credit-hold.md gains, in ERPNext''s panel as a demo person, with the first run live. The reply gives the limit Harbor''s held order would need as arithmetic (what Harbor owes now plus the order, against its limit) and names Rachel, who holds customer credit, as deciding. It gives no opinion on any limit: never that one should be raised, lowered or kept, nor that the order should be released or refused, and no verdict on Harbor.'
+query: What limit would Harbor's held order need, and who decides on that?
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- I recommend
+- you should raise
+- you should lower
+- you should increase
+- I'd raise
+- I would raise
+- I'd lower
+- I suggest raising
+reply_must_name:
+- Rachel
+quality_criteria:
+  gives_what_harbor_owes_now_and_the_held_orders_value_from_the_books: true
+  gives_the_limit_the_order_would_need_as_what_it_owes_plus_the_order_against_its_limit: true
+  names_rachel_as_deciding_on_customer_credit: true
+  gives_no_opinion_on_whether_to_change_any_limit_or_release_the_order: true
+  gives_no_verdict_on_harbor_as_a_customer: true
+  keeps_the_answer_short_enough_for_a_side_panel: true

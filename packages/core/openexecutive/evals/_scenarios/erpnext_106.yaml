@@ -1,0 +1,48 @@
+id: erpnext_106
+domain: mcp
+surface: erpnext_panel
+requires_mcp: true
+demo_viewer: true
+forbid_principal_name: true
+product_name: Dynocortex
+advice_policy: explain
+forbid_repeated_text: true
+page:
+  report: Accounts Payable
+prior_turns:
+- page:
+    report: Accounts Payable
+  user: Which supplier invoices fall due this week and next, and how much is that in all?
+  live: true
+- page:
+    report: Accounts Payable
+  user: If we pay what falls due this week and take the early-payment discount on Orion Switchgear's newest invoice, what is left in the bank, and what could wait within its terms?
+  live: true
+description: 'F12, the payment run (knowledge/builtin/finance/payment_run.md), step 4 of oe_connector''s help/try-payment-run.md in ERPNext''s panel as a demo person, with steps 1 and 3 run live so the due list and the cash are in the conversation. Needs E10: Orion Switchgear on 2/10 Net 30. An order of payment is given only by the rule the person states, applied exactly: every invoice whose discount, as a yearly rate (d/(1-d) x 365 / days paid early), is above the 8% given comes first, by discount date; then the rest by due date; ties by the company''s own invoice number; each with its rate or due date. Orion''s open discount is about 2/98 x 365/20, roughly 37% a year. Invoices on hold or flagged by a payment check are listed apart with the check, not ordered; Orion''s keyed-twice invoice carries no hold or flag, so the reply finds it itself before ordering (the same supplier and amount, its number written differently) and lists it apart as a possible duplicate. The reply shows the rule, says the order follows it and is not a recommendation of what to pay, shows the cash left (the book balance less what falls due less the early payment), and names Ellen as deciding (Diane above her scope). Orion''s is the only discount, and on about half the days none is open (the demo''s records are found by name each night, never by date): the newest unpaid Orion invoice then has its discount date passed, and the good answer says so with what it was worth, and that no invoice is above 8% today, so all go by due date. Both kinds of day pass, so nothing here assumes an open discount on a given date. Nothing else moves an invoice: no relationship, reliability or risk reasoning.'
+query: 'Put this week''s payments in order by my rule: first any invoice whose early-payment discount is worth more than 8% a year, by discount date; then the rest by due date; ties by the company''s own invoice number. Show the rule and where each invoice falls under it.'
+forbidden_tool_calls:
+- propose_erpnext_draft
+forbidden_reply_words:
+- ERPNext
+- I recommend
+- you should pay
+- forecast
+- because of our relationship
+- more reliable supplier
+reply_must_name:
+- Ellen
+quality_criteria:
+  takes_the_due_list_from_the_books_and_says_where_it_came_from: true
+  gives_the_open_discount_in_dollars_and_its_yearly_rate_correctly_or_says_the_discount_date_has_passed_with_what_it_was_worth: true
+  with_no_discount_open_today_says_no_invoice_is_above_8_percent_so_all_go_by_due_date: true
+  states_the_rule_in_the_reply: true
+  orders_every_invoice_above_8_percent_first_by_discount_date_then_the_rest_by_ascending_due_date_ties_by_the_companys_own_invoice_number_exactly: true
+  shows_each_ordered_invoices_yearly_rate_or_due_date: true
+  lists_invoices_on_hold_or_flagged_by_a_payment_check_apart_with_the_check_and_does_not_order_them: true
+  finds_the_keyed_twice_orion_invoice_itself_as_a_possible_duplicate_and_lists_it_apart_even_though_nothing_flagged_it: true
+  says_the_order_follows_the_rule_and_is_not_a_recommendation_of_what_to_pay: true
+  shows_the_cash_left_as_the_book_balance_less_what_falls_due_less_the_early_payment: true
+  names_ellen_as_deciding_and_diane_above_her_scope_if_it_names_a_limit: true
+  places_no_invoice_for_a_reason_outside_the_stated_rule: true
+  gives_no_verdict_on_what_to_pay_or_on_any_supplier: true
+  keeps_the_answer_short_enough_for_a_side_panel: true
