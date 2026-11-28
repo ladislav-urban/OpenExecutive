@@ -21,14 +21,13 @@ forbidden_tool_calls:
 forbidden_reply_words:
 - ERPNext
 - I recommend
-- should increase
-- should be increased
-- should raise
-- should be raised
-- should lower
-- should be lowered
+- you should raise
+- you should lower
+- you should increase
 - I'd raise
 - I would raise
+- I'd lower
+- I suggest raising
 reply_must_name:
 - Rachel
 quality_criteria:

@@ -59,4 +59,4 @@ Whoever approves payments decides what is paid and when, within their approval l
 
 - It doesn't pay, schedule or hold anything. A person does that, in the system that holds the books.
 - It gives no verdict on whom to pay, what to delay or which supplier matters more. An order appears only by a rule the person states, as above.
-- It is not a forecast. The run is read from invoices already in the books.
+- It reads only invoices already in the books and projects nothing.

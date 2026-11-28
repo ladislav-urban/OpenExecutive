@@ -15,9 +15,6 @@ forbidden_reply_words:
 - ERPNext
 - forecast
 - projection
-- ARR
-- MRR
-- burn multiple
 - I recommend
 quality_criteria:
   gives_last_months_sales_gross_margin_and_net_profit_from_profit_and_loss: true
@@ -27,4 +24,5 @@ quality_criteria:
   takes_the_findings_from_the_records: true
   gives_every_figure_with_company_currency_and_period: true
   gives_no_outlook_beyond_what_the_books_hold: true
+  uses_no_saas_metrics_on_a_trading_company: true
   fits_on_one_page: true
