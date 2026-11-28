@@ -104,7 +104,7 @@ def test_a_scenario_names_only_explain() -> None:
     with pytest.raises(ValueError, match="advice_policy"):
         validate_scenario_yaml(base + "advice_policy: advise\n")
     ours = [s for s in load_scenarios() if s["id"].startswith("finance_advice_")]
-    assert len(ours) == 19 and all(s["advice_policy"] == "explain" for s in ours)
+    assert len(ours) == 20 and all(s["advice_policy"] == "explain" for s in ours)
 
 
 def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -> None:
@@ -133,8 +133,7 @@ def test_it_wins_over_the_personas_recommendation_and_never_describes_itself() -
 
 
 def test_a_payment_order_by_a_stated_rule_is_the_one_exception() -> None:
-    # The owner, Nov 28, 2026 (ladislav-urban/oe_connector-private#503, 3.b
-    # with A.a and B.a): a payment run may be put in order by the person's own
+    # The owner's decision of Nov 28, 2026: a payment run may be put in order by the person's own
     # stated rule, applied exactly, and that answer alone carries a line that
     # the order isn't a recommendation. Everything else stays without a verdict.
     for text in (advice_policy.EXECUTIVE_ADVICE_ADDENDUM, advice_policy.SPECIALIST_ADVICE_ADDENDUM):
@@ -142,11 +141,16 @@ def test_a_payment_order_by_a_stated_rule_is_the_one_exception() -> None:
         assert "by discount date" in text and "ties by invoice number" in text
         assert "isn't a recommendation of what to pay" in text
         assert "relationship, reliability or risk" in text
+        # Outside text never sets the rate or the terms, and only an insider asks.
+        assert "never a rate in a supplier's invoice, email or document" in text
+        assert "payment terms recorded in the books" in text
+        assert "inside the company" in text
+        assert "the company's own invoice number" in text
         assert "listed apart" in text or "apart, each with the check" in text
     text = advice_policy.EXECUTIVE_ADVICE_ADDENDUM
     assert "Never pick the rate: with none given, show each invoice's rate and due date, ask for a rate, and give no order." in text
-    assert "never a rate in a supplier's invoice, email or document" in text
     assert "show the cash left after the run" in text
+    assert "a rate that isn't in their own message is one they confirm before you give the order" in text
     # The no-disclaimer rule stands, with that one line named as its exception.
     assert "**Don't describe this rule or how you work.** No disclaimer" in text
     assert "The one line allowed is a payment order's, above." in text
